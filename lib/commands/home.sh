@@ -17,22 +17,34 @@
 # pure helpers that never read T_*.
 if declare -F i18n_load >/dev/null 2>&1; then i18n_load "$(clikae_lang)"; fi
 
-# _human_age <epoch-mtime> [now-epoch] — "just now" / "5m ago" / "3h ago" /
-# "2d ago". One formatter for the board's Continue list and the resume picker
-# (each used to carry its own copy).
-_human_age() {
-  local mt="$1" now="${2:-}" d
-  [ -n "$now" ] || now="$(date +%s 2>/dev/null || echo "$mt")"
-  d=$(( now - mt ))
-  if   [ "$d" -lt 60 ];    then printf 'just now'
-  elif [ "$d" -lt 3600 ];  then printf '%dm ago' "$(( d / 60 ))"
-  elif [ "$d" -lt 86400 ]; then printf '%dh ago' "$(( d / 3600 ))"
-  else                          printf '%dd ago' "$(( d / 86400 ))"
-  fi
-}
+# _human_age lives in lib/core/duration.sh now (P2-5, 2026-09-14 round-1 fix
+# review) — the tmux status row needed it too and couldn't justify sourcing
+# this whole file to get it. bin/clikae sources duration.sh globally, same as
+# every other core lib, so nothing here changes at the call sites.
 
 # _home_active_for <engine>  -> the profile active for <engine> in THIS shell, or empty.
 # Mirrors `clikae status`: read the adapter's live env var and resolve it back.
+# _home_active_forv <cli> — _home_active_for, memoized per ENGINE, into $_ACTIVE.
+#
+# 🔴 The answer depends only on the ENGINE, never on the tank — it reads one env
+# var (or one symlink for a target) — yet the board asked it once per ROW. On a
+# nine-tank store spanning three engines that is nine subshells, each sourcing a
+# target file or loading an adapter, to compute three answers. Memo is a
+# newline-fenced string because bash 3.2 has no associative arrays; it is
+# frame-local (each _home_items call starts with an empty one), so a tank
+# switched in another terminal is still picked up on the next render.
+_home_active_forv() {
+  local cli="$1" rest
+  case "$_ACTIVE_MEMO" in
+    *$'\n'"$cli"$'\037'*)
+      rest="${_ACTIVE_MEMO#*$'\n'"$cli"$'\037'}"
+      _ACTIVE="${rest%%$'\n'*}"
+      return 0 ;;
+  esac
+  _ACTIVE="$(_home_active_for "$cli")"
+  _ACTIVE_MEMO="$_ACTIVE_MEMO$cli"$'\037'"$_ACTIVE"$'\n'
+}
+
 _home_active_for() {
   local cli="$1"
   (
@@ -61,6 +73,42 @@ _home_active_for() {
 # _home_alias_for <engine> <tank>  -> the managed alias NAME from the shell rc,
 # or empty. The block opens with `# >>> clikae:<engine>.<tank> >>>` and the alias
 # line is `alias <name>=...` (zsh/bash) or `alias <name> ...` (fish).
+# _home_alias_prime — read the shell rc ONCE and extract every clikae-managed
+# alias into $_ALIAS_MEMO as "<engine>.<tank>\037<alias-name>\n" lines.
+#
+# 🔴 _home_alias_for forks `detect_shell_rc` AND an `awk` over the whole rc file
+# for EVERY tank row. The rc file does not change while a frame is being built,
+# and one pass can find all of them — nine tanks meant eighteen forks to read
+# one file nine times. Same frame-scoped-cache shape as _home_cols_prime.
+_home_alias_prime() {
+  _ALIAS_MEMO=$'\n'
+  local rc; rc="$(detect_shell_rc)"
+  [ -f "$rc" ] || return 0
+  _ALIAS_MEMO=$'\n'"$(awk '
+    /^# >>> clikae:/ { id = $0; sub(/^# >>> clikae:/, "", id); sub(/ >>>$/, "", id); inb = 1; next }
+    /^# <<< clikae:/ { inb = 0; next }
+    inb && /^alias / {
+      line = $0
+      sub(/^alias /, "", line)
+      sub(/[ =].*$/, "", line)
+      if (id != "" && line != "") printf "%s\037%s\n", id, line
+      id = ""
+    }
+  ' "$rc" 2>/dev/null)"$'\n'
+  return 0
+}
+
+# _home_alias_forv <engine> <tank> — the memoized lookup, into $_ALIASN.
+_home_alias_forv() {
+  local id="$1.$2" rest
+  case "$_ALIAS_MEMO" in
+    *$'\n'"$id"$'\037'*)
+      rest="${_ALIAS_MEMO#*$'\n'"$id"$'\037'}"
+      _ALIASN="${rest%%$'\n'*}" ;;
+    *) _ALIASN="" ;;
+  esac
+}
+
 _home_alias_for() {
   local cli="$1" profile="$2" rc id
   rc="$(detect_shell_rc)"
@@ -89,11 +137,300 @@ _home_alias_for() {
 #   resume ␟ <engine> ␟ <tank> ␟ <title> ␟ <recap> ␟ ␟ <session-id>
 # How many recent sessions the "continue" list surfaces.
 CLIKAE_HOME_RECENT_MAX="${CLIKAE_HOME_RECENT_MAX:-10}"
+# Ceiling on what ONE adapter may be asked for when burn sessions still have to
+# be filtered out of its answer (#34 round-1 P2-1 — see _home_recent_rows).
+#
+# 🔴 #34 round-2 P2-1: this used to default to 200 while the ask was widened by
+# the WHOLE store's burn count, so 190 burn sids anywhere — any engine, any tank
+# — clamped every tank's ask and reinstated the very bug this fix exists for
+# (measured: 195 burns + 50 humans ⇒ 5 rows instead of 10; 250 burns + 3 humans
+# ⇒ no Resume block at all, silently). The sidecar's own cap is 2000, so 190 is
+# a routine number for burn-heavy agy use, not a corner. Two changes: the ask is
+# now widened per TANK (only that tank's sidecar file), and this ceiling is the
+# sidecar's own cap — so at the defaults it is unreachable by anything the GC
+# lets exist, and what is left of it is a guard against a corrupt/hand-written
+# sidecar rather than a routine clamp. When it DOES bite, the board says so
+# (T_RESUME_TRUNCATED) instead of silently showing a short list.
+#
+# What a wider ask costs, per engine (#34 round-2 P3-1 — the honest version):
+# every adapter scans+stats its whole tank BEFORE it `head -n <limit>`, so the
+# scan is limit-independent on all of them. The per-row tail AFTER the cut is
+# string-only too: agy/claude take the sid from the path, and codex/grok now
+# derive it from the rollout/session filename (fork-free, with a body read only
+# when the name does not carry a uuid — see their adapter_recent_sids). Before
+# that change codex/grok paid a fork + a file read per row and a 10→200 ask
+# cost ~+85 ms on a 1,000-rollout tank; measured again after it, see the PR.
+CLIKAE_HOME_RECENT_SCAN_MAX="${CLIKAE_HOME_RECENT_SCAN_MAX:-${CLIKAE_BURN_SIDECAR_CAP:-2000}}"
+
+# _burn_sids_file -> writes every currently-recorded burn sid (deduped, one
+# per line — the first tab field of each well-formed
+# state/burn-sessions/<engine>/<tank> line) to a fresh temp file and prints
+# its path; empty output + rc=1 if there is nothing to hide. The ONE store
+# read shared by `clikae resume`'s picker and the board's Continue list
+# (#74 round-1 P2-2/P2-5) — both used to check membership a different way
+# (or, for the board, not at all), and the picker's own way was a `case`
+# substring compare against the WHOLE accumulated sidecar PER CANDIDATE
+# SESSION: O(sessions × sidecar lines), measured 8170ms at 20,000 sidecar
+# lines the sidecar had no GC to ever shrink. Callers pair this with
+# `grep -n -F -x -f` over their own candidate list — one process, not a loop —
+# which is what actually fixes the asymptotics; this function only owns the
+# store read so both callers read it exactly the same way. Caller removes the
+# file when done.
+# #74 round-2 P3-4: the ONE definition of "valid sidecar line", shared with
+# clean.sh's GC — a line failing this must be dead to BOTH: never hides a
+# session here, never counted "live" (occupying a CLIKAE_BURN_SIDECAR_CAP
+# slot forever) there. Mirrors resume.sh's old per-line regex exactly
+# ($'^[^\t]+\t[^\t]+\t[0-9]+$') — a partial/corrupt record must never hide a
+# real (human) session.
+_BURN_SIDECAR_VALID_AWK='NF==3 && $1!="" && $2!="" && $3 ~ /^[0-9]+$/'
+_burn_sidecar_line_valid() {
+  printf '%s' "$1" | awk -F'\t' "$_BURN_SIDECAR_VALID_AWK"'{f=1} END{exit(!f)}'
+}
+
+_burn_sids_file() {
+  local base="$CLIKAE_HOME/state/burn-sessions" out
+  [ -d "$base" ] || return 1
+  out="$(mktemp "${TMPDIR:-/tmp}/clikae-burn-sids.XXXXXX")" || return 1
+  awk -F'\t' "$_BURN_SIDECAR_VALID_AWK"' {print $1}' "$base"/*/* 2>/dev/null \
+    | LC_ALL=C sort -u > "$out"
+  if [ -s "$out" ]; then
+    printf '%s\n' "$out"
+    return 0
+  fi
+  rm -f "$out"
+  return 1
+}
+
+# _burn_tank_hidden <engine> <tank> -> how many sessions the sidecar can hide on
+# THIS ONE TANK: the deduped, well-formed sid count of
+# state/burn-sessions/<engine>/<tank>. Always prints a number (0 when the tank
+# has no sidecar file at all).
+#
+# #34 round-2 P2-1: the ask used to be widened by the WHOLE store's burn count.
+# That never UNDER-asked (a tank's droppable rows are a subset of the store's),
+# but it pushed every tank's ask into CLIKAE_HOME_RECENT_SCAN_MAX's clamp as
+# soon as any other engine's tank had a few hundred burns — and the clamp is
+# what silently shortened the list. A row this tank's adapter returns can only
+# be dropped by a sid recorded for THIS tank, so this is the exact count, not a
+# smaller-but-still-safe one.
+_burn_tank_hidden() {
+  # <engine> is the engine id, and so is the sidecar's directory — for agy too
+  # ("antigravity", #113). It used to be written under "agy" and read here
+  # through a translation; reading the wrong path counts 0 burns for every agy
+  # tank, which is the pre-#93 ask, i.e. the bug back again, silently. A store
+  # written by an older clikae is moved onto the one key by
+  # burn_sidecar_migrate_legacy (lib/core/profile_store.sh) before any command
+  # runs, so no reader translates anything.
+  local f="$CLIKAE_HOME/state/burn-sessions/$1/$2" n=0
+  if [ -f "$f" ]; then
+    n="$(LC_ALL=C awk -F'\t' "$_BURN_SIDECAR_VALID_AWK"'{print $1}' "$f" 2>/dev/null \
+          | LC_ALL=C sort -u | LC_ALL=C awk 'END{print NR+0}' 2>/dev/null || printf '0')"
+    case "$n" in ''|*[!0-9]*) n=0 ;; esac
+  fi
+  printf '%s' "$n"
+}
+
+# The "Continue list is truncated" signal (#34 round-2 P2-1) travels IN the
+# items stream, as one row of this kind, and never touches the disk.
+#
+# 🔴 #113: it used to be a file, `state/home-recent-truncated.$$`, because
+# _home_recent_rows runs inside _home_items, which every caller consumes through
+# `$( … )` — nothing it assigns can reach the renderer. But nothing removed that
+# file when a board exited (or was killed), so every truncating render left one
+# behind in the user's state dir, one per pid, forever. The data already has a
+# channel from the child to the parent: the items text itself. So
+# _home_recent_rows prints `resume-truncated␟<hidden-count>` as one row, and
+# `_home_items_load` — the ONE place a caller turns `_home_items` output into
+# `$items` — lifts it back out into $_HOME_RESUME_TRUNC before any renderer,
+# row index or filter sees the text. Two boards in one tank share nothing, and
+# a killed board leaves nothing, because there is no file.
+_HOME_TRUNC_KIND="resume-truncated"
+_HOME_RESUME_TRUNC=0
+
+# The second signal riding the same channel: how many sessions the STORE holds
+# that this list does not show. The Continue list is scoped to $PWD (every
+# adapter answers for this directory) while `clikae resume` is scoped to the
+# whole store, and nothing on the board said so — a board showing ten rows
+# read as "these are your sessions", which is how a directory's own claude
+# session could rank #13 behind another engine's rows and be invisible with no
+# hint that anything was missing.
+_HOME_ELSEWHERE_KIND="resume-elsewhere"
+_HOME_RESUME_ELSEWHERE=0
+# Store-wide burn-sid count for this render, so the elsewhere figure counts
+# what the user could actually resume rather than lane one-shots the list is
+# deliberately hiding. Set by _home_recent_rows while it holds the sidecar.
+_HOME_BURN_TOTAL=0
+
+# _home_items_load -> sets the caller's $items from _home_items, and
+# $_HOME_RESUME_TRUNC / $_HOME_RESUME_ELSEWHERE from the signal rows in it (0
+# each when there is none). The rows are removed from $items: the pickers index
+# rows by line (_home_row_kind_at), so a row nobody can select must not occupy
+# a line. Anchored to a line START — a tank or a title containing a kind's text
+# mid-row must never be read as the signal.
+#
+# _home_items_lift <kind> <outvar> — pulls ONE such signal row out of the
+# caller's $_raw (dynamic scope, deliberately: there is exactly one caller and
+# it owns the text) and stores its count in <outvar>, 0 when absent. Two kinds
+# ride this channel now, and a second hand-rolled copy of the extraction is
+# how they would drift.
+_home_items_lift() {
+  local _kind="$1" _var="$2" _pat _rest _val=0
+  _pat=$'\n'"$_kind"$'\037'
+  case "$_raw" in
+    *"$_pat"*)
+      _rest="${_raw#*"$_pat"}"
+      _val="${_rest%%$'\n'*}"
+      case "$_val" in ''|*[!0-9]*) _val=0 ;; esac
+      case "$_rest" in
+        *$'\n'*) _raw="${_raw%%"$_pat"*}"$'\n'"${_rest#*$'\n'}" ;;
+        *)       _raw="${_raw%%"$_pat"*}" ;;
+      esac
+      ;;
+  esac
+  printf -v "$_var" '%s' "$_val"
+  return 0
+}
+
+_home_items_load() {
+  local _raw
+  _HOME_RESUME_TRUNC=0
+  _HOME_RESUME_ELSEWHERE=0
+  _raw=$'\n'"$(_home_items)"
+  _home_items_lift "$_HOME_TRUNC_KIND"     _HOME_RESUME_TRUNC
+  _home_items_lift "$_HOME_ELSEWHERE_KIND" _HOME_RESUME_ELSEWHERE
+  items="${_raw#$'\n'}"
+  return 0
+}
+
+# _home_continue_heading -> the Continue section's heading TEXT, which names
+# the scope it is showing: "Resume — in ~/some/project".
+#
+# 🔴 The list has always been this directory's; the heading said "Resume" and
+# left the reader to assume it meant "your sessions". It does not, and
+# `clikae resume` — the store-wide list — is a different answer to what looks
+# like the same question. A section that states its own scope is the cheapest
+# version of that fix, and it is the one that stays true when a future engine
+# is added. The directory is $HOME-abbreviated and middle-ellipsised (the tail
+# — the leaf directory you are actually in — is what survives).
+_home_continue_heading() {
+  local _d="$PWD" _fixed _b
+  case "$_d" in
+    "$HOME") _d="~" ;;
+    "$HOME"/*) _d="~${_d#"$HOME"}" ;;
+  esac
+  # Budget = the row minus its own lead ("  ▸ ") minus everything the localized
+  # string contributes itself. Asking the string, not hard-coding a width, is
+  # what keeps this honest in the locales whose word for "Resume" is longer.
+  # shellcheck disable=SC2059  # the format IS the localized string
+  _fixed="$(printf "$T_CONTINUE_IN" "")"
+  _b=$(( $(_home_cols) - 4 - $(_dwidth "$_fixed") ))
+  [ "$_b" -ge 12 ] || _b=12
+  # shellcheck disable=SC2059  # the format IS the localized string
+  printf "$T_CONTINUE_IN" "$(_home_trunc_mid "$_d" "$_b")"
+}
+
+# _home_continue_notes <printed_resume> [extra] -> the dim lines under the
+# Continue list, and the section header itself when no Resume row was drawn at
+# all (a tank whose burn sidecar outgrew the ceiling and buried every human
+# session; or a directory with nothing of its own while the store is full).
+# Both of those are cases a silent board got wrong, and the header is printed
+# ONCE here however many notes follow.
+#
+#   1. truncated  — the list could not be filled within the scan ceiling.
+#   2. elsewhere  — the store holds sessions this scoped list is not showing,
+#                   and `clikae resume` is where they all are.
+_home_continue_notes() {
+  local _th="${_HOME_RESUME_TRUNC:-0}" _el="${_HOME_RESUME_ELSEWHERE:-0}"
+  case "$_th" in ''|*[!0-9]*) _th=0 ;; esac
+  case "$_el" in ''|*[!0-9]*) _el=0 ;; esac
+  { [ "$_th" -gt 0 ] || [ "$_el" -gt 0 ]; } || return 0
+  if [ "${1:-0}" -ne 1 ]; then
+    printf '  %b▸ %s%b\n' "$__C_BCYAN" "$(_home_continue_heading)" "$__C_RESET"
+  fi
+  if [ "$_th" -gt 0 ]; then
+    # shellcheck disable=SC2059  # the format IS the localized string
+    _home_wrap_prefixed "$(printf "$T_RESUME_TRUNCATED" "$_th")" \
+      "    " 4 "$__C_DIM" "$__C_RESET" "${2:-0}"
+  fi
+  if [ "$_el" -gt 0 ]; then
+    # shellcheck disable=SC2059  # the format IS the localized string
+    _home_wrap_prefixed "$(printf "$T_RESUME_ELSEWHERE" "$_el")" \
+      "    " 4 "$__C_DIM" "$__C_RESET" "${2:-0}"
+  fi
+  return 0
+}
+
+# _home_elsewhere_row <rows-shown> -> the `resume-elsewhere␟<n>` signal row,
+# when the store holds sessions this scoped list is not showing.
+#
+# n = every session file in the store, minus the ones hidden as burn runs,
+# minus the ones on screen. What it is exactly: "how many more sessions
+# `clikae resume` can offer you than this list does" — which is what the note
+# says and what the user acts on. Two known imprecisions, both small and both
+# in the store total rather than here: a session relayed into a second tank
+# exists as two files, and a sidecar sid whose transcript is already gone
+# still subtracts. Neither can make the note claim MORE than the store holds
+# by more than a rounding of the same kind the footer's "N sessions total"
+# already carries, and n<=0 prints nothing at all.
+_home_elsewhere_row() {
+  local _shown="${1:-0}" _total _burn _n
+  case "$_shown" in ''|*[!0-9]*) _shown=0 ;; esac
+  _total="$(_home_total_sessions 2>/dev/null || printf '0')"
+  case "$_total" in ''|*[!0-9]*) return 0 ;; esac
+  _burn="${_HOME_BURN_TOTAL:-0}"
+  case "$_burn" in ''|*[!0-9]*) _burn=0 ;; esac
+  _n=$(( _total - _burn - _shown ))
+  [ "$_n" -gt 0 ] || return 0
+  printf '%s\037%s\n' "$_HOME_ELSEWHERE_KIND" "$_n"
+  return 0
+}
 
 _home_recent_rows() {
-  local name proot tdir tank rows sid mt acc=""
+  local name proot tdir tank rows sid mt acc="" _proots _rowmark _rank
+  local _burn_sids_f="" _hidden=0 _ask="$CLIKAE_HOME_RECENT_MAX"
+  local _clamped=0 _got=0 _kept=0 _trunc=0
+  # 🔴 #34 round-1 P2-1: read the burn sidecar BEFORE the tank walk, because how
+  # many rows each adapter has to be asked for depends on it. The filter below
+  # always ran before the rank+cut (as its comment promised), but every adapter
+  # had already been cut to CLIKAE_HOME_RECENT_MAX rows on its way here — so N
+  # burn sessions newer than the human ones handed the filter N rows it had to
+  # drop and left it nothing to promote: the Resume block disappeared, which is
+  # the exact symptom #34 set out to fix. Reachable on any agy tank from any
+  # directory since this PR's tank-scoping, and clikae's own dispatch doctrine
+  # burns agy tanks hard, so this is the shape that actually occurs.
+  # THE GUARANTEE, WITH ITS BOUND (#34 round-2 P2-1 — the round-1 version of
+  # this sentence had no bound and was therefore false): only a sid recorded in
+  # THIS TANK's sidecar can be dropped from this tank's answer, so asking that
+  # tank for N + <its own hidden count> yields N survivors whenever N exist —
+  # UNLESS that ask exceeds CLIKAE_HOME_RECENT_SCAN_MAX, which defaults to the
+  # sidecar's own cap and so only bites on a sidecar bigger than the GC allows.
+  # When it does bite, the board prints T_RESUME_TRUNCATED; the guarantee is
+  # never silently broken. Engine-agnostic on purpose: claude and codex tanks
+  # had the same hole (#74's filter, #83's sidecar) and get the same fix here,
+  # once, instead of three adapters each re-learning it.
+  if [ "${CLIKAE_RESUME_ALL:-0}" -ne 1 ]; then
+    _burn_sids_f="$(_burn_sids_file 2>/dev/null || true)"
+  fi
+  # How many sessions the whole store hides as burn runs — read here, while the
+  # file is still around (the filter below removes it), so the "N more in this
+  # store" note counts sessions a human could actually resume.
+  _HOME_BURN_TOTAL=0
+  if [ -n "$_burn_sids_f" ]; then
+    _HOME_BURN_TOTAL="$(LC_ALL=C grep -c . "$_burn_sids_f" 2>/dev/null || true)"
+    case "$_HOME_BURN_TOTAL" in ''|*[!0-9]*) _HOME_BURN_TOTAL=0 ;; esac
+  fi
+  # No sidecar (or CLIKAE_RESUME_ALL=1) => nothing to filter => the ask stays
+  # exactly CLIKAE_HOME_RECENT_MAX. The common path is byte-for-byte unchanged.
+  _proots="$(profiles_root)"      # constant; asked once, not once per adapter
   while IFS= read -r name; do
     [ -n "$name" ] || continue
+    # NO TANKS, NO ROWS — check that first, because it is free. This engine's rows
+    # can only come from a tank directory below, so an engine with none contributes
+    # nothing no matter what its adapter says. The capability gate underneath costs
+    # a subshell AND a full source of the adapter file, and it was being paid for
+    # all 15 installed adapters on every frame when only three have tanks here.
+    proot="$_proots/$name"
+    [ -d "$proot" ] || continue
     ( load_adapter "$name" >/dev/null 2>&1 \
         && declare -F adapter_resume_args >/dev/null 2>&1 \
         && declare -F adapter_recent_sids >/dev/null 2>&1 ) || continue
@@ -103,29 +440,136 @@ _home_recent_rows() {
     # $( … ) fork below, so the per-tank loads become instant instead of each
     # re-sourcing the adapter file (measured: 47 loads per board render before).
     load_adapter "$name" >/dev/null 2>&1
-    proot="$(profiles_root)/$name"
-    [ -d "$proot" ] || continue
-    for tdir in "$proot"/*/; do
-      [ -d "$tdir" ] || continue
-      tank="${tdir%/}"; tank="${tank##*/}"
+    # #61 round-1 P2-6: used to be its own `for … in $proot/*/` — this is the
+    # board's OWN "continue" list, so a stray non-tank directory holding
+    # anything transcript-shaped could show up as a resumable row nowhere
+    # else in clikae names as a tank. Routed through tanks_for_engine.
+    # #61 round-6 P2-1 (merge with #93): the enumeration source is this PR's
+    # (tanks_for_engine, not the glob) and the per-tank ask is #93's, unchanged
+    # — the two answer different questions. WHICH directories may contribute a
+    # resumable row is a "what is a tank" question; HOW MANY rows to ask that
+    # tank for is a burn-sidecar question. Taking either side alone lost the
+    # other: main's arm re-opened the stray-directory row, and this PR's arm
+    # left $_ask at the outer loop's leftover value, reviving #34's "burn
+    # sessions eat the whole Resume block" and making the truncation note
+    # describe the previous tank.
+    while IFS= read -r tank; do
+      [ -n "$tank" ] || continue
+      tdir="$(profile_dir "$name" "$tank")"
+      # How wide to ask THIS tank (#34 round-2 P2-1). Per tank, not per store:
+      # a row this tank returns can only be dropped by a sid recorded for this
+      # tank, so another engine's burn-heavy tank must not push this one's ask
+      # into the ceiling. A tank with no sidecar file asks for exactly N, so the
+      # common path is byte-for-byte the pre-#34 one.
+      _ask="$CLIKAE_HOME_RECENT_MAX"; _clamped=0; _hidden=0
+      if [ -n "$_burn_sids_f" ]; then
+        _hidden="$(_burn_tank_hidden "$name" "$tank")"
+        _ask=$((CLIKAE_HOME_RECENT_MAX + _hidden))
+        if [ "$_ask" -gt "$CLIKAE_HOME_RECENT_SCAN_MAX" ]; then
+          _ask="$CLIKAE_HOME_RECENT_SCAN_MAX"; _clamped=1
+        fi
+        if [ "$_ask" -lt "$CLIKAE_HOME_RECENT_MAX" ]; then _ask="$CLIKAE_HOME_RECENT_MAX"; fi
+      fi
       # CHEAP: just epoch-mtime + sid per recent session (no content reads).
-      rows="$( load_adapter "$name" >/dev/null 2>&1 && adapter_recent_sids "${tdir%/}" "$CLIKAE_HOME_RECENT_MAX" 2>/dev/null || true )"
+      rows="$( load_adapter "$name" >/dev/null 2>&1 && adapter_recent_sids "${tdir%/}" "$_ask" 2>/dev/null || true )"
       [ -n "$rows" ] || continue
-      while IFS=$'\037' read -r mt sid; do
+      # Clamped AND the adapter filled the ask to the brim => there may be rows
+      # it never got to mention. If what survives the filter is still short of
+      # N, the Continue list IS truncated: record it so the renderer can SAY so,
+      # instead of drawing a short list that reads as a complete one.
+      if [ "$_clamped" -eq 1 ]; then
+        _got="$(printf '%s\n' "$rows" | LC_ALL=C grep -c . 2>/dev/null || true)"
+        case "$_got" in ''|*[!0-9]*) _got=0 ;; esac
+        if [ "$_got" -ge "$_ask" ]; then
+          _kept="$(printf '%s\n' "$rows" | LC_ALL=C awk -F $'\037' -v f="$_burn_sids_f" '
+            BEGIN { while ((getline line < f) > 0) skip[line] = 1 }
+            NF >= 2 && $2 != "" && !($2 in skip) { k++ }
+            END { print k+0 }' 2>/dev/null || printf '0')"
+          case "$_kept" in ''|*[!0-9]*) _kept=0 ;; esac
+          if [ "$_kept" -lt "$CLIKAE_HOME_RECENT_MAX" ]; then _trunc=$((_trunc + _hidden)); fi
+        fi
+      fi
+      # A third field on a row is the adapter saying "this one is not from
+      # $PWD, I am only offering it because I had nothing that was" (see
+      # antigravity.sh's _agy_scope_rows). It becomes the FIRST sort key, so a
+      # row that genuinely belongs to this directory can never be pushed off
+      # the board by a courtesy row — measured: 15 fallback rows buried the one
+      # claude session that was actually recorded here. Adapters that emit two
+      # fields are scoped by construction and always rank 0.
+      while IFS=$'\037' read -r mt sid _rowmark; do
         [ -n "$sid" ] || continue
-        acc="$acc$mt"$'\037'"$name"$'\037'"$tank"$'\037'"$sid"$'\n'
+        _rank=0; [ -n "$_rowmark" ] && _rank=1
+        acc="$acc$_rank"$'\037'"$mt"$'\037'"$name"$'\037'"$tank"$'\037'"$sid"$'\n'
       done <<INNER
 $rows
 INNER
-    done
+    done <<TANKS
+$(tanks_for_engine "$name")
+TANKS
   done <<EOF
 $(list_adapters)
 EOF
-  [ -n "$acc" ] || return 0
+  # Emit the truncation row BEFORE the early returns below: the worst truncation
+  # is the one that empties the list completely, and that is the case the note
+  # exists to explain. A row, not a file (#113) — see _home_items_load.
+  if [ "$_trunc" -gt 0 ]; then
+    printf '%s\037%s\n' "$_HOME_TRUNC_KIND" "$_trunc"
+  fi
+  if [ -z "$acc" ]; then
+    # What this actually relies on: BOTH ways out of this function remove the
+    # sidecar temp file — here, and after the filter below. The `if` is for
+    # reading, not for `set -e`: POSIX and bash exempt every command in an
+    # `&&` list except the one after the final `&&`, so `[ … ] && rm` is a
+    # no-op here too (verified: `set -eo pipefail; f=""; [ -n "$f" ] && rm -f
+    # "$f"; echo SURVIVED` prints SURVIVED, rc=0). The shape that DOES kill
+    # the shell is a failing test as the LAST command of a function — the
+    # function then returns 1 and its CALL is what errexit sees. The `return
+    # 0` two lines down is what rules that out here, not the `if`.
+    #
+    # This is the case the scope note matters MOST in: no Continue list at all
+    # in this directory, while the store is full of sessions `clikae resume`
+    # would list. Nothing shown here, so the whole store is "not on this list".
+    _home_elsewhere_row 0
+    return 0
+  fi
+  # #74 round-1 P2-5: hide burn sessions here too, through the SAME store read
+  # `clikae resume`'s picker uses (_burn_sids_file, home.sh) — the board's own
+  # "R" key already forwards to `clikae resume` (one filter, not two), but
+  # this Continue list is a SEPARATE query (this dir's newest across engines,
+  # not the whole-store picker) and had no filter at all. Burn sessions are
+  # by definition the newest thing on a tank that just ran one, so without
+  # this the board's first screen kept showing lane one-shots even after #74
+  # "fixed" resume — the PR's own claim ("resume AND the home board hide
+  # sidecar sessions by default") was true for one of the two surfaces.
+  # Filtered BEFORE the rank+cut below, or a hidden row would just leave a
+  # gap instead of letting a real session take its slot — which is only true
+  # because the ask above was widened by $_hidden first (P2-1).
+  if [ -n "$_burn_sids_f" ]; then
+    acc="$(printf '%s' "$acc" | awk -F $'\037' -v f="$_burn_sids_f" '
+      BEGIN { while ((getline line < f) > 0) skip[line] = 1 }
+      !($5 in skip)
+    ')"
+    rm -f "$_burn_sids_f"
+    if [ -z "$acc" ]; then _home_elsewhere_row 0; return 0; fi
+  fi
   # Rank newest-first by epoch mtime, keep top N, and only THEN read each one's
   # title + recap (the only content greps — bounded to the few rows actually shown).
-  printf '%s' "$acc" | sort -t$'\037' -k1,1 -rn | head -n "$CLIKAE_HOME_RECENT_MAX" \
-    | while IFS=$'\037' read -r mt engine tank sid; do
+  #
+  # Ranked into a variable rather than straight down the pipe, because the
+  # scope note needs to know how many rows this list ACTUALLY shows, and the
+  # `| while` below is a subshell nothing can come back out of (#113's lesson,
+  # one layer down).
+  local _top _shown
+  # Sort key one: scope (0 = this directory, 1 = a fallback row an adapter
+  # could not place), ascending. Key two: mtime, descending. So the list is
+  # "everything that is really here, newest first, then whatever filler is
+  # left" — never "filler, because filler happened to be newer".
+  _top="$(printf '%s' "$acc" | sort -t$'\037' -k1,1n -k2,2rn | head -n "$CLIKAE_HOME_RECENT_MAX")"
+  _shown="$(printf '%s\n' "$_top" | LC_ALL=C grep -c . 2>/dev/null || true)"
+  case "$_shown" in ''|*[!0-9]*) _shown=0 ;; esac
+  _home_elsewhere_row "$_shown"
+  printf '%s\n' "$_top" \
+    | while IFS=$'\037' read -r _rank mt engine tank sid; do
         [ -n "$sid" ] || continue
         local dir title recap age now _d aflag _act
         dir="$(profile_dir "$engine" "$tank")"
@@ -137,14 +581,340 @@ EOF
         fi
         recap="$(adapter_session_recap "$dir" "$sid" 2>/dev/null || true)"
         # Human age (epoch mtime -> "5m / 3h / 2d"), the hover detail when a session
-        # has no recap, so the expand is always visible.
-        age="$(_human_age "$mt")"
+        # has no recap, so the expand is always visible. Guarded like tmux.sh's
+        # call (P3-5, 2026-09-14 round-2 review): _human_age lives in
+        # lib/core/duration.sh, and 20+ test files source this file without it.
+        age=""; declare -F _human_age >/dev/null 2>&1 && age="$(_human_age "$mt")"
         # Is this session on the tank you're currently using? (● vs ○). Packed into
         # the active field as "<flag> <age>" so the draw has both.
         aflag="0"; _act="$(_home_active_for "$engine" 2>/dev/null || true)"
         [ -n "$_act" ] && [ "$_act" = "$tank" ] && aflag="1"
         printf 'resume\037%s\037%s\037%s\037%s\037%s %s\037%s\n' "$engine" "$tank" "$title" "$recap" "$aflag" "$age" "$sid"
       done
+}
+
+# _home_live_rows -> one row per session running RIGHT NOW on this machine.
+#
+# The board's other sections answer "which account" and "what did I do before".
+# This one answers "what is alive", which had no section until tmux made it
+# possible for the answer to be more than "whatever is in front of me".
+#
+# Same shape as a resume row, deliberately: dot · name · engine · "title". The
+# title is the point — `claude/x` does not tell you WHICH piece of work that is,
+# and the maintainer's own words for why this section exists were "I need to know
+# the name I gave it".
+#
+# The title comes from live_session_id (lib/core/live.sh) when this session
+# carries a recorded identity — exact, no guessing. That covers a resume of a
+# KNOWN past session, and (2026-09-12 R1 review) a bare "start fresh" launch
+# too, on any engine whose adapter defines adapter_new_session_args: clikae
+# mints the id itself before the engine ever runs (DESIGN-tmux.md Rule 2).
+# Only a session with genuinely NOTHING recorded — an engine with no such
+# hook, or one started before this existed — falls back to the tank's newest
+# transcript, same as always. That fallback is only a guess when it is
+# actually ambiguous — a tank with two live sessions and no recorded identity
+# for this one — and ONLY then does the title get a trailing "?": a tank
+# with a single live session and no ambiguity to resolve renders the SAME
+# title the guess would have found anyway, marker included or not depending
+# on whether identity was actually recorded — not byte-identical to a
+# pre-identity build in every shape (E4/E5, 2026-09-12 R4/R5 review).
+#
+# 🔴 2026-09 report: a bare session and a resumed one on the same tank showed
+# the SAME title — both fell back to "the tank's newest transcript" (whichever
+# had the most recent activity), because the resolver was keyed by TANK, never
+# by which session a given row actually is. Different tanks were never
+# affected — this is why they showed correctly.
+#
+# note carries the tmux session NAME, so opening the row attaches to THAT session
+# rather than starting anything.
+
+# _home_sid_claimed <engine> <tank> <sid> -> success if a STAMPED row already
+# claims <sid> on this tank. Checked against $_claimed, built below in
+# _home_live_rows' first pass. See R1-P1-1: without this, an unstamped row's
+# guess and a neighbouring stamped row can key on the SAME transcript, so the
+# two rows read as one duplicated title with nothing but a "?" telling them
+# apart — on the exact "one resume, one bare launch" shape the report itself
+# used as its example.
+_home_sid_claimed() {
+  printf '%s' "$_claimed" | grep -Fxq "$1/$2"$'\t'"$3" 2>/dev/null
+}
+
+_home_live_rows() {
+  command -v tmux >/dev/null 2>&1 || return 0
+  local _all; _all="$(live_session_names)"
+  [ -n "$_all" ] || return 0
+
+  # PASS 1: derive engine/tank/stamp ONCE per live session (into $_rows, so
+  # neither the render pass below nor pass 2 has to re-run live_split /
+  # live_session_id a second time — R1-P3-6 / R2-P3-6 asked for exactly this),
+  # and from that: (a) which (engine, tank) pairs are ambiguous — more than
+  # one live session — and (b) which sids are already CLAIMED by a STAMPED row
+  # on that tank. A tank with exactly one live row is never ambiguous,
+  # however this resolves.
+  local _dupkeys="" _claimed="" _rows="" _n _cr _at _e _t _c0
+  while IFS=$'\t' read -r _n _cr _at; do
+    [ -n "$_n" ] || continue
+    IFS=$'\t' read -r _e _t <<SPLIT
+$(live_split "$_n" 2>/dev/null)
+SPLIT
+    [ -n "$_e" ] && [ -n "$_t" ] || continue
+    _dupkeys="$_dupkeys$_e/$_t"$'\n'
+    _c0="$(live_session_id "$_n" 2>/dev/null || true)"
+    # \037, not \t: $_c0 (the stamp) is routinely EMPTY for a bare session,
+    # and `IFS=$'\t' read` — tab being one of bash's "IFS whitespace"
+    # characters — COLLAPSES adjacent tab delimiters instead of yielding an
+    # empty field, silently shifting every field after it left by one. \037
+    # is not whitespace, so an empty field stays exactly one field.
+    _rows="$_rows$_n"$'\037'"$_e"$'\037'"$_t"$'\037'"$_c0"$'\037'"$_cr"$'\037'"$_at"$'\n'
+    [ -n "$_c0" ] && _claimed="$_claimed$_e/$_t"$'\t'"$_c0"$'\n'
+  done <<EOF
+$_all
+EOF
+
+  # PASS 2: give every UNSTAMPED session a provisional guess too, and add it
+  # to $_claimed the same as a real stamp — AFTER pass 1, so every genuine
+  # stamp on this board is already known before any guessing starts.
+  #
+  # Why this has to run before the render pass, not inside it (R2-P1-1): the
+  # STALE-stamp check below asks "is there a transcript in my tank newer than
+  # my own creation time that NOTHING ELSE has already claimed" — and without
+  # this pass, "nothing else has claimed it" only ever meant "no OTHER
+  # STAMPED row claims it". A second, merely BARE (unstamped) live session on
+  # the same tank is real and produces its own real transcript, and that
+  # transcript is, by construction, always newer than ITS OWN window's
+  # creation — which in practice means newer than a NEIGHBOURING stamped
+  # row's creation too, the instant the bare session exists, with no `/clear`
+  # involved at all. The old check read that as "my stamp went stale" on
+  # every row but whichever session had most recently been typed in —
+  # reproducible on REAL timing (a transcript mtime after both sessions'
+  # creation, not the pre-existing tests' fixed pre-creation dates) even in
+  # the simplest two-session, one-resumed-one-bare shape, which is issue
+  # #55's own example. Reserving each bare row's own best-available guess
+  # HERE, in session order (newest tmux session first, same order the render
+  # pass draws them, so an earlier/busier bare row's own reservation is
+  # respected by a later one on the same tank too), means a stamped row's
+  # stale check only ever sees a candidate as "unclaimed" when NOTHING on
+  # this board — stamped or guessed — already explains it, which is the only
+  # time treating it as "my session moved on" is actually warranted.
+  local _guessmap="" _gn _ge _gt _gc0 _gcr _gat
+  while IFS=$'\037' read -r _gn _ge _gt _gc0 _gcr _gat; do
+    [ -n "$_gn" ] || continue
+    # 2026-09-12 round-1 fix review, P1-1: this used to skip the whole guess
+    # pass in board mode, leaving `title="$tank"` (below) as the only outcome
+    # for every unstamped live row on a board build. adapter_recent_sids now
+    # answers from the snapshot first and only falls through to a live,
+    # per-directory scan when the snapshot itself has nothing — bounded by
+    # THIS tank's own file count either way, never every transcript on disk —
+    # so there is no cost reason left to disable it here.
+    [ -n "$_gc0" ] && continue   # a real stamp — already in $_claimed from pass 1
+    load_adapter "$_ge" >/dev/null 2>&1 || true
+    declare -F adapter_recent_sids >/dev/null 2>&1 || continue
+    local _gdir _gmt _gcand _gsid=""
+    _gdir="$(profile_dir "$_ge" "$_gt")"
+    while IFS=$'\037' read -r _gmt _gcand; do
+      [ -n "$_gcand" ] || continue
+      _home_sid_claimed "$_ge" "$_gt" "$_gcand" && continue
+      _gsid="$_gcand"
+      break
+    done <<EOF
+$(adapter_recent_sids "$_gdir" 10 2>/dev/null)
+EOF
+    if [ -n "$_gsid" ]; then
+      _claimed="$_claimed$_ge/$_gt"$'\t'"$_gsid"$'\n'
+      _guessmap="$_guessmap$_gn"$'\t'"$_gsid"$'\n'
+    fi
+  done <<EOF
+$_rows
+EOF
+
+  local name created attached engine tank dir sid title recap age wake_left
+  local guessed stale ambiguous mark
+  while IFS=$'\037' read -r name engine tank sid created attached; do
+    [ -n "$name" ] || continue
+    [ -n "$engine" ] && [ -n "$tank" ] || continue
+    dir="$(profile_dir "$engine" "$tank")"
+
+    title=""; recap=""; guessed=0; stale=0
+    load_adapter "$engine" >/dev/null 2>&1 || true
+
+    # $sid came straight out of $_rows (pass 1's live_session_id read) — this
+    # window's own recorded identity, if any (see tmux_set_session_id,
+    # lib/core/tmux.sh).
+
+    if [ -n "$sid" ]; then
+      # R1-P2-2 — exact identity, but `clikae resume` cd's to the session's
+      # OWN recorded directory before exec'ing, which is routinely not
+      # wherever this board happens to be running from. A stamped sid needs
+      # the same all-projects lookup the resume picker uses —
+      # adapter_find_session + adapter_title_for_file — never one derived
+      # from $PWD.
+      local _ef=""
+      if declare -F adapter_find_session >/dev/null 2>&1; then
+        _ef="$(adapter_find_session "$dir" "$sid" 2>/dev/null || true)"
+      fi
+
+      if [ -n "$_ef" ]; then
+        # R3-P1-1 — staleness is now decided ONLY by direct evidence about
+        # THIS SPECIFIC sid, never by what else is happening on the same
+        # tank. The R2 check treated "a newer transcript that nothing else
+        # on the BOARD claims" as proof this session had moved on (/clear) —
+        # but that signature is IDENTICAL to a `clikae burn`, an
+        # `--ephemeral` run, or an already-ended neighbour writing into the
+        # same tank+directory: none of those are on the live board (a
+        # burn's tmux session name does not parse as a tank — live_split
+        # drops it), so none of them show up in $_claimed either, and
+        # "nothing claims it" was never the same fact as "my own session
+        # wrote it". Measured (2026-09-12 R3 review, probeF): one `clikae
+        # burn` running alongside a resumed, exactly-identified session was
+        # enough to swap the resumed session's own title for the burn's —
+        # and D1/D2/D4/D5 showed the same swap from an already-ended
+        # neighbour, with no burn involved at all. Removed entirely, not
+        # narrowed: there is no signal here that is actually ABOUT this sid.
+        #
+        # What's left checks only THIS sid, directly:
+        #   1. its own transcript file still exists — just confirmed, above.
+        #   2. its own engine process is still running — live_engine_alive
+        #      (lib/core/live.sh) asks whether THIS tmux session's own
+        #      window (not a `wake` watcher window that can outlive it) is
+        #      still there. A window that closed on its own (nothing here
+        #      ever sets remain-on-exit for it) cannot still be the thing
+        #      this stamp names, even when the SESSION persists past it.
+        if ! live_engine_alive "$name"; then
+          stale=1
+        fi
+        if declare -F adapter_title_for_file >/dev/null 2>&1; then
+          title="$(adapter_title_for_file "$_ef" 2>/dev/null || true)"
+          recap="$(adapter_session_recap "$dir" "$sid" 2>/dev/null || true)"
+        fi
+      else
+        # R3-P2-2 — the OTHER direct, sid-specific stale signal: the stamped
+        # transcript itself is simply gone (deleted, moved, or a uuid minted
+        # at launch whose file the engine never got the chance to write).
+        # This IS staleness, and unlike the sibling-scan removed above it
+        # needs no inference about anyone else — so it must fall through to
+        # the ordinary guess below MARKED, not silently as if nothing had
+        # ever been recorded. The previous behaviour (sid=""; stale=0 here)
+        # threw the stale fact away, so a stamp pointing nowhere rendered as
+        # an unmarked, confident guess (2026-09-12 R3 review, probeC5).
+        stale=1
+        sid=""
+      fi
+    fi
+
+    if [ -z "$sid" ] && declare -F adapter_recent_sids >/dev/null 2>&1; then
+      # No recorded identity — the tank-scoped guess pass 2 already computed
+      # for THIS exact row (R1-P1-1: excluding every sid a stamped OR
+      # already-guessed row on this same tank has claimed), looked up by
+      # session name rather than recomputed here, so the render pass and the
+      # exclusion set it depends on can never drift apart.
+      guessed=1
+      sid="$(printf '%s' "$_guessmap" | awk -F'\t' -v n="$name" '$1==n{print $2; exit}' 2>/dev/null || true)"
+      if [ -z "$sid" ]; then
+        # This row was STAMPED as of pass 2 (so pass 2 skipped it, having no
+        # reason yet to think it would need a guess) but turned out
+        # unfindable above. Compute the same exclusion-aware guess every
+        # OTHER bare row already got from pass 2, live, against the now
+        # fully-built $_claimed — this is the rare corner, not the common
+        # path, so recomputing it here rather than in pass 2 for every
+        # stamped row costs nothing in the common case.
+        local _cmt _csid
+        while IFS=$'\037' read -r _cmt _csid; do
+          [ -n "$_csid" ] || continue
+          _home_sid_claimed "$engine" "$tank" "$_csid" && continue
+          sid="$_csid"
+          break
+        done <<EOF
+$(adapter_recent_sids "$dir" 10 2>/dev/null)
+EOF
+      fi
+    fi
+
+    if [ -n "$sid" ] && [ -z "$title" ]; then
+      if declare -F adapter_session_title >/dev/null 2>&1; then
+        title="$(adapter_session_title "$dir" "$sid" 2>/dev/null || true)"
+      fi
+      [ -n "$recap" ] || recap="$(adapter_session_recap "$dir" "$sid" 2>/dev/null || true)"
+    fi
+
+    # R3-P2-1 — every path above can still come up with nothing to show: a
+    # stamp whose transcript was never written, or a guess whose entire
+    # exclusion-aware candidate pool was already claimed by other rows on a
+    # busy tank (2026-09-12 R3 review, probeE1/probeE2/D3 — a literal empty
+    # string rendered in the title column, the one thing
+    # tests/bats/live.bats has a case dedicated to forbidding). For the
+    # guess-pool-exhausted case, main matched this: there was always SOME
+    # transcript on the tank to fall back to, so main never rendered a blank
+    # there either. Falling back the same way here — the tank's own single
+    # newest transcript, with no exclusion at all (an honest,
+    # possibly-duplicate guess beats a blank row) — keeps that parity. The
+    # OTHER branch below is not parity, it's a bonus fix: when a tank has NO
+    # transcript on disk at all, main itself rendered a literal empty title
+    # (2026-09-12 R4 review, R4-P3-1, probe BI-6) — this falls back to the
+    # tank's own name instead, closing a pre-existing gap this comment used
+    # to claim didn't exist. $guessed is set either way: neither answer is a
+    # confirmed fact,
+    # and the mark logic below only actually flags it when this tank is
+    # ambiguous or this row was independently known stale, same as any other
+    # guess.
+    if [ -z "$title" ]; then
+      guessed=1
+      if [ -z "$sid" ] && declare -F adapter_recent_sids >/dev/null 2>&1; then
+        sid="$(adapter_recent_sids "$dir" 1 2>/dev/null | head -n 1 | cut -d$'\037' -f2)"
+      fi
+      if [ -n "$sid" ] && declare -F adapter_session_title >/dev/null 2>&1; then
+        title="$(adapter_session_title "$dir" "$sid" 2>/dev/null || true)"
+        [ -n "$recap" ] || recap="$(adapter_session_recap "$dir" "$sid" 2>/dev/null || true)"
+      fi
+      [ -n "$title" ] || title="$tank"
+    fi
+
+    # A stale stamp is worth flagging on its own — it is wrong regardless of
+    # how many other live sessions this tank has, and (R3-P2-2) it can now be
+    # true even when $sid was never cleared (the "engine process gone" case
+    # keeps the stamp's own sid and title — the transcript is real, just no
+    # longer being written to — so this must not require $guessed too). An
+    # ordinary "no identity" guess is only worth flagging ON AN AMBIGUOUS
+    # TANK — the whole point is "this title might belong to the OTHER live
+    # row on this tank", which is not a sentence that means anything when
+    # there is no other row.
+    #
+    # R1-P2-3: the marker is a SENTINEL (\001) here, not the literal "?" —
+    # appended to the packed title BEFORE this field is truncated for display
+    # at up to four render sites. Appending the visible "?" here, before
+    # truncation, is what let a long title's "…" quietly eat the marker (an
+    # 80-column guess on an ambiguous tank showed no "?" at all, the exact
+    # length class docs/usage.md's own Live example uses). Each "live)" render
+    # site strips the sentinel, truncates the CLEAN title, then appends "?"
+    # after — see _home_truncv's call sites.
+    mark=0
+    if [ -n "$title" ]; then
+      if [ "$stale" -eq 1 ]; then
+        mark=1
+      elif [ "$guessed" -eq 1 ]; then
+        ambiguous="$(printf '%s' "$_dupkeys" | grep -Fxc "$engine/$tank" 2>/dev/null || true)"
+        [ -n "$ambiguous" ] && [ "$ambiguous" -gt 1 ] && mark=1
+      fi
+    fi
+    [ "$mark" -eq 1 ] && title="${title}"$'\001'
+
+    age=""   # P3-5: same declare -F guard as the Continue rows above
+    declare -F _human_age >/dev/null 2>&1 && age="$(_human_age "$created" 2>/dev/null || true)"
+    # A waiter's countdown rides in its window name, so this costs one call and
+    # keeps no state. Empty unless one is actually counting.
+    wake_left="$(live_wake_note "$name" 2>/dev/null || true)"
+
+      # \036 between the three, not a space. `age` is a human string — "2m ago" —
+      # so a space-packed field splits into the WRONG variables: the consumer read
+      # `attached age wake` and got wake="ago" on every live row. Non-empty means
+      # "a waiter is counting", so the board announced "resuming in ago" for any
+      # selected live session — claiming a feature that was not attached, which is
+      # exactly what the comment at the render site forbids. A non-whitespace IFS
+      # also preserves an empty wake_left, which a space separator collapses away.
+    printf 'live\037%s\037%s\037%s\037%s\037%s\036%s\036%s\037%s\n' \
+      "$engine" "$tank" "$title" "$recap" "$attached" "$age" "$wake_left" "$name"
+  done <<EOF
+$_rows
+EOF
 }
 
 # _home_items  -> one canonical launchable row per "thing you can open", fields
@@ -154,6 +924,25 @@ EOF
 # codex) | target (a single-account launch-only target, e.g. agy). Tanks come
 # first, sorted by CLI then profile, so the renderer can group as it reads.
 _home_items() {
+  local _section_start=""
+  # Frame-scoped caches: the shell rc read once instead of per tank row, and the
+  # per-ENGINE "which tank is active" answer computed once per engine instead of
+  # once per row. Both are rebuilt on every call, so nothing goes stale between
+  # renders — a tank switched in another terminal shows up on the next one.
+  local _ALIAS_MEMO=$'\n' _ACTIVE_MEMO=$'\n' _ALIASN="" _ACTIVE=""
+  _home_alias_prime
+
+  # 0) Live — what is running on this machine right now. First because it is the
+  # most immediate thing on the page: a live session is one keypress from being
+  # back in, where a resume row is a relaunch. Usually 0-3 rows, so it does not
+  # push the rest of the board down.
+  _home_clock
+  _section_start="$_HOME_MS"
+  _home_live_rows
+  _home_timing live "$_section_start"
+  _home_clock
+  _section_start="$_HOME_MS"
+
   # 1) Tanks — every profile.
   # Emitted in BURN ORDER (order_list), NOT grouped by engine — the board IS the
   # order. Engine travels in the cli field and the renderer shows it as an inline
@@ -188,13 +977,13 @@ _home_items() {
     else
       label=""
     fi
-    alias="$(_home_alias_for "$cli" "$profile")"
-    active="$(_home_active_for "$cli")"
+    _home_alias_forv "$cli" "$profile"; alias="$_ALIASN"
+    _home_active_forv "$cli"; active="$_ACTIVE"
     if [ -n "$active" ] && [ "$profile" = "$active" ]; then a=1; else a=0; fi
     local _row; _row="$(printf 'tank\037%s\037%s\037%s\037%s\037%d\037' "$cli" "$profile" "$label" "$alias" "$a")"
     if tank_is_solo "$cli" "$profile"; then _solo="$_solo$_row"$'\n'; else _fleet="$_fleet$_row"$'\n'; fi
   done <<EOF
-$(order_list)
+$(order_list; solo_list)
 EOF
   [ -n "$_fleet" ] && printf '%s' "$_fleet"
   [ -n "$_solo" ] && printf '%s' "$_solo"
@@ -240,24 +1029,45 @@ EOF
     )
   done
 
-  # 4) Resume list — this dir's most recent resumable sessions, if any.
+  _home_timing tanks "$_section_start"
+  _home_clock
+  _section_start="$_HOME_MS"
   _home_recent_rows
+  _home_timing recent "$_section_start"
 }
 
 # Which tanks/targets are currently over quota? Emit one row per DRY thing:
 #   cli ␟ profile ␟ reset-phrase
 # Backed by lib/core/limit.sh, which scans transcripts/logs — so compute this ONCE
 # per board render, never per keypress. Two sources:
-#   • every tank   — limit_tank_dry: claude via transcript, codex via the persisted
-#                    dry_store (burn writes it; its limit is exec-stdout-only), and
+#   · every tank   — limit_tank_dry: claude via transcript, codex via the persisted
+#                    dry_store (burn writes it; exec limits can arrive on stdout or stderr), and
 #                    ACCOUNT CONTAGION so a sibling on the same dry account (e.g.
 #                    claude/MFC the moment claude/L hits its limit) reads dry too.
-#   • log-only targets — limit_log_dry scans the vendor's limit log (agy's cli.log).
+#   · log-only targets — limit_log_dry scans the vendor's limit log (agy's cli.log).
 # Rows key on the SAME (cli, profile) pair the renderer uses, so for a target the
 # key is (binary, target-name) — matching _home_items' target row (cli=$tbin,
 # profile=$tname). Anything not scannable is simply never marked dry (no guessing).
 _home_dry_set() {
   local cli profile reset ep
+  # The two halves below read entirely different things — the tanks' transcripts,
+  # and the vendors' own limit logs — so the second one starts here and is
+  # collected after the first. On the maintainer's machine the target half is a
+  # 53 ms full-file grep of a 3.2 MB agy cli.log that grows with every launch, and
+  # it was simply added to the tank scan's bill. Emission order is unchanged:
+  # tanks first, then targets.
+  #
+  # 🔴 The scan itself is NOT bounded or narrowed to make it cheaper. It decides
+  # which tanks are drawn as out of fuel, this machine's log happens to contain no
+  # quota line at all, and a change with no specimen to test it against is a guess
+  # about the one thing the board must not get wrong.
+  local _gf="" _gpid=""
+  _gf="$(mktemp "${TMPDIR:-/tmp}/clikae-tgt.XXXXXX" 2>/dev/null)" || _gf=""
+  if [ -n "$_gf" ]; then
+    _home_dry_targets >"$_gf" 2>/dev/null &
+    _gpid=$!
+  fi
+
   # limit_dry_set scans every tank's fuel ONCE (vs limit_tank_dry per tank, which
   # re-scanned same-account siblings) and emits cli␟profile␟reset for the dry ones.
   while IFS=$'\037' read -r cli profile reset; do
@@ -266,18 +1076,29 @@ _home_dry_set() {
     # the engine said when we last caught it headless — annotate WHEN we observed
     # it (see dry_seen_suffix) so a stale/off-timezone time reads honestly. claude
     # has no store marker (its dry is a live transcript scan), so it's never tagged.
-    if [ -n "$reset" ] && ep="$(dry_store_epoch "$cli" "$profile" 2>/dev/null)"; then
+    if [ -n "$reset" ] && [ "$reset" != "${LIMIT_RESET_UNVERIFIED:-reset passed · unverified}" ] && ep="$(dry_store_epoch "$cli" "$profile" 2>/dev/null)"; then
       reset="$reset$(dry_seen_suffix "$ep")"
     fi
     printf '%s\037%s\037%s\n' "$cli" "$profile" "$reset"
   done <<EOF
-$(list_all_profiles | limit_dry_set)
+$(list_all_profiles | limit_dry_set --include-unverified)
 EOF
 
-  # Log-only targets (single-account vendors like agy): scan the limit log the
-  # same once-per-render way. Gate on the binary being installed, mirroring
-  # _home_items, so an uninstalled vendor's stale log can't badge a row that
-  # isn't even shown.
+  # Started at the top of this function; here is where we wait for it.
+  if [ -n "$_gf" ]; then
+    _home_reap "$_gpid"
+    cat "$_gf" 2>/dev/null || true
+    rm -f "$_gf"
+  else
+    _home_dry_targets            # no writable temp dir — do it the plain way
+  fi
+}
+
+# Log-only targets (single-account vendors like agy): scan the limit log the
+# same once-per-render way. Gate on the binary being installed, mirroring
+# _home_items, so an uninstalled vendor's stale log can't badge a row that
+# isn't even shown.
+_home_dry_targets() {
   local tfile tname
   for tfile in "$CLIKAE_LIB"/targets/*.sh; do
     [ -f "$tfile" ] || continue
@@ -303,11 +1124,148 @@ EOF
   done
 }
 
+# _home_reap <pid> — wait for one background scan, properly.
+#
+# A non-zero status must not abort the board under `set -e`, and a job that has
+# already exited still needs reaping. The LOOP is the part that matters: a `wait`
+# interrupted by a trapped signal RETURNS (128+n) while the scan is still writing,
+# and the caller would then read a half-written file — a tank that is out of fuel
+# drawn as fuelled, silently. The board's traps all exit today, so this cannot
+# currently fire; it is here because the one trap that would break it is the WINCH
+# handler the resize comment further down keeps circling, and the failure it would
+# cause is invisible.
+_home_reap() {
+  local _st
+  while :; do
+    _st=0; wait "$1" 2>/dev/null || _st=$?     # `|| ` so set -e cannot abort here
+    [ "$_st" -gt 128 ] && kill -0 "$1" 2>/dev/null && continue
+    break
+  done
+}
+
+# Timing has no clock subprocess or stderr effect unless explicitly enabled.
+_home_clock() {
+  _HOME_MS=0
+  [ "${CLIKAE_HOME_TIMING:-}" = 1 ] || return 0
+  _HOME_MS="$(perl -MTime::HiRes=time -e 'printf "%.0f", time()*1000')"
+}
+_home_timing() {
+  [ "${CLIKAE_HOME_TIMING:-}" = 1 ] || return 0
+  _home_clock
+  printf 'clikae home %s: %s ms\n' "$1" "$((_HOME_MS - $2))" >&2
+}
+# Consume boundary snapshots; never discover transcripts on a frame.
+# Callers supply dynamically scoped items/dry locals.
+#
+# P1-1/P2-1 (2026-09-13 round-4 fix review): `board_generation`'s memo
+# (board_state.sh — plain globals as of fix7, an associative array before it;
+# either way, state private to THIS process) does not survive a `$( )`
+# command substitution, which forks a CHILD process that can read whatever
+# the memo already holds but can never write anything back to the parent.
+# Every section below forks at least one of its own: `_home_items`'
+# live/tanks/recent rows each call `adapter_recent_sids`/`board_recent` from
+# inside their OWN `$( )`, and `_home_dry_set`/`board_total` are each a
+# further, sibling one. Naively, that is one board_stale freshness check —
+# and, on a genuine miss, one full per-tank rebuild (a `find` over every
+# transcript that tank has) — PER SECTION, PER TANK, every single render
+# (measured: 3 claude tanks, idle fuel window, 24 `find` calls a frame — 3
+# tanks × 2 finds × 4 sections). A `$( )` subshell is a fork(): it inherits
+# whatever this process's variables already hold AT FORK TIME. Priming the
+# memo here,
+# before any of those subshells exist, means every one of them is born with
+# an already-warm cache and never asks board_stale (or `find`) a second time
+# for the same tank — one board_generation call per tank for the WHOLE
+# render, matching board_total's own per-tank cost exactly, not a multiple
+# of it. Left untimed on purpose: it is now the only place this render's
+# freshness/rebuild cost is paid at all, so attributing it to any one of the
+# four named sections below would make that section's number stand in for
+# the whole render's cost, not its own share of it.
+#
+# round-5 fix review, P2-1: `board_generation`'s memo is global — see
+# board_state.sh's own header for why — so it OUTLIVES a single
+# `_home_refresh` call in a long-lived process (the interactive TUI's
+# `_home_pick`, which calls `_home_refresh` again after every `c`/`m`/`n`/
+# `a`/`d`/`l`), not just a `$( )` subshell. Priming it (above) without first
+# clearing it meant the SECOND refresh in the same process reused the FIRST
+# refresh's memoized generation unconditionally, even though the whole point
+# of priming is to re-ask `board_generation`/`board_stale` on every refresh —
+# a brand new session, or a limit landing, between two refreshes was
+# invisible until the process exited and a new one started. Clearing here,
+# right before priming, makes every refresh ask fresh, exactly as if this
+# were the first one.
+#
+# fix7: the memo stopped being one associative array you can reset with a
+# single `_BOARD_GEN_CACHE=()` (bash 3.2 has none — see board_state.sh's own
+# header on `board_generation`) — `_board_gen_cache_clear` is the equivalent
+# for the plain-globals-keyed-by-sanitized-name replacement.
+_home_refresh() {
+  local _CLIKAE_BOARD=1 _start
+  # #61 round-2 P2-4 (main, #91): warm the per-process tank cache for THIS
+  # refresh before anything below walks the store — board was 2.4x slower than
+  # main on 30 tanks. Reset first, not warm-once-for-the-process: the board is
+  # a single long-lived process that mutates tanks (n/a/d/s below) and calls
+  # this again after every mutation, so a stale cache from the FIRST refresh
+  # would otherwise keep answering for the rest of the session. Guarded:
+  # tests/bats/home.bats sources this file standalone (log.sh only) to
+  # unit-test the overlap/fallback logic with fake _home_items/_home_dry_set,
+  # without profile_store.sh in scope — an unguarded call is a bare "command
+  # not found" under this function's own `set -eo pipefail` contract.
+  #
+  # 🔴 FIRST, before the board priming below, not after: `board_generation`'s
+  # per-tank walk goes through the same tank enumeration, so priming ahead of
+  # the warm would pay the uncached store walk it exists to avoid.
+  declare -F profiles_cache_reset >/dev/null 2>&1 && profiles_cache_reset
+  declare -F profiles_cache_warm  >/dev/null 2>&1 && profiles_cache_warm
+  declare -F _board_gen_cache_clear >/dev/null 2>&1 && _board_gen_cache_clear
+  if declare -F board_generation >/dev/null 2>&1 && declare -F list_all_profiles >/dev/null 2>&1; then
+    local _pe _pt _pd
+    while IFS=$'\t' read -r _pe _pt _pd; do
+      [ -n "$_pt" ] || continue
+      board_generation "$_pe" "$_pd" >/dev/null 2>&1 || true
+    done <<EOF_PROFILES
+$(list_all_profiles)
+EOF_PROFILES
+  fi
+  _home_items_load
+  _home_clock; _start="$_HOME_MS"
+  dry="$(_home_dry_set || true)"
+  _HOME_TOTAL_SESSIONS=0
+  if declare -F board_total >/dev/null; then _HOME_TOTAL_SESSIONS="$(board_total)"; fi
+  _home_timing fuel "$_start"
+}
+
 # Is <engine>/<tank> in the dry set ($1)? Prints its reset phrase (maybe empty)
 # and returns 0 when dry, 1 when not — so:  if r="$(_home_is_dry "$dry" c p)"; then
+# _home_is_dryv <dry-set> <cli> <tank> — sets $_DRY_RESET, returns 0 when dry.
+#
+# 🔴 THIS IS THE HOTTEST FUNCTION ON THE BOARD. Every tank row asks it twice (once
+# through the fuel dot, once for the over-quota footer), and it forked `printf |
+# awk` each time — two processes to look up one key in a string that is usually
+# EMPTY, because a healthy fleet has no dry tanks at all. 2.3 ms a call, 8.5 ms a
+# row, and it repeats on every keypress in the redraw path.
+#
+# Fenced with newlines for the same reason order_list is: the key "claude␟h␟" must
+# match a whole entry, never the tail of a longer engine or tank name.
+#
+# Where awk printed EVERY matching row, this takes the first. limit_dry_set emits
+# one entry per tank, so there is nothing to lose — and a caller reading a reset
+# phrase wants one phrase, not two concatenated.
+_home_is_dryv() {
+  local set key rest
+  _DRY_RESET=""
+  [ -n "$1" ] || return 1
+  set=$'\n'"$1"$'\n'; key=$'\n'"$2"$'\037'"$3"$'\037'
+  case "$set" in *"$key"*) ;; *) return 1 ;; esac
+  rest="${set#*"$key"}"
+  _DRY_RESET="${rest%%$'\n'*}"
+  [ "$_DRY_RESET" != "${LIMIT_RESET_UNVERIFIED:-reset passed · unverified}" ]
+}
+
+# The echoing form, for callers that want the phrase in a $( ). Kept so the
+# lookup itself has one implementation.
 _home_is_dry() {
-  printf '%s\n' "$1" | awk -F'\037' -v c="$2" -v p="$3" \
-    '$1==c && $2==p{print $3; found=1} END{exit !found}'
+  _home_is_dryv "$1" "$2" "$3" || return 1
+  printf '%s\n' "$_DRY_RESET"
 }
 
 # --- The status dot is a FUEL GAUGE, not a "you are here". ----------------------
@@ -317,33 +1275,277 @@ _home_is_dry() {
 # (which still drives the launch target — the on-row `← here` text label it used
 # to also drive was dropped 2026-06-30, commit 9d55047: noise with many shells open).
 
+# The two windows are judged SEPARATELY, not by a single peak = max(window,weekly)
+# (2026-09-22 decision) — they cost differently. A full 5h window means "wait up
+# to two hours"; a full week means the tank is gone for days. Collapsing them into
+# one number let a nearly-spent window hide behind a fine weekly number and vice
+# versa.
+_FUEL_RED_WINDOW_PCT=100   # the 5h window is fully spent — cannot burn at all
+_FUEL_RED_WEEKLY_PCT=100   # the week is fully spent — cannot burn at all
+_FUEL_YELLOW_WEEKLY_PCT=85 # one step before the fleet's own "stop burning a
+                            # shared tank at 90%" rule — dispatch should already
+                            # be moving to another tank by here
+_FUEL_YELLOW_WINDOW_PCT=90 # a burn dispatched now will probably die mid-run
+
 # _home_weekly_path/_read <cli> <profile>  (BETA) — the vendor's verbatim weekly
 # usage phrase, cached (first line) by watch/auto when it streams past. Read-only
 # here; we never compute a %. Absent/empty cache = no yellow reading.
-_home_weekly_path() { printf '%s/cache/weekly/%s-%s' "$CLIKAE_HOME" "$1" "$2"; }
+_home_weekly_pathv() { _WEEKLY_PATH="$CLIKAE_HOME/cache/weekly/$1-$2"; }
+_home_weekly_path()  { _home_weekly_pathv "$1" "$2"; printf '%s' "$_WEEKLY_PATH"; }
+# _home_weekly_readv <cli> <tank> — sets $_WEEKLY, returns 0 when there is one.
+# `read < file` is a redirect, not a pipeline: the old form forked twice (the
+# path builder and `head`) to get the first line of a one-line cache file, once
+# per row, on a file that usually does not exist.
+_home_weekly_readv() {
+  _home_weekly_pathv "$1" "$2"
+  _WEEKLY=""
+  [ -f "$_WEEKLY_PATH" ] || return 1
+  IFS= read -r _WEEKLY < "$_WEEKLY_PATH" 2>/dev/null || true
+  [ -n "$_WEEKLY" ] || return 1
+  return 0
+}
 _home_weekly_read() {
-  local f s; f="$(_home_weekly_path "$1" "$2")"
-  [ -f "$f" ] || return 1
-  s="$(head -n 1 "$f" 2>/dev/null)"
-  [ -n "$s" ] || return 1
-  printf '%s' "$s"
+  _home_weekly_readv "$1" "$2" || return 1
+  printf '%s' "$_WEEKLY"
 }
 
 # _home_fuel_dot <dry_set> <cli> <profile>  ->  echoes  "<colored-glyph>\037<note>"
 # note carries the dry reset phrase / weekly-% string (may be empty). Priority is
 # mutually exclusive: dry → weekly(BETA) → detectable-ready → no-reading.
 _home_fuel_dot() {
-  local dry="$1" cli="$2" profile="$3" reset wk
-  if reset="$(_home_is_dry "$dry" "$cli" "$profile")"; then
-    printf '%b●%b\037%s' "$__C_RED" "$__C_RESET" "${reset:-over quota}"; return 0
+  # 🔴 THE GLYPH CARRIES THE MEANING; COLOUR ONLY REINFORCES IT. Dry, weekly-warn
+  # and ready all printed the SAME `●` and differed by colour alone — so the one
+  # signal the board exists to give was invisible to anyone with a colour-vision
+  # deficiency (~8% of men), invisible under NO_COLOR, and invisible in a piped
+  # or screenshotted board. The overlay's own legend read
+  # `● ready · ● dry · ● weekly % · ○ no reading`: four labels, two glyphs.
+  # Now each state has its own shape, and colour says the same thing twice.
+  _home_fuel_dotv "$1" "$2" "$3"
+  printf '%s\037%s' "$_FDOT" "$_FNOTE"
+}
+
+# _home_codex_status_readv <profile> — codex's OWN proactive 5h/weekly usage
+# (unlike the dry set and the weekly-BETA cache above, this fires on a
+# HEALTHY tank too — codex reports "N% left, resets …" for both windows
+# whether or not either is exhausted). Sets $_CODEX_DOT/$_CODEX_NOTE,
+# returns 0 when codex has ever reported anything for this tank, 1
+# (never a guessed reading) when it hasn't. See lib/core/limit.sh's
+# limit_codex_status_cached and docs/DESIGN-board-fuel-dots.md.
+#
+# P2-1 (2026-09-12 round-1 review): calls the CACHED entry point, not
+# limit_codex_status directly — the plain form re-scans every rollout file's
+# content on every call, which broke _home_fuel_dotv's fork-free contract
+# (a couple of SECONDS on a 120-rollout store; see limit_codex_status_cached's
+# header and REPORT-codex-light-fix1.md for the exact before/after numbers).
+# The cache lives at $CLIKAE_HOME/cache/codex/<profile>, the same shape as
+# the weekly cache a few lines up.
+_home_codex_status_readv() {
+  local profile="$1" dir now cache fields light note
+  _CODEX_DOT=""; _CODEX_NOTE=""
+  dir="$(profile_dir codex "$profile")"
+  now="$(date +%s 2>/dev/null || echo 0)"
+  cache="$CLIKAE_HOME/cache/codex/$profile"
+  fields="$(limit_codex_status_cached "$dir" "$now" "$cache" 2>/dev/null)" || return 1
+  IFS=$'\037' read -r light note _ <<< "$fields"
+  # Glyph = which state (matches the existing shapes exactly — dry is ALWAYS
+  # ○, weekly-warn is ALWAYS ◐, ready is ALWAYS ● — see the legend a few
+  # hundred lines down and DESIGN-board-fuel-dots.md's "glyph carries the
+  # meaning, colour only reinforces it"); colour is redundant on purpose.
+  case "$light" in
+    red)    _CODEX_DOT="${__C_RED}○$__C_RESET" ;;
+    yellow) _CODEX_DOT="${__C_YELLOW}◐$__C_RESET" ;;
+    green)  _CODEX_DOT="${__C_GREEN}●$__C_RESET" ;;
+    *)      return 1 ;;
+  esac
+  _CODEX_NOTE="$note"
+  return 0
+}
+
+# _home_fuel_dotv <dry-set> <cli> <tank> — the GLYPH only, into $_FDOT.
+#
+# The redraw path wants just the mark, and every row was paying a `$( )` to get
+# it — and this one is the priciest on the board, because _home_is_dry forks awk
+# inside it. Measured on the maintainer's store: 4.3 ms per call, ~39 ms of a
+# 248 ms frame, for a value that cannot change between two keypresses.
+# The echoing form above stays for the non-hot callers that want the phrase too.
+#
+# P3-1 (round-2 review): this header used to promise "fork-free" outright.
+# That was never true even at its narrowest (see the codex paragraph below,
+# unchanged), and P2-1(c)'s fix to actually SHOW the vendor cache (not just
+# the fresh-within-120s slice of it) made it less true, not more: every tank
+# not yet memoized this redraw still pays one `jq` fork (usage_board_fields)
+# to parse its cache file, plus one `date` fork for the whole redraw (below,
+# shared via $_FUEL_MEMO_NOW — not one per tank). The real, current contract
+# is "at most one `date` fork per redraw, and at most one `jq` fork per
+# (dry,cli,tank) key per redraw" — memoization removes the multiplier a tank
+# repeated across several rows used to pay (see the P2-1 round-1 comment
+# just below), it does not remove the base cost of reading the cache at all.
+# Measured on this host, µs/call, `origin/main` (no usage cache in play) vs
+# this branch: 43–49 (main) vs ~960–1000 with a warm vendor cache and one
+# call per tank per redraw (was ~4700 before the P2-1 round-1 memoization —
+# see docs/DESIGN-board-fuel-dots.md's own numbers). A hand-rolled bash-only
+# JSON reader could close that last gap, but the cache format already goes
+# through `jq -ce` on write specifically so nothing downstream has to
+# re-implement JSON parsing by hand (see lib/core/usage.sh's usage_read) —
+# rewriting that decision here, for one caller, in exchange for shaving a
+# sub-millisecond-per-tank cost that is not on any hot per-keypress path
+# (only a redraw, and only the tanks whose memo missed) was judged not worth
+# the fragility. Rewritten to say what ships, not what this used to promise.
+#
+# "Fork-free" was, and remains, more aspirational for the codex branch
+# specifically: a cache hit (_home_codex_status_readv ->
+# limit_codex_status_cached) still costs a handful of forks (`find`/`stat`/
+# `head`/`awk` to check the cache key) — see P2-1 in
+# limit_codex_status_cached's header — just no longer one proportional to
+# the rollout store's CONTENT size, which is what actually broke this
+# contract before that fix.
+_home_fuel_dotv() {
+  local dry="$1" cli="$2" profile="$3"
+  # P2-1 (round-1 review): a tank can appear in more than one row of the SAME
+  # redraw (a Live row and its Tank row are the same tank) — 1634/1657/1686/
+  # 2574/2632 are five call sites, not five DIFFERENT tanks. usage_cached_fields
+  # forks `date`+`jq`; paying that per ROW instead of per TANK-per-REDRAW was
+  # the 719µs -> 4605µs regression. _home_fuel_memo_reset (called once per
+  # render, same "once per render" shape as _home_cols_prime) clears this
+  # between redraws; within one redraw a repeat (dry,cli,profile) key is
+  # served from memory with zero forks.
+  local _key="$dry"$'\037'"$cli/$profile" _n="${#_FUEL_MEMO_KEYS[@]}" _i
+  if [ "$_n" -gt 0 ]; then
+    for (( _i = 0; _i < _n; _i++ )); do
+      if [ "${_FUEL_MEMO_KEYS[_i]}" = "$_key" ]; then
+        _FDOT="${_FUEL_MEMO_DOT[_i]}"; _FNOTE="${_FUEL_MEMO_NOTE[_i]}"
+        return 0
+      fi
+    done
   fi
-  if wk="$(_home_weekly_read "$cli" "$profile")"; then
-    printf '%b●%b\037%s' "$__C_YELLOW" "$__C_RESET" "$wk"; return 0
+  [ -n "$_FUEL_MEMO_NOW" ] || _FUEL_MEMO_NOW="$(date +%s 2>/dev/null || echo 0)"
+  _home_fuel_dotv_compute "$dry" "$cli" "$profile" "$_FUEL_MEMO_NOW"
+  _FUEL_MEMO_KEYS[_n]="$_key"; _FUEL_MEMO_DOT[_n]="$_FDOT"; _FUEL_MEMO_NOTE[_n]="$_FNOTE"
+}
+
+# _home_fuel_memo_reset — clear the per-redraw fuel-dot memo. Called once at
+# the top of each redraw entry point (_home_render_static, _home_pick_draw_body),
+# right beside _home_cols_prime — the same "one per render, not one per row"
+# shape that function already established.
+_FUEL_MEMO_KEYS=(); _FUEL_MEMO_DOT=(); _FUEL_MEMO_NOTE=(); _FUEL_MEMO_NOW=""
+_home_fuel_memo_reset() {
+  _FUEL_MEMO_KEYS=(); _FUEL_MEMO_DOT=(); _FUEL_MEMO_NOTE=(); _FUEL_MEMO_NOW=""
+}
+
+# The actual computation _home_fuel_dotv used to do inline — unchanged logic,
+# just given a $4 `now` (epoch seconds, shared for the whole redraw) so it
+# never forks `date` itself; usage_board_fields accepts the same param.
+#
+# P2-1(c) (round-2 review): this used to call usage_cached_fields, which
+# stops returning ANYTHING once the reading is older than the 120s TTL —
+# and nothing but a manual `clikae usage` ever refreshes it (see
+# lib/core/usage.sh's "who writes this cache" header), so on a real machine
+# the vendor number was invisible almost all the time (round-2 review's own
+# receipt: 3 of 4 real tanks, hours stale, showed nothing). usage_board_fields
+# has no TTL of its own — it returns whatever is on disk, however old, same
+# cache-only/no-fetch/reset-instant-aware contract as burn's
+# usage_cache_peek — so THIS function is the one that draws the line: still
+# shown, silently, inside the TTL; shown WITH its age once past the TTL
+# ("window 44% · weekly 20% · 3h ago" — _human_age already has this exact
+# phrasing, built for the Continue list); and treated as if there were no
+# cached reading at all once the reading is 24h or older (falls through to
+# the same dry/weekly/codex/ready chain below this block, unchanged) — a
+# number that old is closer to noise than to a fact worth a coloured dot.
+#
+# P2-1, round 3: dry and "reset passed · unverified" are checked FIRST, below,
+# and WIN outright — a fresh vendor percentage never overrides them. Per
+# docs/DESIGN-board-fuel-dots.md:41 (red = dry, including account contagion
+# and the verbatim reset string) and :223-224 (#75: an expired limit takes
+# precedence over proactive percentage snapshots), the vendor reading only
+# gets to colour a tank that has already cleared BOTH checks. Landing the
+# usage_board_fields block ahead of _home_is_dryv (as this function did before
+# round 3) let any <24h cached reading paper over a dry tank, silently eating
+# its reset string — round-2's own receipt found four real tanks all carrying
+# a vendor reading, so that ordering was the common case, not an edge one.
+_home_fuel_dotv_compute() {
+  local dry="$1" cli="$2" profile="$3" now="${4:-}"
+  _FNOTE=""
+  [ -n "$now" ] || now="$(date +%s 2>/dev/null || echo 0)"
+  if _home_is_dryv "$dry" "$cli" "$profile"; then
+    _FDOT="${__C_RED}○$__C_RESET"; _FNOTE="${_DRY_RESET:-over quota}"; return 0
   fi
-  if limit_engine_detectable "$cli"; then
-    printf '%b●%b\037' "$__C_GREEN" "$__C_RESET"; return 0
+  if [ "$_DRY_RESET" = "${LIMIT_RESET_UNVERIFIED:-reset passed · unverified}" ]; then
+    _FDOT="${__C_YELLOW}◐$__C_RESET"; _FNOTE="$_DRY_RESET"; return 0
   fi
-  printf '%b○%b\037' "$__C_DIM" "$__C_RESET"
+  local usage_fields up uw cached_at age ttl
+  if declare -F usage_board_fields >/dev/null && usage_fields="$(usage_board_fields "$cli" "$profile" "$now")"; then
+    # 4th field (peak = max(window,weekly)) is the OLD single-axis reading;
+    # the dot no longer uses it — window and weekly are judged separately
+    # below — so it is read and discarded, not carried into an unused local.
+    IFS=$'\t' read -r up uw _ cached_at <<< "$usage_fields"
+    # P3-7 (round-6 review): a `cached_at` in the FUTURE (host clock skew)
+    # counts as AGE 0. This clamp is one half of a rule usage_cache_peek
+    # (lib/core/usage.sh) now shares — it used to REJECT that same reading
+    # instead, so a cache stamped 30 seconds ahead was unknown for burn
+    # ranking and freshly-read on the board at the same instant. Age 0 also
+    # means no age annotation below, which is the honest rendering: we have
+    # no idea how old it really is, and the stamp says "now".
+    age=$(( now - cached_at )); [ "$age" -ge 0 ] || age=0
+    if [ "$age" -lt 86400 ]; then
+      ttl="${CLIKAE_USAGE_TTL:-120}"; case "$ttl" in ''|*[!0-9]*) ttl=120 ;; esac
+      _FNOTE="window ${up}% · weekly ${uw}%"
+      # 🔴 The `declare -F` is on THIS line on purpose. `_human_age` lives in
+      # lib/core/duration.sh and 20+ test files source home.sh on its own, so
+      # tests/bats/home.bats ("every _human_age call in home.sh is guarded by
+      # declare -F") asserts the guard per CODE LINE — reaching this one needs
+      # a real usage cache, so nothing else would catch it. #89 added this
+      # third call site after #102's test was written against two, and main
+      # (459c981) carries it unguarded: that test is red on main itself, not
+      # only here. Guarded rather than carried forward. Same `&&`-list shape
+      # as the other two call sites; errexit exempts every command in an
+      # `&&` list but the last, so a missing function is a no-op, not a death.
+      declare -F _human_age >/dev/null 2>&1 && [ "$age" -ge "$ttl" ] && _FNOTE="$_FNOTE · $(_human_age "$cached_at" "$now")"
+      # Judged separately, not by peak = max(window,weekly) — see the
+      # constants' own header just above _home_weekly_pathv. A full window
+      # costs a couple of hours; a full week costs days, so weekly's own
+      # yellow line sits below window's.
+      up="${up%%.*}"; uw="${uw%%.*}"
+      if [ "$up" -ge "$_FUEL_RED_WINDOW_PCT" ] || [ "$uw" -ge "$_FUEL_RED_WEEKLY_PCT" ]; then
+        _FDOT="${__C_RED}○$__C_RESET"
+      elif [ "$uw" -ge "$_FUEL_YELLOW_WEEKLY_PCT" ] || [ "$up" -ge "$_FUEL_YELLOW_WINDOW_PCT" ]; then
+        _FDOT="${__C_YELLOW}◐$__C_RESET"
+      else
+        _FDOT="${__C_GREEN}●$__C_RESET"
+      fi
+      return 0
+    fi
+    # 24h or older: too stale to trust — fall through as if unread, below.
+  fi
+  if _home_weekly_readv "$cli" "$profile"; then
+    _FDOT="${__C_YELLOW}◐$__C_RESET"; _FNOTE="$_WEEKLY"; return 0
+  fi
+  # #107: a cached "expired" reading (under 24h, same ceiling as a number) is
+  # said out loud instead of falling through to a green "ready" — an idle tank
+  # at 99% weekly used to look exactly like a fresh one. The dot is the
+  # honest "no reading" `·` (there are no numbers), and the note carries the
+  # word "expired" and the remedy, cut to fit the gutter
+  # (usage_expired_board_notev; the full sentence is `clikae usage`'s). No
+  # emoji anywhere on this row (no delivery surface prints one) — the note is
+  # a word, not a glyph, so it costs no special width handling. Fork-free:
+  # one `read` of a one-line file, the same technique lib/core/tmux.sh's
+  # status row uses.
+  local _ucache="$CLIKAE_HOME/state/usage/$cli/$profile.json" _uline="" _uca
+  if [ -f "$_ucache" ]; then
+    IFS= read -r _uline < "$_ucache" || true
+    case "$_uline" in
+      *'"source":"expired"'*)
+        _uca="${_uline##*\"cached_at\":}"; _uca="${_uca%%[!0-9]*}"
+        if [ -n "$_uca" ] && [ $(( now - _uca )) -lt 86400 ] && declare -F usage_expired_board_notev >/dev/null 2>&1; then
+          usage_expired_board_notev "$profile"
+          _FDOT="${__C_DIM}·$__C_RESET"; _FNOTE="$_UEH"; return 0
+        fi ;;
+    esac
+  fi
+  if [ "$cli" = codex ] && _home_codex_status_readv "$profile"; then
+    _FDOT="$_CODEX_DOT"; _FNOTE="$_CODEX_NOTE"; return 0
+  fi
+  if limit_engine_detectable "$cli"; then _FDOT="${__C_GREEN}●$__C_RESET"; return 0; fi
+  _FDOT="${__C_DIM}·$__C_RESET"
 }
 
 # _home_chunk <word> <width> -> the word cut into space-separated chunks, each at
@@ -389,7 +1591,21 @@ _home_wrap_prefixed() {
   cols="$(_home_cols)"
   pad="$(printf '%*s' "$hang" '')"
   avail=$(( cols - hang - extra - 1 ))
-  [ "$avail" -ge 12 ] || avail=$(( cols - extra - 1 ))
+  # 🔴 When the hanging indent leaves too little room to wrap into, the old
+  # escape hatch widened the budget to the WHOLE terminal — and still printed the
+  # prefix. So every line came out exactly <hang> columns too wide: at 30 columns
+  # with a 19-column prefix it wrapped the text to 29 and printed 48. The escape
+  # hatch produced the overflow it existed to prevent.
+  #
+  # Dropping the indent is the honest degradation: put the prefix on its own line
+  # and wrap the text under a small one. You lose the column alignment, which is
+  # what a terminal this narrow cannot afford anyway.
+  if [ "$avail" -lt 12 ]; then
+    printf '%b%s%b\n' "$color" "$prefix" "$reset"
+    hang=2; pad='  '; first=0
+    avail=$(( cols - hang - extra - 1 ))
+    [ "$avail" -ge 1 ] || avail=1
+  fi
   # Don't let a `*` in a recap glob against the cwd while we word-split.
   case $- in *f*) ;; *) glob=1; set -f ;; esac
   # CJK has NO INTERWORD SPACES, so a Japanese/Chinese sentence is ONE "word" to
@@ -402,7 +1618,7 @@ _home_wrap_prefixed() {
   # the same treatment, which is also what you want.
   local _rebuilt="" _w
   for _w in $text; do
-    if [ "$(_dwidth "$_w")" -gt "$avail" ]; then
+    _dwv "$_w"; if [ "$_DW_W" -gt "$avail" ]; then
       _rebuilt="$_rebuilt $(_home_chunk "$_w" "$avail")"
     else
       _rebuilt="$_rebuilt $_w"
@@ -412,7 +1628,15 @@ _home_wrap_prefixed() {
   for word in $text; do
     if [ -z "$line" ]; then
       line="$word"
-    elif [ "$(_dwidth "$line $word")" -le "$avail" ]; then
+      continue
+    fi
+    # 🔴 _dwv, not $(_dwidth …). This loop runs once PER WORD, twice over (the
+    # hard-break pass above and the fill pass here), so a keybar of fifteen words
+    # was ~30 subshells in a single call — measured 62 _dwidth forks in ONE
+    # frame, which is where the redraw's time actually went. The fork-free form
+    # computes the identical number into $_DW_W.
+    _dwv "$line $word"
+    if [ "$_DW_W" -le "$avail" ]; then
       line="$line $word"
     else
       if [ "$first" -eq 1 ]; then printf '%b%s%s%b\n' "$color" "$prefix" "$line" "$reset"; first=0
@@ -461,6 +1685,20 @@ _dw_walk() {
   local s="$1" max="$2"
   local i=0 n=${#s} v b2 b3 cp len cw w=0
   _DW_CUT=-1
+  # FAST PATH — no byte has the high bit set, so every character is one ASCII byte
+  # worth exactly one column and the walk below would just count to $n the slow
+  # way. That is most of what this board draws: tank names, engine names, emails,
+  # session ids, English titles. The loop costs ~15 shell operations PER BYTE, and
+  # it runs several times per row, per keypress, in the redraw path — 112 ms to
+  # draw ten rows, nearly all of it here. Control bytes are included on purpose:
+  # the walk below gives everything under 128 a width of 1, so ${#s} agrees with
+  # it byte for byte, and the two must not disagree for ANY input (there is a
+  # differential test over both paths).
+  if [[ "$s" != *[$'\200'-$'\377']* ]]; then
+    if [ "$max" -ge 0 ] && [ "$n" -gt "$max" ]; then _DW_CUT=$max; _DW_W=$max
+    else _DW_W=$n; fi
+    return 0
+  fi
   while [ "$i" -lt "$n" ]; do
     printf -v v '%d' "'${s:i:1}"
     [ "$v" -lt 0 ] && v=$(( v + 256 ))
@@ -536,7 +1774,12 @@ _dw_skip() {
 }
 
 # _dwidth <str> -> the string's DISPLAY width in terminal columns (CJK = 2).
-_dwidth() { local LC_ALL=C; _dw_walk "$1" -1; printf '%s' "$_DW_W"; }
+# _dwidthv leaves the answer in $_DW_W instead of printing it, so a caller on the
+# redraw path does not pay a `$( )` for a number. The C locale stays scoped to
+# this function either way — the walker's contract requires it, and leaking it
+# into the caller would change how the rest of the render sorts and prints.
+_dwidthv() { local LC_ALL=C; _dw_walk "$1" -1; }
+_dwidth()  { _dwidthv "$1"; printf '%s' "$_DW_W"; }
 
 # _dw_atleast <str> <n> — "is <str> at least <n> columns wide?" without scanning
 # the whole string: stops at <n>. Sets _DW_W to the width consumed and returns 0
@@ -563,12 +1806,90 @@ _home_truncv() {
   _TRUNC="${s:0:$_DW_CUT}…"
 }
 
+# _home_live_ttlv <label> <maxcols> — _home_truncv for a Live row's title,
+# marker-aware: result lands in $_TRUNC, same as _home_truncv.
+#
+# _home_live_rows encodes "this title is a guess worth flagging" as a
+# trailing \001 SENTINEL on $label, not the literal "?" — because appending
+# "?" before truncation (the R1-P2-3 bug) let a long title's own "…" silently
+# eat it: at the default 80-column fallback, an ambiguous tank's guessed
+# title regularly runs past the row's ~55-column budget, and a marker glued
+# onto the end of a string that then gets cut from the end is a marker that
+# was never going to survive. So: strip the sentinel FIRST, truncate the
+# CLEAN title with one column reserved for the marker, THEN append the
+# visible "?" — after truncation, where nothing can cut it off again.
+_home_live_ttlv() {
+  local s="$1" n="$2" marked=0
+  case "$s" in
+    *$'\001') marked=1; s="${s%$'\001'}" ;;
+  esac
+  if [ "$marked" -eq 1 ]; then
+    n=$(( n - 1 ))
+    [ "$n" -ge 1 ] || n=1
+  fi
+  _home_truncv "$s" "$n"
+  if [ "$marked" -eq 1 ]; then
+    # R1-P3-1 / R2-P3-3: a title that itself ends in "?" (a real, literal
+    # question in the transcript) must not grow a second one — "??" reads as
+    # a typo, not as "this title is a guess". One trailing "?" already IS the
+    # marker in that case; only add a fresh one when the title didn't supply
+    # its own.
+    case "$_TRUNC" in
+      *'?') : ;;
+      *) _TRUNC="${_TRUNC}?" ;;
+    esac
+  fi
+  return 0
+}
+
 # _home_lpadv <str> <width> — _home_lpad without the subshell; result in $_LPAD.
 _home_lpadv() {
   local s="$1" w="$2" pad
   _dwv "$s"
   pad=$(( w - _DW_W )); [ "$pad" -lt 0 ] && pad=0
   printf -v _LPAD '%s%*s' "$s" "$pad" ''
+}
+
+# _home_live_dup_keysv <items> — sets $_LIVE_KEYS to one "<cli>/<profile>" line
+# per LIVE row in <items>, in the order they'll be drawn. Precomputed ONCE per
+# render (not per row) so a per-row lookup is a cheap grep over a handful of
+# lines, never a re-scan of the whole board.
+#
+# Why this exists: the same tank open in two tmux sessions at once (a bare one
+# and a resumed one) draws TWO live rows, and until now both showed the exact
+# same name — "l" and "l", with nothing to tell them apart (2026-09 report).
+# The tank's transcript can only ever name the tank, never which OF ITS
+# SESSIONS a given row is, so the fix lives entirely in the render layer: count
+# how many live rows share a (cli, profile) and, only when there's more than
+# one, badge them "#1", "#2", ... in the order the board already sorts live
+# sessions (newest first, from live_session_names). A tank with a single live
+# session is untouched — no badge, no column shift.
+_home_live_dup_keysv() {
+  _LIVE_KEYS=""
+  local _k_kind _k_cli _k_profile _k_rest
+  while IFS=$'\037' read -r _k_kind _k_cli _k_profile _k_rest; do
+    [ "$_k_kind" = "live" ] || continue
+    _LIVE_KEYS="$_LIVE_KEYS$_k_cli/$_k_profile"$'\n'
+  done <<EOF
+$1
+EOF
+}
+
+# _home_live_dup_suffixv <cli> <profile> <seen-so-far> — sets $_LIVE_SUFFIX to
+# " #N" (N = this row's 1-based ordinal among same-tank live rows) when this
+# (cli, profile) has MORE THAN ONE live row on the board, else "". <seen-so-far>
+# is the caller's running newline-list of "<cli>/<profile>" for live rows
+# already drawn THIS frame — the caller appends its own key to it after calling
+# this, so the ordinal advances row by row. Needs $_LIVE_KEYS from
+# _home_live_dup_keysv (called once, before the render loop starts).
+_home_live_dup_suffixv() {
+  local _key="$1/$2" _seen="$3" _total _ord
+  _LIVE_SUFFIX=""
+  _total="$(printf '%s' "$_LIVE_KEYS" | grep -Fxc "$_key" 2>/dev/null || true)"
+  [ -n "$_total" ] && [ "$_total" -gt 1 ] || return 0
+  _ord="$(printf '%s' "$_seen" | grep -Fxc "$_key" 2>/dev/null || true)"
+  [ -n "$_ord" ] || _ord=0
+  _LIVE_SUFFIX=" #$((_ord + 1))"
 }
 
 # _dwv <str> — the FORK-FREE _dwidth: leaves the answer in $_DW_W instead of
@@ -604,7 +1925,57 @@ _home_trunc() {
 
 # _home_engine_label <cli> -> the display name for an engine tag. The antigravity
 # target is shown as its canonical short name "agy" everywhere.
-_home_engine_label() { case "$1" in antigravity) printf 'agy' ;; *) printf '%s' "$1" ;; esac; }
+_home_engine_label() { engine_label "$1"; }   # one owner: lib/core/profile_store.sh
+
+# _home_engine_has_memory <engine> — does a "brain" even mean anything here?
+# File-based, like _home_newtank_choices' AI check: loading the adapter would be
+# both slower and wrong (load_adapter provides stubs, so `declare -F` says yes to
+# everything). Without this, a docker or kubectl tank would be reported as having
+# no shared memory, which is not a fact about it — it is a category error.
+_home_engine_has_memory() {
+  grep -qE '^(adapter|target)_memory_(dir|pointer_path)\(\)' \
+    "$CLIKAE_LIB/adapters/$1.sh" "$CLIKAE_LIB/targets/$1.sh" 2>/dev/null
+}
+
+# _home_soulless -> "<engine>/<tank>" lines for FLEET tanks with no shared brain.
+#
+# This exists because the board has exactly one axis — fleet vs solo — and the
+# model now says that axis IS the memory axis. A tank sitting in the fleet
+# without a brain is the one state the board cannot otherwise express, so it is
+# the one state worth spending a line on. Everything else stays quiet.
+#
+# Only reported once a default group exists: before your first share NOTHING is
+# shared, so listing every tank would be noise about a deliberate state.
+_home_soulless() {
+  [ -n "$(soul_default_group 2>/dev/null || true)" ] || return 0
+  local members="" f
+  for f in "$(souls_root)"/*/members; do
+    [ -f "$f" ] || continue
+    members="$members$(cut -f1 "$f" 2>/dev/null || true)"$'\n'
+  done
+  local cli tank path
+  while IFS=$'\t' read -r cli tank path; do
+    [ -n "$cli" ] || continue
+    : "$path"
+    tank_is_solo "$cli" "$tank" && continue
+    _home_engine_has_memory "$cli" || continue
+    case "$members" in *"$cli/$tank"$'\n'*) continue ;; esac
+    printf '%s/%s\n' "$(engine_label "$cli")" "$tank"
+  done <<EOF
+$(list_all_profiles)
+EOF
+}
+
+# One dim line, only when there is something wrong to say. `·` is the family's
+# only bullet and the text carries the meaning on its own — stripping the colour
+# must not strip the fact (signet: colour amplifies, never carries).
+_home_soulless_note() {
+  local list; list="$(_home_soulless)"
+  [ -n "$list" ] || return 0
+  # shellcheck disable=SC2059
+  printf '  %b· %s%b\n' "$__C_DIM" \
+    "$(printf "$T_SOUL_NOBRAIN" "$(printf '%s' "$list" | tr '\n' ' ' | sed 's/ *$//')")" "$__C_RESET"
+}
 
 # _home_agy_email <tank_dir> -> the Google account this agy tank is signed in as,
 # or empty. agy has no clean account field, but its CLI logs the signed-in account
@@ -622,11 +1993,62 @@ _home_lpad() {
   printf '%s%*s' "$s" "$pad" ''
 }
 
+# _home_tank_fields <profile> <engine-label> <account-label> <has-tail>
+#   -> "<name>\037<engine>\037<account>", each padded to its column.
+#
+# 🔴 The three widths were literals (7 / 8 / 22) written out at BOTH tank-row
+# sites — the static board and the interactive one — and neither asked how wide
+# the terminal is. 4 lead + dot + 3 spaces + 7 + 8 + 22 = 45 columns, always.
+# Reported 2026-08-16 over ssh from a PineNote: the board did not fit, and this
+# was one of the rows that could not.
+#
+# Two changes. The account column is now what is LEFT after the fixed chrome
+# (capped at the old 22, so a wide terminal renders exactly as before), and the
+# value is truncated to it rather than only padded to it. And it is padded only
+# when something follows it: otherwise the padding is trailing whitespace that
+# still counts as width, which is how a row whose account was the single
+# character "-" measured 45 columns wide.
+#
+# One function because there were two copies. Copies drift, and these two had
+# to be found by measuring the output rather than by reading either one.
+_home_tank_fields() {
+  _home_tank_fieldsv "$@"
+  printf '%s\037%s\037%s' "$_TF_NM" "$_TF_EN" "$_TF_AC"
+}
+
+# _home_tank_fieldsv — the same, fork-free, into $_TF_NM / $_TF_EN / $_TF_AC.
+#
+# The echoing form above cost SEVEN subshells per tank row (itself, three
+# _home_trunc, three _home_lpad — and each _home_lpad forks _dwidth again). With
+# nine tanks that is the bulk of a redraw. Same arithmetic, no forks.
+_home_tank_fieldsv() {
+  local prof="$1" eng="$2" acct="$3" has_tail="$4" acw
+  acw=$(( $(_home_cols) - 8 - 7 - 8 ))    # 8 = 4 lead + dot + 3 single spaces
+  [ "$acw" -gt 22 ] && acw=22
+  [ "$acw" -lt 3 ]  && acw=3
+  _home_truncv "${acct:--}" "$acw"; _TF_AC="$_TRUNC"
+  if [ -n "$has_tail" ]; then _home_lpadv "$_TF_AC" "$acw"; _TF_AC="$_LPAD"; fi
+  _home_truncv "$prof" 7; _home_lpadv "$_TRUNC" 7; _TF_NM="$_LPAD"
+  _home_truncv "$eng" 8;  _home_lpadv "$_TRUNC" 8; _TF_EN="$_LPAD"
+}
+
 # _home_cols -> the live terminal COLUMN width, via `stty size </dev/tty`
 # (works inside $(), unlike `tput cols` which reads its piped stdout — see the
 # NB in _home_welcome). Falls back to 80 when not a real terminal, unreadable,
 # or implausibly narrow (<30) — same floor _home_wrap_prefixed already uses.
+# 🔴 Cached FOR THE DURATION OF ONE FRAME. Asking costs `stty size </dev/tty`
+# piped into awk — two forks and a tty ioctl — and the answer cannot change
+# while a single frame is being composed. It was being asked 12 times per
+# redraw, once per tank row from inside _home_tank_fields, and that was the
+# single largest cost in the frame (measured: 3.4 ms a call).
+#
+# The cache is a plain variable that each renderer CLEARS then primes at the top
+# of its own frame, so a resize is picked up on the very next one. Priming in the
+# renderer's own shell also means the `$( )` subshells further down inherit the
+# value instead of each re-asking — which is exactly where the 12 came from.
+_home_cols_prime() { _HOME_COLS_CACHE=""; _HOME_COLS_CACHE="$(_home_cols)"; }
 _home_cols() {
+  [ -n "${_HOME_COLS_CACHE:-}" ] && { printf '%s' "$_HOME_COLS_CACHE"; return 0; }
   local cols
   cols="$( { stty size </dev/tty | awk '{print $2}'; } 2>/dev/null || true )"
   # No /dev/tty (piped, redirected, CI) — the terminal is still THERE, we just
@@ -638,6 +2060,19 @@ _home_cols() {
   case "$cols" in ''|*[!0-9]*) cols=80 ;; esac
   [ "$cols" -ge 30 ] || cols=80
   printf '%s' "$cols"
+}
+
+# _home_size -> "<cols>x<rows>" from ONE stty call. Used by the picker's wait to
+# notice a resize; two calls to _home_cols/_home_rows would fork twice a second
+# for the life of an idle board. Empty when there is no controlling terminal —
+# which then never changes, so an idle non-tty board never repaints either.
+_home_size() {
+  local sz
+  sz="$( { stty size </dev/tty; } 2>/dev/null || true )"
+  case "$sz" in
+    *[!0-9\ ]*|'') printf '' ;;
+    *) printf '%sx%s' "${sz##* }" "${sz%% *}" ;;
+  esac
 }
 
 # _home_row_budget <cols> <overhead> [min] -> how many DISPLAY columns are left
@@ -658,6 +2093,55 @@ _home_row_budget() {
   b=$(( cols - overhead ))
   [ "$b" -ge "$min" ] || b="$min"
   printf '%s' "$b"
+}
+
+# _home_row_geom <overhead> <min-title> — decide a session/live row's geometry for
+# the CURRENT terminal, once per frame. Sets:
+#   _RG_ENG    the engine field, coloured and space-suffixed, or "" when dropped
+#   _RG_TITLE  the title budget in display columns
+#
+# 🔴 THE FLOOR HAS TO YIELD. _home_row_budget floors the title at <min> so a
+# narrow terminal cannot drive it to nothing — but a floor that cannot be met is
+# just a guaranteed overflow: at 30 columns the row's own chrome is 25, so
+# 25 + a 20-column floor is a 45-column row on a 30-column screen. Measured
+# exactly that, at 30/36/40.
+#
+# So when the floor cannot be honoured, the row sheds a COLUMN instead of
+# spilling: the engine tag goes first. It is the least load-bearing thing there —
+# the tank name identifies the row, the engine is context, and it is 9 columns
+# (8 padded + separator) recovered in one move. Same sacrifice-ladder principle
+# clean.sh's _clean_row_fit already applies to age/size.
+_home_row_geom() {
+  local overhead="$1" min="$2" cols
+  cols="$(_home_cols)"
+  if [ $(( cols - overhead )) -lt "$min" ]; then
+    _RG_ENG=""
+    overhead=$(( overhead - 9 ))
+    # …and the floor yields with it. Dropping the column is not always enough on
+    # its own: at 30 columns the remaining chrome is 16, so a 20-column floor is
+    # still a 36-column row. Once we are in shed-mode the title takes what is
+    # actually there, down to _home_row_budget's own 12-column default — below
+    # which a title stops being recognisable and the terminal is past helping.
+    [ "$min" -gt 12 ] && min=12
+  else
+    _RG_ENG="KEEP"
+  fi
+  _RG_TITLE="$(_home_row_budget "$cols" "$overhead" "$min")"
+}
+
+# _home_row_eng <cli> -> the coloured, padded engine field for a row, or "" when
+# _home_row_geom decided this terminal cannot afford it.
+_home_row_eng() {
+  _home_row_engv "$1"; printf '%s' "$_RENG"
+}
+
+# _home_row_engv <cli> — the same, fork-free, into $_RENG. Every `$( )` in the
+# redraw path costs ~0.5 ms and this runs once per row, per keypress.
+_home_row_engv() {
+  if [ -z "$_RG_ENG" ]; then _RENG=""; return 0; fi
+  local _el; _el="$1"; [ "$_el" = "antigravity" ] && _el="agy"   # engine_label, inline
+  _home_lpadv "$_el" 8
+  _RENG="$__C_DIM$_LPAD$__C_RESET "
 }
 
 # _home_trunc_mid <str> <maxcols> -> <str> unchanged if it already fits within
@@ -686,36 +2170,89 @@ _home_trunc_mid() {
 # Render the launchable items (passed as $1) as the static tank board. The dry
 # set ($2, from _home_dry_set) badges over-quota tanks with !.
 _home_render_static() {
+  _home_cols_prime          # one width question per render, not one per row
+  _home_fuel_memo_reset     # one date/jq fork per TANK this render, not per row (P2-1)
   local items="$1" dry="$2" any_dry=""
-  local n_tanks n_clis
-  # `grep -c .` exits 1 when the count is 0 — under `set -eo pipefail` that would
-  # abort the whole render. The board can legitimately have 0 fuel tanks now (e.g.
-  # only tool-CLI tanks, which the board filters out), so guard with `|| true`.
-  n_tanks="$(printf '%s\n' "$items" | awk -F'\037' '$1=="tank"' | grep -c . || true)"
-  n_clis="$(printf '%s\n' "$items" | awk -F'\037' '$1=="tank"{print $2}' | sort -u | grep -c . || true)"
-  printf '%b%s%b  %b·  %s%b\n\n' \
-    "$__C_BOLD" "$T_WORDMARK" "$__C_RESET" "$__C_DIM" "$(i18n_summary "$n_tanks" "$n_clis")" "$__C_RESET"
+  # Two numbers for one headline used to cost nine processes — two awks, a sort, a
+  # uniq-by-grep and the pipes to feed them — over a string the loop below is
+  # about to walk anyway. Count them here instead; the engines are de-duplicated
+  # through a newline-fenced memo, the same trick the dry lookup uses. (The old
+  # form needed `|| true` because `grep -c` exits 1 on a count of zero and would
+  # have aborted the render under `set -eo pipefail`; nothing here can fail.)
+  local n_tanks=0 n_clis=0 _seen_cli=$'\n' _k _c
+  while IFS=$'\037' read -r _k _c _; do
+    [ "$_k" = "tank" ] || continue
+    n_tanks=$(( n_tanks + 1 ))
+    case "$_seen_cli" in
+      *$'\n'"$_c"$'\n'*) ;;
+      *) n_clis=$(( n_clis + 1 )); _seen_cli="$_seen_cli$_c"$'\n' ;;
+    esac
+  done <<EOF
+$items
+EOF
+  # Wordmark and summary share a line only when both fit. The joined form is
+  # `clikae  ·  N tanks across M engines` — 34 columns in en-US with two tanks,
+  # and wider in de-DE/pt-BR — printed with no budget at all until 2026-08-16,
+  # so it was the first thing to run off a narrow terminal.
+  local _sum _hw _w1 _w2
+  _sum="$(i18n_summary "$n_tanks" "$n_clis")"
+  _dwidthv "$T_WORDMARK"; _w1="$_DW_W"
+  _dwidthv "$_sum";       _w2="$_DW_W"
+  _hw=$(( _w1 + 5 + _w2 ))                                       # 5 = "  ·  "
+  if [ "$_hw" -le "$(_home_cols)" ]; then
+    printf '%b%s%b  %b·  %s%b\n\n' \
+      "$__C_BOLD" "$T_WORDMARK" "$__C_RESET" "$__C_DIM" "$_sum" "$__C_RESET"
+  else
+    printf '%b%s%b\n' "$__C_BOLD" "$T_WORDMARK" "$__C_RESET"
+    _home_wrap_prefixed "$_sum" "" 0 "$__C_DIM" "$__C_RESET"
+    printf '\n'
+  fi
 
-  local kind cli profile label alias active note cur_sect="" also="" printed_resume=0 rdot
-  local launch_cli="" launch_profile=""
+  local kind cli profile label alias active note cur_sect="" also="" printed_resume=0 printed_live=0 rdot
+  local launch_cli="" launch_profile="" _live_seen=""
   # Title budget, in DISPLAY COLUMNS: cols minus this row's own fixed chrome
   # (4-space lead + dot + space + 7-col name + space + 8-col engine + space + 2
   # quotes = 25). No extra column for the "…" — _home_trunc keeps its ellipsis
   # INSIDE the budget it's given. Computed ONCE (the chrome is identical on
   # every resume row) rather than per row.
-  local _resume_title_budget; _resume_title_budget="$(_home_row_budget "$(_home_cols)" 25 20)"
+  _home_row_geom 25 20; local _resume_title_budget="$_RG_TITLE"
+  _home_live_dup_keysv "$items"   # see _home_live_dup_suffixv — dup-name badging
   while IFS=$'\037' read -r kind cli profile label alias active note; do
     [ -n "$kind" ] || continue
     case "$kind" in
+      live)
+        # Running right now, in the same columns as everything else on the page.
+        if [ "$printed_live" -eq 0 ]; then printed_live=1; printf '  %b▸ %s%b\n' "$__C_BCYAN" "$T_LIVE" "$__C_RESET"; fi
+        _home_fuel_dotv "$dry" "$cli" "$profile"; rdot="$_FDOT"
+        # Same tank, two live tmux sessions → same profile name on both rows
+        # with nothing to tell them apart (2026-09 report). Badge every row
+        # past the first "#2", "#3", … in board order (newest live session
+        # first); a tank with only one live session draws exactly as before.
+        _home_live_dup_suffixv "$cli" "$profile" "$_live_seen"
+        _live_seen="$_live_seen$cli/$profile"$'\n'
+        # 🔴 2026-09-06: this printed a bare, never-set $_ttl (always empty —
+        # every live row's "preview" quoted ""). $label IS the title
+        # (_home_live_rows' adapter_session_title), truncated to the same
+        # budget the interactive board and the resume rows already use.
+        # _home_live_ttlv (not the plain _home_truncv the "resume)" case
+        # below uses): a Live title can carry a trailing guess marker that
+        # must survive truncation — see R1-P2-3.
+        local _ttl; _home_live_ttlv "$label" "$_resume_title_budget"; _ttl="$_TRUNC"
+        printf '    %b %s%s %b%b"%s"%b\n' "$rdot" "$(_home_lpad "$(_home_trunc "$profile" 7)" 7)" "$_LIVE_SUFFIX" \
+          "$(_home_row_eng "$cli")" \
+          "$__C_DIM" "$_ttl" "$__C_RESET"
+        ;;
       resume)
         # The "continue" list: this dir's recent resumable sessions, each with its
         # ai-title and a one-line recap when present.
-        if [ "$printed_resume" -eq 0 ]; then printed_resume=1; printf '  %b%s%b\n' "$__C_BCYAN" "$T_CONTINUE" "$__C_RESET"; fi
-        rdot="$(_home_fuel_dot "$dry" "$cli" "$profile")"; rdot="${rdot%%$'\037'*}"
+        if [ "$printed_resume" -eq 0 ]; then printed_resume=1; printf '  %b▸ %s%b\n' "$__C_BCYAN" "$(_home_continue_heading)" "$__C_RESET"; fi
+        _home_fuel_dotv "$dry" "$cli" "$profile"; rdot="$_FDOT"
         # Same columns as a Tank row — dot · name · engine — then the session title
         # where a tank's account would sit, so the two sections read as one grid.
-        local _rnm _ren; _rnm="$(_home_lpad "$profile" 7)"; _ren="$(_home_lpad "$(_home_engine_label "$cli")" 8)"
-        printf '    %b %s %b%s%b %b"%s"%b\n' "$rdot" "$_rnm" "$__C_DIM" "$_ren" "$__C_RESET" "$__C_DIM" "$(_home_trunc "$label" "$_resume_title_budget")" "$__C_RESET"
+        local _rnm _ren; _home_truncv "$profile" 7; _home_lpadv "$_TRUNC" 7; _rnm="$_LPAD"
+        _home_row_engv "$cli"; _ren="$_RENG"
+        local _ttl; _home_truncv "$label" "$_resume_title_budget"; _ttl="$_TRUNC"
+        printf '    %b %s %b%b"%s"%b\n' "$rdot" "$_rnm" "$_ren" "$__C_DIM" "$_ttl" "$__C_RESET"
         # recap (carried in the alias field): word-wrapped with a hanging indent so
         # long recaps align under their first word instead of spilling to column 0.
         [ -n "$alias" ] && _home_wrap_prefixed "$alias" "        -> " 11 "$__C_DIM" "$__C_RESET"
@@ -727,27 +2264,29 @@ _home_render_static() {
         # what relay/`to` are for), so it's not worth shouting. _home_items emits fleet
         # first then solo, so a section change is just a header.
         if tank_is_solo "$cli" "$profile"; then
-          if [ "$cur_sect" != "solo" ]; then printf '\n  %b%s%b\n' "$__C_BCYAN" "$T_SOLO_SECTION" "$__C_RESET"; cur_sect="solo"; fi
+          if [ "$cur_sect" != "solo" ]; then printf '\n  %b▸ %s%b\n' "$__C_BCYAN" "$T_SOLO_SECTION" "$__C_RESET"; cur_sect="solo"; fi
         elif [ "$cur_sect" != "fleet" ]; then
-          [ "$printed_resume" -eq 1 ] && printf '\n'
-          printf '  %b%s%b\n' "$__C_BCYAN" "$T_TANKS" "$__C_RESET"; cur_sect="fleet"
+          { [ "$printed_resume" -eq 1 ] || [ "$printed_live" -eq 1 ]; } && printf '\n'
+          printf '  %b▸ %s%b\n' "$__C_BCYAN" "$T_TANKS" "$__C_RESET"; cur_sect="fleet"
         fi
-        local _reset _eng _fd _dot; _eng="$(_home_engine_label "$cli")"
+        local _reset _eng _fd _dot; engine_labelv "$cli"; _eng="$_ENGINE_LABEL"
         # Dot = fuel state (red dry / yellow weekly-BETA / green ready / ○ no read),
         # decoupled from `active`. `active` still picks the launch target (the
         # on-row "← here" label it also used to drive was dropped, see above).
-        _fd="$(_home_fuel_dot "$dry" "$cli" "$profile")"; _dot="${_fd%%$'\037'*}"; _reset="${_fd#*$'\037'}"
-        if _home_is_dry "$dry" "$cli" "$profile" >/dev/null; then any_dry=1; fi
+        # One lookup per row, not three: the dot, its note, and the over-quota
+        # footer flag all come out of the same fork-free call.
+        _home_fuel_dotv "$dry" "$cli" "$profile"; _dot="$_FDOT"; _reset="$_FNOTE"
+        if _home_is_dryv "$dry" "$cli" "$profile"; then any_dry=1; fi
         if [ "$active" = "1" ]; then launch_cli="$cli"; launch_profile="$profile"
         elif [ -z "$launch_cli" ]; then launch_cli="$cli"; launch_profile="$profile"; fi
         # Aligned columns (display-width padded, CJK-safe): name · engine · account,
         # then a right gutter that holds the reset time when the tank is dry. (We don't
         # mark "this shell's tank": with many tanks open at once across terminals, the
         # current-shell tank is an artifact of where you typed clikae, not useful info.)
-        local _nm _en _ac _tail="" _sep=""
-        _nm="$(_home_lpad "$profile" 7)"; _en="$(_home_lpad "$_eng" 8)"; _ac="$(_home_lpad "${label:--}" 22)"
-        if [ -n "$_reset" ]; then _tail="$(printf '%b%s%b' "$__C_YELLOW" "$_reset" "$__C_RESET")"; fi
-        [ -n "$_tail" ] && _sep="  "
+        local _nm _en _ac _tail="" _sep="" _flds
+        if [ -n "$_reset" ]; then _tail="$(printf '%b%s%b' "$__C_YELLOW" "$_reset" "$__C_RESET")"; _sep="  "; fi
+        _home_tank_fieldsv "$profile" "$_eng" "${label:--}" "$_tail"
+        _nm="$_TF_NM"; _en="$_TF_EN"; _ac="$_TF_AC"
         printf '    %b %s %b%s%b %b%s%b%s%s\n' \
           "$_dot" "$_nm" "$__C_DIM" "$_en" "$__C_RESET" "$__C_DIM" "$_ac" "$__C_RESET" "$_sep" "$_tail"
         ;;
@@ -779,11 +2318,16 @@ _home_render_static() {
 $items
 EOF
 
+  # "N sessions hidden as burn runs; list truncated" — printed here, directly
+  # under the Continue list (resume rows are the last thing _home_items emits).
+  _home_continue_notes "$printed_resume"
+
   if [ -n "$also" ]; then
-    printf '\n  %b%s%b\n' "$__C_BOLD" "$T_ALSO_AVAILABLE" "$__C_RESET"
+    printf '\n  %b▸ %s%b\n' "$__C_BCYAN" "$T_ALSO_AVAILABLE" "$__C_RESET"
     printf '%s' "$also"
   fi
   echo ""
+  _home_soulless_note
 
   if [ -n "$any_dry" ]; then
     printf '  %b! %s%b — %s\n' \
@@ -794,9 +2338,18 @@ EOF
     # The tank's NAME is the way to launch it (alias retired from the board). agy
     # shown by its short name. Colour via %b only (codes are literal \033).
     local _leng; _leng="$(_home_engine_label "$launch_cli")"
-    printf '  %s clikae %s %s\n' "$(_home_lpad "$T_LAUNCH" 9)" "$_leng" "$launch_profile"
+    # Wrapped, like every other prose row. Prefix is 2 lead + a 9-column label +
+    # 1 space = 12 display columns; _home_wrap_prefixed takes that width as a
+    # number because _dwidth cannot see through the label's own padding.
+    _home_wrap_prefixed "clikae $_leng $launch_profile" \
+      "  $(_home_lpad "$T_LAUNCH" 9) " 12 "" ""
   fi
-  printf '  %s %s\n' "$(_home_lpad "$T_MORE" 9)" "clikae status · clikae doctor · clikae demo · clikae help"
+  # 🔴 This row was a bare printf with a hardcoded 69-column string and no width
+  # budget at all — it did not even call _home_cols. Reported 2026-08-16 from a
+  # PineNote over ssh: it is the row that overflows first, at anything under 69
+  # columns, and it was the last line of the board so it was the one you saw.
+  _home_wrap_prefixed "clikae status · clikae doctor · clikae demo · clikae help" \
+    "  $(_home_lpad "$T_MORE" 9) " 12 "" ""
 }
 
 # The welcome screen, shown when there are no tanks yet. RESPONSIVE (like a web
@@ -898,7 +2451,29 @@ _home_welcome_beside() {
 # Interactive launcher (only on a real TTY; pipes/scripts/tests get the static
 # board). Uses the alternate screen buffer so the user's scrollback is intact.
 
-_home_tty_leave() { stty echo 2>/dev/null || true; printf '\033[?25h\033[?1049l'; }   # show cursor, leave alt screen
+# Show cursor, leave alt screen, restore echo — but ONLY onto a real terminal.
+# 🔴 Guarded on `[ -t 1 ]`: resume.sh calls this on its non-interactive listing
+# path too, so `clikae resume > file` began with the raw bytes
+# `ESC[?2004l ESC[?25h ESC[?1049l` before its first character — terminal control
+# codes written into a pipe, where they are noise at best and corrupt whatever
+# parses the output at worst. Nothing to restore when nobody is watching.
+_home_tty_leave() { stty echo 2>/dev/null || true; [ -t 1 ] && tui_screen_leave; return 0; }
+
+# _home_tty_leave_final -> the SAME `_home_tty_leave` every other exit point
+# uses, but for the ones that are leaving the picker for good: it also drops
+# the EXIT/INT/TERM trap `_home_pick` installed (nothing left to restore it
+# on abnormal termination).
+#
+# #61 round-5 P3-2: it used to ALSO run the warn-once sentinel cleanup here.
+# That deleted the dedupe file of a process that was still running, so the
+# very next enumeration warned a second time — cancelling a submenu printed
+# the read-only-store line twice. The dedupe is an exported variable now
+# (profile_store.sh), which nothing needs to clean up and no exit path can
+# accidentally reset.
+_home_tty_leave_final() {
+  _home_tty_leave
+  trap - EXIT INT TERM
+}
 
 # Resolve and EXEC the launch for one item row (replaces this process).
 #   tank   -> clikae <engine> <tank>   (the bare switch: applies env, then execs)
@@ -911,6 +2486,20 @@ $1
 EOF
   : "$label" "$alias" "$active" "$note"
   case "$kind" in
+    live)
+      # ATTACH to the session that is already running — never start anything.
+      # This is the whole reason the section exists: `clikae <engine> <tank>` would
+      # land on the tank's stable name, which is a different session from a resumed
+      # one, and a resume row would start a second conversation. note carries the
+      # exact tmux session name, so there is nothing to guess.
+      #
+      # Inside tmux, moving the current client is the right verb; a nested attach
+      # is what `switch-client` exists to prevent.
+      if [ -n "${TMUX:-}" ]; then
+        exec tmux switch-client -t "=$note"
+      fi
+      exec tmux attach -t "=$note"
+      ;;
     resume)
       # Reopen this dir's most recent session: clikae <engine> <tank> -- <resume-args>.
       # note carries the session id; the engine's adapter_resume_args turns it into
@@ -921,6 +2510,12 @@ EOF
 $(load_adapter "$cli" >/dev/null 2>&1 && adapter_resume_args "$note" 2>/dev/null || true)
 EOF
       if [ "${#_rargs[@]}" -gt 0 ]; then
+        # See resume.sh's _resume_exec for why: $note IS the sid here, and it
+        # is already IN "${_rargs[@]}" (adapter_resume_args built it) — no
+        # environment variable needed. switch.sh's adapter_sid_from_args reads
+        # it back out of that argv before spawning and stamps the new tmux
+        # session with it, instead of the board later guessing which
+        # transcript this row is.
         exec "$CLIKAE_BIN" "$cli" "$profile" -- "${_rargs[@]}"
       else
         exec "$CLIKAE_BIN" "$cli" "$profile"
@@ -955,14 +2550,23 @@ EOF
   [ "$n" -gt 0 ] || return 1
   # Read-write (<>) so we can both draw to and read keys from the terminal; a
   # write-only (3>) fd would EOF on the first read and cancel instantly.
-  exec 3<>/dev/tty 2>/dev/null || return 1
+  { exec 3<>/dev/tty; } 2>/dev/null || return 1
 
+  # Preselect on an exact match OR on the option's first token. Callers that
+  # pass a bare value ("codex") against ANNOTATED options ("codex  (AI)") would
+  # otherwise never match, and the cursor silently sat on row 0 forever — which
+  # is what the new-tank picker did from every non-claude row. Menus whose
+  # options carry no annotation are unaffected: their first token is the option.
   local sel=0 i
-  for ((i = 0; i < n; i++)); do [ "${opts[$i]}" = "$pre" ] && sel=$i; done
+  for ((i = 0; i < n; i++)); do
+    if [ "${opts[$i]}" = "$pre" ] || [ "${opts[$i]%% *}" = "$pre" ]; then sel=$i; fi
+  done
 
-  printf '\033[?1049h\033[?25l' >&3
+  tui_screen_enter >&3
+  # #61 round-4 P2-1: also replaces bin/clikae's own EXIT trap, so it chains
+  # the same sentinel cleanup that trap would have run.
   # shellcheck disable=SC2064
-  trap "printf '\033[?25h\033[?1049l' >&3 2>/dev/null; exec 3>&- 2>/dev/null" EXIT INT TERM
+  trap "tui_screen_leave >&3 2>/dev/null; { exec 3>&-; } 2>/dev/null" EXIT INT TERM
   while :; do
     {
       printf '\033[H\033[2J'
@@ -980,12 +2584,12 @@ EOF
       end|pgdn)       sel=$((n - 1)) ;;
       q|esc) break ;;
       enter)
-        printf '\033[?25h\033[?1049l' >&3; trap - EXIT INT TERM; exec 3>&-
+        tui_screen_leave >&3; trap - EXIT INT TERM; exec 3>&-
         printf '%s\n' "${opts[$sel]}"
         return 0 ;;
     esac
   done
-  printf '\033[?25h\033[?1049l' >&3; trap - EXIT INT TERM; exec 3>&-
+  tui_screen_leave >&3; trap - EXIT INT TERM; exec 3>&-
   return 1
 }
 
@@ -1063,7 +2667,7 @@ EOF
 
 # Enter on a Continue row → a tiny submenu. The options DEPEND on whether
 # the tank still has fuel ($2 = the dry set from _home_dry_set):
-#   • has fuel → by default (resume_ask_tank_get = always), FIRST ask which tank
+#   · has fuel → by default (resume_ask_tank_get = always), FIRST ask which tank
 #     to resume on — same "Resume on which tank?" question and default as
 #     `clikae resume`'s own standalone picker, so the two entry points behave
 #     identically. Keeping the default (this tank) falls through to the original
@@ -1071,7 +2675,7 @@ EOF
 #     carries the session there directly (switching tanks IS the carry — no
 #     separate "are you sure" needed). `clikae resume ask-tank dry-only` skips
 #     this and restores the older behavior below.
-#   • DRY → resuming or opening fresh both dead-end on the same exhausted quota, so
+#   · DRY → resuming or opening fresh both dead-end on the same exhausted quota, so
 #     instead lead with "carry onward" — relay this session to the ring's next
 #     fuelled tank (next_tank) — and keep "force-resume anyway" as an escape hatch.
 # Both choices exec; cancel (q) returns 1 so the caller can re-enter the picker.
@@ -1182,6 +2786,11 @@ _home_newtank_choices() {
   # the file is the ground truth.
   while IFS= read -r name; do
     [ -n "$name" ] || continue
+    # A TARGET is offered by its own line below (agy), never again from the
+    # adapter scan — antigravity has an adapter FILE (a resume-only shim), so a
+    # name-blind scan listed it a second time, tagged "(tool)", and picking it
+    # landed in the same `_agy_init`. Ask the canonical predicate, not the name.
+    clikae_is_target "$name" && continue
     if grep -qE '^[[:space:]]*adapter_start_with_prompt[[:space:]]*\(\)' "$CLIKAE_LIB/adapters/$name.sh" 2>/dev/null; then
       ai="$ai$name"$'\n'
     else
@@ -1277,7 +2886,9 @@ _home_help_overlay() {
   _home_help_row "[ / ]"         "$T_K_REORDER"
   _home_help_row "⏎ Enter"       "$T_K_OPEN"
   _home_help_row "r"             "$T_K_RELAY"
+  _home_help_row "R"             "$T_K_RESUME_ALL"
   _home_help_row "x"             "$T_K_INCOGNITO"
+  _home_help_row "K"             "$T_K_CLOSE"
   _home_help_row "n"             "$T_K_NEW"
   _home_help_row "a"             "$T_K_RENAME"
   _home_help_row "d"             "$T_K_DELETE"
@@ -1298,7 +2909,9 @@ _home_help_overlay() {
   local _dots_prefix _dots_hang _dots_legend
   _dots_prefix="$(printf '  %b%s:%b  ' "$__C_BOLD" "$T_DOTS_TITLE" "$__C_RESET")"
   _dots_hang=$(( 5 + $(_dwidth "$T_DOTS_TITLE") ))
-  _dots_legend="$(printf '%b●%b %s · %b●%b %s · %b●%b %s · %b○%b %s' \
+  # Glyphs must match _home_fuel_dot exactly — this legend is the only place the
+  # mapping is stated, so a drift here teaches the wrong thing forever.
+  _dots_legend="$(printf '%b●%b %s · %b○%b %s · %b◐%b %s · %b·%b %s' \
     "$__C_GREEN"  "$__C_RESET" "$T_DOT_READY" \
     "$__C_RED"    "$__C_RESET" "$T_DOT_DRY" \
     "$__C_YELLOW" "$__C_RESET" "$T_DOT_WEEK" \
@@ -1310,7 +2923,18 @@ _home_help_overlay() {
   printf '\n'
   _home_wrap_prefixed "$T_HELP_AGY" "  " 2 "$__C_DIM" "$__C_RESET"
   printf '  %b%s%b' "$__C_DIM" "$T_HELP_DISMISS" "$__C_RESET"
-  local _k; IFS= read -rsn1 _k || true
+  # 🔴 Dismiss through the SHARED decoder on fd 3, not a bare one-byte read on
+  # stdin. "Any key dismisses" still holds — but an arrow key is three bytes, and
+  # a one-byte read ate only the ESC. The board then read the tail back as real
+  # keystrokes: `[` moved the selected tank in the burn order and MATERIALISED
+  # $CLIKAE_HOME/order, and `A` cycled autonomy ask→safe→full. Both were
+  # reproduced on a pty with the files absent beforehand and written after — two
+  # persistent state changes, no prompt, from the one screen whose entire job is
+  # to teach the keymap. tui_read_key consumes a whole logical key and returns
+  # `unknown` for anything it does not recognise, which also covers PgUp/Home/End
+  # /F-keys/modifier'd arrows — none of which could be dismissed cleanly before.
+  # `|| true`: it returns 1 on EOF and the board runs under `set -eo pipefail`.
+  tui_read_key 3 || true
 }
 
 # Draw the menu (full redraw) with row index $2 highlighted, from items in $1.
@@ -1318,35 +2942,191 @@ _home_pick_draw() {
   # Single-write flicker fix: _home_pick_draw_body composes the whole frame via
   # printf to a captured string; we then write it to the terminal in ONE printf.
   # Repainting line-by-line (a write per row) is what still flickered.
-  local _frame
-  _frame="$(_home_pick_draw_body "$@")"
   local _lsz _lrows
   _lsz="$( { stty size </dev/tty; } 2>/dev/null || true )"
   _lrows="${_lsz%% *}"
-  [ -n "$_lrows" ] || _lrows=24
+  case "$_lrows" in ''|*[!0-9]*) _lrows=24 ;; esac
+
+  local _frame
+  _frame="$(_home_pick_draw_body "$@")"
+
+  # 🔴 THE BOARD HAD NO HEIGHT. 0.28.0 made every row fit the terminal's WIDTH;
+  # nothing ever made the frame fit its HEIGHT, and the frame is a constant size
+  # for a given fleet — measured on a real store, 21 lines at every terminal
+  # height from 12 to 40. On anything shorter the top scrolled away: the
+  # wordmark, the keybar that teaches the keys, and the first rows, with the
+  # selection cursor able to sit off-screen entirely.
+  #
+  # Measure and only then trim, rather than predicting how many rows fit: rows
+  # are NOT a fixed height (a tank row is one line, a resume row with a recap is
+  # three, each section header is another) and the chrome itself grows from 3
+  # lines to 5 as the keybar wraps. A frame that already fits — every board that
+  # fits today — is emitted unchanged and pays nothing for this.
+  # The budget is rows-1, not rows: the frame homes the cursor and then advances
+  # one line per newline, so a frame with exactly <rows> newlines leaves the
+  # cursor one line past the bottom and the terminal scrolls. What it loses first
+  # is only the blank top margin, which is why this is easy to not notice — and
+  # one row further would take the wordmark. The invariant worth having is the
+  # simple one: the frame never scrolls the screen.
+  local _h _budget=$(( _lrows - 1 ))
+  [ "$_budget" -lt 1 ] && _budget=1
+  _h="$(_home_frame_height "$_frame")"
+  if [ "$_h" -gt "$_budget" ]; then
+    _frame="$(_home_pick_draw_windowed "$_budget" "$@")"
+  fi
+
   # Synchronized Output: BSU → frame → park cursor → ESU
   printf '\033[?2026h%s\033[%d;1H\033[?2026l' "$_frame" "$_lrows"
 }
+
+# _home_frame_height <frame> -> how many terminal lines it occupies.
+# Counts newlines with a pure substitution — no fork, and this runs on the redraw
+# path. The frame carries ANSI escapes, none of which contain a newline.
+_home_frame_height() {
+  local nl="${1//[!$'\n']/}"
+  printf '%s' "${#nl}"
+}
+
+# _home_pick_draw_windowed <rows> <items> <sel> <dry> [filter]
+#
+# Shrink the drawn row window until the frame fits <rows>, keeping the selection
+# inside it. Centred on the selection like the resume picker's viewport, which is
+# the convention this follows rather than inventing a second one.
+#
+# The loop re-measures instead of computing a target, because dropping a row does
+# not free a predictable number of lines — dropping the last row of a section
+# takes its header with it, and a resume row is worth three tank rows. It shrinks
+# monotonically, so it terminates; in practice it settles in one or two passes.
+_home_pick_draw_windowed() {
+  local rows="$1" items="$2" sel="$3" dry="$4" filter="${5:-}"
+  local n vis start end hidden frame h guard=0
+  n="$(_home_frame_height "$items")"
+  [ -n "$items" ] && n=$(( n + 1 ))          # last row carries no trailing newline
+  [ "$n" -gt 0 ] || { _home_pick_draw_body "$items" "$sel" "$dry" "$filter"; return 0; }
+
+  vis="$n"
+  while :; do
+    vis=$(( vis - 1 ))
+    [ "$vis" -lt 1 ] && vis=1
+    start=$(( sel - vis / 2 ))
+    [ "$start" -lt 0 ] && start=0
+    end=$(( start + vis - 1 ))
+    if [ "$end" -ge "$n" ]; then end=$(( n - 1 )); start=$(( end - vis + 1 )); fi
+    [ "$start" -lt 0 ] && start=0
+    hidden=$(( n - (end - start + 1) ))
+    frame="$(_home_pick_draw_body "$items" "$sel" "$dry" "$filter" "$start" "$end" "$hidden")"
+    h="$(_home_frame_height "$frame")"
+    [ "$h" -le "$rows" ] && break
+    [ "$vis" -le 1 ] && break                # nothing left to give
+    guard=$(( guard + 1 ))
+    [ "$guard" -gt "$n" ] && break           # cannot loop longer than the list
+  done
+  printf '%s' "$frame"
+}
+# _home_total_sessions -> ONE line: how many session files the whole store holds.
+#
+# 🔴 It used to emit TWO. A single-engine store leaves the codex/antigravity
+# globs unmatched, `ls` exits non-zero, the script-global `pipefail` promotes
+# that past `wc|tr`, and the trailing `|| echo 0` then appended a second line
+# AFTER the real count — so the function returned "4\n0". The footer's
+# `printf "$T_RESUME_FOOTER"` was handed that and died with
+# `printf: 4\n0: invalid number` (captured in a live frame), rendering
+# "0 sessions total" directly beneath four listed sessions. The board was
+# stating a falsehood and leaking a bash diagnostic into its own output.
+#
+# Swallow the failure INSIDE the subshell, where it belongs, and pin the result
+# to digits. NB a test for this must `set -o pipefail` itself or it passes
+# vacuously — the bug does not exist without it.
+#
+# 🔴 The `grep -v` stage needs its OWN `|| true` for the same reason, and it is
+# a different reason from the one above: grep exits 1 when it prints NOTHING,
+# which here means "an empty store", or "a store holding only subagent
+# transcripts" — the two cases where a board must still render. Without the
+# guard the count is the one thing on the board that kills it.
+_home_total_sessions_scan() {
+  local chome="${CLIKAE_HOME:-$HOME/.clikae}" n
+  # grok's glob was missing here for the same reason it was missing from
+  # `clikae resume`'s enumerator: a hand-written per-engine list is a thing
+  # someone has to remember. This one stays a glob (it is a count, on the
+  # board's hot path, with no adapter to load), so it is pinned by a test
+  # instead — tests/bats/home.bats' grok-counting case.
+  # 🔴 claude's `agent-*.jsonl` subagent transcripts are NOT sessions and are
+  # dropped here too. They outnumber real sessions on a working store, so
+  # counting them made both numbers this feeds — the footer's "N sessions
+  # total" and the Continue list's "N more in this store" — describe a store
+  # the user does not have, and offered to go and find things that cannot be
+  # resumed. The rule is the adapter's (adapter_transcript_is_resumable); it is
+  # spelled inline because this is a count on the board's hot path with no
+  # adapter loaded, and pinned by a test so the two cannot drift apart.
+  n="$( { ls -1 "$chome"/profiles/claude/*/projects/*/*.jsonl \
+                "$chome"/profiles/codex/*/sessions/*/*/*/rollout-*.jsonl \
+                "$chome"/profiles/grok/*/sessions/*/*/summary.json \
+                "$chome"/profiles/antigravity/*/antigravity-cli/brain/*/.system_generated/logs/transcript.jsonl \
+           2>/dev/null || true; } \
+         | { LC_ALL=C grep -av '/agent-[^/]*\.jsonl$' || true; } \
+         | wc -l | tr -d ' ' )"
+  case "$n" in ''|*[!0-9]*) n=0 ;; esac
+  printf '%s' "$n"
+}
+
+# 🔴 ONCE PER REFRESH, NOT ONCE PER KEYPRESS. The scan above lists every session
+# file in the store — 15 ms on the maintainer's — and it was running inside the
+# frame, so every arrow key re-counted 1,400 files to redraw a footer. It now
+# rides along with the fuel scan in _home_refresh, which makes it exactly as
+# fresh as everything else the board is showing rather than more so.
+#
+# The cache has to be filled by _home_refresh and NOT here: the frame is composed
+# inside `$( … ) | while`, two nested subshells, so anything this assigns during
+# a draw is discarded when the frame ends. The lazy scan below is the fallback
+# for callers that never went through a refresh (the unit tests).
 _home_total_sessions() {
-  local chome="${CLIKAE_HOME:-$HOME/.clikae}"
-  ( ls -1 "$chome"/profiles/claude/*/projects/*/*.jsonl \
-          "$chome"/profiles/codex/*/sessions/*/*/*/rollout-*.jsonl \
-          "$chome"/profiles/antigravity/*/antigravity-cli/brain/*/.system_generated/logs/transcript.jsonl 2>/dev/null | wc -l | tr -d ' ' ) 2>/dev/null || echo 0
+  [ -n "${_HOME_TOTAL_SESSIONS:-}" ] && { printf '%s' "$_HOME_TOTAL_SESSIONS"; return 0; }
+  if [ "${_CLIKAE_BOARD:-0}" = 1 ]; then board_total; else _home_total_sessions_scan; fi
+}
+
+# <start> and <end> bound which ROW INDICES are drawn; empty means all of them,
+# which is what every frame that fits does. <hidden> is how many rows the window
+# leaves out, and it is drawn as its own line rather than left implicit — a board
+# silently showing a subset is the same defect the filter indicator exists for
+# ("where did my tank go" with no answer on screen).
+# _home_row_kind_at <items> <idx> -> the kind of the row at that index, or empty.
+# The keybar needs it before the row loop reaches that row, so it is its own tiny
+# scan rather than a flag threaded through the loop.
+_home_row_kind_at() {
+  local i=0 line
+  while IFS= read -r line; do
+    [ -n "$line" ] || continue
+    if [ "$i" -eq "$2" ]; then printf '%s' "${line%%$'\037'*}"; return 0; fi
+    i=$(( i + 1 ))
+  done <<EOF
+$1
+EOF
+  return 0
 }
 
 _home_pick_draw_body() {
-  local items="$1" sel="$2" dry="$3"
+  local items="$1" sel="$2" dry="$3" filter="${4:-}"
+  local _vps="${5:-}" _vpe="${6:-}" _vphid="${7:-0}"
+  _home_cols_prime
+  _home_fuel_memo_reset     # one date/jq fork per TANK this render, not per row (P2-1)
   # Flicker-free paint: home the cursor and overwrite in place — NO `\033[2J`
   # full-screen clear (the momentary blank frame is exactly what flickered on
   # each keypress). Leftover lines from a taller previous frame are erased with
   # `\033[J` after the content, and the logo is drawn LAST (below) so that erase
   # can't clip it. Row widths are stable frame-to-frame, so no per-line erase yet.
-  local kind cli profile label alias active note idx=0 cur_cli="" printed_also=0 printed_resume=0 mark dot _reset tdot _line rdot rage
+  local kind cli profile label alias active note idx=0 cur_cli="" printed_also=0 printed_resume=0 printed_live=0 ldot mark dot _reset tdot _line rdot rage _live_seen=""
   # Same fixed-chrome accounting as _home_render_static's resume row (25 cols:
   # 2-space lead + mark + space + dot + space + 7-col name + space + 8-col
   # engine + space + 2 quotes). The "…" lives inside _home_trunc's budget, so
   # no extra column here. Computed ONCE, not per row.
-  local _resume_title_budget; _resume_title_budget="$(_home_row_budget "$(_home_cols)" 25 20)"
+  #
+  # 🔴 27, not 25, in the INTERACTIVE frame. The static renderer's chrome really
+  # is 25 and keeps its own number; here every row additionally passes through
+  # the `| while … printf '  %s'` indenter, and the selected row carries the `❯ `
+  # mark — 2 columns each. Measured: with 25 the interactive rows came out
+  # exactly 2 columns wider than the static ones at every width.
+  _home_row_geom 27 20; local _resume_title_budget="$_RG_TITLE"
+  _home_live_dup_keysv "$items"   # see _home_live_dup_suffixv — dup-name badging
   printf '\033[H\033[K\n'   # home + one blank top-margin line
   # Repaint the whole frame, clearing each line to end-of-line (\033[K) so a row
   # that COLLAPSES when the cursor moves away (hover → fewer chars) leaves no stale
@@ -1366,30 +3146,134 @@ _home_pick_draw_body() {
   # was composed. The wrapper cannot see that outer indent, so it must be TOLD —
   # the same reason the recap call below passes 2. Without it the keybar wraps 2
   # columns too late and overruns a 60-col terminal by 1.
-  _home_wrap_prefixed \
-    "· ↑↓/Tab $T_K_MOVE · ⏎ $T_K_OPEN · [ ] $T_K_REORDER · / $T_K_FILTER · ? $T_K_HELP · q $T_K_QUIT" \
-    "$(printf '%b%s%b  ' "$__C_BOLD" "$T_WORDMARK" "$__C_RESET")" \
-    "$(( $(_dwidth "$T_WORDMARK") + 2 ))" "$__C_DIM" "$__C_RESET" 2
-  printf '%b%s: %s · [A] change (BETA, claude)%b\n\n' "$__C_DIM" "$T_K_AUTO" "$(autonomy_get)" "$__C_RESET"
+  # 🔴 SAY WHEN A FILTER IS ON. With one active the board silently showed a
+  # SUBSET — same wordmark, same keybar, fewer rows — so "where did my tank go"
+  # had no answer on screen. The state is now named in the bar that is always
+  # there, using T_FILTER_PROMPT, which every locale already has (a dedicated
+  # new string would have cost 9 translations to say what this already says).
+  # 🔴 THE BAR ADVERTISED KEYS THAT COULD NOT FIRE. `K` is gated on the selected
+  # row being LIVE and `[ ]` on it being a TANK, but both were printed on every
+  # row — so on a tank row (the common case) `K` did nothing, on a live row `[ ]`
+  # did nothing, and on a resume row neither worked. Pressing an advertised key
+  # and getting silence is the same defect as the resume picker's dead `?`
+  # (0f51f48): byte-identical to an unbound key, with a legend insisting
+  # otherwise.
+  #
+  # ONE contextual slot, in a fixed position, so the bar does not reflow as the
+  # selection moves — only what sits in that slot changes. The `?` overlay still
+  # lists every key the board has; this line is what applies RIGHT NOW.
+  local _kctx=""
+  case "$(_home_row_kind_at "$items" "$sel")" in
+    live) _kctx=" · K $T_K_CLOSE" ;;
+    tank) _kctx=" · [ ] $T_K_REORDER" ;;
+  esac
+  local _keybar="· ↑↓/Tab $T_K_MOVE · ⏎ $T_K_OPEN$_kctx · / $T_K_FILTER · ? $T_K_HELP · q $T_K_QUIT"
+  [ -n "$filter" ] && _keybar="· $T_FILTER_PROMPT$(_home_trunc "$filter" 20) · esc $T_K_FILTER · q $T_K_QUIT"
+  local _kbpfx _kbind
+  printf -v _kbpfx '%b%s%b  ' "$__C_BOLD" "$T_WORDMARK" "$__C_RESET"
+  _dwidthv "$T_WORDMARK"; _kbind=$(( _DW_W + 2 ))
+  _home_wrap_prefixed "$_keybar" "$_kbpfx" "$_kbind" "$__C_DIM" "$__C_RESET" 2
+  # Wrapped, not printf'd raw: 38 columns in en-US and wider in de-DE/pt-BR, and
+  # it was the one row of the INTERACTIVE frame that still ran off a narrow
+  # terminal after the 2026-08-16 sweep.
+  # Only when it is NOT the default. `ask` is the safe, expected state and saying
+  # so on every frame spends two of the board's scarcest rows (it wraps to two at
+  # 40 columns) telling you that nothing unusual is set. When autonomy IS raised,
+  # that is exactly when it must be visible — clikae may then carry your session
+  # onto another account on its own.
+  autonomy_getv                              # asked once, not once per mention
+  if [ "$_AUTONOMY" != "ask" ]; then
+    _home_wrap_prefixed "$T_K_AUTO: $_AUTONOMY · [A] change (BETA, claude+codex)" \
+      "  " 2 "$__C_DIM" "$__C_RESET"
+  fi
+  printf '\n'
   while IFS=$'\037' read -r kind cli profile label alias active note; do
     [ -n "$kind" ] || continue
+    # Outside the window: still counted, not drawn. The section headers below
+    # fire on the first row of their kind that is actually DRAWN, so a window
+    # that starts mid-section still gets its header.
+    if [ -n "$_vps" ] && { [ "$idx" -lt "$_vps" ] || [ "$idx" -gt "$_vpe" ]; }; then
+      idx=$((idx + 1)); continue
+    fi
     if [ "$idx" -eq "$sel" ]; then mark="${__C_GREEN}❯${__C_RESET}"; else mark=" "; fi
     case "$kind" in
+      live)
+        # Running right now. Same columns as a Resume row on purpose — the eye
+        # should not have to learn a second layout for the same kind of thing.
+        if [ "$printed_live" -eq 0 ]; then
+          printed_live=1
+          printf '  %b▸ %s%b\n' "$__C_BCYAN" "$T_LIVE" "$__C_RESET"
+        fi
+        local _lat _lage _lwake
+        IFS=$'\036' read -r _lat _lage _lwake <<LIVEACT
+$active
+LIVEACT
+        _home_fuel_dotv "$dry" "$cli" "$profile"; ldot="$_FDOT"
+        # Same tank, two live tmux sessions → same profile name on both rows
+        # with nothing to tell them apart (2026-09 report). Badge every row
+        # past the first "#2", "#3", … in board order (newest live session
+        # first); a tank with only one live session draws exactly as before.
+        _home_live_dup_suffixv "$cli" "$profile" "$_live_seen"
+        _live_seen="$_live_seen$cli/$profile"$'\n'
+        local _lnm _len; _home_truncv "$profile" 7; _home_lpadv "$_TRUNC" 7; _lnm="$_LPAD$_LIVE_SUFFIX"
+        _home_row_engv "$cli"; _len="$_RENG"
+        # _home_live_ttlv, not the plain _home_truncv the "resume)" case
+        # below uses: a Live title can carry a trailing guess marker that
+        # must survive truncation — see R1-P2-3.
+        local _ttl; _home_live_ttlv "$label" "$_resume_title_budget"; _ttl="$_TRUNC"
+        if [ "$idx" -eq "$sel" ]; then
+          printf '  %b %b %b%s%b %b%b"%s"%b\n' "$mark" "$ldot" "$__C_BOLD" "$_lnm" "$__C_RESET" "$_len" "$__C_DIM" "$_ttl" "$__C_RESET"
+          # The second line is where time lives, in a whole sentence. When the
+          # tank is limited the vendor's own words go here verbatim — they
+          # already use the family's `·` — and clikae's promise, if any, follows
+          # on its own line. `resets` is the vendor's fact; `resumes` is our
+          # commitment, so the second line appears ONLY when a waiter is really
+          # counting. Saying it otherwise would be claiming a feature that is
+          # not attached.
+          # _home_is_dry deliberately reports 1 (nothing to print) for an
+          # UNVERIFIED tank — see its own _home_is_dryv check — so a caution
+          # that IS shown on the Tank row (via _home_fuel_dotv, just above)
+          # would silently vanish on the Live row (R1-P3-5). $_FNOTE already
+          # holds it from that same _home_fuel_dotv call above.
+          #
+          # _lhard tracks whether the row is genuinely dry (red, can't be
+          # dispatched into) vs. merely carrying a borrowed UNVERIFIED caution
+          # (yellow, still enterable) — R2-P3-1: a yellow tank is still usable,
+          # so suppressing its age/enter hint the same way a red one's is
+          # suppressed silently hid an action the user could actually take.
+          local _lphrase _lhard=0
+          _lphrase="$(_home_is_dry "$dry" "$cli" "$profile" 2>/dev/null || true)"
+          [ -n "$_lphrase" ] && _lhard=1
+          [ -n "$_lphrase" ] || [ "$_FNOTE" != "${LIMIT_RESET_UNVERIFIED:-reset passed · unverified}" ] || _lphrase="$_FNOTE"
+          if [ -n "$_lphrase" ]; then
+            printf '        %b%s%b\n' "$__C_DIM" "$_lphrase" "$__C_RESET"
+          fi
+          if [ -n "$_lwake" ]; then
+            printf '        %b-> %s %s%b\n' "$__C_DIM" "$T_LIVE_RESUMING" "$_lwake" "$__C_RESET"
+          elif [ "$_lhard" -eq 0 ]; then
+            printf '        %b%s · %s%b\n' "$__C_DIM" "$_lage" "$T_LIVE_ENTER" "$__C_RESET"
+          fi
+        else
+          printf '  %b %b %s %b%b"%s"%b\n' "$mark" "$ldot" "$_lnm" "$_len" "$__C_DIM" "$_ttl" "$__C_RESET"
+        fi
+        ;;
       resume)
         # The Resume list — recent resumable sessions
         if [ "$printed_resume" -eq 0 ]; then
           printed_resume=1
           if [ -n "$cur_cli" ] || [ "$printed_also" -gt 0 ]; then printf '\n'; fi
-          printf '  %b%s%b\n' "$__C_BCYAN" "$T_CONTINUE" "$__C_RESET"
+          printf '  %b▸ %s%b\n' "$__C_BCYAN" "$(_home_continue_heading)" "$__C_RESET"
         fi
         # active field is "<flag> <age>": flag 1 = this session is on the tank you're
         # using now (●), else ○. Age is the hover fallback when there's no recap.
-        rdot="$(_home_fuel_dot "$dry" "$cli" "$profile")"; rdot="${rdot%%$'\037'*}"
+        _home_fuel_dotv "$dry" "$cli" "$profile"; rdot="$_FDOT"
         rage="${active#* }"
         # Same columns as a Tank row — dot · name · engine — then the session title.
-        local _rnm _ren; _rnm="$(_home_lpad "$profile" 7)"; _ren="$(_home_lpad "$(_home_engine_label "$cli")" 8)"
+        local _rnm _ren; _home_truncv "$profile" 7; _home_lpadv "$_TRUNC" 7; _rnm="$_LPAD"
+        _home_row_engv "$cli"; _ren="$_RENG"
+        local _ttl; _home_truncv "$label" "$_resume_title_budget"; _ttl="$_TRUNC"
         if [ "$idx" -eq "$sel" ]; then
-          printf '  %b %b %b%s%b %b%s%b %b"%s"%b\n' "$mark" "$rdot" "$__C_BOLD" "$_rnm" "$__C_RESET" "$__C_DIM" "$_ren" "$__C_RESET" "$__C_DIM" "$(_home_trunc "$label" "$_resume_title_budget")" "$__C_RESET"
+          printf '  %b %b %b%s%b %b%b"%s"%b\n' "$mark" "$rdot" "$__C_BOLD" "$_rnm" "$__C_RESET" "$_ren" "$__C_DIM" "$_ttl" "$__C_RESET"
           if [ -n "$alias" ]; then
             # recap, wrapped with a hanging indent. extra=2 for the wrapper's `  ` prefix.
             _home_wrap_prefixed "$alias" "        -> " 11 "$__C_DIM" "$__C_RESET" 2
@@ -1397,7 +3281,7 @@ _home_pick_draw_body() {
             printf '        %b%s · %s%b\n' "$__C_DIM" "$rage" "$T_ENTER_RESUME" "$__C_RESET"
           fi
         else
-          printf '  %b %b %s %b%s%b %b"%s"%b\n' "$mark" "$rdot" "$_rnm" "$__C_DIM" "$_ren" "$__C_RESET" "$__C_DIM" "$(_home_trunc "$label" "$_resume_title_budget")" "$__C_RESET"
+          printf '  %b %b %s %b%b"%s"%b\n' "$mark" "$rdot" "$_rnm" "$_ren" "$__C_DIM" "$_ttl" "$__C_RESET"
         fi
         ;;
       tank)
@@ -1407,20 +3291,31 @@ _home_pick_draw_body() {
         # the current-section marker ("fleet"/"solo"); other cases test it for "any
         # tank printed yet".
         if tank_is_solo "$cli" "$profile"; then
-          if [ "$cur_cli" != "solo" ]; then printf '\n  %b%s%b\n' "$__C_BCYAN" "$T_SOLO_SECTION" "$__C_RESET"; cur_cli="solo"; fi
+          if [ "$cur_cli" != "solo" ]; then printf '\n  %b▸ %s%b\n' "$__C_BCYAN" "$T_SOLO_SECTION" "$__C_RESET"; cur_cli="solo"; fi
         elif [ "$cur_cli" != "fleet" ]; then
-          printf '  %b%s%b\n' "$__C_BCYAN" "$T_TANKS" "$__C_RESET"; cur_cli="fleet"
+          printf '  %b▸ %s%b\n' "$__C_BCYAN" "$T_TANKS" "$__C_RESET"; cur_cli="fleet"
         fi
-        local _eng; _eng="$(_home_engine_label "$cli")"
-        local _fd; _fd="$(_home_fuel_dot "$dry" "$cli" "$profile")"
-        dot="${_fd%%$'\037'*}"; _reset="${_fd#*$'\037'}"
+        local _eng; _eng="$cli"; [ "$_eng" = "antigravity" ] && _eng="agy"
+        # P3-2 (round-2 review): this used to call the ECHOING _home_fuel_dot
+        # via `$( )` — a command substitution IS a subshell, so any memo
+        # write _home_fuel_dotv makes inside it (the per-redraw fuel-dot
+        # cache, `_FUEL_MEMO_*`) never reaches the parent shell: readable
+        # (a repeat lookup here would still see nothing to reuse) but not
+        # writable back out. Every OTHER call site already calls
+        # _home_fuel_dotv directly and reads $_FDOT/$_FNOTE in this same
+        # shell (1634/1657/1686/2612 above) — this was the one holdout, and
+        # it silently broke :940's "repeat … with zero forks" promise at
+        # exactly this call point (a tank whose Live row already computed
+        # its dot paid the fork again here instead of hitting the memo).
+        _home_fuel_dotv "$dry" "$cli" "$profile"
+        dot="$_FDOT"; _reset="$_FNOTE"
         # Aligned columns (display-width padded): name · engine · account, then a
         # right gutter holding the reset time when the tank is dry. (No "this shell"
         # marker — see _home_render_static: with many tanks open at once it's noise.)
-        local _nm _en _ac _tail="" _sep=""
-        _nm="$(_home_lpad "$profile" 7)"; _en="$(_home_lpad "$_eng" 8)"; _ac="$(_home_lpad "${label:--}" 22)"
-        if [ -n "$_reset" ]; then _tail="$(printf '%b%s%b' "$__C_YELLOW" "$_reset" "$__C_RESET")"; fi
-        [ -n "$_tail" ] && _sep="  "
+        local _nm _en _ac _tail="" _sep="" _flds
+        if [ -n "$_reset" ]; then _tail="$(printf '%b%s%b' "$__C_YELLOW" "$_reset" "$__C_RESET")"; _sep="  "; fi
+        _home_tank_fieldsv "$profile" "$_eng" "${label:--}" "$_tail"
+        _nm="$_TF_NM"; _en="$_TF_EN"; _ac="$_TF_AC"
         if [ "$idx" -eq "$sel" ]; then
           printf '  %b %b %b%s%b %b%s%b %b%s%b%s%s\n' \
             "$mark" "$dot" "$__C_BOLD" "$_nm" "$__C_RESET" "$__C_DIM" "$_en" "$__C_RESET" "$__C_DIM" "$_ac" "$__C_RESET" "$_sep" "$_tail"
@@ -1435,7 +3330,7 @@ _home_pick_draw_body() {
         if [ "$printed_also" -eq 0 ]; then
           printed_also=1
           [ -n "$cur_cli" ] && printf '\n'
-          printf '  %b%s%b\n' "$__C_BOLD" "$T_ALSO_AVAILABLE" "$__C_RESET"
+          printf '  %b▸ %s%b\n' "$__C_BCYAN" "$T_ALSO_AVAILABLE" "$__C_RESET"
         fi
         if _reset="$(_home_is_dry "$dry" "$cli" "$profile")"; then tdot="${__C_RED}●${__C_RESET}"
         else tdot="${__C_DIM}·${__C_RESET}"; _reset=""; fi
@@ -1455,7 +3350,7 @@ _home_pick_draw_body() {
         if [ "$printed_also" -eq 0 ]; then
           printed_also=1
           [ -n "$cur_cli" ] && printf '\n'
-          printf '  %b%s%b\n' "$__C_BOLD" "$T_ALSO_AVAILABLE" "$__C_RESET"
+          printf '  %b▸ %s%b\n' "$__C_BCYAN" "$T_ALSO_AVAILABLE" "$__C_RESET"
         fi
         if [ "$idx" -eq "$sel" ]; then
           _home_wrap_prefixed "$note" \
@@ -1470,29 +3365,37 @@ _home_pick_draw_body() {
   done <<EOF
 $items
 EOF
+  # Say how many rows the window is holding back. Reuses T_K_MOVE rather than
+  # adding a string: a new one would cost nine translations to say what the
+  # keybar already says in all nine.
+  if [ "${_vphid:-0}" -gt 0 ]; then
+    printf '    %b⋯ %d · ↑↓ %s%b\n' "$__C_DIM" "$_vphid" "$T_K_MOVE" "$__C_RESET"
+  fi
+  # "N sessions hidden as burn runs; list truncated" (#34 round-2 P2-1), with
+  # extra=2 for the outer indenter this block is piped through.
+  _home_continue_notes "$printed_resume" 2
   if [ "$printed_resume" -eq 1 ]; then
-    local total_s; total_s="$(_home_total_sessions)"
-    printf '    %b%s%b\n' "$__C_DIM" "$(printf "$T_RESUME_FOOTER" "$total_s")" "$__C_RESET"
+    # The footer is a full localized sentence (54 columns in en-US, longer in
+    # de/fr/pt) and was printed with no width budget at all — so on a narrow
+    # terminal it was one of the widest lines on the board and simply wrapped.
+    # Truncate it to what is left after the 4-column indent plus the 2 the outer
+    # indenter adds, so it obeys the same rule as every row above it.
+    local total_s _foot _fw
+    total_s="$(_home_total_sessions)"
+    # shellcheck disable=SC2059  # the format IS the localized string
+    _foot="$(printf "$T_RESUME_FOOTER" "$total_s")"
+    _fw="$(_home_row_budget "$(_home_cols)" 6 12)"
+    printf '    %b%s%b\n' "$__C_DIM" "$(_home_trunc "$_foot" "$_fw")" "$__C_RESET"
   fi
   } | while IFS= read -r _line || [ -n "$_line" ]; do printf '  %s\033[K\n' "$_line"; done
   printf '\033[J'   # erase any leftover lines from a previous, taller frame
 
-  # Logo LAST, pinned top-RIGHT when wide enough — drawn AFTER the \033[J erase so
-  # it's never clipped, and on the alt screen so absolute positioning is safe.
-  # Width read live via `stty size </dev/tty` (works inside $()), recomputed each
-  # draw so a resize reflows it. Skipped on narrow terminals (would crowd tanks).
-  local _llogo="$CLIKAE_ROOT/assets/logo.txt" _lsz _lrows _lcols _lh=14
-  _lsz="$( { stty size </dev/tty; } 2>/dev/null || true )"
-  _lrows="${_lsz%% *}"; _lcols="${_lsz##* }"
-  # Logo pinned BOTTOM-right with a small margin. RWD: shown only when the window
-  # is wide AND tall enough to hold it clear of the board — otherwise omitted.
-  if [ -f "$_llogo" ] && [ "${_lcols:-0}" -ge 100 ] && [ "${_lrows:-0}" -ge 28 ]; then
-    local _ll _lr=$(( _lrows - _lh )) _lc=$(( _lcols - 41 ))
-    while IFS= read -r _ll || [ -n "$_ll" ]; do
-      printf '\033[%d;%dH%b%s%b' "$_lr" "$_lc" "$__C_BCYAN" "$_ll" "$__C_RESET"
-      _lr=$(( _lr + 1 ))
-    done < "$_llogo"
-  fi
+  # No watermark here. A logo pinned bottom-right by absolute cursor position was
+  # gated on the TERMINAL being big enough (cols>=100, rows>=28) — but the board's
+  # own content has no such limit, so on a busy account the session list ran under
+  # it and the two overwrote each other mid-line. The check could not see the thing
+  # it needed to avoid. The welcome screen still shows the logo, where it is the
+  # only thing on screen and nothing can collide with it.
   printf '\033[H'   # park the cursor home
 }
 
@@ -1506,15 +3409,26 @@ _home_stay() {
   printf '\n  %b↵ back to clikae%b ' "$__C_DIM" "$__C_RESET"
   local _discard; IFS= read -r _discard || true
   stty -echo 2>/dev/null || true
-  printf '\033[?1049h\033[?25l'   # re-enter alt screen, hide cursor
+  tui_screen_enter   # re-enter alt screen, hide cursor
 }
 
-# Toggle the solo marker on a tank — instant + silent (the picker redraws the badge
-# itself). solo = out of the fleet: no relay/`to`, skipped by burn/watch, `memory
-# share` refuses it. The CLI face is `clikae solo`; this is the board's one-key form.
+# Toggle solo on a tank — silent (the picker redraws the badge itself). solo = out
+# of the fleet: no relay/`to`, skipped by burn/watch, `memory share` refuses it.
+#
+# 🔴 DELEGATE to `clikae solo`, don't just flip the marker file. Solo and the shared
+# brain are ONE statement (docs/grammar.md §127): `clikae solo` also LEAVES the
+# memory group, and `--off` rejoins it. When the board only touched the marker, a
+# tank could end up solo-in-the-marker but still in a Soul group — the "solo BUT
+# STILL SHARING" state `clikae memory status` reports as impossible/broken. Running
+# the real verb (in a subprocess, output suppressed) keeps board == CLI by
+# construction and can't drift. `solo` accepts both `agy` and `antigravity`.
 _home_toggle_solo() {
-  local f; f="$(solo_marker_file "$1" "$2")"
-  if [ -f "$f" ]; then rm -f "$f"; else mkdir -p "$(dirname "$f")"; : > "$f"; fi
+  local engine="$1" tank="$2"
+  if [ -f "$(solo_marker_file "$engine" "$tank")" ]; then
+    "$CLIKAE_BIN" solo "$engine" "$tank" --off >/dev/null 2>&1 || true
+  else
+    "$CLIKAE_BIN" solo "$engine" "$tank" >/dev/null 2>&1 || true
+  fi
 }
 
 # The memory dial on the selected TANK (the `m` key): point its long-term memory at
@@ -1544,7 +3458,11 @@ EOF
       "$CLIKAE_BIN" memory share "$group" "$cli" "$profile" || true
       ;;
     "$T_MEM_OPT_ISOLATE")
-      "$CLIKAE_BIN" memory isolate "$cli" "$profile" || true
+      # `memory isolate` was RETIRED into `clikae solo` (it created a tank in the
+      # fleet with no brain — a state the board can't show). The board must call the
+      # surviving verb; `memory isolate` now hard-fails. solo gives the tank its own
+      # memory back AND takes it out of the fleet, which is the one supported way out.
+      "$CLIKAE_BIN" solo "$cli" "$profile" || true
       ;;
     "$T_MEM_OPT_STATUS")
       "$CLIKAE_BIN" memory status "$cli" "$profile" || true
@@ -1559,41 +3477,125 @@ _home_pick() {
   trap '_home_tty_leave' EXIT
   trap '_home_tty_leave; exit 130' INT TERM
   stty -echo 2>/dev/null || true
-  printf '\033[?1049h\033[?25l'   # enter alt screen, hide cursor
+  tui_screen_enter   # enter alt screen, hide cursor
   # Keys come from a DEDICATED /dev/tty fd, never bare stdin — the same isolation
   # _home_choose and the resume picker already had (this board was the straggler;
   # stray stdout feedback bytes read as keystrokes on some terminals).
-  exec 3</dev/tty 2>/dev/null || exec 3<&0
+  #
+  # 🔴 THE BRACES ARE LOAD-BEARING. `exec` with no command makes its redirections
+  # PERMANENT for the shell, so a bare `exec 3</dev/tty 2>/dev/null` points this
+  # process's stderr at /dev/null for the rest of its life — and every fd-3 line
+  # below did it again. What that cost, until it was found on 2026-07-27:
+  #   • bash writes `read -p` prompts to STDERR, so `n`/`a`/`m` dropped to a blank
+  #     screen with an invisible prompt and read as a hang;
+  #   • every log_err/log_warn/log_fail from a board-launched subcommand vanished
+  #     (a duplicate `clikae init` name failed with no output at all);
+  #   • worst, `_home_launch` execs the ENGINE, which inherited fd 2 = /dev/null —
+  #     so Claude Code's crashes, node warnings and OAuth errors were discarded.
+  # The `2>/dev/null` is only meant to hide the *open failure* message. A brace
+  # group scopes it to exactly that. Do not "simplify" the braces away.
+  { exec 3</dev/tty; } 2>/dev/null || exec 3<&0
 
   # `view` is the (possibly filtered) list actually shown + indexed; `filter` is
   # the live `/` query. Everything navigational works on `view`; relay still reads
   # the FULL `items` so it can find the active source tank even when filtered out.
-  local sel=0 n sel_row sel_kind sel_cli filter="" view
+  local sel=0 n sel_row sel_kind sel_cli filter="" view _cursize
   view="$items"
+
+  # 🔴 REDRAW ON RESIZE. tui_read_key blocks — its argument is a file descriptor,
+  # not a timeout — so the loop sat there until a key arrived. Every layout
+  # figure is read per draw (_home_cols), so the board was always capable of
+  # reflowing; nothing ever asked it to. Resize the window and the frame stayed
+  # laid out for the old size until you happened to press something.
+  #
+  # A `trap ... WINCH` does NOT fix this on its own: bash installs handlers with
+  # SA_RESTART, so the blocked `read` resumes and the flag is never looked at.
+  # Measured on a pty — SIGWINCH after the first frame produced zero bytes of
+  # repaint. So the wait polls instead, and only repaints when the width or the
+  # height actually changed; an idle board with a still terminal draws nothing.
+  # Reported alongside the ssh-from-PineNote report, 2026-08-16.
+  local _lastsize=""
   while :; do
     view="$(_home_filter "$items" "$filter")"
-    n="$(printf '%s\n' "$view" | grep -c .)"
+    # 🔴 `|| true`. `grep -c .` exits 1 on ZERO matches and the board runs under
+    # `set -eo pipefail`, so typing a filter that matched nothing KILLED the
+    # board: rc=1, blank screen, no message. The "no matches" notice three lines
+    # below — translated into all nine locales — had therefore never rendered
+    # once, in any language. The two siblings at :869-870 already carry this
+    # guard with a comment explaining exactly this hazard; this was the one that
+    # got missed. (resume.sh's equivalent counts with ${#filtered[@]} and cannot
+    # fail, which is why only the board broke.)
+    n="$(printf '%s\n' "$view" | grep -c . || true)"
+    case "$n" in ''|*[!0-9]*) n=0 ;; esac
     if [ "$n" -le 0 ]; then
       # Filter matched nothing (or everything's gone): show a tiny notice, let the
       # user clear the filter or quit. Never get stuck on an empty board.
       printf '\033[H\033[2J  %b%s%b  %b(/ %s · q %s)%b\n' \
         "$__C_DIM" "$T_FILTER_NONE" "$__C_RESET" "$__C_DIM" "$T_K_FILTER" "$T_K_QUIT" "$__C_RESET"
-      tui_read_key 3 || TUI_KEY="q"
+      # Wait for a key, waking every second so a resize repaints without one.
+      #
+      # 🔴 BASELINE BEFORE THE BLOCK, NOT AFTER. `tui_read_key 3 1` blocks for
+      # up to a full second when idle, so if `_lastsize` were only captured
+      # AFTER that first timeout (as it used to be), a resize delivered while
+      # still inside that first blocking read became the baseline itself —
+      # "new" size recorded with no "old" to compare against, so the resize
+      # was never detected, not even on a LATER check, because the terminal
+      # does not change again on its own. Silent forever, not just late.
+      # Capturing it here, right after the draw and before the wait, means
+      # the window in which a resize can be lost is however long THIS printf
+      # takes, not up to a second.
+      _lastsize="$(_home_size)"
+    TUI_KEY=""
+    while :; do
+      tui_read_key 3 1 && break
+      # 🔴 Do NOT branch on the exit code: bash 3.2 returns 1 for a `read -t`
+      # timeout, same as EOF (bash 4+ gives >128). Ask something independent —
+      # a terminal that is gone has no size, and that is the only case that
+      # should quit. Everything else was just a quiet second.
+      _cursize="$(_home_size)"
+      if [ -z "$_cursize" ]; then TUI_KEY="q"; break; fi
+      if [ -n "$_lastsize" ] && [ "$_cursize" != "$_lastsize" ]; then
+        _lastsize="$_cursize"; TUI_KEY="__resized"; break
+      fi
+      _lastsize="$_cursize"
+    done
+    [ "$TUI_KEY" = "__resized" ] && continue
       case "$TUI_KEY" in
         /) _home_tty_leave; printf '%b%s%b' "$__C_BOLD" "$T_FILTER_PROMPT" "$__C_RESET"
            IFS= read -r filter <&3 || filter=""
            stty -echo 2>/dev/null || true
-           printf '\033[?1049h\033[?25l'; sel=0; continue ;;
+           tui_screen_enter; sel=0; continue ;;
         *) [ -n "$filter" ] && { filter=""; sel=0; continue; }; break ;;
       esac
     fi
     [ "$sel" -ge "$n" ] && sel=$((n - 1))    # clamp after a delete/filter
     [ "$sel" -lt 0 ] && sel=0
-    _home_pick_draw "$view" "$sel" "$dry"
+    _home_pick_draw "$view" "$sel" "$dry" "$filter"
     # One decoded key per frame from the tty fd (tui_read_key, lib/core/tui.sh);
     # a lone ESC quits, PgUp/Home jump top, PgDn/End jump bottom (the board has
     # no viewport, so page = jump).
-    tui_read_key 3 || TUI_KEY="q"
+    # Wait for a key, waking every second so a resize repaints without one.
+    #
+    # 🔴 BASELINE BEFORE THE BLOCK, NOT AFTER — see the twin comment on the
+    # empty-filter branch above. Same bug, same fix: capture `_lastsize` right
+    # after this draw, not after the first second-long `tui_read_key` timeout,
+    # or a resize inside that first blocking wait is lost forever.
+    _lastsize="$(_home_size)"
+    TUI_KEY=""
+    while :; do
+      tui_read_key 3 1 && break
+      # 🔴 Do NOT branch on the exit code: bash 3.2 returns 1 for a `read -t`
+      # timeout, same as EOF (bash 4+ gives >128). Ask something independent —
+      # a terminal that is gone has no size, and that is the only case that
+      # should quit. Everything else was just a quiet second.
+      _cursize="$(_home_size)"
+      if [ -z "$_cursize" ]; then TUI_KEY="q"; break; fi
+      if [ -n "$_lastsize" ] && [ "$_cursize" != "$_lastsize" ]; then
+        _lastsize="$_cursize"; TUI_KEY="__resized"; break
+      fi
+      _lastsize="$_cursize"
+    done
+    [ "$TUI_KEY" = "__resized" ] && continue
     sel_row="$(printf '%s\n' "$view" | sed -n "$((sel + 1))p")"
     sel_kind="$(printf '%s' "$sel_row" | cut -d$'\037' -f1)"
     sel_cli="$(printf '%s' "$sel_row" | cut -d$'\037' -f2)"
@@ -1608,20 +3610,50 @@ _home_pick() {
       '[')
         # Move the selected tank UP in the burn order (the board IS the order).
         if [ "$sel_kind" = "tank" ] && _home_reorder "$sel_cli" "$(printf '%s' "$sel_row" | cut -d$'\037' -f3)" -1; then
-          items="$(_home_items)"; sel=$(( sel - 1 )); [ "$sel" -lt 0 ] && sel=0
+          _home_items_load; sel=$(( sel - 1 )); [ "$sel" -lt 0 ] && sel=0
         fi ;;
       ']')
         # Move the selected tank DOWN in the burn order.
         if [ "$sel_kind" = "tank" ] && _home_reorder "$sel_cli" "$(printf '%s' "$sel_row" | cut -d$'\037' -f3)" 1; then
-          items="$(_home_items)"; sel=$(( sel + 1 ))
+          _home_items_load; sel=$(( sel + 1 ))
         fi ;;
-      q|esc) break ;;
+      # Esc CLEARS an active filter before it leaves. Escape is the universal
+      # "undo this mode" reflex, and while filtered the mode IS the filter — so
+      # reaching for it to get the full board back used to quit the launcher
+      # instead. With no filter on, Esc still exits exactly as before, and `q`
+      # exits unconditionally either way, so there is always a one-key way out.
+      esc) if [ -n "$filter" ]; then filter=""; sel=0; continue; fi; break ;;
+      q) break ;;
       /)
         _home_tty_leave
         printf '%b%s%b' "$__C_BOLD" "$T_FILTER_PROMPT" "$__C_RESET"
         IFS= read -r filter <&3 || filter=""
         stty -echo 2>/dev/null || true
-        printf '\033[?1049h\033[?25l'; sel=0
+        tui_screen_enter; sel=0
+        ;;
+      K)
+        # Close a running session from the board.
+        #
+        # Reported 2026-08-15: the only way out of a session whose engine had
+        # finished was to close the terminal — the board could show you a live
+        # row and offer nothing but "enter it". Destructive, so it asks; and the
+        # question says the thing that makes it safe, which is that the
+        # conversation is a transcript on disk. `clikae resume` brings it back.
+        # What ends is the process, not the work.
+        if [ "$sel_kind" = "live" ]; then
+          local _csess; _csess="$(printf '%s' "$sel_row" | cut -d$'\037' -f7)"
+          if [ -n "$_csess" ]; then
+            _home_tty_leave
+            printf '%b%s%b' "$__C_BOLD" "$T_CLOSE_ASK" "$__C_RESET"
+            local _cans; IFS= read -r _cans <&3 || _cans=""
+            stty -echo 2>/dev/null || true
+            tui_screen_enter
+            case "$_cans" in
+              y|Y) tmux kill-session -t "=$_csess" 2>/dev/null || true
+                   _home_items_load; sel=0 ;;
+            esac
+          fi
+        fi
         ;;
       '?')
         _home_help_overlay   # full key legend; any key dismisses, then redraw
@@ -1633,17 +3665,34 @@ _home_pick() {
         [ -n "$_lang" ] && i18n_set "$_lang"
         trap '_home_tty_leave' EXIT; trap '_home_tty_leave; exit 130' INT TERM
         stty -echo 2>/dev/null || true
-        printf '\033[?1049h\033[?25l'
-        items="$(_home_items)"; dry="$(_home_dry_set)"
+        tui_screen_enter
+        _home_refresh
         ;;
       A)
-        # Cycle autonomy ask → safe → full → ask (consumed by the BETA supervised
-        # launch). Shown live on the board's autonomy line.
-        case "$(autonomy_get)" in
-          ask)  autonomy_set safe ;;
-          safe) autonomy_set full ;;
-          *)    autonomy_set ask ;;
-        esac
+        # PICK the autonomy level; do not blind-cycle it.
+        #
+        # 🔴 `A` is Shift of `a` (rename), and it was the board's only completely
+        # unguarded Shift-slip: no prompt, no confirm, written straight to disk,
+        # and bound on EVERY row kind — including the rows where `a` itself is
+        # inert, which are exactly the rows where a user presses it again harder.
+        # Two slipped Shifts took `ask` to `full`, and `full` means a dry tank
+        # carries your session onto the next tank in the burn order — a different
+        # account, possibly a different engine — without asking. That is the one
+        # setting on this board whose whole purpose is to be a consent moment, so
+        # it must not be reachable by accident. (It was also settable by the help
+        # overlay's escape leak, fixed above; found set to `full` on the
+        # maintainer's own machine with no memory of choosing it.)
+        #
+        # A picker, like the `l` language key: same one keystroke to open, the
+        # current value preselected, Esc/q cancels, and the level you land on is
+        # the one you looked at.
+        _home_tty_leave; trap - EXIT INT TERM
+        local _lvl _cur; _cur="$(autonomy_get)"
+        _lvl="$(_home_choose "$T_AUTONOMY_PICK" "$(printf 'ask\nsafe\nfull')" "$_cur")" || _lvl=""
+        [ -n "$_lvl" ] && [ "$_lvl" != "$_cur" ] && autonomy_set "$_lvl"
+        trap '_home_tty_leave' EXIT; trap '_home_tty_leave; exit 130' INT TERM
+        stty -echo 2>/dev/null || true
+        tui_screen_enter
         ;;
 
       # --- leave actions: these launch a CLI, so exiting the picker is expected
@@ -1651,26 +3700,26 @@ _home_pick() {
       enter)
         if [ "$sel_kind" = "resume" ]; then
           # Continue row → submenu (resume vs switch-fresh). Cancel returns here.
-          _home_tty_leave; trap - EXIT INT TERM
-          exec 3<&- 2>/dev/null || true
+          _home_tty_leave_final
+          { exec 3<&-; } 2>/dev/null || true
           _home_resume_action "$sel_row" "$dry" || {
             trap '_home_tty_leave' EXIT; trap '_home_tty_leave; exit 130' INT TERM
             stty -echo 2>/dev/null || true
-            printf '\033[?1049h\033[?25l'
-            exec 3</dev/tty 2>/dev/null || exec 3<&0
+            tui_screen_enter
+            { exec 3</dev/tty; } 2>/dev/null || exec 3<&0
             continue
           }
           return 0
         fi
-        _home_tty_leave; trap - EXIT INT TERM
-        exec 3<&- 2>/dev/null || true
+        _home_tty_leave_final
+        { exec 3<&-; } 2>/dev/null || true
         _home_launch "$sel_row"
         return 0
         ;;
       r)
         if [ "$sel_kind" = "tank" ]; then
-          _home_tty_leave; trap - EXIT INT TERM
-          exec 3<&- 2>/dev/null || true
+          _home_tty_leave_final
+          { exec 3<&-; } 2>/dev/null || true
           _home_relay "$items" "$sel_row"
           return 0
         fi
@@ -1680,8 +3729,8 @@ _home_pick() {
         # idiom every other launch in this board uses): cmd_resume lives in
         # resume.sh, which isn't sourced in the home process — and can't be sourced
         # at home.sh's top, since resume.sh sources home.sh (mutual-source loop).
-        _home_tty_leave; trap - EXIT INT TERM
-        exec 3<&- 2>/dev/null || true
+        _home_tty_leave_final
+        { exec 3<&-; } 2>/dev/null || true
         exec "$CLIKAE_BIN" resume
         ;;
       x)
@@ -1689,8 +3738,8 @@ _home_pick() {
         # (--ephemeral). A clean, amnesiac session: this run's long-term memory
         # evaporates on exit.
         if [ "$sel_kind" = "tank" ]; then
-          _home_tty_leave; trap - EXIT INT TERM
-          exec 3<&- 2>/dev/null || true
+          _home_tty_leave_final
+          { exec 3<&-; } 2>/dev/null || true
           exec "$CLIKAE_BIN" "$sel_cli" "$(printf '%s' "$sel_row" | cut -d$'\037' -f3)" --ephemeral
         fi
         ;;
@@ -1698,20 +3747,20 @@ _home_pick() {
       # --- stay actions: mutate, then return to the live menu ---
       n)
         _home_stay _home_new_tank "$sel_cli"
-        items="$(_home_items)"; dry="$(_home_dry_set)"
+        _home_refresh
         ;;
       a)
         # v0.5.3: `a` renames the TANK (carries alias + login); alias-only edits
         # are at `clikae alias` on the CLI.
         if [ "$sel_kind" = "tank" ]; then
           _home_stay _home_rename_tank "$sel_row"
-          items="$(_home_items)"; dry="$(_home_dry_set)"
+          _home_refresh
         fi
         ;;
       d)
         if [ "$sel_kind" = "tank" ]; then
           _home_stay _home_remove_tank "$sel_row"
-          items="$(_home_items)"; dry="$(_home_dry_set)"
+          _home_refresh
         fi
         ;;
       s)
@@ -1722,7 +3771,7 @@ _home_pick() {
         if [ "$sel_kind" = "tank" ]; then
           local _sp; _sp="$(printf '%s' "$sel_row" | cut -d$'\037' -f3)"
           _home_toggle_solo "$sel_cli" "$_sp"
-          items="$(_home_items)"
+          _home_items_load
           local _vv _i=0 _row2
           _vv="$(_home_filter "$items" "$filter")"
           while IFS= read -r _row2; do
@@ -1741,7 +3790,7 @@ EOF
         # normal screen via _home_stay, then the board refreshes.
         if [ "$sel_kind" = "tank" ]; then
           _home_stay _home_memory "$sel_row"
-          items="$(_home_items)"; dry="$(_home_dry_set)"
+          _home_refresh
         fi
         ;;
       c)
@@ -1750,13 +3799,13 @@ EOF
         # first-class key from the hub, and an adjacent screen returns where
         # you came from (grammar §8.1). Row-independent, like `n`.
         _home_stay "$CLIKAE_BIN" clean
-        items="$(_home_items)"; dry="$(_home_dry_set)"
+        _home_refresh
         ;;
     esac
   done
 
-  exec 3<&- 2>/dev/null || true
-  _home_tty_leave; trap - EXIT INT TERM
+  { exec 3<&-; } 2>/dev/null || true
+  _home_tty_leave_final
   # On quit, leave the static board (unfiltered) in the normal scrollback.
   _home_render_static "$items" "$dry"
 }
@@ -1769,10 +3818,14 @@ _home_update_prompt() {
   update_check_refresh
   local latest; latest="$(update_check_pending)" || return 0
   local cmd; cmd="$(update_upgrade_command)"
-  # The ✨ banner doubles as the menu title (_home_choose prints the title above the
+  # The banner doubles as the menu title (_home_choose prints the title above the
   # options, codex-style). Release-notes link on its own line.
+  #
+  # No glyph in front of it: the colour and the sentence already say a new version
+  # exists, and signet's first ruler is that a mark earns its place by doing a job
+  # no other mark does. The ✨ that used to sit here was costume.
   local title opt1 opts choice
-  title="$(printf '%b✨ %s%b  clikae %s → %s\n%b%s %s%b' \
+  title="$(printf '%b%s%b  clikae %s → %s\n%b%s %s%b' \
     "$__C_YELLOW" "$T_UPDATE_AVAIL" "$__C_RESET" "$CLIKAE_VERSION" "$latest" \
     "$__C_DIM" "$T_UPDATE_NOTES" "https://github.com/CVERInc/clikae/releases/latest" "$__C_RESET")"
   if [ -n "$cmd" ]; then opt1="$(printf "$T_UPDATE_NOW" "$cmd")"; else opt1="$T_UPDATE_SHOW"; fi
@@ -1783,7 +3836,11 @@ _home_update_prompt() {
       if [ -n "$cmd" ]; then
         printf '\n  %b$ %s%b\n\n' "$__C_DIM" "$cmd" "$__C_RESET"
         if eval "$cmd"; then
-          printf '\n  %b✓ %s%b\n\n' "$__C_GREEN" "$T_UPDATE_DONE" "$__C_RESET"
+          # `[ DONE ]`, not a tick: the upgrade changed the disk, which is the
+          # exact question that badge answers — and the failure branch below was
+          # already speaking that language. One state, two vocabularies, is the
+          # thing the closed badge set exists to stop.
+          printf '\n'; log_done "$T_UPDATE_DONE"; printf '\n'
         else
           log_warn "$T_UPDATE_FAILED"
         fi
@@ -1843,7 +3900,8 @@ EOF
     return 0
   fi
 
-  local items dry; items="$(_home_items)"; dry="$(_home_dry_set)"
+  local _CLIKAE_BOARD=1
+  local items dry; _home_refresh
   # Interactive only on a real TTY (both stdin and stdout); otherwise plain text.
   if [ -t 0 ] && [ -t 1 ] && [ -z "${CLIKAE_NO_INTERACTIVE:-}" ]; then
     # A newer clikae out? Offer it first (codex-style), before the board. If an

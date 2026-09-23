@@ -26,3 +26,10 @@
 # Internal conversation backups — never publish
 conversations/
 DOGFOOD-*.md
+
+# Headless dispatch working files (per-round task brief + agent report)
+/task.md
+/report.md
+
+# Python bytecode from harnesses that import tests/tools/*.py as a module.
+__pycache__/

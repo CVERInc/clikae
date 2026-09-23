@@ -13,14 +13,22 @@ _src() {
 }
 
 @test "init stamps the state schema version" {
+  # 🔴 Asks the source what "current" is instead of writing it down. Hardcoded,
+  # this test breaks on every bump — which is a red light that means "someone
+  # changed a number", not "something is wrong", and those get fixed by editing
+  # the number until one day the number was wrong.
+  _src
   clikae init claude work
   [ -f "$CLIKAE_HOME/version" ]
   run cat "$CLIKAE_HOME/version"
-  [ "$output" = "1" ]
+  [ "$output" = "$CLIKAE_STATE_VERSION" ] || {
+    echo "stamped '$output', current schema is $CLIKAE_STATE_VERSION"; false; }
 }
 
 @test "state_version_read: no file = the original un-versioned layout = v1" {
-  _src; mkdir -p "$CLIKAE_HOME"
+  # helpers stamps the current schema so ordinary tests never see a migration
+  # message; this one is ABOUT the file being absent, so it takes it away again.
+  _src; mkdir -p "$CLIKAE_HOME"; rm -f "$CLIKAE_HOME/version"
   run state_version_read
   [ "$output" = "1" ]
 }
@@ -32,7 +40,9 @@ _src() {
 }
 
 @test "state_version_check: current version is a no-op (writes nothing)" {
-  _src; mkdir -p "$CLIKAE_HOME"; printf '1\n' > "$CLIKAE_HOME/version"
+  # "current" comes from the source, not from a literal — see the note on the
+  # rehearsal below. Stamped `1` here, this passed until the day v2 shipped.
+  _src; mkdir -p "$CLIKAE_HOME"; printf '%s\n' "$CLIKAE_STATE_VERSION" > "$CLIKAE_HOME/version"
   local before; before="$(find "$CLIKAE_HOME" | sort; echo --; cat "$CLIKAE_HOME/version")"
   state_version_check
   local after; after="$(find "$CLIKAE_HOME" | sort; echo --; cat "$CLIKAE_HOME/version")"
@@ -49,7 +59,7 @@ _src() {
 }
 
 @test "state_version_check: NO version file but v2 binary migrates from v1 (no-file = v1)" {
-  _src; mkdir -p "$CLIKAE_HOME"     # no version file at all
+  _src; mkdir -p "$CLIKAE_HOME"; rm -f "$CLIKAE_HOME/version"     # no version file at all
   CLIKAE_STATE_VERSION=2
   _state_migrate_1() { touch "$CLIKAE_HOME/.migrated_from_unversioned"; }
   state_version_check
@@ -73,30 +83,34 @@ _src() {
   [ ! -d "$CLIKAE_HOME" ]                          # didn't create anything
 }
 
-# --- end-to-end v1 -> v2 forward migration (the future-format-change rehearsal) ---
-# Simulates the real lifecycle of the FIRST on-disk format change: a tank created by
-# an old (v1) clikae, then a newer binary that bumps CLIKAE_STATE_VERSION to 2 and
-# ships a `_state_migrate_1` hook (the convention is `_state_migrate_<n>` = n -> n+1,
-# so v1->v2 is `_state_migrate_1`). Asserts the hook (a) sees the OLD layout, (b)
-# actually runs exactly once, and (c) leaves the version file stamped at the new 2.
-@test "state schema v1 -> v2: a real v1 tank migrates forward and re-stamps to 2" {
+# --- end-to-end forward migration (the format-change rehearsal) ---
+# The lifecycle of an on-disk format change: a tank created by the CURRENT binary,
+# then a newer one that bumps CLIKAE_STATE_VERSION by one and ships the matching
+# `_state_migrate_<n>` hook (the convention is n -> n+1). Asserts the hook (a) sees
+# the OLD layout, (b) runs exactly once, and (c) leaves the version re-stamped.
+#
+# 🔴 Written against "current + 1", not against a literal version pair. It used to
+# rehearse v1 -> v2; the day v2 became real, this test failed for having been
+# overtaken rather than for finding anything. The rehearsal is about the RUNNER,
+# and the runner does not care which numbers it is between.
+@test "state schema: a real tank migrates forward one version and re-stamps" {
   _src
-  # 1) An old (v1) clikae creates a tank. No bump yet → version stamps as 1.
+  local from="$CLIKAE_STATE_VERSION" to=$((CLIKAE_STATE_VERSION + 1))
+  # 1) The current binary creates a tank. Version stamps at today's schema.
   clikae init claude work
-  [ "$(cat "$CLIKAE_HOME/version")" = "1" ]
-  # Pretend v1's layout kept a setting in a flat file the v2 format relocates.
+  [ "$(cat "$CLIKAE_HOME/version")" = "$from" ]
+  # Pretend this layout keeps a setting in a flat file the next format relocates.
   printf 'legacy-value\n' > "$CLIKAE_HOME/old_setting"
 
-  # 2) A newer binary: bump the schema to 2 and register the v1->v2 migration.
-  CLIKAE_STATE_VERSION=2
+  # 2) A newer binary: bump the schema and register the matching migration.
+  CLIKAE_STATE_VERSION="$to"
   _migrate_runs=0
-  _state_migrate_1() {
-    _migrate_runs=$((_migrate_runs + 1))
-    # The migration sees the OLD (v1) layout and moves it into the v2 shape.
-    [ -f "$CLIKAE_HOME/old_setting" ] || return 1     # must run BEFORE re-stamp
-    mkdir -p "$CLIKAE_HOME/settings"
-    mv "$CLIKAE_HOME/old_setting" "$CLIKAE_HOME/settings/value"
-  }
+  eval "_state_migrate_$from() {
+    _migrate_runs=\$((_migrate_runs + 1))
+    [ -f \"\$CLIKAE_HOME/old_setting\" ] || return 1   # must run BEFORE re-stamp
+    mkdir -p \"\$CLIKAE_HOME/settings\"
+    mv \"\$CLIKAE_HOME/old_setting\" \"\$CLIKAE_HOME/settings/value\"
+  }"
 
   # 3) Startup runs the forward migration.
   state_version_check
@@ -104,9 +118,9 @@ _src() {
   [ "$_migrate_runs" -eq 1 ]                            # ran exactly once
   [ ! -f "$CLIKAE_HOME/old_setting" ]                   # old layout gone
   [ "$(cat "$CLIKAE_HOME/settings/value")" = "legacy-value" ]   # data carried over
-  [ "$(cat "$CLIKAE_HOME/version")" = "2" ]             # re-stamped to the new version
+  [ "$(cat "$CLIKAE_HOME/version")" = "$to" ]           # re-stamped
 
-  # 4) Idempotent: a second startup at v2 is a no-op (the hook does NOT run again).
+  # 4) Idempotent: a second startup at the new version does NOT run it again.
   state_version_check
   [ "$_migrate_runs" -eq 1 ]
 }

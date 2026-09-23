@@ -14,14 +14,28 @@
 # BETA, claude-only for now (see docs/DESIGN-runtime.md). The toggle ships WITH its
 # consumer so it's never a phantom switch.
 
-autonomy_file() { printf '%s\n' "$CLIKAE_HOME/autonomy"; }
+autonomy_filev() { _AUTONOMY_FILE="$CLIKAE_HOME/autonomy"; }
+autonomy_file()  { autonomy_filev; printf '%s\n' "$_AUTONOMY_FILE"; }
+
+# autonomy_getv -> sets $_AUTONOMY to ask | safe | full.
+#
+# The board's frame asks this TWICE, and the old form forked three times a call —
+# `$(autonomy_file)` twice plus a `tr` — to read one word from a one-line file.
+# `$(<file)` is bash's own read: no subprocess at all. The `${//}` strips exactly
+# what `tr -d '[:space:]'` did, over the whole content rather than one line, so a
+# file that somehow holds a stray newline normalises the same way it always did.
+autonomy_getv() {
+  local v=""
+  autonomy_filev
+  if [ -f "$_AUTONOMY_FILE" ]; then
+    v="$(<"$_AUTONOMY_FILE")" || v=""
+    v="${v//[[:space:]]/}"
+  fi
+  case "$v" in safe|full) _AUTONOMY="$v" ;; *) _AUTONOMY='ask' ;; esac
+}
 
 # autonomy_get -> ask | safe | full  (default ask; unknown content normalises to ask).
-autonomy_get() {
-  local v=""
-  [ -f "$(autonomy_file)" ] && v="$(tr -d '[:space:]' < "$(autonomy_file)" 2>/dev/null)"
-  case "$v" in safe|full) printf '%s' "$v" ;; *) printf 'ask' ;; esac
-}
+autonomy_get() { autonomy_getv; printf '%s' "$_AUTONOMY"; }
 
 # autonomy_set <ask|safe|full> -> persist. Returns 1 on an unknown level.
 autonomy_set() {

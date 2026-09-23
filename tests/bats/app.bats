@@ -34,7 +34,9 @@ macos_only() { [ "$(uname -s)" = "Darwin" ] || skip "clikae app is macOS-only"; 
 @test "app embeds the --global-config flag for a flag-strategy adapter (vercel)" {
   macos_only
   clikae init vercel prod
-  run clikae app vercel prod --out "$TEST_HOME/Apps"
+  # --terminal is explicit: the DEFAULT is now detected from $TERM_PROGRAM, and
+  # this test is about the Terminal.app template, not about which default won.
+  run clikae app vercel prod --terminal terminal --out "$TEST_HOME/Apps"
   [ "$status" -eq 0 ]
   [ -d "$TEST_HOME/Apps/vercel (prod).app" ]
   run osadecompile "$TEST_HOME/Apps/vercel (prod).app"
@@ -79,7 +81,7 @@ macos_only() { [ "$(uname -s)" = "Darwin" ] || skip "clikae app is macOS-only"; 
 
 @test "app --board makes a clikae.app that opens the board (Terminal)" {
   macos_only
-  run clikae app --board --out "$TEST_HOME/Apps"
+  run clikae app --board --terminal terminal --out "$TEST_HOME/Apps"
   [ "$status" -eq 0 ]
   [ -d "$TEST_HOME/Apps/clikae.app" ]
   run osadecompile "$TEST_HOME/Apps/clikae.app"
@@ -176,4 +178,183 @@ _src_app() {
   _src_app
   run _app_shell_squote 'clikae; exec zsh -i'
   [ "$output" = "'clikae; exec zsh -i'" ]
+}
+
+# --- default terminal auto-detection ------------------------------------------
+# The default used to be a hardcoded `terminal`, so an iTerm2/Ghostty user got an
+# Apple-Terminal launcher unless they knew --terminal existed. $TERM_PROGRAM is
+# the best available guess, but only when that app is really installed — a guess
+# that names a missing app would turn a default into a hard failure.
+@test "_app_default_terminal falls back to terminal for an unknown TERM_PROGRAM" {
+  source "$CLIKAE_TEST_ROOT/lib/core/log.sh"
+  source "$CLIKAE_TEST_ROOT/lib/commands/app.sh"
+  TERM_PROGRAM="something-nobody-supports" run _app_default_terminal
+  [ "$status" -eq 0 ]
+  [ "$output" = "terminal" ]
+}
+
+@test "_app_default_terminal falls back to terminal when TERM_PROGRAM is unset" {
+  source "$CLIKAE_TEST_ROOT/lib/core/log.sh"
+  source "$CLIKAE_TEST_ROOT/lib/commands/app.sh"
+  run env -u TERM_PROGRAM bash -c \
+    "source '$CLIKAE_TEST_ROOT/lib/core/log.sh'; source '$CLIKAE_TEST_ROOT/lib/commands/app.sh'; _app_default_terminal"
+  [ "$status" -eq 0 ]
+  [ "$output" = "terminal" ]
+}
+
+@test "_app_default_terminal never names an app that isn't installed" {
+  source "$CLIKAE_TEST_ROOT/lib/core/log.sh"
+  source "$CLIKAE_TEST_ROOT/lib/commands/app.sh"
+  # Force the installed-check to say no, then claim to be running in iTerm2.
+  _app_terminal_installed() { return 1; }
+  TERM_PROGRAM="iTerm.app" run _app_default_terminal
+  [ "$output" = "terminal" ]
+}
+
+@test "clikae app --terminal warp explains itself instead of a generic unknown" {
+  run clikae app --terminal warp claude nope
+  [ "$status" -ne 0 ]
+  [[ "$output" == *"Warp"* ]] || false
+  [[ "$output" == *"running a command"* ]] || false
+}
+
+# --- launcher templates must COMPILE -----------------------------------------
+# AppleScript resolves an app's terminology from that app's dictionary, so a
+# template using iTerm2's vocabulary can only be compiled on a machine that has
+# iTerm2. That is why this gap stayed open: nobody could check it here. Rather
+# than leave it permanently unverifiable, this test self-closes — the first
+# person with iTerm2 who runs the suite verifies it for everyone.
+@test "the Terminal.app launcher template compiles" {
+  macos_only
+  local out="$TEST_HOME/t.app" src="$TEST_HOME/t.applescript"
+  sed -e 's/@SHELL_CMD@/echo hi/g' -e 's/@TITLE@/test/g' \
+    "$CLIKAE_TEST_ROOT/lib/templates/launcher.applescript.tmpl" > "$src"
+  run osacompile -o "$out" "$src"
+  [ "$status" -eq 0 ]
+}
+
+@test "the Ghostty launcher template compiles (needs Ghostty's own AppleScript dictionary)" {
+  macos_only
+  # The template now has an in-app path for Ghostty >= 1.3.0 (`tell
+  # application "Ghostty" … new surface configuration …`), so it is NOT
+  # dictionary-free the way it used to be — osacompile resolves those terms
+  # against Ghostty's own terminology at compile time, which needs the app
+  # installed (running is not required), same as the iTerm2 template below.
+  [ -d "/Applications/Ghostty.app" ] || [ -d "$HOME/Applications/Ghostty.app" ] \
+    || skip "Ghostty not installed -- its AppleScript dictionary cannot be resolved here"
+  local out="$TEST_HOME/g.app" src="$TEST_HOME/g.applescript"
+  sed -e 's/@SHELL_CMD@/echo hi/g' -e 's/@TITLE@/test/g' \
+    "$CLIKAE_TEST_ROOT/lib/templates/launcher.ghostty.applescript.tmpl" > "$src"
+  run osacompile -o "$out" "$src"
+  [ "$status" -eq 0 ]
+}
+
+@test "the iTerm2 launcher template compiles (only checkable WITH iTerm2)" {
+  macos_only
+  [ -d "/Applications/iTerm.app" ] || [ -d "$HOME/Applications/iTerm.app" ] \
+    || skip "iTerm2 not installed — its AppleScript terminology cannot be resolved here"
+  local out="$TEST_HOME/i.app" src="$TEST_HOME/i.applescript"
+  sed -e 's/@SHELL_CMD@/echo hi/g' -e 's/@TITLE@/test/g' \
+    "$CLIKAE_TEST_ROOT/lib/templates/launcher.iterm2.applescript.tmpl" > "$src"
+  run osacompile -o "$out" "$src"
+  [ "$status" -eq 0 ]
+}
+
+@test "app force rebuild installs terminal fixture icon and seals the bundle" {
+  macos_only
+  _src_app
+  source "$CLIKAE_TEST_ROOT/lib/core/log.sh"
+  printf 'fixture' > "$TEST_HOME/Fixture.icns"
+  _app_terminal_icon() { printf '%s\n' "$TEST_HOME/Fixture.icns"; }
+  cmd_app --board --terminal terminal --out "$TEST_HOME/Apps"
+  run cmd_app --board --terminal terminal --out "$TEST_HOME/Apps" --force
+  [ "$status" -eq 0 ]
+  local app="$TEST_HOME/Apps/clikae.app"
+  cmp "$TEST_HOME/Fixture.icns" "$app/Contents/Resources/Fixture.icns"
+  run /usr/libexec/PlistBuddy -c 'Print :CFBundleIconFile' "$app/Contents/Info.plist"
+  [ "$output" = Fixture.icns ]
+  run codesign --verify "$app"
+  [ "$status" -eq 0 ]
+}
+
+@test "app clears CFBundleIconName so the copied .icns is the EFFECTIVE icon (#50)" {
+  macos_only
+  _src_app
+  source "$CLIKAE_TEST_ROOT/lib/core/log.sh"
+  printf 'fixture' > "$TEST_HOME/Fixture.icns"
+  _app_terminal_icon() { printf '%s\n' "$TEST_HOME/Fixture.icns"; }
+  run cmd_app --board --terminal terminal --out "$TEST_HOME/Apps"
+  [ "$status" -eq 0 ]
+  local plist="$TEST_HOME/Apps/clikae.app/Contents/Info.plist"
+  run /usr/libexec/PlistBuddy -c 'Print :CFBundleIconFile' "$plist"
+  [ "$output" = Fixture.icns ]
+  # CFBundleIconName references an asset catalog and OUTRANKS CFBundleIconFile on
+  # macOS 10.13+ — osacompile's applet bundle sets it to "applet". If it is still
+  # here, the .icns above is set but never shown: this is the actual bug, not the
+  # plist-value/cmp/codesign checks above it, which all pass while the icon never
+  # changes.
+  run /usr/libexec/PlistBuddy -c 'Print :CFBundleIconName' "$plist"
+  [ "$status" -ne 0 ]
+}
+
+@test "app finds a terminal's icon when it's installed outside /Applications (#50)" {
+  macos_only
+  _src_app
+  source "$CLIKAE_TEST_ROOT/lib/core/log.sh"
+  # A fake bundle at the real relative path _app_terminal_installed already
+  # accepts — but NOT a real .app (no executable, no scripting dictionary), so
+  # this stays icon-step-only and never asks osacompile/AppleScript to resolve
+  # iTerm2 terminology it doesn't have (that needs a real install; see "the
+  # iTerm2 launcher template compiles" above).
+  mkdir -p "$TEST_HOME/Applications/iTerm.app/Contents/Resources"
+  printf 'fixture-icon' > "$TEST_HOME/Applications/iTerm.app/Contents/Resources/AppIcon.icns"
+  mkdir -p "$TEST_HOME/fakeapp/Contents/Resources"
+  cat > "$TEST_HOME/fakeapp/Contents/Info.plist" <<'PLIST'
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>CFBundleIconFile</key>
+	<string>applet</string>
+</dict>
+</plist>
+PLIST
+  run _app_install_icon "$TEST_HOME/fakeapp" iterm2
+  [ "$status" -eq 0 ]
+  # _app_terminal_installed already accepts this (via $HOME/Applications), so the
+  # render step proceeds — before the fix, _app_terminal_icon still looked ONLY
+  # under /Applications and lost track of it, so this warning fired despite the
+  # terminal being right there: it stated the wrong cause.
+  [[ "$output" != *"No terminal or clikae icon found"* ]] || false
+  cmp "$TEST_HOME/Applications/iTerm.app/Contents/Resources/AppIcon.icns" \
+      "$TEST_HOME/fakeapp/Contents/Resources/AppIcon.icns"
+  run /usr/libexec/PlistBuddy -c 'Print :CFBundleIconFile' "$TEST_HOME/fakeapp/Contents/Info.plist"
+  [ "$output" = AppIcon.icns ]
+}
+
+@test "app missing icons leave applet icon with a warning" {
+  _src_app
+  source "$CLIKAE_TEST_ROOT/lib/core/log.sh"
+  _app_terminal_icon() { printf '%s\n' "$TEST_HOME/absent.icns"; }
+  CLIKAE_ROOT="$TEST_HOME"
+  run _app_install_icon "$TEST_HOME/test.app" terminal
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"No terminal or clikae icon found; leaving the applet icon."* ]] || false
+}
+
+@test "app uses the shipped icon when the terminal icon is absent" {
+  macos_only
+  _src_app
+  source "$CLIKAE_TEST_ROOT/lib/core/log.sh"
+  _app_terminal_icon() { printf '%s\n' "$TEST_HOME/absent.icns"; }
+  mkdir -p "$TEST_HOME/assets"
+  printf 'fallback fixture' > "$TEST_HOME/assets/clikae.icns"
+  # shellcheck disable=SC2034  # cmd_app reads it for the asset fallback
+  CLIKAE_ROOT="$TEST_HOME"
+  run cmd_app --board --terminal terminal --out "$TEST_HOME/Apps"
+  [ "$status" -eq 0 ]
+  local app="$TEST_HOME/Apps/clikae.app"
+  cmp "$TEST_HOME/assets/clikae.icns" "$app/Contents/Resources/clikae.icns"
+  run /usr/libexec/PlistBuddy -c 'Print :CFBundleIconFile' "$app/Contents/Info.plist"
+  [ "$output" = clikae.icns ]
 }

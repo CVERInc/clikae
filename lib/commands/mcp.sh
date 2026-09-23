@@ -41,9 +41,9 @@ there first with the engine's own CLI:
   clikae run claude work -- mcp add --transport http stripe https://mcp.stripe.com/ -s user
   clikae mcp share stripe
 
-🔴 Requires `jq` (safely merging one JSON key without touching the rest of the
+Requires: `jq` (safely merging one JSON key without touching the rest of the
 tank's config — oauthAccount, projects, caches — needs a real JSON parser).
-🔴 Solo tanks are refused as a share SOURCE and never targeted by the fan-out —
+Never: solo tanks are refused as a share SOURCE and never targeted by the fan-out —
 same fleet exclusion `clikae memory`/`to`/`watch`/`burn` already honor.
 Merge is additive-only: a key the tank's config already has is never
 overwritten. To pick up a changed shared definition, remove that server from
@@ -125,7 +125,7 @@ _mcp_share() {
     || log_fail "mcp share: failed to update the fleet store."
   printf '%s\n' "$updated" > "$store.tmp" && mv "$store.tmp" "$store"
 
-  log_ok "Shared '$name' fleet-wide for $engine — every non-solo tank gets it from here on."
+  log_done "Shared '$name' fleet-wide for $engine — every non-solo tank gets it from here on."
 
   # Eager backfill into every EXISTING non-solo tank (mirrors memory share's
   # eager pass over already-existing directories) — no need to wait for each
@@ -166,7 +166,7 @@ _mcp_unshare() {
   local updated
   updated="$(jq --arg n "$name" 'del(.[$n])' "$store")"
   printf '%s\n' "$updated" > "$store.tmp" && mv "$store.tmp" "$store"
-  log_ok "Removed '$name' from $engine's fleet-wide MCP store."
+  log_done "Removed '$name' from $engine's fleet-wide MCP store."
   log_dim "Tanks that already picked it up keep their own copy — remove it per-tank if you need it gone (claude mcp remove $name)."
 }
 
@@ -180,6 +180,12 @@ _mcp_list() {
   fi
   log_info "Fleet-wide MCP servers for '$engine':"
   jq -r 'keys[]' "$store" | while IFS= read -r n; do
-    [ -n "$n" ] && printf '  %s\n' "$n"
+    # #61 round-3 P1-1 audit: `if`, not `cmd && printf` — this loop is
+    # _mcp_list's own last statement, reached bare from `clikae mcp list`'s
+    # dispatch under `set -e`. Same shape as profile_store.sh's enumerator.
+    if [ -n "$n" ]; then
+      printf '  %s\n' "$n"
+    fi
   done
+  return 0
 }

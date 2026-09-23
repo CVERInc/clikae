@@ -6,7 +6,26 @@
 
 load '../helpers'
 
-scan() { grep -rnE "$1" "$CLIKAE_TEST_ROOT/bin/clikae" "$CLIKAE_TEST_ROOT/lib"; }
+# 🔴 SKIPS WHOLE-LINE COMMENTS. These guards scan source TEXT, and a comment is
+# text — so the paragraph written to explain "we deliberately do not use
+# readlink -f here" satisfied the assertion that no such call exists, and the
+# guard went red at the one place that was obeying it. A check that fires on its
+# own documentation teaches people to stop documenting.
+#
+# Whole-line only, on purpose: a trailing comment still trips it. Erring toward
+# a false alarm is right for a guard whose job is to be conservative, and
+# stripping `#` correctly out of live shell code is not a job for a grep.
+scan() {
+  grep -rnE "$1" "$CLIKAE_TEST_ROOT/bin/clikae" "$CLIKAE_TEST_ROOT/lib" \
+    | grep -vE '^[^:]+:[0-9]+:[[:space:]]*#'
+}
+
+# The bash-4 flag pattern, written ONCE. Round-7 fix review P3-1: the negative
+# control below used to re-spell it (and re-spell `scan`'s greps) inline, so it
+# proved "this regex fires", not "THIS RULER fires" — the moment `scan` changed
+# its roots or its comment exemption, the control would have gone on vouching
+# for a ruler that no longer existed.
+BASH4_FLAG_RE='declare -[gAn]|local -[An]|typeset -[An]'
 
 @test "no mapfile / readarray (bash 4+)" {
   run scan '\b(mapfile|readarray)\b'
@@ -23,9 +42,284 @@ scan() { grep -rnE "$1" "$CLIKAE_TEST_ROOT/bin/clikae" "$CLIKAE_TEST_ROOT/lib"; 
   [ -z "$output" ]
 }
 
+@test "board GC still RUNS under a real bash 3.2, not just parses" {
+  # 🔴 THE CLASS bash -n CANNOT SEE. Every other guard in this file scans source
+  # TEXT, and `shellcheck -S warning`, `bash -n` and the CI's own syntax gate are
+  # all parsers — but bash 3.2 re-parses the BODY of a `$( … )` only when it
+  # expands it, and its scanner stops at the first unbalanced `)`. So a `case`
+  # pattern inside a command substitution parses clean everywhere and then, on
+  # 3.2 only, fails AT RUNTIME with `command substitution: syntax error near
+  # unexpected token` on stderr — while the substitution yields the empty string
+  # and the caller returns 0. `_board_gc_candidates` shipped exactly that shape
+  # on 6a4aa49: an EMPTY candidate list, no error code, so the board GC swept
+  # nothing on macOS and said nothing. `2f51d15` hoisted the `case` into
+  # `_board_gc_rows`; this asserts the fix by EXECUTING it, because nothing that
+  # reads the file can.
+  command -v docker >/dev/null 2>&1 || skip "docker is unavailable; cannot run a real bash 3.2"
+  docker image inspect bash:3.2 >/dev/null 2>&1 \
+    || skip "the bash:3.2 image is not present locally (docker pull bash:3.2 to enable this guard)"
+
+  local probe="$TEST_HOME/bash32.sh"
+  cat > "$probe" <<'PROBE'
+cd /w || exit 1
+. lib/core/profile_store.sh || exit 1
+. lib/core/board_state.sh   || exit 1
+# The bash:3.2 image is Alpine, so its userland is busybox: `_clikae_statv`
+# sees a `stat` that does not say GNU, takes the BSD branch, and busybox's
+# `stat -f` answers with FILESYSTEM info. That is the container's userland,
+# not this code (macOS' BSD `stat -f %m` is right) — stub it out so the probe
+# measures the thing it is about.
+file_mtime() { stat -c %Y "$1" 2>/dev/null; }
+
+# CONTROL FOR THE RULER: prove this bash really is one that cannot see the
+# class, so a green result below means "fixed", not "ran on bash 5". The bad
+# shape lives in its own FILE, run by its own bash — written inline it would
+# break this probe the same way it breaks the subject.
+case "$BASH_VERSION" in
+  3.2*) ;;
+  *) echo "CONTROL: not bash 3.2 but $BASH_VERSION"; exit 9 ;;
+esac
+printf '%s\n' 'v="$(case x in x) echo alive ;; esac)"' 'printf "CTL=[%s]\n" "$v"' > /tmp/ctl.sh
+bash /tmp/ctl.sh > /tmp/ctl.out 2>/tmp/ctl.err
+if [ ! -s /tmp/ctl.err ] || grep -q 'CTL=\[alive\]' /tmp/ctl.out; then
+  echo "CONTROL-DID-NOT-FIRE: a case inside \$( ) ran clean here"; exit 9
+fi
+
+root="$(mktemp -d)/board"; mkdir -p "$root"
+i=1
+while [ "$i" -le 4 ]; do
+  mkdir -p "$root/generation.g$i"; echo "$i" > "$root/generation.g$i/seq"
+  [ "$i" -eq 1 ] || echo "generation.g$((i-1))" > "$root/generation.g$i/parent"
+  i=$((i + 1))
+done
+mkdir -p "$root/generation.orphan"; echo 0 > "$root/generation.orphan/seq"
+echo "generation.g4" > "$root/current"
+_board_gc_rows "$root" > /tmp/rows 2>/tmp/rows.err || true
+_board_gc_candidates "$root" 2 > /tmp/cand 2>/tmp/cand.err || true
+echo "ROWS=$(grep -c . /tmp/rows)"
+echo "CAND=$(grep -c . /tmp/cand)"
+echo "ERR=$(cat /tmp/rows.err /tmp/cand.err | tr '\n' ' ')"
+PROBE
+
+  run docker run --rm -v "$CLIKAE_TEST_ROOT":/w:ro -v "$TEST_HOME":/p:ro \
+    bash:3.2 bash /p/bash32.sh
+  [ "$status" -eq 0 ] || { echo "probe exited $status: $output"; false; }
+  printf '%s\n' "$output" | grep -q '^ROWS=5$' \
+    || { echo "_board_gc_rows saw the wrong number of generations under 3.2: $output"; false; }
+  # keep=2 roots g4 and g3; g2/g1 survive as their chain, orphan does not
+  printf '%s\n' "$output" | grep -q '^CAND=1$' \
+    || { echo "_board_gc_candidates under bash 3.2: $output"; false; }
+  printf '%s\n' "$output" | grep -q '^ERR=$' \
+    || { echo "bash 3.2 wrote to stderr: $output"; false; }
+}
+
+# P1-1 (round-2 review): `tests/bats/burn.bats` shipped `touch -d "@epoch"` —
+# GNU coreutils only, BSD `touch -d` doesn't take `@epoch` at all — and every
+# macOS CI run since has been silently testing nothing (see burn.bats' own
+# P1-1 comment: with every `touch` failing, 30 fixture files collapsed to one
+# identical mtime, and a broken string-sort fallback happened to produce the
+# "right" answer by coincidence). This GNU-ism slipped past every scan above
+# because it lived in `tests/`, which `scan()` never covered — so this one
+# does, alongside bin/clikae and lib. `touch -t YYYYMMDDhhmm.SS` (POSIX,
+# already this repo's own convention — grep `date -v.*touch -t` in
+# live.bats/memory.bats/agy-harness.bats) is the portable replacement; there
+# is no legitimate use of `touch -d` anywhere in this repo.
+# Same three directories as `scan()`, plus `tests/` — that's where the P1-1
+# GNU-ism actually lived, and `scan()` alone would never have caught it.
+scan_incl_tests() {
+  grep -rnE "$1" "$CLIKAE_TEST_ROOT/bin/clikae" "$CLIKAE_TEST_ROOT/lib" "$CLIKAE_TEST_ROOT/tests" \
+    | grep -vE '^[^:]+:[0-9]+:[[:space:]]*#'
+}
+
+@test "no touch(1) -d (BSD form takes ISO-8601, not a GNU @epoch — use touch -t)" {
+  run scan_incl_tests 'touch[[:space:]]+-d\b'
+  [ -z "$output" ]
+}
+
+# P1-1 (round-2 review), same finding, the other two GNU date/stat calls the
+# review named: `date -d`/`stat -c` are NOT a blanket ban like `touch -d`
+# above — this codebase's own established idiom (grep `_limit_date_kind` in
+# lib/core/limit.sh, or `_clikae_statv`/`_CLIKAE_STAT_FMT` in
+# lib/core/profile_store.sh — "the platform probe") is GNU-first with a BSD
+# fallback a few lines away, dozens of times over, and banning the GNU half
+# outright would just break that idiom. What's actually unsafe is a `date
+# -d`/`stat -c` call with NO BSD counterpart anywhere nearby — so this scans
+# a small window around every hit for the fallback shapes this repo already
+# uses (`date -j`/`date -r`/`date -v`, `_limit_date_kind`; `stat -f`,
+# `_clikae_statv`/`_CLIKAE_STAT_FMT`) and only flags a hit that has none.
+_scan_gnu_date_or_stat() {
+  local pattern="$1" markers="$2" f ln rest window hits=""
+  while IFS=: read -r f ln rest; do
+    [[ "$rest" =~ ^[[:space:]]*# ]] && continue
+    window="$(sed -n "$((ln > 3 ? ln - 3 : 1)),$((ln + 3))p" "$f" 2>/dev/null)"
+    printf '%s' "$window" | grep -qE "$markers" && continue
+    hits="$hits
+$f:$ln:$rest"
+  done < <(grep -rnE "$pattern" "$CLIKAE_TEST_ROOT/bin/clikae" "$CLIKAE_TEST_ROOT/lib" "$CLIKAE_TEST_ROOT/tests" 2>/dev/null)
+  printf '%s' "$hits"
+}
+
+@test "date -d (GNU-only) never appears without a BSD fallback nearby" {
+  run _scan_gnu_date_or_stat 'date[[:space:]]+-d\b' 'date[[:space:]]+-[jrv]|_limit_date_kind'
+  [ -z "$output" ] || { echo "date -d with no BSD fallback nearby:$output"; false; }
+}
+
+@test "stat -c (GNU-only) never appears without a BSD fallback or the platform probe nearby" {
+  run _scan_gnu_date_or_stat 'stat[[:space:]]+-c\b' 'stat[[:space:]]+-f|_clikae_statv|_CLIKAE_STAT_FMT'
+  [ -z "$output" ] || { echo "stat -c with no BSD fallback/platform probe nearby:$output"; false; }
+}
+
+@test "the compat scans do not fire on their own documentation" {
+  # 🔴 A CONTROL FOR THE RULER, not for the code. `scan` was a plain grep over
+  # source text until a comment saying "not readlink -f" turned it red. Both
+  # halves are pinned: a commented mention is ignored, a real call is not — the
+  # second is what stops this exemption from quietly disabling every guard above.
+  local probe="$TEST_HOME/probe"; mkdir -p "$probe/lib" "$probe/bin"
+  : > "$probe/bin/clikae"
+  printf '# we deliberately avoid readlink -f here\n' > "$probe/lib/note.sh"
+  run env CLIKAE_TEST_ROOT="$probe" bash -c \
+    'grep -rnE "readlink[[:space:]]+-f" "$CLIKAE_TEST_ROOT/bin/clikae" "$CLIKAE_TEST_ROOT/lib" | grep -vE "^[^:]+:[0-9]+:[[:space:]]*#"'
+  [ -z "$output" ] || { echo "still fires on a comment: $output"; false; }
+
+  printf 'target="$(readlink -f "$1")"\n' > "$probe/lib/real.sh"
+  run env CLIKAE_TEST_ROOT="$probe" bash -c \
+    'grep -rnE "readlink[[:space:]]+-f" "$CLIKAE_TEST_ROOT/bin/clikae" "$CLIKAE_TEST_ROOT/lib" | grep -vE "^[^:]+:[0-9]+:[[:space:]]*#"'
+  [ -n "$output" ] || { echo "the exemption swallowed a REAL call"; false; }
+}
+
 @test "no &> redirection (use >file 2>&1)" {
   run grep -rn -- '&>' "$CLIKAE_TEST_ROOT/bin/clikae" "$CLIKAE_TEST_ROOT/lib"
   [ -z "$output" ]
+}
+
+# fix7: PR #78's own CI caught what this file's scans missed —
+# `declare -gA _BOARD_GEN_CACHE` in board_state.sh. macOS bash 3.2 has neither
+# `declare -g` (added 4.2) nor associative arrays (`-A`, added 4.0), and a
+# script that hits either at SOURCE time (not even at call time — `declare -gA`
+# runs the moment the file is sourced) exits 2 before a single command runs:
+# `lib/core/board_state.sh: line 205: declare: -g: invalid option`, ~1,000 bats
+# red on every macOS job since this branch's first commit. `[[ … =~ …]]` is
+# deliberately NOT scanned here — 3.2 has that.
+@test "no declare/local/typeset -g / -A / -n (bash 4+ global/assoc-array/nameref flags)" {
+  run scan "$BASH4_FLAG_RE"
+  [ -z "$output" ]
+}
+
+@test "the -g/-A/-n scan does not fire on its own documentation, and does fire on a real occurrence" {
+  # Same shape as "the compat scans do not fire on their own documentation"
+  # above — a control for THIS ruler, not for the code.
+  local probe="$TEST_HOME/probe2"; mkdir -p "$probe/lib" "$probe/bin"
+  : > "$probe/bin/clikae"
+  printf '# we deliberately avoid local -A here, see board_state.sh\n' > "$probe/lib/note.sh"
+
+  # P3-1: point the REAL `scan` at the probe tree and call it with the REAL
+  # pattern. Nothing about the ruler is restated here, so a change to either
+  # can no longer leave this control vouching for a ruler that moved.
+  local saved="$CLIKAE_TEST_ROOT"
+  CLIKAE_TEST_ROOT="$probe"
+
+  run scan "$BASH4_FLAG_RE"
+  [ -z "$output" ] || { CLIKAE_TEST_ROOT="$saved"; echo "still fires on a comment: $output"; false; }
+
+  printf 'local -A x=()\n' > "$probe/lib/real.sh"
+  run scan "$BASH4_FLAG_RE"
+  CLIKAE_TEST_ROOT="$saved"
+  [ -n "$output" ] || { echo "the exemption swallowed a REAL call"; false; }
+}
+
+# P3-6 (round-3 review): the guards above scan for known bash-4+ CONSTRUCTS
+# via grep — they can't see a bash 3.2 PARSE error, which is exactly what
+# broke CI on macOS (the interpreter itself, not a construct grep knows to
+# name). A real bash:3.2 running `bash -n` on every shipped file is the
+# direct gate; skip with a reason where docker isn't available rather than
+# silently passing.
+#
+# P3-2 (round-4 review): this gate had no sample-count assertion — point it
+# at an empty tree and it happily reports `checked=0`, rc=0: "passed" by
+# checking nothing. `checked=$n` is now printed unconditionally (pass or
+# fail) and asserted against a lower bound derived from the real tree
+# (`lib/**/*.sh` alone, ignoring bin/ and non-.sh — a true floor, never a
+# number that needs bumping by hand as files are added).
+#
+# P3-7 (round-5 review): this exact docker command used to be copy-pasted
+# THREE times (the real gate below, plus its own empty-tree and negative-
+# control test) — a change to the gate's `find` (say, its exclusion list)
+# only ever reached the copy the real test used; the two controls kept
+# testing whatever the LAST edited copy happened to say, silently, since
+# nothing forced all three to stay identical. One helper, called by name
+# three times, so the controls can only ever exercise the real gate.
+_bash32_parse_gate() {
+  local mount="$1"
+  docker run --rm -v "$mount:/src:ro" bash:3.2 bash -c \
+    'rc=0; n=0
+     while IFS= read -r -d "" f; do
+       n=$((n+1))
+       bash -n "$f" || rc=1
+     done < <(find /src/bin /src/lib -type f -not -path "/src/lib/templates/*" -print0)
+     echo "checked=$n"
+     exit $rc'
+}
+
+# P3-8 (round-5 review): the gate's OWN `find` excludes `lib/templates/`
+# (files meant to be parsed by a TARGET engine's runtime, not by clikae's own
+# bash 3.2), but the floor computed here used to count `lib/templates/*.sh`
+# toward the lower bound anyway — a margin of exactly 1 file in this repo
+# today (measured: `checked=93`, `floor=92`). Two `.sh` files landing in
+# `lib/templates/` would make this floor assertion fail for the WRONG
+# reason (a template the gate correctly never looked at, not a real parse
+# regression). The floor must exclude the same directory the gate does.
+_bash32_gate_floor() {
+  find "$CLIKAE_TEST_ROOT/lib" -name '*.sh' -type f -not -path '*/lib/templates/*' | wc -l | tr -d ' '
+}
+
+@test "bash 3.2 can parse every shipped lib/ + bin/ file (docker bash -n)" {
+  command -v docker >/dev/null 2>&1 ||
+    skip "docker not on PATH — cannot run a real bash 3.2 to parse-check lib/ + bin/"
+  run _bash32_parse_gate "$CLIKAE_TEST_ROOT"
+  [ "$status" -eq 0 ] || { echo "$output" >&2; false; }
+  local checked floor
+  checked="$(printf '%s\n' "$output" | sed -n 's/^checked=//p')"
+  floor="$(_bash32_gate_floor)"
+  [ -n "$checked" ] || { echo "gate printed no checked= count: $output" >&2; false; }
+  [ "$checked" -ge "$floor" ] || { echo "checked=$checked < $floor lib/**/*.sh files — the gate scanned less than the real tree"; false; }
+}
+
+@test "P3-2 (round-4 review): the docker gate goes red on an empty tree's worth of nothing checked" {
+  command -v docker >/dev/null 2>&1 ||
+    skip "docker not on PATH — cannot run a real bash 3.2 to parse-check lib/ + bin/"
+  # The ruler for the sample-count assertion above: point the SAME gate at a
+  # disposable tree with no shell files in bin/ or lib/ at all. Before the
+  # floor assertion, this "passed" (checked=0, rc=0) — reporting nothing
+  # checked as a clean bill of health, exactly the gap P3-2 found.
+  local probe="$TEST_HOME/emptytree"; mkdir -p "$probe/lib" "$probe/bin"
+  run _bash32_parse_gate "$probe"
+  [ "$status" -eq 0 ]
+  local checked; checked="$(printf '%s\n' "$output" | sed -n 's/^checked=//p')"
+  [ "$checked" = 0 ]
+  # An empty tree must fail THIS repo's own floor (>=1 real lib/**/*.sh file).
+  local floor; floor="$(_bash32_gate_floor)"
+  [ "$floor" -gt 0 ]
+  [ "$checked" -lt "$floor" ]
+}
+
+@test "P3-2 (round-4 review): the docker gate's negative control — seed c673adb's claude.sh, it must go red" {
+  # This is the review's own negative control for THIS gate specifically
+  # (distinct from "the compat scans do not fire on their own documentation"
+  # above, which guards the grep-based scans): the historical claude.sh at
+  # c673adb is the file whose bash-4+ shape once broke CI's real macOS bash
+  # 3.2 with a genuine PARSE error (not a construct grep can name) — a
+  # disposable copy of it must make this gate fail, verbatim, with that
+  # error, or the gate is not actually exercising anything.
+  command -v docker >/dev/null 2>&1 ||
+    skip "docker not on PATH — cannot run a real bash 3.2 to parse-check lib/ + bin/"
+  command -v git >/dev/null 2>&1 || skip "git not on PATH — cannot fetch c673adb's claude.sh"
+  local probe="$TEST_HOME/negcontrol"
+  mkdir -p "$probe/lib/adapters" "$probe/bin"
+  ( cd "$CLIKAE_TEST_ROOT" && git show c673adb:lib/adapters/claude.sh ) > "$probe/lib/adapters/claude.sh" \
+    || skip "c673adb:lib/adapters/claude.sh not reachable from this checkout"
+  run _bash32_parse_gate "$probe"
+  [ "$status" -ne 0 ]
+  [[ "$output" == *"unexpected EOF while looking for matching"* ]] || { echo "expected the verbatim bash 3.2 parse error, got: $output" >&2; false; }
 }
 
 # --- PowerShell adapter table parity (informational; no Windows/pwsh needed) ----
@@ -52,7 +346,7 @@ scan() { grep -rnE "$1" "$CLIKAE_TEST_ROOT/bin/clikae" "$CLIKAE_TEST_ROOT/lib"; 
     # The psm1 row keys by the engine name; assert that row carries the same binary,
     # env var (empty for flag-strategy engines), and strategy.
     local row
-    row="$(grep -E "^[[:space:]]*$n[[:space:]]*=" "$psm" || true)"
+    row="$(grep -E "^[[:space:]]*${n}[[:space:]]*=" "$psm" || true)"
     [ -n "$row" ] || { missing="$missing $n(no-row)"; continue; }
     printf '%s' "$row" | grep -q "Binary = '$bin'"     || missing="$missing $n(binary)"
     printf '%s' "$row" | grep -q "EnvVar = '$ev'"       || missing="$missing $n(envvar)"

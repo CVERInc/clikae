@@ -50,6 +50,62 @@ _src_limit() {
   [ "$status" -ne 0 ]
 }
 
+# --- P2-1 (2026-09-08 round-5 review): the same "12 bytes of leading
+# non-alphabetic noise" allowance claude's branch had was wide enough to
+# admit a markdown blockquote marker — narrowed on both branches together.
+
+@test "codex output_dry: a markdown blockquote marker does not stand in for transport noise (P2-1 r5)" {
+  _src_limit
+  run limit_codex_output_dry "> You've hit your usage limit. try again at Jul 7th, 2026 2:17 PM."
+  [ "$status" -ne 0 ]
+}
+
+# --- P1-1 (2026-09-08 round-5 review): limit_codex_reset only recognized
+# "try again at …" — but the repo's own 175-row real-reset-phrase corpus
+# (tests/fixtures/limit-reset-phrases.tsv) is entirely "resets …" / "reset
+# at …" grammar, so every one of those real phrases failed to yield a reset
+# and limit_codex_output_dry discarded the whole event as not-dry (175/175).
+# Widened to recognize the same three grammars claude's branch already does.
+
+@test "codex reset phrase: the \"resets …\" grammar is relayed (P1-1 r5)" {
+  _src_limit
+  run limit_codex_reset "You've hit your usage limit · resets 5am (Asia/Tokyo)"
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"resets 5am (Asia/Tokyo)"* ]] || false
+}
+
+@test "codex reset phrase: the \"reset at …\" grammar is relayed (P1-1 r5)" {
+  _src_limit
+  run limit_codex_reset "You have already hit your usage limit. Your limit will reset at 5am (Asia/Tokyo)."
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"reset at 5am (Asia/Tokyo)"* ]] || false
+}
+
+@test "codex output_dry: the \"resets …\" grammar fires dry, not just \"try again at …\" (P1-1 r5)" {
+  _src_limit
+  run limit_codex_output_dry "You've hit your usage limit · resets 5am (Asia/Tokyo)"
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"resets 5am"* ]] || false
+}
+
+@test "codex output_dry: a real sample of the fixture's reset-phrase corpus fires dry (P1-1 r5, was 175/175 not-dry)" {
+  _src_limit
+  local fixture="$CLIKAE_TEST_ROOT/tests/fixtures/limit-reset-phrases.tsv"
+  local -a resets=()
+  local _e phrase _x
+  while IFS=$'\t' read -r _e phrase _x; do
+    [ -n "$phrase" ] || continue
+    resets+=("$phrase")
+  done < <(awk -F'\t' '!/^#/ && NF==3' "$fixture" | awk 'NR==1 || NR%37==0')
+  [ "${#resets[@]}" -ge 4 ]
+  local reset
+  for reset in "${resets[@]}"; do
+    run limit_codex_output_dry "You've hit your usage limit. $reset"
+    [ "$status" -eq 0 ]
+    [ "$output" = "$reset" ]
+  done
+}
+
 # --- $CLIKAE_LIMIT_PATTERN fallback for the headless output-dry path -----------
 # The built-in matcher leans on codex's CURRENT wording ("hit your usage limit").
 # If a vendor rewords its limit line, burn/conduct would misread a dry tank as a
@@ -84,7 +140,472 @@ _src_limit() {
 
 @test "limit_output_dry: clean output stays NOT dry even with a pattern set" {
   _src_limit
+  # shellcheck disable=SC2034  # read by limit_output_dry itself
   CLIKAE_LIMIT_PATTERN='Quota exceeded'
   run limit_output_dry codex "wrote /tmp/out.md, all good."
   [ "$status" -ne 0 ]
+}
+
+# --- codex dry-detection from its own rollout ---------------------------------
+# The project recorded for a long time that codex's usage limit was
+# "exec-stdout-only — never written to a file clikae can scan". It is written:
+# the interactive TUI puts it in the rollout transcript with a MACHINE-READABLE
+# marker, `codex_error_info: usage_limit_exceeded`. We match that field, never
+# the English sentence beside it (vendor copy drifts; the marker is the contract).
+# NB: each remaining arg becomes its OWN LINE. Building the fixture with
+# "$(_codex_limit_line …)$(_codex_reply_line …)" silently glues both JSON objects
+# onto one line — command substitution eats the trailing newline — and a
+# one-line fixture made the self-clearing test fail against correct code.
+_seed_codex_rollout() {
+  local dir="$1" name="$2"; shift 2
+  mkdir -p "$dir/sessions/2026/07/27"
+  local l
+  : > "$dir/sessions/2026/07/27/rollout-$name.jsonl"
+  for l in "$@"; do
+    printf '%s\n' "$l" >> "$dir/sessions/2026/07/27/rollout-$name.jsonl"
+  done
+}
+_codex_limit_line() {
+  printf '{"timestamp": "%s", "type": "event_msg", "payload": {"type": "task_complete", "error": {"message": "You'"'"'ve hit your usage limit. Upgrade to Plus, or try again at Aug 23rd, 2026 8:26 PM.", "codex_error_info": "usage_limit_exceeded"}}}' "$1"
+}
+_codex_reply_line() {
+  printf '{"timestamp": "%s", "type": "event_msg", "payload": {"type": "agent_message", "message": "back"}}' "$1"
+}
+
+@test "limit_profile_dry codex: a limit with no later success reads DRY, with the vendor's reset phrase" {
+  source "$CLIKAE_TEST_ROOT/lib/core/log.sh"
+  source "$CLIKAE_TEST_ROOT/lib/core/profile_store.sh"   # transcript_tail
+  source "$CLIKAE_TEST_ROOT/lib/core/limit.sh"
+  local d="$CLIKAE_HOME/profiles/codex/t"
+  _seed_codex_rollout "$d" a "$(_codex_limit_line 2026-07-27T10:00:00.000Z)"
+  run limit_profile_dry codex "$d"
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"try again at Aug 23rd, 2026 8:26 PM"* ]] || false
+}
+
+@test "limit_profile_dry codex: a reply AFTER the limit clears it (self-clearing)" {
+  source "$CLIKAE_TEST_ROOT/lib/core/log.sh"
+  source "$CLIKAE_TEST_ROOT/lib/core/profile_store.sh"   # transcript_tail
+  source "$CLIKAE_TEST_ROOT/lib/core/limit.sh"
+  local d="$CLIKAE_HOME/profiles/codex/t"
+  _seed_codex_rollout "$d" b \
+    "$(_codex_limit_line 2026-07-27T10:00:00.000Z)" \
+    "$(_codex_reply_line 2026-07-27T11:00:00.000Z)"
+  run limit_profile_dry codex "$d"
+  [ "$status" -ne 0 ]
+}
+
+@test "limit_profile_dry codex: the English sentence alone is NOT a limit" {
+  source "$CLIKAE_TEST_ROOT/lib/core/log.sh"
+  source "$CLIKAE_TEST_ROOT/lib/core/profile_store.sh"   # transcript_tail
+  source "$CLIKAE_TEST_ROOT/lib/core/limit.sh"
+  local d="$CLIKAE_HOME/profiles/codex/t"
+  # A user pasting the phrase into a prompt must never dry the tank — we key on
+  # the structured marker precisely so this can't happen.
+  _seed_codex_rollout "$d" c \
+    '{"timestamp": "2026-07-27T10:00:00.000Z", "type": "event_msg", "payload": {"type": "user_message", "message": "why do I keep hitting my usage limit?"}}'
+  run limit_profile_dry codex "$d"
+  [ "$status" -ne 0 ]
+}
+
+@test "limit_profile_dry rejects an engine it has no signal for" {
+  source "$CLIKAE_TEST_ROOT/lib/core/log.sh"
+  source "$CLIKAE_TEST_ROOT/lib/core/profile_store.sh"   # transcript_tail
+  source "$CLIKAE_TEST_ROOT/lib/core/limit.sh"
+  run limit_profile_dry antigravity "$CLIKAE_HOME/profiles/antigravity/g"
+  [ "$status" -ne 0 ]
+}
+
+# --- agy: the log carries three different RESOURCE_EXHAUSTED sentences and only
+# two of them are a spent tank. Real lines, pulled from
+# ~/.gemini/antigravity-cli/log/ on 2026-08-11.
+
+@test "agy log_dry: 'Individual quota reached' is dry, and the reset phrase is echoed verbatim" {
+  _src_limit
+  local f="$BATS_TEST_TMPDIR/cli.log"
+  printf '%s\n' 'ERROR: logging before google.Init: E0808 22:20:54 stream_handler.go:101] error encountered while processing planner output: RESOURCE_EXHAUSTED (code 429): Individual quota reached. Please upgrade your subscription to increase your limits. Resets in 47h47m20s.' > "$f"
+  run limit_log_dry "$f"
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"Resets in 47h47m20s"* ]] || false
+}
+
+@test "agy log_dry: 'exhausted your capacity on this model' is dry" {
+  _src_limit
+  local f="$BATS_TEST_TMPDIR/cli.log"
+  printf '%s\n' 'ERROR: logging before google.Init: E0803 22:48:49 stream_handler.go:101] error encountered while processing planner output: RESOURCE_EXHAUSTED (code 429): You have exhausted your capacity on this model. Resets in 0s.' > "$f"
+  run limit_log_dry "$f"
+  [ "$status" -eq 0 ]
+}
+
+@test "agy log_dry: a userInfo CACHE refresh that says RESOURCE_EXHAUSTED is NOT dry" {
+  _src_limit
+  local f="$BATS_TEST_TMPDIR/cli.log"
+  printf '%s\n' 'ERROR: logging before google.Init: W0810 13:03:09 cache.go:56] Cache(userInfo): Singleflight refresh failed: RESOURCE_EXHAUSTED (code 429): Resource has been exhausted (e.g. check quota).' > "$f"
+  run limit_log_dry "$f"
+  [ "$status" -ne 0 ]
+}
+
+# --- claude's interactive session limit. The wording and the structural flags
+# below are not a guess: they were checked against every occurrence in this
+# machine's own transcripts on 2026-08-12 — 283 records carry the sentence, 194
+# are real limit events (synthetic + api-error flag) and all 194 match, while the
+# other 89 are people and assistants TALKING about a limit and none of them do.
+
+@test "claude limit: the real interactive marker fires (synthetic + api-error flag)" {
+  _src_limit
+  local line='{"type":"assistant","isApiErrorMessage":true,"message":{"model":"<synthetic>","role":"assistant","content":[{"type":"text","text":"You'"'"'ve hit your session limit · resets 2:10am (Asia/Tokyo)"}]}}'
+  run limit_line_is_real claude "$line" "" 0
+  [ "$status" -eq 0 ]
+}
+
+@test "claude limit: an assistant merely QUOTING the sentence does not fire" {
+  _src_limit
+  # 10 real records look like this — a normal model reply that mentions the
+  # limit. Text alone would call every one of them a dry tank.
+  local line='{"type":"assistant","message":{"model":"claude-opus-5","role":"assistant","content":[{"type":"text","text":"When you see You'"'"'ve hit your session limit · resets 2:10am (Asia/Tokyo), wait for the reset."}]}}'
+  run limit_line_is_real claude "$line" "" 0
+  [ "$status" -ne 0 ]
+}
+
+@test "claude limit: the api-error flag alone is not enough (an interrupt is not a limit)" {
+  _src_limit
+  local line='{"type":"assistant","isApiErrorMessage":true,"message":{"model":"<synthetic>","role":"assistant","content":[{"type":"text","text":"Request interrupted by user"}]}}'
+  run limit_line_is_real claude "$line" "" 0
+  [ "$status" -ne 0 ]
+}
+
+@test "codex #81: ERROR stderr report parses dated ordinal reset in observer zone" {
+  _src_limit
+  local line reset
+  line="$(awk -F '\t' '/^1789200000\tERROR:/ {print $2}' "$CLIKAE_TEST_ROOT/tests/fixtures/limit-reset-phrases.tsv")"
+  reset="$(limit_codex_output_dry "$line")"
+  [ "$reset" = "try again at Sep 13th, 2026 2:13 AM" ]
+  TZ=UTC run limit_reset_epoch "$reset" 1789200000
+  [ "$status" -eq 0 ]
+  [ "$output" = "1789265580" ]
+  TZ=Asia/Tokyo run limit_reset_epoch "$reset" 1789200000
+  [ "$status" -eq 0 ]
+  [ "$output" = "1789233180" ]
+}
+
+@test "codex #81: ERROR prefix does not admit quoted limit prose" {
+  _src_limit
+  run limit_codex_output_dry "ERROR: See docs for You've hit your usage limit. try again at 2:13 AM."
+  [ "$status" -ne 0 ]
+}
+
+# --- P2-3 (#81 round-1 fix review): the reset phrase used to come from
+# grep's first hit ANYWHERE in the buffer, not the line that anchored the
+# dry verdict — so an earlier, unrelated "resets …"/"try again at …" in the
+# engine's own prose won the marker over the genuine vendor line.
+
+@test "codex reset: a prose decoy earlier in the buffer does not win over the anchored line's own reset (P2-3)" {
+  _src_limit
+  local out
+  out=$'the schedule resets Monday morning, so try again at 9:00 PM if unsure.\nERROR: You\'ve hit your usage limit. try again at Sep 13th, 2026 2:13 AM.'
+  run limit_codex_output_dry "$out"
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"Sep 13th, 2026 2:13 AM"* ]] || false
+  [[ "$output" != *"Monday morning"* ]] || false
+}
+
+@test "codex reset: a sentence wrapped across two lines still yields the full, parseable reset (P2-3)" {
+  _src_limit
+  local out reset
+  out=$'ERROR: You\'ve hit your usage limit. try again at Sep 13th, 2026 2:13\nAM.'
+  reset="$(limit_codex_output_dry "$out")"
+  [ "$reset" = "try again at Sep 13th, 2026 2:13 AM" ]
+  TZ=UTC run limit_reset_epoch "$reset" 1789200000
+  [ "$status" -eq 0 ]
+  [ "$output" = "1789265580" ]
+}
+
+# --- P3-4 (#81 round-1 fix review): "ERROR:" was the only letter-bearing
+# prefix the anchor accepted, rejecting a real ISO timestamp or a single
+# bracketed tag ahead of it — narrow to codex's one current wording rather
+# than the class of transport noise it should be.
+
+@test "codex output_dry: an ISO timestamp ahead of ERROR: is accepted (P3-4)" {
+  _src_limit
+  run limit_codex_output_dry "2026-09-13T02:13:00Z ERROR: You've hit your usage limit. try again at Sep 13th, 2026 2:13 AM."
+  [ "$status" -eq 0 ]
+}
+
+@test "codex output_dry: a bracketed tag ahead of ERROR: is accepted (P3-4)" {
+  _src_limit
+  run limit_codex_output_dry "[codex] ERROR: You've hit your usage limit. try again at Sep 13th, 2026 2:13 AM."
+  [ "$status" -eq 0 ]
+}
+
+@test "codex output_dry: free prose ahead of ERROR: (warn: ERROR: ...) is still rejected (P3-4)" {
+  _src_limit
+  run limit_codex_output_dry "warn: ERROR: You've hit your usage limit. try again at Sep 13th, 2026 2:13 AM."
+  [ "$status" -ne 0 ]
+}
+
+# --- P2-1 (round-2 fix review, this PR): the prior "ISO timestamp" allowance
+# was `(\S+T\S+ )?` under `grep -i` — read as "any non-space token with a t
+# or T anywhere in its middle", not "an ISO-8601 stamp". Every one of these
+# decoys satisfies that (a `t` sandwiched inside a real word), so a task that
+# merely echoed codex's own sentence back while genuinely failing for an
+# unrelated reason came out dry. Rewritten as an exact ISO-8601 literal,
+# matched case-sensitively — none of these are it.
+
+@test "codex output_dry: prefix decoys with a letter-embedded 't' are rejected, not accepted via case-folding (P2-1)" {
+  _src_limit
+  local line
+  for line in \
+    "agent: You've hit your usage limit. try again at Sep 13th, 2026 2:13 AM." \
+    "context: You've hit your usage limit. try again at Sep 13th, 2026 2:13 AM." \
+    "stderr: You've hit your usage limit. try again at Sep 13th, 2026 2:13 AM." \
+    "output: You've hit your usage limit. try again at Sep 13th, 2026 2:13 AM." \
+    "note: You've hit your usage limit. try again at Sep 13th, 2026 2:13 AM." \
+    "attempt You've hit your usage limit. try again at Sep 13th, 2026 2:13 AM." \
+  ; do
+    run limit_codex_output_dry "$line"
+    [ "$status" -ne 0 ] || { echo "wrongly dry: $line"; false; }
+  done
+}
+# --- P3-1 (round-2 fix review, this PR): the forward-join used to glue the
+# next line onto an anchor line with no trailing punctuation UNCONDITIONALLY
+# — meant for a vendor sentence the terminal wrapped mid-RESET-PHRASE, but it
+# fired just as readily when the next line was unrelated prose that happened
+# to carry its OWN "resets …" text, donating that decoy's reset to the
+# genuine anchor. limit_codex_reset used to have this exact bug at the
+# buffer level (P2-3, fixed by isolating the anchor line) — this is the same
+# shape one line-join later.
+
+@test "codex output_dry: a decoy reset phrase on the NEXT line is not donated to an anchor line missing its own (P3-1)" {
+  _src_limit
+  local out=$'ERROR: You\'ve hit your usage limit\nthe schedule resets Monday morning, so try again at 9:00 PM if unsure.'
+  run limit_codex_output_dry "$out"
+  # Conservative and correct: the anchor line itself carries no reset
+  # phrase, and the next line's reset belongs to unrelated prose, not this
+  # event — so this is NOT dry (same as before P2-3 ever existed).
+  [ "$status" -ne 0 ]
+}
+
+@test "codex output_dry: a genuine wrapped reset (no decoy reset on the next line) still joins (P3-1 control)" {
+  _src_limit
+  local out=$'ERROR: You\'ve hit your usage limit. try again at Sep 13th, 2026 2:13\nAM.'
+  run limit_codex_output_dry "$out"
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"Sep 13th, 2026 2:13 AM"* ]] || false
+}
+
+# --- P3-2 (round-2 fix review, this PR): `while read -r` does not strip a
+# trailing `\r` — a CRLF capture left one on the end of every line, so the
+# "does this line already end in terminal punctuation" check never matched
+# and every anchor line tried to glue its neighbour on, whether wrapped or
+# not.
+
+@test "codex output_dry: a CRLF capture's reset stays byte-clean, no stray \\r (P3-2)" {
+  _src_limit
+  local out=$'ERROR: You\'ve hit your usage limit. try again at Sep 13th, 2026 2:13 AM.\r\ntrailer line\r'
+  run limit_codex_output_dry "$out"
+  [ "$status" -eq 0 ]
+  [[ "$output" == "try again at Sep 13th, 2026 2:13 AM" ]] || { echo "$output" | od -c; false; }
+}
+
+# --- P2-1 (round-3 fix review, this PR): the anchor's `^` was followed
+# directly by the three named prefixes with no whitespace allowance at all
+# — origin/main's noise class accepted leading space/tab, and a real
+# transport routinely indents a wrapped/quoted error block, so this was a
+# coverage regression vs main (#81's own symptom, recurring). Restored as a
+# bounded `[[:space:]]{0,8}` ahead of the three prefixes.
+
+@test "codex output_dry: leading spaces/tab ahead of a bare vendor sentence still fire dry (P2-1 r3)" {
+  _src_limit
+  local line
+  for line in \
+    "   You've hit your usage limit. try again at Sep 13th, 2026 2:13 AM." \
+    "$(printf '\tYou'"'"'ve hit your usage limit. try again at Sep 13th, 2026 2:13 AM.')" \
+  ; do
+    run limit_codex_output_dry "$line"
+    [ "$status" -eq 0 ] || { echo "wrongly not-dry: $line"; false; }
+  done
+}
+
+@test "codex output_dry: leading space ahead of ERROR: still fires dry (P2-1 r3)" {
+  _src_limit
+  run limit_codex_output_dry "  ERROR: You've hit your usage limit. try again at Sep 13th, 2026 2:13 AM."
+  [ "$status" -eq 0 ]
+}
+
+@test "codex output_dry: an over-long indent (16 spaces) is still rejected — bounded, not a generic noise class (P2-1 r3 control)" {
+  _src_limit
+  run limit_codex_output_dry "$(printf '%16sYou'"'"'ve hit your usage limit. try again at Sep 13th, 2026 2:13 AM.' '')"
+  [ "$status" -ne 0 ]
+}
+
+# --- claude: the vendor continuing BY ITSELF after a reset ---------------------
+#
+# Claude Code now writes its own user-role line the moment a limit lifts
+# mid-task — isMeta, promptSource "system", and the structural marker
+# `"origin":{"kind":"auto-continuation"}` — and carries on. Until it was read,
+# the transcript said DRY for as long as the assistant turn it then produced
+# took to land, and `clikae wake` typed a second "go" into a conversation that
+# was already working. Shape taken from a real transcript, 2026-09-15.
+
+_seed_claude_limit_then() {
+  # <dir> <extra-line…> -> a tank whose newest limit is at 13:37Z, plus whatever
+  # the caller appends after it.
+  local dir="$1"; shift
+  local proj="$dir/projects/p"
+  mkdir -p "$proj"
+  printf '%s\n' '{"type":"assistant","isApiErrorMessage":true,"message":{"model":"<synthetic>","content":[{"type":"text","text":"You have hit your session limit · resets 8:20pm (Asia/Tokyo)"}]},"timestamp":"2026-09-16T13:37:00.000Z"}' > "$proj/s.jsonl"
+  local l
+  for l in "$@"; do printf '%s\n' "$l" >> "$proj/s.jsonl"; done
+}
+
+_AUTOCONT_LINE='{"parentUuid":"a1","isMeta":true,"type":"user","message":{"role":"user","content":"Your claude.ai usage limit has reset. Continue the task you were working on."},"origin":{"kind":"auto-continuation"},"promptSource":"system","timestamp":"2026-09-16T15:00:30.000Z"}'
+
+@test "claude limit: _limit_claude_readings reads an auto-continuation line as the newest recovery" {
+  source "$CLIKAE_TEST_ROOT/lib/core/log.sh"
+  source "$CLIKAE_TEST_ROOT/lib/core/profile_store.sh"   # transcript_tail
+  source "$CLIKAE_TEST_ROOT/lib/core/limit.sh"
+  local dir="$CLIKAE_HOME/profiles/claude/t"
+  _seed_claude_limit_then "$dir" "$_AUTOCONT_LINE"
+  # "<newest limit>\037<newest success>\037<reset phrase>" — assert the SECOND
+  # field, which is the only one this change can move.
+  run _limit_claude_readings "$dir/projects/p/s.jsonl"
+  [ "$status" -eq 0 ]
+  local maxL maxS
+  IFS=$'\037' read -r maxL maxS _ <<EOF
+$output
+EOF
+  [ "$maxL" = "2026-09-16T13:37:00.000Z" ]
+  [ "$maxS" = "2026-09-16T15:00:30.000Z" ] || { echo "maxS=[$maxS] reading=[$output]"; false; }
+}
+
+@test "claude limit: an auto-continuation after the limit reads RECOVERED (rc 2), not merely not-dry" {
+  # rc 2 and rc 1 are different facts and clikae wake acts on the difference:
+  # 2 is positive evidence the account came back, 1 is "this scan found
+  # nothing" — which is also what a tank outside the 5h window looks like, and
+  # that is the case the nudge exists for.
+  source "$CLIKAE_TEST_ROOT/lib/core/log.sh"
+  source "$CLIKAE_TEST_ROOT/lib/core/profile_store.sh"
+  source "$CLIKAE_TEST_ROOT/lib/core/limit.sh"
+  local dir="$CLIKAE_HOME/profiles/claude/t"
+  _seed_claude_limit_then "$dir" "$_AUTOCONT_LINE"
+  run limit_profile_dry claude "$dir"
+  [ "$status" -eq 2 ] || { echo "status=$status output=$output"; false; }
+}
+
+@test "claude limit: with the limit alone the tank is still DRY (the control)" {
+  # Without this, a reading that called every transcript recovered would pass
+  # the test above.
+  source "$CLIKAE_TEST_ROOT/lib/core/log.sh"
+  source "$CLIKAE_TEST_ROOT/lib/core/profile_store.sh"
+  source "$CLIKAE_TEST_ROOT/lib/core/limit.sh"
+  local dir="$CLIKAE_HOME/profiles/claude/t"
+  _seed_claude_limit_then "$dir"
+  run limit_profile_dry claude "$dir"
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"resets 8:20pm"* ]] || false
+}
+
+@test "claude limit: a transcript QUOTING the auto-continuation marker does not clear the tank" {
+  # The same rule the limit marker itself lives by. A person (or an assistant)
+  # pasting the marker into a message has it JSON-escaped inside the content
+  # string — \"origin\" — so it can never be mistaken for the record's own keys.
+  source "$CLIKAE_TEST_ROOT/lib/core/log.sh"
+  source "$CLIKAE_TEST_ROOT/lib/core/profile_store.sh"
+  source "$CLIKAE_TEST_ROOT/lib/core/limit.sh"
+  local dir="$CLIKAE_HOME/profiles/claude/t"
+  _seed_claude_limit_then "$dir" \
+    '{"type":"user","message":{"role":"user","content":"look for {\"origin\":{\"kind\":\"auto-continuation\"}} in the jsonl"},"timestamp":"2026-09-16T16:00:00.000Z"}'
+  run limit_profile_dry claude "$dir"
+  [ "$status" -eq 0 ] || { echo "a quoted marker cleared the tank: status=$status"; false; }
+  [[ "$output" == *"resets 8:20pm"* ]] || false
+}
+
+# --- a stated reset that has ALREADY passed ----------------------------------
+#
+# An undated phrase names a time of day, not a date, so "resets 8:20pm" read at
+# 21:00 used to mean 8:20pm TOMORROW — there was no other reading available.
+# For `clikae wake` that was the difference between a nudge and a 23-hour sleep:
+# a watcher that first notices a limit after its stated reset (it polls once a
+# minute, and the machine may have been asleep) handed the waiter an instant a
+# day out. Measured before the fix: a phrase 40 minutes past resolved 1400
+# minutes into the future.
+#
+# 1789200000 is 2026-09-12 08:00:00 UTC. Every case below is anchored on it so
+# nothing here depends on when the suite runs.
+
+@test "reset epoch: a reset 10 minutes in the past means it ALREADY happened, not tomorrow" {
+  _src_limit
+  # 07:50 UTC — ten minutes behind the anchor, well inside LIMIT_RESET_PAST_GRACE.
+  run limit_reset_epoch "resets 7:50am (UTC)" 1789200000
+  [ "$status" -eq 0 ]
+  [ "$output" -le 1789200000 ] || { echo "rolled forward to $output"; false; }
+  [ "$output" = "1789199400" ]      # 07:50 UTC — the instant the vendor named
+}
+
+@test "reset epoch: a reset five hours in the past is still the one in hand" {
+  # The inside edge of the grace. The window a limit can be held from is ~5h by
+  # construction, so this is the oldest phrase that is still today's.
+  _src_limit
+  run limit_reset_epoch "resets 3am (UTC)" 1789200000
+  [ "$status" -eq 0 ]
+  [ "$output" = "1789182000" ]      # 03:00 UTC, five hours behind the anchor
+}
+
+@test "reset epoch: a reset EIGHT hours in the past is tomorrow's, not this morning's" {
+  # The control, and the reason the grace is bounded rather than "any past time
+  # means now". Beyond it, a phrase is a genuine next-day reset being read on
+  # the wrong side of midnight, and firing on it immediately would be worse than
+  # the bug being fixed. 00:00 UTC is eight hours behind the anchor, so the
+  # answer is the NEXT midnight: 2026-09-13 00:00:00 UTC.
+  _src_limit
+  run limit_reset_epoch "resets 12am (UTC)" 1789200000
+  [ "$status" -eq 0 ]
+  [ "$output" = "1789257600" ] || { echo "got $output"; false; }
+  [ "$output" -gt 1789200000 ]
+}
+
+@test "reset epoch: a reset still ahead is untouched by any of this" {
+  _src_limit
+  run limit_reset_epoch "resets 11pm (UTC)" 1789200000
+  [ "$status" -eq 0 ]
+  [ "$output" = "1789254000" ]
+}
+
+@test "reset epoch: the same rule applies to codex's undated phrase" {
+  # codex's branch has its own copy of the roll-forward, and a rule that lives
+  # in one of two spellings is how this file's twin drifted before.
+  _src_limit
+  TZ=UTC run limit_reset_epoch "try again at 7:50 AM" 1789200000
+  [ "$status" -eq 0 ]
+  [ "$output" = "1789199400" ] || { echo "got $output"; false; }
+  TZ=UTC run limit_reset_epoch "try again at 12:00 AM" 1789200000
+  [ "$status" -eq 0 ]
+  [ "$output" = "1789257600" ] || { echo "got $output"; false; }
+}
+
+@test "reset epoch: a tank whose stated reset has passed reads 'unverified', not 'dry until tomorrow'" {
+  # What the grace actually changes at the tank level, and it is the honest
+  # reading: the reset happened, no successful turn has been seen since, so the
+  # fuel is probably back but nothing has proved it. Before the grace this same
+  # tank claimed a reset nearly a day out, and the board drew a countdown to it.
+  #
+  # 🔴 limit_tank_dry therefore reports NOT DRY here, which is why wake_watch
+  # cannot key on it alone — it hands over on this verdict too. Pinned in
+  # tests/bats/wake-sit.bats; pinned HERE because a future simplification of
+  # _limit_tank_dry_self would silently disconnect the watcher.
+  source "$CLIKAE_TEST_ROOT/lib/core/log.sh"
+  source "$CLIKAE_TEST_ROOT/lib/core/profile_store.sh"
+  source "$CLIKAE_TEST_ROOT/lib/core/limit.sh"
+  local dir="$CLIKAE_HOME/profiles/claude/t" zone phrase ten
+  zone="$(readlink /etc/localtime 2>/dev/null | sed 's#.*zoneinfo/##')"
+  [ -n "$zone" ] || skip "no named zone on this host"
+  ten="$(( $(date +%s) - 600 ))"
+  phrase="resets $(date -r "$ten" '+%-I:%M' 2>/dev/null || date -d "@$ten" '+%-I:%M')$(date -r "$ten" '+%p' 2>/dev/null || date -d "@$ten" '+%p' | tr 'APM' 'apm') ($zone)"
+  phrase="${phrase/AM/am}"; phrase="${phrase/PM/pm}"
+  _seed_claude_limit_then "$dir"
+  printf '{"type":"assistant","isApiErrorMessage":true,"message":{"model":"<synthetic>","content":[{"type":"text","text":"You have hit your session limit · %s"}]},"timestamp":"%s"}\n' \
+    "$phrase" "$(date -u '+%Y-%m-%dT%H:%M:%S.000Z')" > "$dir/projects/p/s.jsonl"
+  run _limit_tank_dry_self claude t
+  [ "$status" -eq 0 ] || { echo "phrase=[$phrase] status=$status"; false; }
+  [ "$output" = "$LIMIT_RESET_UNVERIFIED" ] || { echo "phrase=[$phrase] got [$output]"; false; }
 }

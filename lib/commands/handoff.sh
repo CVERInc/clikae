@@ -132,7 +132,7 @@ EOF
   if [ -z "$to" ]; then
     if [ -n "$out" ]; then
       handoff_render "$transcript" "$summarizer" > "$out" || log_fail "Failed to write $out"
-      log_ok "Handoff written to $out"
+      log_done "Handoff written to $out"
     else
       handoff_render "$transcript" "$summarizer"
     fi
@@ -148,7 +148,7 @@ EOF
 
   if [ -n "$out" ]; then
     printf '%s\n' "$brief" > "$out" || log_fail "Failed to write $out"
-    log_ok "Handoff also written to $out"
+    log_done "Handoff also written to $out"
   fi
 
   # Parse <engine>[/<tank>].
@@ -166,7 +166,7 @@ EOF
     [ -z "$to_profile" ] || log_fail "'$to_cli' is a single-account handoff target — drop the /$to_profile."
     # shellcheck source=/dev/null
     source "$target_file"
-    log_ok "Handing off: $cli/$profile → $(target_meta_name)"
+    log_done "Handing off: $cli/$profile → $(target_meta_name)"
     log_dim "Starting $(target_meta_binary) seeded with the brief; the source session is untouched."
     target_start_with_prompt "$brief" "$@"
 
@@ -183,7 +183,7 @@ EOF
       validate_name profile "$to_profile"
       to_dir="$(ensure_profile --require "$to_cli" "$to_profile")"
     fi
-    log_ok "Handing off: $cli/$profile → $to${to_dir:+ ($to_dir)}"
+    log_done "Handing off: $cli/$profile → $to${to_dir:+ ($to_dir)}"
     log_dim "Starting $to_cli seeded with the brief; the source session is untouched."
     adapter_start_with_prompt "$to_dir" "$brief" "$@"
 

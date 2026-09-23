@@ -1,11 +1,11 @@
 # clikae (CLI-Kae / ｷﾘｶｴ)
 
-> Type `clikae` and land back on your recent sessions — across every account and engine (Claude Code, Codex, Antigravity), each with a one-line recap of where you left off. Pick one and keep going.
+> Type `clikae` and land back on your recent sessions — across every account and engine (Claude Code, Codex, Grok, Antigravity), each with a one-line recap of where you left off. Pick one and keep going.
 >
 > *"Kirikae" (切り替え, ki-ri-ka-e) is Japanese for "switching".*
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
-[![Status](https://img.shields.io/badge/status-v0.14.1-blue.svg)](CHANGELOG.md)
+[![Status](https://img.shields.io/github/v/tag/CVERInc/clikae?label=version&color=blue)](CHANGELOG.md)
 [![Docs](https://img.shields.io/badge/docs-clikae.cver.net-2563eb.svg)](https://clikae.cver.net)
 
 📖 **Docs:** [clikae.cver.net](https://clikae.cver.net) — humans read it, agents call `/mcp`.
@@ -90,6 +90,30 @@ tanks share a Soul, so the new engine reads the same markdown brain the old
 one wrote — try it for an afternoon with your context intact, and walk back
 out just as easily. The vendors compete; your memory doesn't care who wins.
 
+**You get up and walk away.** The engine runs inside a tmux session named for
+its tank, so shutting the laptop — or an ssh connection dropping on the train —
+doesn't end the conversation. Type the same `clikae claude work` from wherever
+you land next and you're back in it, at that screen's size, mid-thought. If
+tmux isn't installed, or you're in a pipe, it just runs the engine directly:
+same command, no persistence, nothing to configure either way. Over ssh from
+a phone with no scroll wheel (a-Shell/iPhone), tmux 3.1+ also gets you swipe
+scrolling — see [`docs/usage.md`](docs/usage.md#touch-scrolling-over-ssh).
+
+**You hit the limit at 2am.** The session isn't gone — it's sitting at its
+prompt with the whole conversation in it, waiting for you to come back at 3:50
+and type something. clikae types it: a countdown opens inside that session and
+sends one keystroke when the limit lifts, so you wake up to work that continued
+instead of work that stopped. Nothing is re-run — no prompt is replayed, so
+nothing that already happened happens twice. It asks you once, the first time.
+
+**Your subordinate stops grading its own homework.** A new agy tank comes with a
+small restraint: a reply can stay as confident as it likes, but it cannot end
+with *"I verified everything works"* in a session that ran zero commands. The
+claim gets handed back with the contradiction attached, and the next reply says
+what it actually did. The threshold is zero, not "enough" — the second is an
+argument about taste, the first is not. Your project can add its own gate; delete
+one file and it's off.
+
 **Some sessions shouldn't be remembered.** Get a cold read on your own plan
 from a session with no memory of you: `clikae claude work --ephemeral`. The
 reviewer doesn't know what you believe, and the tank's long-term memory never
@@ -148,6 +172,9 @@ with it that one account can't:
   hands you every answer to judge: a vote, not a coin flip.
 - **A long job that survives a dry tank** — burn re-fires it on your next reserve
   automatically, so unattended work finishes *somewhere*.
+- **See the runway before you hit it** — `clikae usage [engine] [tank]` reports
+  each tank's real vendor percentages (window/weekly used, and when they
+  reset), cached so the board never makes a network call to show them.
 
 Situation-by-situation recipes, with the exact calls, are in
 **[docs/playbooks.md](docs/playbooks.md)**. An account switcher gives you another login;
@@ -169,7 +196,7 @@ you are and where the work stands. Swap the engine, keep the soul.
   drift, it's literally the same files.
 - 🔴 Sharing is **opt-in and per-tank**; clikae never auto-crosses accounts, and
   crossing your own is announced. The store is seeded by copy and `clikae memory
-  isolate` reverses it.
+  solo` reverses it — it takes the tank out of the fleet and gives its own memory back.
 - `clikae solo` walls a tank off — a bot or persona that lives on your own account —
   so it's out of the fleet: never relayed, burned, watched, or shared.
 
@@ -183,6 +210,16 @@ is the field guide: when to use `burn` vs `conduct`, the rules that keep it hone
 and how to see your fleet from inside a Claude Code session. Routing cheap breadth to
 Antigravity? The **[agy dispatch recipe](docs/agy-dispatch.md)** is the one engine an
 agent fumbles most — read it first so an agy leg returns real work, not a blank.
+
+On a Claude tank's first `memory share`, clikae lists existing project memory in
+`~/.claude/projects/*/memory` and the tank, with markdown file counts. It asks
+`[y/N]` per additional source on a terminal; unattended runs warn and print an
+exact `clikae memory share <group> claude <tank> --adopt <dir>` command. You can
+pass `--adopt` up front or after joining (one source per invocation). Adoption
+copies markdown topics, keeps existing same-named files, and appends the source
+index under an `Adopted from <dir>` heading once. Originals remain untouched;
+collisions are reported for manual review. `--yes` does not approve discovery
+imports. The tank's current directory retains its existing copy-seeding behavior.
 
 ## Install
 
@@ -254,58 +291,64 @@ clikae                            # your home board (run `clikae doctor` for a h
 - **[Adding an adapter](docs/adding-an-adapter.md)** — teach clikae a new CLI.
 - **[Adding a language](docs/adding-a-locale.md)** — give the board and prompts a new locale: one string file + one resolver line, CI enforces the rest.
 
-## Milestones
+## How it got here
 
-- **v0.5 — the fuel-tank grammar.** clikae became the verb (`clikae <engine> <tank>`),
-  `clikae to` carries a session onward (same engine resumes; another engine gets a
-  written brief), and the engine/tank/fuel vocabulary landed throughout. See
-  [docs/grammar.md](docs/grammar.md).
-- **v0.5.4 — the fuel gauge.** The board's dot stopped meaning "you are here": 🟢 ready ·
-  🔴 dry (the vendor's verbatim reset time) · ○ no reading — never a guessed green. See
-  [docs/DESIGN-board-fuel-dots.md](docs/DESIGN-board-fuel-dots.md).
-- **v0.5.5 — real multi-account agy, and `burn`.** Each Antigravity tank carries its own
-  Google login via the macOS Keychain; `clikae burn` runs headless tasks across tanks,
-  verified by the artifact they produce, never the exit code.
-- **v0.5.12 — the quality punch-list hit empty.** State schema versioning landed; since
-  then it's been polish. The full story, version by version: [CHANGELOG.md](CHANGELOG.md).
-- **v0.6 — vertical orchestration.** `clikae conduct` (BETA) fans one prompt across N
-  accounts in parallel, each running headless read-only on its own tank, and hands back
-  every leg's output plus an honest captured/dry table — it doesn't pick the winner, you
-  do. `clikae git-id` gives a tank its own commit identity so commits aren't stamped with
-  the engine's account email; `clikae burn --prompt-file` / `--prompt` / `--add-dir` fill
-  in each engine's headless-write flags for you. Patches since (0.6.1, 0.6.2) are
-  correctness and string fixes — see [CHANGELOG.md](CHANGELOG.md).
-- **v0.7 — agy joins the fan-out.** `clikae conduct --leg agy/<tank>` lets Antigravity
-  run a read-only best-of-N leg alongside claude/codex, so cheap breadth rides your agy
-  quota — on its active tank only (it's a global single-account engine). The recipe for
-  driving agy headless without firing a blank is now baked into `clikae agy --help` and
-  [docs/agy-dispatch.md](docs/agy-dispatch.md).
-- **v0.8 — resume, picked from a board.** `clikae resume` reaches *backward* to a past
-  session by id across every tank (claude/codex/antigravity); run with no id it opens an
-  interactive picker — filter, page, pick by title, no UUID to copy — and `[R]` opens it
-  from the dashboard. `clikae resume cleanup` reclaims disk from old session data. The
-  home board also got much faster (several seconds → well under one on multi-GB tanks) by
-  reading only the transcript slices it needs and scanning each tank's fuel state once.
-- **v0.9 — the Soul layer.** `clikae memory share|isolate|status` gives several of
-  your own tanks one shared markdown brain **across engines** — claude symlinks its
-  memory dir into the store; codex and agy read a pointer note to the same files, no
-  translator, no drift. Swap the engine, keep the soul. `clikae solo` walls a tank off
-  from the fleet, and the home board became an **interactive cockpit** (press `m` for
-  the memory dial, `s` to solo) laid out as Tanks / Solo / Resume. See
-  [docs/memory.md](docs/memory.md).
-- **v1.0 — someday.** A macOS menu bar app (`gui/ClikaeMenuBar`) exists as a
-  build-verified skeleton; it ships when it earns it.
+clikae started as a switcher. Several accounts on one machine, a bag of
+environment variables to juggle between them — so the verb came first
+(`clikae <engine> <tank>`), and the engine/tank/fuel vocabulary followed.
+
+Then the board learned not to guess. The dot that meant "you are here" became
+a fuel gauge reading the vendor's own reset time, showing ○ rather than a
+hopeful green; `resume` learned to reach *backward* to any past session by
+title, across every tank; headless runs report what they actually captured,
+verified by the artifact rather than the exit code. One release shipped no
+features at all — four review lenses over the whole tree, ~220 lines of dead
+code out, and a real-pty smoke driver that presses keys, because shellcheck
+reads source and bats never types.
+
+Somewhere in there the point moved. The accounts were never the interesting
+part; the memory was. `clikae memory share` gives several of your tanks one
+vendor-neutral markdown brain — no translator, no drift — and the front page
+was rewritten around it: your work has two halves, and clikae keeps yours
+portable. Quota rotation stepped down from the headline to an advanced
+chapter with an honest, dated
+[terms page](docs/terms-and-your-accounts.md).
+
+Since then, reach. Nine languages, transcreated against each one's own Apple
+system strings and translated *by grade* — the sentences you must understand
+in order to consent are fully localized; what you type stays technical.
+`clikae clean` reclaims disk with one list, one red confirm, and the Trash
+instead of `rm`. New engines keep joining the board. A macOS menu bar app
+(`gui/ClikaeMenuBar`) exists as a build-verified skeleton; it ships when it
+earns it.
+
+And then the sessions stopped ending. Tanks run inside tmux now, so the thing
+that used to end a conversation — closing the window, an ssh link dropping —
+doesn't. It turned the switcher into something you can walk away from and come
+back to on a different machine, which is a different product than the one that
+started here. It also moved the honest question: not "does it work on my
+laptop" but "does it work on the tablet on the sofa *and* the desktop upstairs,
+at the same time, on the same session".
+
+Version by version: **[Releases](https://github.com/CVERInc/clikae/releases)**
+· **[CHANGELOG.md](CHANGELOG.md)**.
 
 ## Testing & quality
 
-Pure bash, no runtime dependencies, held to a deliberate bar:
+Pure bash, one runtime dependency and only for one feature — the cockpit guard
+(`clikae cockpit`) parses each tool call with **`jq`**, and refuses every Agent
+spawn on the cockpit tank if jq isn't on PATH when the hook runs. Everything
+else in clikae needs nothing but bash. Held to a deliberate bar:
 
-- **`bats-core` suite (450+ tests)**, run in **CI on macOS *and* Ubuntu** on every push/PR.
+- **`bats-core` suite (640+ tests)**, run in **CI on macOS *and* Ubuntu** on every push/PR.
 - **`shellcheck` clean** (zero warnings) across `bin/` and `lib/`.
+- **A real-pty smoke leg** that drives the board, the resume picker and the prompt
+  flows on an actual terminal, in a throwaway `$HOME` — because shellcheck reads
+  source and bats never presses a key, so neither can see the TUI. It gates.
 - The **Homebrew formula is `brew audit`- and `brew test`-clean**; each release pins and verifies the tarball SHA‑256.
 - Behaviour-critical paths — the `burn` headless runner, limit/dry detection, the in-use guard — have dedicated regression tests, several added straight from real dogfood failures.
 
-Developed and hand-tested on **macOS**; Linux is covered by CI. **Linux / WSL / BSD field reports and PRs are very welcome** (see [Contributing](#contributing)) — the thing to watch is `clikae burn --artifact` behaviour.
+Runs on **macOS and Linux** — both hand-tested, not just CI. The Linux side was verified on real **ARM64** hardware (a PineNote, aarch64/bash 5.2) as well as the x86 CI runners: the whole test suite and the interactive pty checks pass there, and clikae has driven a real Claude Code session on it. Roaming is hand-verified between two physical machines rather than simulated — the same tank attached from an e-ink tablet at 90x28 and a Mac at 200x50, both live at once, engine started exactly once. The one macOS-only piece is `clikae app` (the double-clickable `.app` launcher) — everything else is plain bash. **WSL / BSD field reports and PRs are very welcome** (see [Contributing](#contributing)) — the thing to watch is `clikae burn --artifact` behaviour.
 
 ## Contributing
 

@@ -1,0 +1,82 @@
+#!/usr/bin/env bash
+# hooks/changelog-guard — block a push that changes lib/ or bin/ without saying so
+# in CHANGELOG.md.
+#
+# Why: at 0.28.0, nineteen commits went out and exactly ONE of them had touched
+# the changelog. The release notes were reconstructed afterwards from commit
+# messages — which worked, but only because someone sat down and did it, and only
+# because the commit messages happened to be good. That is not a process, it is a
+# person remembering.
+#
+# Scope is deliberately narrow. tests/, docs/, hooks/ and scripts/ do not trip it:
+# the question this asks is "would a user notice?", and only lib/ and bin/ can
+# change what a user gets. The granularity is the PUSH, not the commit — a series
+# where any one commit updates the changelog is fine, because that is how a real
+# change is usually written.
+#
+# Reads git's pre-push payload on stdin, one line per ref:
+#   <local ref> <local sha> <remote ref> <remote sha>
+#
+# 🔴 THIS GUARD MUST BE ABLE TO FAIL, and it is tested that way
+# (tests/bats/changelog-guard.bats). The last guard added to this repo without
+# that proof — wake's "am I the last window?" check — was constant-true and sat
+# there for a month doing nothing, which is worse than no guard at all: it reads
+# as covered.
+set -uo pipefail
+
+ZERO='0000000000000000000000000000000000000000'
+WATCHED_RE='^(lib|bin)/'
+
+# An explicit, narrow escape. `--no-verify` also exists but throws away the whole
+# test suite with it, which is far too blunt for "this change is invisible".
+if [ -n "${CLIKAE_SKIP_CHANGELOG:-}" ]; then
+  printf '  changelog guard SKIPPED (CLIKAE_SKIP_CHANGELOG set)\n' >&2
+  exit 0
+fi
+
+offenders=''
+while read -r local_ref local_sha remote_ref remote_sha; do
+  [ -n "${local_ref:-}" ] || continue
+  : "$remote_ref"
+  # Deleting a ref pushes nothing.
+  case "$local_sha" in "$ZERO"|'') continue ;; esac
+  # A tag push carries no new commits of its own.
+  case "$local_ref" in refs/tags/*) continue ;; esac
+
+  if [ "${remote_sha:-$ZERO}" = "$ZERO" ]; then
+    # A branch the remote has never seen. Everything back to the default branch
+    # is "new", so measure against that rather than against the root commit.
+    base="$(git merge-base "$local_sha" origin/main 2>/dev/null || true)"
+    [ -n "$base" ] || continue          # cannot establish a range — do not guess
+    range="$base..$local_sha"
+  else
+    range="$remote_sha..$local_sha"
+  fi
+
+  files="$(git diff --name-only "$range" 2>/dev/null || true)"
+  [ -n "$files" ] || continue
+
+  # Grep, not a bash loop: the paths can be many and this runs on every push.
+  watched="$(printf '%s\n' "$files" | grep -E "$WATCHED_RE" || true)"
+  [ -n "$watched" ] || continue
+  printf '%s\n' "$files" | grep -qxF 'CHANGELOG.md' && continue
+
+  offenders="$offenders$(printf '%s\n' "$watched" | head -6)"$'\n'
+  extra="$(printf '%s\n' "$watched" | tail -n +7 | grep -c . || true)"
+  [ "${extra:-0}" -gt 0 ] && offenders="$offenders  … and $extra more"$'\n'
+done
+
+[ -n "$offenders" ] || exit 0
+
+{
+  printf '\n'
+  printf '  ✗ CHANGELOG.md is untouched, but this push changes what ships:\n\n'
+  printf '%s' "$offenders" | sed 's/^/      /'
+  printf '\n'
+  printf '  Add an entry under ## [Unreleased] — the release notes get written\n'
+  printf '  from it, and reconstructing them later only works while the commit\n'
+  printf '  messages happen to be good.\n\n'
+  printf '  Genuinely invisible change?   CLIKAE_SKIP_CHANGELOG=1 git push\n'
+  printf '\n'
+} >&2
+exit 1

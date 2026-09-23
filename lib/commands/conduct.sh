@@ -15,7 +15,10 @@
 # (audits, analyses, design proposals). Write/impl tournaments that need isolated
 # worktrees stay an orchestrator's job (see the conductor skill's Heavy mode).
 
-# Reuse burn's timeout-tool resolver (timeout/gtimeout/perl-or-warn).
+# Reuse burn's _burn_size (byte-count-or-"?" for the summary table). The
+# timeout-tool resolver this comment used to name (_burn_timeout_bin) moved
+# to lib/core/timeout_bin.sh (P2-2, round-2 review) and is sourced globally
+# now — this source is no longer why it's available here, only _burn_size is.
 # shellcheck source=./burn.sh
 source "$CLIKAE_LIB/commands/burn.sh"
 # agy is adapter-less (global single-account, no per-shell env to export), so it
@@ -45,6 +48,15 @@ winner; clikae never judges. (BETA — the vertical-orchestration primitive.)
   --add-dir <dir>     extra read root for every leg (default: $PWD). Repeatable.
   --out-dir <dir>     where to collect <engine>-<tank>.txt results
                       (default: a fresh mktemp dir, printed at the end).
+  --json              print ONE result object on stdout and every word of
+                      progress on stderr. clikae never judges — you pick the
+                      winner — so the caller needs the legs in a form it can
+                      rank without knowing conduct's on-disk layout:
+                        {out_dir, captured, dry, other,
+                         legs:[{engine, tank, status, detail, output,
+                                output_bytes}]}
+                      `status` is CAPTURED / DRY / EMPTY / NORECIPE / NOPATH /
+                      NOTANK / NOTACTIVE; `output` is the file to read.
   --timeout <secs>    bound each leg (coreutils timeout/gtimeout, else a perl alarm).
 
 Each leg's outcome is judged by its OUTPUT, never the exit code (a headless agent
@@ -52,20 +64,20 @@ exits 0 even when it hit its limit). Outcomes per leg: captured / dry (with the
 vendor's reset phrase) / empty (a real failure — auth/sandbox/no answer).
 
 Honest limits (what conduct does NOT do):
-  • Read-only by design. Every leg runs with its engine's read-only headless
+  · Read-only by design. Every leg runs with its engine's read-only headless
     recipe, so N legs can't clobber a shared working tree. conduct is for
     best-of-N AUDITS/ANALYSES/PROPOSALS — NOT write/impl tournaments (those need
     isolated worktrees and stay an orchestrator's job).
-  • clikae never judges. You get N result files + an honest table; YOU (or the
+  · clikae never judges. You get N result files + an honest table; YOU (or the
     session model acting as conductor) pick the winner. No scoring, no merge.
-  • Adapter-gated. A leg only runs if its engine defines a read-only recipe
+  · Adapter-gated. A leg only runs if its engine defines a read-only recipe
     (adapter_audit_flags) — today claude and codex. Others are flagged, not run.
-  • agy is special (no adapter — global single-account). An agy leg runs ONLY on
+  · agy is special (no adapter — global single-account). An agy leg runs ONLY on
     the currently active agy tank; a leg naming another tank is reported (not run),
     since clikae can't switch agy per-shell or run two agy tanks in parallel. agy's
     dry state is read from its cli.log (its quota event never reaches stdout). Full
     recipe + caveats: docs/agy-dispatch.md.
-  • Dry-detection leans on each vendor's CURRENT limit wording. If a vendor
+  · Dry-detection leans on each vendor's CURRENT limit wording. If a vendor
     rewords it, set $CLIKAE_LIMIT_PATTERN='<regex>' to teach it (same override
     clikae watch honours); otherwise a dry leg may show as "empty (failure)".
 
@@ -163,7 +175,10 @@ _conduct_one_agy() {
   # (the leg is read-only, and an AI-driven safety classifier blocks that flag anyway).
   # --add-dir pre-authorises each read root so a path outside cwd doesn't hang on a
   # TTY-less permission prompt (docs/agy-dispatch.md).
-  local -a gen=(-p "$prompt"); local d
+  # --log-file gives this leg its own log; see the dry check below for why the
+  # shared cli.log symlink cannot be trusted to describe THIS run.
+  local runlog; runlog="$(mktemp "${TMPDIR:-/tmp}/clikae-agy-log.XXXXXX")"
+  local -a gen=(-p "$prompt" --log-file "$runlog"); local d
   for d in "${add_dirs[@]}"; do gen+=(--add-dir "$d"); done
 
   local -a runner=()
@@ -179,13 +194,16 @@ _conduct_one_agy() {
   out="$("${runner[@]}" agy "${gen[@]}" </dev/null 2>&1)" || true
   printf '%s\n' "$out" > "$outfile"
 
-  # agy's quota event lands in cli.log (RESOURCE_EXHAUSTED / "Individual quota
+  # agy's quota event lands in a log (RESOURCE_EXHAUSTED / "Individual quota
   # reached"), NEVER in stdout — `agy -p` exits 0 with empty output when dry. So judge
-  # dry from the log (limit_output_dry can't see agy), not the captured stdout. cli.log
-  # is a per-run symlink, so its content reflects THIS run. (Path == target_limit_log_path.)
-  local logf reset
-  logf="$(_agy_link)/antigravity-cli/cli.log"
-  if reset="$(limit_log_dry "$logf")"; then
+  # dry from the log (limit_output_dry can't see agy), not the captured stdout.
+  # The log is OURS, requested with --log-file above: ~/.gemini/.../cli.log is a
+  # symlink shared by every agy process on the tank, so reading it would let an
+  # interactive session's quota event be charged to this leg.
+  local reset dry=1
+  reset="$(limit_log_dry "$runlog")" && dry=0
+  rm -f "$runlog"
+  if [ "$dry" -eq 0 ]; then
     printf 'DRY %s\n' "$reset" > "$statusfile"
   elif [ -n "$out" ]; then
     printf 'CAPTURED\n' > "$statusfile"
@@ -195,6 +213,7 @@ _conduct_one_agy() {
 }
 
 cmd_conduct() {
+  local as_json=0
   local prompt="" prompt_file="" prompt_set=0 out_dir="" timeout_s=""
   local -a legs=() add_dirs=()
   while [ $# -gt 0 ]; do
@@ -202,6 +221,7 @@ cmd_conduct() {
       -h|--help)     _conduct_help; return 0 ;;
       --prompt)      shift; [ $# -gt 0 ] || log_fail "--prompt needs a string"; prompt="$1"; prompt_set=1; shift ;;
       --prompt-file) shift; [ $# -gt 0 ] || log_fail "--prompt-file needs a path"; prompt_file="$1"; shift ;;
+      --json)      as_json=1; shift ;;
       --leg)         shift; [ $# -gt 0 ] || log_fail "--leg needs <engine>/<tank>"; legs+=("$1"); shift ;;
       --add-dir)     shift; [ $# -gt 0 ] || log_fail "--add-dir needs a path"; add_dirs+=("$1"); shift ;;
       --out-dir)     shift; [ $# -gt 0 ] || log_fail "--out-dir needs a path"; out_dir="$1"; shift ;;
@@ -226,6 +246,11 @@ cmd_conduct() {
   else
     mkdir -p "$out_dir" || log_fail "Could not create --out-dir: $out_dir"
   fi
+
+  # --json: the result object on stdout, every word of progress on stderr. Same
+  # contract as `burn --json`; log_done/log_info write to stdout, so without this
+  # the object would arrive mixed into the prose it replaces.
+  if [ "$as_json" -eq 1 ]; then exec 4>&1; exec 1>&2; else exec 4>/dev/null; fi
 
   log_info "conduct: fanning 1 prompt across ${#legs[@]} legs (read-only, parallel) → $out_dir"
 
@@ -264,17 +289,38 @@ cmd_conduct() {
   for i in "${!tags[@]}"; do
     verdict="$(cut -d' ' -f1 < "${stats[$i]}" 2>/dev/null || echo '?')"
     rest="$(cut -s -d' ' -f2- < "${stats[$i]}" 2>/dev/null || true)"
+    # No glyph in front of these: log_done/log_warn/log_err already print the
+    # badge, and a tick beside `[ DONE ]` is the same state written twice.
     case "$verdict" in
-      CAPTURED) captured=$((captured+1)); log_ok   "  ✔ ${tags[$i]} — captured ($(_burn_size "${outs[$i]}")B) → ${outs[$i]}" ;;
-      DRY)      dry=$((dry+1));           log_warn "  ⛽ ${tags[$i]} — ran dry${rest:+  ($rest)}" ;;
-      EMPTY)    other=$((other+1));       log_err  "  ✖ ${tags[$i]} — no output (auth / sandbox / no answer)" ;;
-      NORECIPE) other=$((other+1));       log_err  "  ✖ ${tags[$i]} — engine has no read-only recipe (adapter_audit_flags)" ;;
-      NOPATH)   other=$((other+1));       log_err  "  ✖ ${tags[$i]} — engine binary not on PATH" ;;
-      NOTANK)   other=$((other+1));       log_err  "  ✖ ${tags[$i]} — no such tank (clikae tanks to list)" ;;
-      NOTACTIVE) other=$((other+1));      log_err  "  ✖ ${tags[$i]} — not the active agy tank (active: $rest). agy can't switch in parallel; run 'clikae agy ${tags[$i]#*/}' first, or use --leg agy/$rest" ;;
-      *)        other=$((other+1));       log_err  "  ✖ ${tags[$i]} — unknown outcome" ;;
+      CAPTURED) captured=$((captured+1)); log_done   "  ${tags[$i]} — captured ($(_burn_size "${outs[$i]}")B) → ${outs[$i]}" ;;
+      DRY)      dry=$((dry+1));           log_warn "  ${tags[$i]} — ran dry${rest:+  ($rest)}" ;;
+      EMPTY)    other=$((other+1));       log_err  "  ${tags[$i]} — no output (auth / sandbox / no answer)" ;;
+      NORECIPE) other=$((other+1));       log_err  "  ${tags[$i]} — engine has no read-only recipe (adapter_audit_flags)" ;;
+      NOPATH)   other=$((other+1));       log_err  "  ${tags[$i]} — engine binary not on PATH" ;;
+      NOTANK)   other=$((other+1));       log_err  "  ${tags[$i]} — no such tank (clikae tanks to list)" ;;
+      NOTACTIVE) other=$((other+1));      log_err  "  ${tags[$i]} — not the active agy tank (active: $rest). agy can't switch in parallel; run 'clikae agy ${tags[$i]#*/}' first, or use --leg agy/$rest" ;;
+      *)        other=$((other+1));       log_err  "  ${tags[$i]} — unknown outcome" ;;
     esac
   done
   log_info "summary: ${captured} captured · ${dry} dry · ${other} other  →  read them in $out_dir, then pick the winner."
+  # 🔴 The per-leg outcome already exists on disk — a status file and an output
+  # file per leg — but reaching it meant knowing conduct's internal layout and
+  # parsing status words out of prose. clikae never judges; you pick the winner.
+  # That is exactly why the caller needs the legs in a form it can rank.
+  if [ "$as_json" -eq 1 ]; then
+    local j="" first=1 v r ob
+    for i in "${!tags[@]}"; do
+      v="$(cut -d' ' -f1 < "${stats[$i]}" 2>/dev/null || echo '?')"
+      r="$(cut -s -d' ' -f2- < "${stats[$i]}" 2>/dev/null || true)"
+      ob=null; [ -e "${outs[$i]}" ] && ob="$(_burn_size "${outs[$i]}")"
+      [ "$first" -eq 1 ] || j="$j,"
+      first=0
+      j="$j{\"engine\":$(json_str "${tags[$i]%%/*}"),\"tank\":$(json_str "${tags[$i]#*/}")"
+      j="$j,\"status\":$(json_str "$v"),\"detail\":$(json_or_null "$r")"
+      j="$j,\"output\":$(json_str "${outs[$i]}"),\"output_bytes\":${ob:-null}}"
+    done
+    printf '{"out_dir":%s,"captured":%s,"dry":%s,"other":%s,"legs":[%s]}\n' \
+      "$(json_str "$out_dir")" "$captured" "$dry" "$other" "$j" >&4
+  fi
   [ "$captured" -ge 1 ]
 }

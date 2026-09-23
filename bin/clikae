@@ -1,11 +1,11 @@
 #!/usr/bin/env bash
-# clikae - CLI profile switcher  (kirikae, "switch")
-# https://github.com/CVERInc/clikae
-# MIT License
+# clikae — the CLI account switcher you can read.  (kirikae, 切り替え, "switching")
+# Open source · claude · codex · grok · agy · land back on your recent sessions.
+# https://oss.cver.net/clikae  ·  MIT © CVER Inc.
 
 set -eo pipefail
 
-CLIKAE_VERSION="0.14.5"
+CLIKAE_VERSION="0.31.0"
 
 # Resolve install root (handles symlink chains, e.g., via Homebrew)
 __resolve_self() {
@@ -38,10 +38,22 @@ source "$CLIKAE_LIB/core/i18n.sh"
 source "$CLIKAE_LIB/core/json.sh"
 # shellcheck source=../lib/core/profile_store.sh
 source "$CLIKAE_LIB/core/profile_store.sh"
+
+# #61 round-5 P3-1: there is no warn-once sentinel FILE any more, so there is
+# nothing for this process to clean up on the way out and no EXIT trap here
+# for the TUI/burn/resume/clean to have to remember to chain onto. The
+# read-only-store warning dedupes through an exported variable instead, which
+# every fork and every `exec` inherits by itself — see
+# _tank_adoption_warn_once in lib/core/profile_store.sh.
+
+# shellcheck source=../lib/core/tmux.sh
+source "$CLIKAE_LIB/core/tmux.sh"
 # shellcheck source=../lib/core/soul.sh
 source "$CLIKAE_LIB/core/soul.sh"
 # shellcheck source=../lib/core/fleet_mcp.sh
 source "$CLIKAE_LIB/core/fleet_mcp.sh"
+# shellcheck source=../lib/core/fleet_hooks.sh
+source "$CLIKAE_LIB/core/fleet_hooks.sh"
 # shellcheck source=../lib/core/shell_rc.sh
 source "$CLIKAE_LIB/core/shell_rc.sh"
 # shellcheck source=../lib/core/tui.sh
@@ -56,16 +68,34 @@ source "$CLIKAE_LIB/core/handoff.sh"
 source "$CLIKAE_LIB/core/scan.sh"
 # shellcheck source=../lib/core/dry_store.sh
 source "$CLIKAE_LIB/core/dry_store.sh"
+# shellcheck source=../lib/core/burn_status.sh
+source "$CLIKAE_LIB/core/burn_status.sh"
+# shellcheck source=../lib/core/duration.sh
+source "$CLIKAE_LIB/core/duration.sh"
+# shellcheck source=../lib/core/timeout_bin.sh
+source "$CLIKAE_LIB/core/timeout_bin.sh"
 # shellcheck source=../lib/core/update_check.sh
 source "$CLIKAE_LIB/core/update_check.sh"
 # shellcheck source=../lib/core/limit.sh
 source "$CLIKAE_LIB/core/limit.sh"
+# shellcheck source=../lib/core/reading_cache.sh
+source "$CLIKAE_LIB/core/reading_cache.sh"
+# shellcheck source=../lib/core/board_state.sh
+source "$CLIKAE_LIB/core/board_state.sh"
+# shellcheck source=../lib/core/usage.sh
+source "$CLIKAE_LIB/core/usage.sh"
 # shellcheck source=../lib/core/history.sh
 source "$CLIKAE_LIB/core/history.sh"
 # shellcheck source=../lib/core/autonomy.sh
 source "$CLIKAE_LIB/core/autonomy.sh"
 # shellcheck source=../lib/core/resume_settings.sh
 source "$CLIKAE_LIB/core/resume_settings.sh"
+# shellcheck source=../lib/core/live.sh
+source "$CLIKAE_LIB/core/live.sh"
+# shellcheck source=../lib/core/agy_harness.sh
+source "$CLIKAE_LIB/core/agy_harness.sh"
+# shellcheck source=../lib/core/wake.sh
+source "$CLIKAE_LIB/core/wake.sh"
 # shellcheck source=../lib/core/session_carry.sh
 source "$CLIKAE_LIB/core/session_carry.sh"
 # shellcheck source=../lib/core/proc.sh
@@ -77,6 +107,30 @@ source "$CLIKAE_LIB/core/state_version.sh"
 # state is current or absent; read-only safe — see lib/core/state_version.sh).
 state_version_check
 
+# #113: the burn sidecar is keyed by engine id (state/burn-sessions/antigravity/,
+# never the old "agy"). One `[ -d ]` when there is nothing to move — see
+# burn_sidecar_migrate_legacy (lib/core/profile_store.sh) for why this runs every
+# command rather than once behind CLIKAE_STATE_VERSION.
+burn_sidecar_migrate_legacy
+
+# #61 round-2/3 P1-1/P1-2: the ONE-TIME inclusive tank-adoption sweep (see
+# lib/core/profile_store.sh) — "the first command run against a store with no
+# adoption flag" means literally the first, not just the first one that
+# happens to list tanks. Without this here, `clikae init` (which creates its
+# OWN tank directly and never walks the store) — or `clikae settings apply
+# <engine> <tank>` (#76), which requires a marker on a NAMED path without
+# ever calling the enumerator — could be a real upgrade's first command and
+# leave the flag unwritten, so a stray directory created between then and
+# the first `doctor`/`tanks`/board call would still fall inside the adoption
+# window; round-3's own review reproduced #61's exact original symptom
+# through exactly that gap (a successful burn as the first command, then a
+# stray dropped in, then a reroute that adopted and burned it). A no-op
+# single `[ -f ]` stat once the flag exists, for every command including
+# ones that never touch a tank. `_tank_adoption_ensure` itself bails before
+# any write when `profiles_root` doesn't exist yet, so a command that must
+# create NO clikae state before refusing (three burn.bats tests) still does.
+_tank_adoption_ensure
+
 # Subcommand dispatch (see docs/grammar.md §4). Resolve the first argument:
 #   1. a reserved command (or alias) -> run it directly;
 #   2. an installed engine (an adapter) -> the BARE SWITCH, `clikae <engine>
@@ -87,7 +141,7 @@ raw="${1:-home}"
 
 __clikae_is_reserved() {
   case "$1" in
-    home|dashboard|doctor|demo|init|app|tanks|list|ls|status|remove|rm|run|burn|conduct|to|continue|resume|clean|relay|handoff|watch|auto|antigravity|agy|rename|alias|migrate|env|git-id|memory|mcp|solo|info|adapters|lang|help|--help|-h|version|--version|-v) return 0 ;;
+    home|dashboard|settings|doctor|demo|init|app|tanks|list|ls|usage|status|remove|rm|run|burn|wait|conduct|to|continue|resume|clean|relay|handoff|watch|wake|auto|antigravity|agy|rename|alias|migrate|env|git-id|memory|mcp|hooks|solo|info|adapters|lang|cockpit|help|--help|-h|version|--version|-v) return 0 ;;
     *) return 1 ;;
   esac
 }
@@ -131,8 +185,16 @@ else
   else
     log_err "Unknown command, engine, or tank: $raw"
     echo ""
-    set --
-    cmd="help"
+    # Help is printed as a COURTESY; the result is still failure. A typo has to be
+    # detectable by whatever called us — `clikae statsu` used to print help and
+    # exit 0, so a script could not tell it from success. Handled here rather than
+    # by routing to cmd_help, because the dispatcher's last line is the command
+    # itself and wrapping that in `||` would suppress `set -e` inside every
+    # command function.
+    # shellcheck source=../lib/commands/help.sh
+    source "$CLIKAE_LIB/commands/help.sh"
+    cmd_help || true
+    exit 1
   fi
 fi
 

@@ -1,0 +1,36 @@
+#!/usr/bin/env bash
+# tests/stubs/security — the ONE fake `security(1)` the test suites use.
+#
+# 🔴 HOST SAFETY, not convenience. agy's per-tank login carry shells out to
+# `security`, so a suite running on a real Mac without this stub reads, WRITES
+# and DELETES the maintainer's actual `gemini` Keychain item — corrupting a live
+# login to make a test pass.
+#
+# It lives here rather than inline in tests/helpers.bash because the pty harness
+# needs it too, and this repo has already paid for one drifted copy of a shared
+# helper. State is one file per service under $CLIKAE_TEST_KEYCHAIN, so every
+# caller is hermetic; a test that wants different behaviour prepends its own
+# stub earlier in PATH and wins.
+state="${CLIKAE_TEST_KEYCHAIN:?}"
+sub="$1"; shift
+svc=""; want_w=0; secret=""
+while [ $# -gt 0 ]; do
+  case "$1" in
+    -s) svc="$2"; shift 2 ;;
+    -w) shift
+        if [ "$sub" = "add-generic-password" ]; then secret="$1"; shift; else want_w=1; fi ;;
+    -a|-l) shift 2 ;;
+    -U|-g) shift ;;
+    *) shift ;;
+  esac
+done
+file="$state/$svc"
+case "$sub" in
+  find-generic-password)
+    [ -f "$file" ] || exit 1
+    if [ "$want_w" -eq 1 ]; then cat "$file"; else echo '    "acct"<blob>="antigravity"'; fi
+    exit 0 ;;
+  add-generic-password)  printf '%s' "$secret" > "$file"; exit 0 ;;
+  delete-generic-password) rm -f "$file"; exit 0 ;;
+esac
+exit 1

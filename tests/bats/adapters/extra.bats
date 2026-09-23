@@ -125,3 +125,50 @@ load '../../helpers'
   clikae alias terraform work
   grep -qF "TF_CLI_CONFIG_FILE=\"$CLIKAE_HOME/profiles/terraform/work/terraformrc\"" "$RC_FILE"
 }
+
+# 🔴 The unset list in lib/core/adapter_loader.sh is what stops one adapter's
+# OPTIONAL hook from answering for the next one loaded in the same process
+# (`clikae handoff <a> --to <b>`, and every board render that walks engines).
+# It has drifted three times: #81 added adapter_burn_flags/adapter_audit_flags
+# to claude, #60 added adapter_meta_permission_modes, and round 12 of #62 found
+# four more (adapter_cwd_from_args, adapter_ephemeral_flags,
+# adapter_mcp_config_file, adapter_tank_fingerprint). Each was caught by a
+# person reading the list, and each time only the hook that person was thinking
+# about got a leak-guard test. This is the general form: a hook that exists is
+# in the list, or this test names it. Adding a hook and forgetting the list can
+# no longer be silent.
+@test "every adapter hook is in adapter_loader's unset list" {
+  local defined unset_list missing
+  defined="$(grep -ho '^adapter_[a-z_]*()' "$CLIKAE_TEST_ROOT"/lib/adapters/*.sh \
+    | sed 's/()$//' | LC_ALL=C sort -u)"
+  [ -n "$defined" ] || { echo "found no adapter hooks at all — the grep is wrong"; false; }
+  unset_list="$(sed -n '/unset -f adapter_meta_name/,/2>\/dev\/null || true/p' \
+    "$CLIKAE_TEST_ROOT/lib/core/adapter_loader.sh" \
+    | tr ' \\' '\n\n' | grep '^adapter_' | LC_ALL=C sort -u)"
+  [ -n "$unset_list" ] || { echo "found no unset list — the sed range is wrong"; false; }
+  missing="$(LC_ALL=C comm -23 <(printf '%s\n' "$defined") <(printf '%s\n' "$unset_list"))"
+  [ -z "$missing" ] || {
+    echo "adapter hooks missing from adapter_loader's unset list — they leak across a two-adapter load:"
+    printf '%s\n' "$missing"
+    false
+  }
+}
+
+@test "an optional hook one adapter defines is not inherited by the next (leak-guard, generalised)" {
+  # The list above is a claim about a FILE; this is the same claim about the
+  # running shell, for the four hooks round 12 added. claude defines all four
+  # of them (grok defines none), so one load of each side proves both halves.
+  source "$CLIKAE_LIB/core/log.sh"
+  source "$CLIKAE_LIB/core/adapter_loader.sh"
+  local h
+  load_adapter claude
+  for h in adapter_cwd_from_args adapter_ephemeral_flags adapter_mcp_config_file adapter_tank_fingerprint; do
+    declare -F "$h" >/dev/null || { echo "fixture is stale: claude no longer defines $h"; false; }
+  done
+  load_adapter grok
+  # grok defines adapter_cwd_from_args itself, so only the other three can
+  # prove a leak here.
+  for h in adapter_ephemeral_flags adapter_mcp_config_file adapter_tank_fingerprint; do
+    ! declare -F "$h" >/dev/null || { echo "grok inherited claude's $h"; false; }
+  done
+}

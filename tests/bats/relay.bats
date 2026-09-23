@@ -94,6 +94,18 @@ _seed_transcript() {
   [[ "$output" == *"same tank"* ]] || false
 }
 
+@test "relay refuses to carry onto a SOLO target (out of the fleet)" {
+  _install_claude_stub
+  clikae init claude a
+  clikae init claude b
+  clikae solo claude b
+  run clikae relay claude a b
+  [ "$status" -ne 0 ]
+  [[ "$output" == *"SOLO"* ]] || false
+  [[ "$output" == *"--off"* ]] || false
+  [ ! -f "$CLAUDE_STUB_LOG" ]   # the engine was never launched on the solo tank
+}
+
 @test "relay errors when a named profile does not exist" {
   _install_claude_stub
   clikae init claude a

@@ -9,7 +9,7 @@
 # backslash FIRST, then double-quote (order matters). Echoes the result.
 # We substitute with bash parameter expansion, NOT sed — BSD/macOS sed strips
 # backslashes from the replacement string and silently corrupts the script
-# (see HANDOFF §4).
+# (the BSD-sed footgun in HANDOFF's code conventions).
 _app_applescript_escape() {
   local s="$1"
   s="${s//\\/\\\\}"
@@ -33,16 +33,53 @@ _app_shell_squote() {
   printf "'%s'" "$s"
 }
 
-# Is a terminal app installed? Args: <App display name> <bundle id>.
-# Checks the usual /Applications and ~/Applications paths, then Spotlight.
-_app_terminal_installed() {
-  local name="$1" bundle="$2"
-  [ -d "/Applications/$name.app" ] && return 0
-  [ -d "$HOME/Applications/$name.app" ] && return 0
+# Resolve the FULL PATH to an installed terminal app's bundle. Args: <App display
+# name> <bundle id>. Checks the usual /Applications and ~/Applications paths
+# first (cheap, no subprocess), then asks Spotlight, then asks Launch Services
+# directly (covers a Spotlight-excluded volume, and any other install location —
+# the same door System Settings ▸ Privacy & Security uses to find an app to
+# allow). Prints the bundle path and returns 0, or prints nothing and returns 1.
+_app_terminal_bundle_path() {
+  local name="$1" bundle="$2" hit
+  [ -d "/Applications/$name.app" ] && { printf '%s\n' "/Applications/$name.app"; return 0; }
+  [ -d "$HOME/Applications/$name.app" ] && { printf '%s\n' "$HOME/Applications/$name.app"; return 0; }
   if command -v mdfind >/dev/null 2>&1; then
-    [ -n "$(mdfind "kMDItemCFBundleIdentifier == '$bundle'" 2>/dev/null | head -n 1)" ] && return 0
+    hit="$(mdfind "kMDItemCFBundleIdentifier == '$bundle'" 2>/dev/null | head -n 1)"
+    [ -n "$hit" ] && [ -d "$hit" ] && { printf '%s\n' "$hit"; return 0; }
+  fi
+  if command -v osascript >/dev/null 2>&1; then
+    hit="$(osascript -e "POSIX path of (path to application id \"$bundle\")" 2>/dev/null)"
+    hit="${hit%/}"
+    [ -n "$hit" ] && [ -d "$hit" ] && { printf '%s\n' "$hit"; return 0; }
   fi
   return 1
+}
+
+# Is a terminal app installed? Args: <App display name> <bundle id>.
+_app_terminal_installed() {
+  _app_terminal_bundle_path "$1" "$2" >/dev/null
+}
+
+# _app_default_terminal -> the terminal to generate for when nobody said.
+#
+# The old default was a hardcoded `terminal`, so an iTerm2 or Ghostty user got an
+# Apple-Terminal launcher unless they knew about --terminal. $TERM_PROGRAM names
+# the terminal clikae is being RUN in, which is the best available guess at the
+# one you want the .app to open — and it costs nothing to be wrong, because the
+# result is only a default you can override.
+#
+# Two rules keep it honest: a guess is only used if that app is actually
+# installed, and an unsupported terminal falls back to `terminal` rather than
+# failing — `clikae app` should never refuse to make a launcher because of where
+# you happened to type it.
+_app_default_terminal() {
+  case "${TERM_PROGRAM:-}" in
+    iTerm.app)
+      _app_terminal_installed "iTerm" "com.googlecode.iterm2" && { printf 'iterm2\n'; return 0; } ;;
+    ghostty|Ghostty)
+      _app_terminal_installed "Ghostty" "com.mitchellh.ghostty" && { printf 'ghostty\n'; return 0; } ;;
+  esac
+  printf 'terminal\n'
 }
 
 # Render the AppleScript for a target into $1 (a file path).
@@ -80,6 +117,8 @@ _app_render_script() {
       tmpl_content="$(cat "$tmpl")"
       ;;
     *)
+      # cmd_app validates the name up front; this is the belt-and-braces arm for
+      # any caller that reaches the renderer directly.
       log_fail "Unknown --terminal '$target'. Choose: terminal, iterm2, ghostty."
       ;;
   esac
@@ -104,8 +143,54 @@ _app_write_ghostty_conf() {
   } > "$resdir/clikae-ghostty.conf"
 }
 
+# Kept separate so fixtures can supply a terminal icon without installing an app.
+#
+# Resolves the target's bundle via _app_terminal_bundle_path rather than a
+# hardcoded /Applications path — a terminal installed under ~/Applications (or
+# anywhere Spotlight/Launch Services can find it) IS installed, per
+# _app_terminal_installed above, so its icon must be findable too. Before this,
+# the two checks disagreed: a launcher would render for a ~/Applications-only
+# install, then fail to find its own icon and warn "no terminal found" — which
+# was simply false; the terminal was right there.
+_app_terminal_icon() {
+  local name bundle icns app
+  case "$1" in
+    ghostty) name=Ghostty bundle=com.mitchellh.ghostty icns=Ghostty.icns ;;
+    iterm2) name=iTerm bundle=com.googlecode.iterm2 icns=AppIcon.icns ;;
+    terminal) name=Terminal bundle=com.apple.Terminal icns=Terminal.icns ;;
+    *) return 1 ;;
+  esac
+  app="$(_app_terminal_bundle_path "$name" "$bundle")" || return 1
+  printf '%s\n' "$app/Contents/Resources/$icns"
+}
+
+# Icon failure is cosmetic: keep the compiled applet usable.
+_app_install_icon() {
+  local app="$1" icon name
+  icon="$(_app_terminal_icon "$2")"
+  [ -f "$icon" ] || icon="$CLIKAE_ROOT/assets/clikae.icns"
+  if [ ! -f "$icon" ]; then
+    log_warn "No terminal or clikae icon found; leaving the applet icon."
+    return 0
+  fi
+  name="${icon##*/}"
+  if ! cp "$icon" "$app/Contents/Resources/$name" 2>/dev/null; then
+    log_warn "Couldn't copy launcher icon; leaving the applet icon."
+    return 0
+  fi
+  /usr/libexec/PlistBuddy -c "Set :CFBundleIconFile $name" "$app/Contents/Info.plist" 2>/dev/null \
+    || log_warn "Couldn't set launcher icon; leaving the applet icon."
+  # osacompile's applet bundle carries an asset-catalog CFBundleIconName ("applet")
+  # that OUTRANKS CFBundleIconFile on macOS 10.13+. Without this, CFBundleIconFile
+  # above is set correctly but nothing ever reads it, and the .app keeps showing
+  # the AppleScript scroll icon. Delete it so the .icns we just installed becomes
+  # the effective icon. A missing key is not an error (nothing to delete).
+  /usr/libexec/PlistBuddy -c "Delete :CFBundleIconName" "$app/Contents/Info.plist" 2>/dev/null || true
+  return 0
+}
+
 cmd_app() {
-  local cli="" profile="" force=0 out_dir="" board=0 target="${CLIKAE_TERMINAL:-terminal}"
+  local cli="" profile="" force=0 out_dir="" board=0 target="${CLIKAE_TERMINAL:-$(_app_default_terminal)}"
   while [ $# -gt 0 ]; do
     case "$1" in
       -f|--force) force=1; shift ;;
@@ -124,14 +209,25 @@ clikae board (your menu of recent sessions + tanks) so you can pick from there.
 Options:
   --board               Make a launcher for the clikae BOARD (no engine/tank) —
                         a single button that opens the menu.
-  -t, --terminal <app>  Which terminal to open: terminal (default), iterm2,
-                        ghostty. Default can also be set via $CLIKAE_TERMINAL.
+  -t, --terminal <app>  Which terminal to open: terminal, iterm2, ghostty.
+                        Defaults to the terminal you're running in when that's
+                        one of them (else Terminal.app); $CLIKAE_TERMINAL wins
+                        over the guess, and this flag wins over both.
   -f, --force           Overwrite an existing .app at the destination.
   -o, --out <dir>       Where to put the .app. Default: ~/Applications
 
 The window's title is "<CLI> (<tank>)" (or "clikae" for --board) so you can tell
 windows apart. The Ghostty launcher passes its command through a trusted config
 file, so Ghostty never shows the "Allow Ghostty to execute…" dialog.
+
+Ghostty: if Ghostty is already running, the launcher opens its window IN that
+instance through Ghostty's AppleScript API (1.3.0+) — one Dock icon, no "Allow
+execute" dialog. macOS asks once, on first launch, to let the .app control Ghostty
+(Automation permission). If AppleScript isn't available it falls back to a separate
+instance, which works but shows a second Dock icon.
+
+The launcher uses the target terminal’s icon, including with --force. If missing,
+it uses assets/clikae.icns when shipped, else keeps the applet icon with a warning.
 
 macOS only.
 EOF
@@ -147,6 +243,23 @@ EOF
         ;;
     esac
   done
+
+  # Validate the TARGET NAME before anything else touches the store: a mistyped
+  # --terminal is wrong no matter which tank you named, and hearing "profile not
+  # found" first sends you debugging the wrong half of the command. (Whether the
+  # app is INSTALLED is still checked at render time, where the template lives.)
+  case "$target" in
+    terminal|iterm2|ghostty) : ;;
+    warp)
+      # Not "we haven't got round to it": Warp has no documented way to open a
+      # window running a given command. Its URL scheme opens a tab in a directory
+      # and stops; the only command-running door is a Launch Configuration YAML,
+      # a different shape from every other target here and unverifiable on a
+      # machine without Warp. Say that, rather than ship a launcher nobody has
+      # watched work. If you use Warp and know the door: PRs welcome.
+      log_fail "Warp can't be targeted: it has no supported way to open a window running a command. Use --terminal terminal|iterm2|ghostty (the .app still works when you launch it from Warp)." ;;
+    *) log_fail "Unknown --terminal '$target'. Choose: terminal, iterm2, ghostty." ;;
+  esac
 
   [ "$(uname -s)" = "Darwin" ] || log_fail "clikae app is macOS-only. Use \`clikae alias\` on Linux/Windows."
   command -v osacompile >/dev/null 2>&1 || log_fail "osacompile not found (it's a macOS built-in — this is unexpected)."
@@ -193,6 +306,7 @@ EOF
 
   osacompile -o "$app_path" "$tmp_scpt"
   rm -rf "$tmp_dir"
+  _app_install_icon "$app_path" "$target"
   # Ghostty: drop the trusted config into the bundle the script reads via path-to-me,
   # then RE-SEAL. osacompile ad-hoc-signs the bundle; adding a Resource afterwards
   # breaks that seal ("a sealed resource is missing or invalid"), and on Apple
@@ -200,13 +314,14 @@ EOF
   # re-sign ad-hoc so the conf is sealed in and the launcher opens cleanly.
   if [ "$target" = "ghostty" ]; then
     _app_write_ghostty_conf "$app_path" "$title" "$shell_cmd"
-    xattr -cr "$app_path" 2>/dev/null || true
-    if command -v codesign >/dev/null 2>&1; then
-      codesign --force --sign - "$app_path" >/dev/null 2>&1 \
-        || log_warn "Couldn't re-sign the .app — on Apple Silicon, allow it once in System Settings ▸ Privacy & Security."
-    fi
   fi
-  log_ok "Created $app_path"
+  # Every target now has bundle resources/plist edits to seal.
+  xattr -cr "$app_path" 2>/dev/null || true
+  if command -v codesign >/dev/null 2>&1; then
+    codesign --force --sign - "$app_path" >/dev/null 2>&1 \
+      || log_warn "Couldn't re-sign the .app — on Apple Silicon, allow it once in System Settings ▸ Privacy & Security."
+  fi
+  log_done "Created $app_path"
   log_dim "  terminal: $target"
   log_dim "  title   : $title"
   log_dim "  runs    : $shell_cmd"

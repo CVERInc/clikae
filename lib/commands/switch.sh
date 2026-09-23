@@ -91,7 +91,264 @@ _supervise_decision() {
   esac
 }
 
-# _switch_supervise <engine> <tank> <dir> [engine-args...]  (BETA, claude-only)
+# The tmux layer — session creation, the status bar, attach-or-fall-back — lives
+# in lib/core/tmux.sh. It used to live here, which is why burn.sh had to write its
+# own and got it wrong. DESIGN-tmux.md Rule 2 asked for one shared set of exits;
+# this file is now one of its callers rather than its owner.
+
+
+_switch_run_tmux_wrapped() {
+  local engine="$1" tank="$2" d="$3"; shift 3
+  local tank_id="${engine}-${tank}"
+
+  # The tmux session is keyed on WHAT WAS ASKED FOR, not just on the tank.
+  #
+  # Keying it on the tank alone was a real regression, reproduced 2026-08-13: open
+  # `clikae claude x`, then from the board resume a DIFFERENT past session on the
+  # same tank, and the second launch found `ck-claude-x` already running and
+  # attached to it. Two tabs, one screen — and the `--resume <sid>` was dropped in
+  # silence, because nothing was started to receive it.
+  #
+  # A bare `clikae <engine> <tank>` means "take me to my tank" and must keep the
+  # stable name, so leaving and coming back lands in the same place. Passing
+  # anything after `--` means "run the engine with THESE arguments", which a
+  # session started with different ones cannot satisfy. So the argv gets a short
+  # digest appended.
+  #
+  # Identical requests still collide on purpose: resuming the same session id
+  # twice attaches to it, which is exactly the desired answer.
+  #
+  # cksum, not shasum/md5: POSIX, present everywhere, and this is a namespacing
+  # digest — nothing here is a security boundary.
+  local sess_id="$tank_id"
+  if [ "$#" -gt 0 ]; then
+    local _argsum
+    _argsum="$(printf '%s\0' "$@" | cksum 2>/dev/null | cut -d' ' -f1)"
+    [ -n "$_argsum" ] && sess_id="$tank_id-$_argsum"
+  fi
+
+  # What crosses into the session. tmux copies only its `update-environment` list
+  # and inherits everything else from the SERVER's process environment — whoever
+  # started it, not us — so anything the engine needs is named here explicitly.
+  # The SSH agent socket is deliberately NOT in this list: tmux_spawn_session
+  # injects clikae's stable symlink for every caller (DESIGN-tmux Rule 4).
+  local -a spawn_env=(--env "CLIKAE_TANK_NAME=$tank_id" --env "HOME=$HOME")
+  if [ -n "$CLIKAE_HOME" ]; then
+    spawn_env+=(--env "CLIKAE_HOME=$CLIKAE_HOME")
+  fi
+
+  mkdir -p "$HOME/.clikae/state"
+
+  local scrollback_file="$HOME/.clikae/state/${CLIKAE_SESS_PREFIX}$sess_id-$$.scrollback"
+
+  # No tmux, or no terminal to attach one to -> run the engine directly. tmux is a
+  # convenience layer over `clikae run`, never a dependency: a machine without it
+  # (a CI runner, a stripped container) must still switch tanks. Shipped without
+  # this check on 2026-08-11 and CI caught it — with tmux shadowed by a stub that
+  # exits 127, pty-smoke's "launched engine keeps stdout" and "keeps STDERR" both
+  # fail, because the launch went through a tmux that was not there.
+  if ! tmux_usable; then
+    while IFS= read -r kv; do [ -n "$kv" ] && export "${kv%%=*}"="${kv#*=}"; done <<KV
+$(adapter_export_env "$d")
+KV
+    exec "$CLIKAE_BIN" run "$engine" "$tank" -- "$@"
+  fi
+
+  # Settle the wake preference here, while a human is demonstrably present — they
+  # just typed the command. Asking at limit time was the original design and it
+  # could not work: the question would be posed by a watcher in another window,
+  # where nobody would ever see it.
+  wake_ask_once "$engine" "$tank"
+
+  # One resolution for both branches: which session name this id means today,
+  # and whether it is already up. Sessions started before 0.28.3 are still
+  # named `ck-…`, and tmux_sessv finds those too — attaching to the one you
+  # already have is the point of keeping the old prefix readable.
+  local CLIKAE_TMUX_SESS CLIKAE_TMUX_SESS_EXISTS
+  tmux_sessv "$sess_id"
+  # 🔴 EXISTING IS NOT THE SAME AS USABLE. A session whose only window is the
+  # wake waiter has no engine to talk to; attaching to it is how a human ends up
+  # staring at a countdown. Kill it and let the spawn below rebuild — nothing is
+  # lost, the waiter is the only thing in there, and it re-attaches on launch.
+  if [ "$CLIKAE_TMUX_SESS_EXISTS" -eq 1 ] && ! tmux_sess_has_engine "$CLIKAE_TMUX_SESS"; then
+    log_dim "That session had only its wake watcher left — starting the engine again."
+    tmux kill-session -t "=$CLIKAE_TMUX_SESS" 2>/dev/null
+    CLIKAE_TMUX_SESS_EXISTS=0
+  fi
+
+  # Deterministic identity, decided BEFORE the engine ever runs — and only when
+  # a spawn is actually about to happen (never on an attach/reuse: the session
+  # already carries whatever it was stamped with at ITS spawn, and re-stamping
+  # here was the asymmetry a prior review caught — R1-P3-2).
+  #
+  # Two ways a launch can already know its identity:
+  #   - it is a RESUME (or otherwise already carries session-picking argv):
+  #     adapter_sid_from_args reads it straight back out of "$@" — the
+  #     ORIGINAL argv, before anything below appends to it — which is what
+  #     replaces the old CLIKAE_LAUNCH_SID environment variable: that
+  #     variable was exported, never unset, and a tmux SERVER born under it
+  #     handed it to every later session on that server, stamping bare launches
+  #     with a foreign sid (R1-P1-2, DESIGN-tmux.md Rule 7).
+  #   - it is a FRESH start and the engine's adapter defines
+  #     adapter_new_session_args: hand it a uuid clikae generates itself and
+  #     tell the engine to use exactly that id (claude: `--session-id <uuid>`).
+  #     codex/antigravity define no such flag and are left exactly as
+  #     honest-guess as before (DESIGN-tmux.md Rule 2).
+  #
+  # 🔴 adapter_sid_from_args reports a TRI-STATE, not just "found a sid or
+  # not": it returns 0 (with nothing printed) for a resume/continue SHAPE
+  # that names no explicit id (a bare `--resume`/`-r` — the picker — or
+  # `-c`/`--continue`, which resumes whatever claude itself judges most
+  # recent), and only returns 1 for a genuinely fresh launch. This is load-
+  # bearing: claude itself refuses to start when `--session-id` is appended
+  # alongside `--continue`/`--resume` without `--fork-session` ("--session-id
+  # can only be used with --continue or --resume if --fork-session is also
+  # specified" — verified live, claude 2.1.267), so gating the append on
+  # "$_launch_sid is empty" alone (the previous round's bug, R2-P1-2) made
+  # `-- --continue` / `-- -c` / `-- -r <sid>` / `-- --resume` refuse to start
+  # at all — there was no way to tell "fresh, mint one" apart from "already a
+  # resume, just didn't name an id here". $_launch_has_identity is that
+  # distinction.
+  #
+  # A resumed uuid must never affect $sess_id above — it is read from the
+  # ORIGINAL "$@" and appended to a COPY, never fed back into the digest. Doing
+  # that would make every bare launch mint a new session name on every run,
+  # breaking the one guarantee this function's own comment above makes: a bare
+  # `clikae <engine> <tank>` keeps the stable name.
+  local -a _engine_args=("$@")
+  local _launch_sid="" _launch_has_identity=0 _fresh_spawn=0
+  [ "$CLIKAE_TMUX_SESS_EXISTS" -eq 0 ] && _fresh_spawn=1
+
+  if declare -F adapter_sid_from_args >/dev/null 2>&1; then
+    if _launch_sid="$(adapter_sid_from_args "$@" 2>/dev/null)"; then
+      _launch_has_identity=1
+    fi
+  fi
+  if [ "$_fresh_spawn" -eq 1 ] && [ "$_launch_has_identity" -eq 0 ] \
+     && declare -F adapter_new_session_args >/dev/null 2>&1; then
+    local _new_sid
+    _new_sid="$(uuidgen 2>/dev/null || true)"
+    # uuidgen ships with util-linux/macOS but is not a hard dependency of
+    # anything else here — a minimal container without it just degrades to the
+    # guess, same as an engine with no adapter_new_session_args at all.
+    if [ -z "$_new_sid" ] && command -v python3 >/dev/null 2>&1; then
+      _new_sid="$(python3 -c 'import uuid; print(uuid.uuid4())' 2>/dev/null || true)"
+    fi
+    _new_sid="$(printf '%s' "$_new_sid" | LC_ALL=C tr 'A-Z' 'a-z')"
+    if [ -n "$_new_sid" ]; then
+      local _nsline
+      while IFS= read -r _nsline; do
+        [ -n "$_nsline" ] && _engine_args+=("$_nsline")
+      done <<EOF
+$(adapter_new_session_args "$_new_sid" 2>/dev/null || true)
+EOF
+      _launch_sid="$_new_sid"
+    fi
+  fi
+
+  local target_cmd
+  target_cmd="$(printf '%q ' "$CLIKAE_BIN" run "$engine" "$tank" -- "${_engine_args[@]}")"
+  # No -t. This runs INSIDE the pane it is capturing, so the target is implicit —
+  # and naming the SESSION here was silently wrong on tmux 3.4: measured on ubuntu
+  # CI, `capture-pane -p -S - -t <session>` returned 0 bytes while the same
+  # command with no target returned 1717. The scrollback file was therefore empty,
+  # `[ -s ]` was false, and the replay this whole feature exists for never ran on
+  # Linux — for as long as the feature has existed. macOS (3.7b) resolves a
+  # session target to its active pane and hid it completely.
+  target_cmd="trap 'tmux capture-pane -p -S - > \"$scrollback_file\" 2>/dev/null' EXIT; $target_cmd"
+
+  if [ -n "$TMUX" ]; then
+    local current_pane_session
+    current_pane_session="$(tmux display-message -p -t "$TMUX_PANE" '#S' 2>/dev/null || true)"
+    [ -z "$current_pane_session" ] && current_pane_session="$(tmux display-message -p '#S' 2>/dev/null || true)"
+    
+    [ "$CLIKAE_TMUX_SESS_EXISTS" -eq 1 ] || \
+      tmux_spawn_session "${spawn_env[@]}" \
+        --session "$CLIKAE_TMUX_SESS" --window "$engine" -- "bash -c $(_switch_shquote "$target_cmd")"
+    tmux_label "$CLIKAE_TMUX_SESS" "$engine" "$tank"
+    # See tmux_set_session_id (lib/core/tmux.sh) and the identity block above:
+    # only stamp a session we JUST spawned, with whichever id (resumed or
+    # freshly minted) that spawn actually used — never on an attach, which
+    # already carries whatever its own spawn stamped it with.
+    if [ "$_fresh_spawn" -eq 1 ] && [ -n "$_launch_sid" ]; then
+      tmux_set_session_id "$CLIKAE_TMUX_SESS" "$_launch_sid"
+    fi
+    wake_enabled && wake_attach_watcher "$CLIKAE_TMUX_SESS" "$engine" "$tank"
+    # …and give the status row a number to draw. The watcher refreshes the fuel
+    # cache from then on (WAKE_USAGE_INTERVAL), but its first tick is five
+    # minutes out and it only exists when wake is on — so the one-shot is fired
+    # here, for a session we JUST spawned, whatever the wake preference says.
+    # Backgrounded inside wake_usage_prime: the launch path pays nothing.
+    [ "$_fresh_spawn" -eq 1 ] && wake_usage_prime "$engine" "$tank"
+
+    local clients
+    clients="$(tmux list-clients -t "=$current_pane_session" 2>/dev/null || true)"
+    if [ -n "$clients" ]; then
+      exec tmux switch-client -t "=$CLIKAE_TMUX_SESS"
+    fi
+    # No client on this pane's session to move — we are inside a DETACHED one (a
+    # burn wrapper, an agent run, a pane whose client went away). The engine has
+    # already been started in $CLIKAE_TMUX_SESS by this point, so returning here in
+    # silence reads as "the command did nothing" while a session quietly holds it
+    # (and spends the account's quota). Say where it went instead. Not an attach:
+    # attaching from inside tmux is what `switch-client` exists to avoid.
+    log_info "Started $engine/$tank in tmux session $CLIKAE_TMUX_SESS (no client here to switch)."
+    log_dim  "Reach it with:  tmux switch-client -t $CLIKAE_TMUX_SESS   (or: tmux attach -t $CLIKAE_TMUX_SESS)"
+  else
+    local started_here=0
+    if [ "$CLIKAE_TMUX_SESS_EXISTS" -eq 0 ]; then
+      tmux_spawn_session "${spawn_env[@]}" \
+        --session "$CLIKAE_TMUX_SESS" --window "$engine" -- "bash -c $(_switch_shquote "$target_cmd")"
+      tmux_label "$CLIKAE_TMUX_SESS" "$engine" "$tank"
+      [ -n "$_launch_sid" ] && tmux_set_session_id "$CLIKAE_TMUX_SESS" "$_launch_sid"
+      started_here=1
+    fi
+    # OUTSIDE the spawn guard, like the branch above. wake_attach_watcher returns
+    # early when a `wake` window is already there, so calling it every time costs
+    # nothing and heals a session that lost its waiter — which is exactly what
+    # happens when tmux_sessv renames one off the old prefix: the old waiter had
+    # the old name in its command and exits when that name stops resolving.
+    wake_enabled && wake_attach_watcher "$CLIKAE_TMUX_SESS" "$engine" "$tank"
+    # The fuel readout's one-shot, same as the branch above — but gated on
+    # `started_here`, which is THIS branch's name for "we just spawned it".
+    # Re-attaching to a session that is already running must not spend a vendor
+    # call: the watcher inside it is already refreshing on its own cadence.
+    [ "$started_here" -eq 1 ] && wake_usage_prime "$engine" "$tank"
+
+    # Whether this terminal can host tmux is tmux's call, not ours. `new-session -d`
+    # happily succeeds under a TERM tmux cannot draw on (TERM=dumb: "open terminal
+    # failed: terminal does not support clear") and only the attach fails — by which
+    # point the engine is already running detached, invisible, spending quota. Ask by
+    # attaching, and if that is refused put back exactly what we started.
+    # An earlier version pre-flighted with `tput clear`, which is a PROXY for tmux's
+    # answer: PineNote's ssh sessions arrive as TERM=dumb, so that guard would have
+    # quietly taken roaming away from the one device this feature exists for.
+    local attach_rc=0
+    tmux_attach "$CLIKAE_TMUX_SESS" "$started_here" "$scrollback_file" || attach_rc=$?
+    # 2 means the tmux SERVER went away while we were in it — not that this
+    # terminal cannot host tmux. Falling through to `run` here is what left three
+    # live sessions permanently outside tmux on 2026-08-21: reachable only from
+    # the tab they happened to be in, absent from the board, unreachable from
+    # another machine. Re-enter the tmux path instead, once — a fresh session is
+    # the thing the human was asking for, and CLIKAE_TMUX_REHOSTED stops a broken
+    # tmux from turning this into a loop.
+    if [ "$attach_rc" -eq 2 ] && [ -z "${CLIKAE_TMUX_REHOSTED:-}" ]; then
+      log_warn "The tmux server went away. Starting a fresh session rather than leaving this outside tmux."
+      export CLIKAE_TMUX_REHOSTED=1
+      exec "$CLIKAE_BIN" "$engine" "$tank" -- "$@"
+    fi
+    if [ "$attach_rc" -ne 0 ]; then
+      [ "$attach_rc" -eq 2 ] && \
+        log_warn "The tmux server went away again; running outside tmux. This session will not appear in \`tmux ls\`."
+      while IFS= read -r kv; do [ -n "$kv" ] && export "${kv%%=*}"="${kv#*=}"; done <<KV
+$(adapter_export_env "$d")
+KV
+      exec "$CLIKAE_BIN" run "$engine" "$tank" -- "$@"
+    fi
+  fi
+}
+
+# _switch_supervise <engine> <tank> <dir> [engine-args...]  (BETA, claude + codex)
 # Run the engine as a CHILD (so clikae stays the parent), and when it exits, if
 # THIS tank just hit its limit, carry onward to the next tank in the burn order
 # per the autonomy level. Same-engine → seamless resume (relay); cross-engine →
@@ -101,15 +358,23 @@ _switch_supervise() {
   local engine="$1" tank="$2" dir="$3"; shift 3
   # Parent ignores INT so Ctrl-C reaches the engine; we resume after it exits.
   trap '' INT
-  ( trap - INT; adapter_run "$dir" "$@" ) || true
+  ( trap - INT; _switch_run_tmux_wrapped "$engine" "$tank" "$dir" "$@" ) || true
   trap - INT
 
   # Only act if THIS tank is genuinely dry as of now (self-clears if it recovered).
-  # NB: claude's dry state lives in its transcript (scannable + self-clearing on
-  # the next successful turn), so we deliberately do NOT also write dry_store here —
-  # a 6h store marker would mask a real recovery. dry_store is for engines whose
-  # limit is NOT in a transcript (codex, via burn).
-  limit_profile_dry "$engine" "$dir" >/dev/null 2>&1 || return 0
+  # NB: both engines' dry state lives in their own transcript (scannable +
+  # self-clearing on the next successful turn), so we deliberately do NOT also
+  # write dry_store here — a store marker would mask a real recovery. dry_store
+  # stays for what a transcript can't cover (a headless codex exec, via burn).
+  local reset=""
+  reset="$(limit_profile_dry "$engine" "$dir" 2>/dev/null)" || return 0
+
+  # Offered before the carry, because the two answer different questions and the
+  # user only ever gets asked the second one: staying put is staying put, being
+  # asked where to go next belongs to leaving. Silent unless the session is still
+  # alive — this path also runs after the engine EXITED, and an exited engine
+  # took its conversation with it, so there is nothing left to resume.
+  wake_offer "$engine" "$tank" "$reset"
 
   local _next ne nt
   _next="$(next_tank "$engine" "$tank")"
@@ -149,6 +414,65 @@ EOF
   history_log "auto: $engine/$tank dry → $ne/$nt"
   printf '%b↻ %s/%s hit its limit — carrying on to %s/%s%b\n' "$__C_GREEN" "$engine" "$tank" "$ne" "$nt" "$__C_RESET"
   if [ "$same" = "1" ]; then
+    # tank_id is local to _switch_run_tmux_wrapped (which ran in a subshell), so it
+    # is NOT in scope here. Rebuild it from engine/tank — otherwise the carry made a
+    # session literally named "ck-", a scrollback file "ck--$$", and an empty
+    # CLIKAE_TANK_NAME below.
+    local tank_id="${engine}-${tank}"
+    local target_cmd scrollback_file="$HOME/.clikae/state/${CLIKAE_SESS_PREFIX}$tank_id-$$.scrollback"
+    target_cmd="$(printf '%q ' "$CLIKAE_BIN" relay "$engine" "$tank" "$nt" -y)"
+  # No -t. This runs INSIDE the pane it is capturing, so the target is implicit —
+  # and naming the SESSION here was silently wrong on tmux 3.4: measured on ubuntu
+  # CI, `capture-pane -p -S - -t <session>` returned 0 bytes while the same
+  # command with no target returned 1717. The scrollback file was therefore empty,
+  # `[ -s ]` was false, and the replay this whole feature exists for never ran on
+  # Linux — for as long as the feature has existed. macOS (3.7b) resolves a
+  # session target to its active pane and hid it completely.
+    target_cmd="trap 'tmux capture-pane -p -S - > \"$scrollback_file\" 2>/dev/null' EXIT; $target_cmd"
+    
+    local -a relay_env=(--env "CLIKAE_TANK_NAME=$tank_id" --env "HOME=$HOME")
+    if [ -n "$CLIKAE_HOME" ]; then
+      relay_env+=(--env "CLIKAE_HOME=$CLIKAE_HOME")
+    fi
+    # No SSH_AUTH_SOCK here any more. This site used to pass the symlink path
+    # WITHOUT the `ln -sf` that creates it — the interactive path did both, the
+    # carry path only the second half, so a carried session could be handed a
+    # socket that was never linked. tmux_spawn_session does both, for everyone.
+
+    # The carry runs unattended by definition — the tank went dry mid-session — so
+    # every guard the plain switch path grew applies here too, and this site had
+    # none of them: no tmux check, a capture without -S - (last screen only), and
+    # an attach with nothing to catch its refusal.
+    #
+    # It is also the path most likely to CREATE the server, precisely because
+    # nobody is watching. That is how a server ends up born from a context holding
+    # no file-access grant, which no later call can repair (DESIGN-tmux Rule 7).
+    if tmux_usable; then
+      local started_here=0
+      local CLIKAE_TMUX_SESS CLIKAE_TMUX_SESS_EXISTS
+      tmux_sessv "$tank_id"
+      if [ "$CLIKAE_TMUX_SESS_EXISTS" -eq 1 ] && ! tmux_sess_has_engine "$CLIKAE_TMUX_SESS"; then
+        tmux kill-session -t "=$CLIKAE_TMUX_SESS" 2>/dev/null
+        CLIKAE_TMUX_SESS_EXISTS=0
+      fi
+      if [ "$CLIKAE_TMUX_SESS_EXISTS" -eq 0 ]; then
+        tmux_spawn_session "${relay_env[@]}" \
+          --session "$CLIKAE_TMUX_SESS" --window "$engine" -- "bash -c $(_switch_shquote "$target_cmd")"
+        tmux_label "$CLIKAE_TMUX_SESS" "$engine" "$tank"
+        started_here=1
+      fi
+      local roam_rc=0
+      tmux_attach "$CLIKAE_TMUX_SESS" "$started_here" "$scrollback_file" || roam_rc=$?
+      [ "$roam_rc" -eq 0 ] && return 0
+      # Same two-failures-one-code problem as the launch path above. The relay
+      # below is the right answer for a terminal tmux cannot draw on; it is not
+      # the right answer for a server that died, but re-entering mid-roam is a
+      # different question than re-entering a launch. Say so rather than
+      # dropping out of tmux in silence — being silent is what made this cost a
+      # whole afternoon to find.
+      [ "$roam_rc" -eq 2 ] && \
+        log_warn "The tmux server went away mid-roam; continuing outside tmux. Reattach with: clikae $engine $nt"
+    fi
     exec "$CLIKAE_BIN" relay "$engine" "$tank" "$nt" -y
   else
     exec "$CLIKAE_BIN" handoff "$engine" "$tank" --to "$ne/$nt"
@@ -220,18 +544,23 @@ cmd_switch() {
   # per-tank opt-in (lib/core/fleet_mcp.sh; no-op for solo tanks, an empty
   # store, or engines without an adapter_mcp_config_file hook).
   fleet_mcp_prelaunch "$engine" "$tank" "$d"
+  # Fleet hooks: the same default-on rule, for the other half of a tank's own
+  # engine config (lib/core/fleet_hooks.sh, #141).
+  fleet_hooks_prelaunch "$engine" "$tank" "$d"
 
   # BETA supervised launch: when launched through clikae, watch THIS tank and, on a
-  # dry limit, carry onward per `clikae auto`. claude-only for now — its limit is
-  # detectable from the transcript; other engines exec unchanged. (docs/DESIGN-runtime)
-  if [ "$engine" = "claude" ]; then
+  # dry limit, carry onward per `clikae auto`. claude and codex only: both
+  # persist their limit to a transcript, so after the engine exits we can tell
+  # whether THIS tank is genuinely out of fuel rather than guessing. agy has no
+  # per-tank signal to read (one global login), so it is not supervised.
+  if [ "$engine" = "claude" ] || [ "$engine" = "codex" ]; then
     _switch_require_binary "$engine" "$tank"
     _switch_supervise "$engine" "$tank" "$d" "${passthru[@]}"
     return $?
   fi
 
   _switch_require_binary "$engine" "$tank"
-  adapter_run "$d" "${passthru[@]}"   # execs
+  _switch_run_tmux_wrapped "$engine" "$tank" "$d" "${passthru[@]}"   # execs
 }
 
 # clikae switches accounts; it does NOT install the engine. If the binary isn't on
@@ -268,6 +597,53 @@ _switch_run_ephemeral() {
   stash="$mem.clikae-ephemeral-stash"
 
   mkdir -p "$(dirname "$mem")"
+
+  # 🔴 ONE EPHEMERAL PER MEMORY SLOT, and the slot is keyed on $PWD.
+  #
+  # Two ephemeral runs in the same directory target the same <mem> path, and the
+  # second does not merely fail to link: its self-heal step below reads the FIRST
+  # run's symlink as a crashed leftover, removes it, and moves the stash back —
+  # out from under a live engine. That is the 2026-07-19 incident, and parallel
+  # dispatch reaches it on purpose rather than by accident.
+  #
+  # Measured 2026-08-15: two cold reads launched together in one directory, one
+  # died with a bare `ln:` error and no explanation. Three launched in three
+  # directories all succeeded, left no residue, and wrote no transcript — which
+  # is the shape agents should use, so the failure has to say that rather than
+  # leak the first shell error that happened to surface.
+  #
+  # Same lock mechanism as burn's GC (DESIGN-tmux Rule 6): an fd, held for the
+  # life of the process, never unlinked.
+  #
+  # 🔴 The lock lives under $HOME/.clikae/state (0700), NOT world-writable /tmp.
+  # The name is predictable, so in /tmp another local user could plant it as a
+  # symlink (our `exec 8>` would then truncate the target) or as a plain file the
+  # clean GC reads as a dead lock — killing your tmux session and deleting your
+  # state files. A private dir removes both, and sidesteps macOS's /tmp purge.
+  local lock_dir="$HOME/.clikae/state"
+  mkdir -p "$lock_dir" 2>/dev/null || true
+  chmod 0700 "$lock_dir" 2>/dev/null || true
+  local slot_lock
+  slot_lock="$lock_dir/${CLIKAE_SESS_PREFIX}ephem-slot-$(printf '%s' "$mem" | cksum | cut -d' ' -f1).lock"
+  # 🔴 `lockf -k`. Without -k the lock does not lock: measured 2026-08-15, two
+  # processes both got rc=0 from `lockf -t 0 <fd>` on the same file. -k keeps the
+  # file on release, and the second holder then gets 75 (EX_TEMPFAIL) — which is
+  # what DESIGN-tmux Rule 6 already wrote down after burn's GC hit the same
+  # thing. A lock written without it is a guard that is silent on every input.
+  local _lrc=0
+  exec 8>"$slot_lock"
+  if command -v flock >/dev/null 2>&1; then
+    flock -n 8 2>/dev/null || _lrc=$?
+  else
+    lockf -k -t 0 8 2>/dev/null || _lrc=$?
+  fi
+  if [ "$_lrc" -ne 0 ]; then
+    log_fail "--ephemeral: another ephemeral run already holds this directory's memory slot.
+         Parallel cold reads need ONE WORKING DIRECTORY EACH — the slot is keyed on \$PWD,
+         so runs sharing a directory fight over the same memory link.
+         Give each run its own scratch dir (see AGENTS.md § dispatching cold readers)."
+  fi
+
   # A Soul-shared slot is a symlink INTO $CLIKAE_HOME/souls — remember its target
   # so the exit trap can re-link it. (Without this, an ephemeral run on a shared
   # tank silently un-shared this directory: the link read as a crashed run's
@@ -289,6 +665,8 @@ _switch_run_ephemeral() {
   # Cleanup on exit, with literal paths captured now (survives scope). The parent
   # ignores INT so Ctrl-C reaches the engine; cleanup fires on the parent's exit.
   # Restore order: stashed own memory first; else re-link a Soul-shared slot.
+  # #61 round-4 P2-1: this replaces bin/clikae's own EXIT trap, so it chains
+  # the same sentinel cleanup that trap would have run.
   # shellcheck disable=SC2064
   trap "rm -f '$mem'; if [ -d '$stash' ]; then mv '$stash' '$mem'; elif [ -n '$soul_tgt' ]; then ln -s '$soul_tgt' '$mem'; fi; rm -rf '$throwaway'" EXIT
   # A hard terminal close (SIGHUP) or a SIGTERM would otherwise kill the parent
@@ -301,8 +679,28 @@ _switch_run_ephemeral() {
   trap 'exit 143' TERM
   trap '' INT
 
-  log_dim "ephemeral: this session's memory is a throwaway — nothing here is remembered."
-  log_dim "(login & transcript are normal; the tank's real memory is untouched.)"
+  # Memory was only ever ONE of the channels a session inherits. Ask the adapter
+  # for the per-run flags that close the others (skills, the fleet's MCP servers,
+  # and — headless only — writing a transcript at all). Per-run on purpose: the
+  # alternative, temporarily rewiring the tank's own skills symlink, would mutate
+  # a tank another session may be live on, which is the `memory isolate` mistake.
+  local -a eph=()
+  if declare -F adapter_ephemeral_flags >/dev/null 2>&1; then
+    # Claude Code only honours --no-session-persistence with --print, so tell the
+    # adapter which shape this run is.
+    local headless=0 a
+    for a in "$@"; do case "$a" in -p|--print) headless=1; break ;; esac; done
+    while IFS= read -r -d '' a; do eph+=("$a"); done < <(adapter_ephemeral_flags "$headless")
+    if [ "$headless" -eq 1 ]; then
+      log_dim "ephemeral: throwaway memory · no skills · no shared MCP · no transcript written."
+    else
+      log_dim "ephemeral: throwaway memory · no skills · no shared MCP."
+      log_dim "(login is normal, and an INTERACTIVE run still writes a transcript to the tank — incognito here means it doesn't know you, not that it never happened.)"
+    fi
+  else
+    log_dim "ephemeral: this session's memory is a throwaway — nothing here is remembered."
+    log_dim "(login & transcript are normal; the tank's real memory is untouched.)"
+  fi
   # Run as a CHILD (subshell exec), so the parent resumes and the EXIT trap fires.
-  ( adapter_run "$d" "$@" ) || true
+  ( adapter_run "$d" "${eph[@]}" "$@" ) || true
 }

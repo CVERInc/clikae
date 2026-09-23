@@ -1,13 +1,125 @@
 #!/usr/bin/env bash
-# Single entry point — the gating checks GitHub Actions runs (shellcheck + bats).
-# The CI also runs a macOS/Linux smoke matrix and an informational Windows Pester
-# job; those stay server-side. shellcheck severity=warning matches the CI action.
+# Single entry point — the gating checks GitHub Actions runs (shellcheck + bats
+# + pty smoke). The CI also runs a macOS/Linux smoke matrix and an informational
+# Windows Pester job; those stay server-side. shellcheck severity=warning
+# matches the CI action.
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
+# 🔴 ONE SUITE AT A TIME ON THIS MACHINE.
+#
+# Some tests read the REAL process table: clean's live guard runs
+# `ps -axo command=` so it can never offer a session a process still has open.
+# Two copies of this suite therefore share a ruler that the other one moves —
+# suite A's `clikae` processes appear in suite B's snapshot, the fixtures use
+# fixed session ids, and B decides those sessions are live and skips the rows
+# the test is asserting on.
+#
+# That is not hypothetical, and it is not rare. The pre-commit hook runs this
+# suite and so does pre-push, so `git commit && git push` overlaps them by
+# construction. Reproduced 2026-08-16 by starting a second run 25s into the
+# first: round 2 of 6 turned BOTH runs red, four clean.bats failures in one and
+# two in the other, every one of them `[ "$status" -eq 0 ]` on a `clikae clean`.
+# It is also the best explanation for a single unexplained pre-push red four
+# days of investigation could not otherwise reproduce in ~218 isolated runs.
+#
+# So: wait for the other run rather than racing it, and say what is happening.
+# A test suite that is red for a reason outside the code teaches you to ignore
+# red, which is the one thing a gate cannot afford.
+# 🔴 The re-exec below re-enters this script, so it MUST be told not to lock
+# again — the first draft had no such marker and would have recursed until the
+# process table said no.
+if [ "${1:-}" = "--locked" ]; then
+  shift
+  # Tell the bats files they are the run that HOLDS the lock. Without this they
+  # would probe it, find it busy, and refuse the suite they are part of.
+  export CLIKAE_SUITE_LOCKED=1
+else
+# Overridable so the tests that exercise the door can own their premise: a check
+# for "nothing else is running" cannot be run by the thing that is running.
+_TEST_LOCK="${CLIKAE_SUITE_LOCK:-${TMPDIR:-/tmp}/clikae-test-suite.lock}"
+if command -v lockf >/dev/null 2>&1; then
+  # -k: hold the lock for the whole command. Without it two processes both get 0.
+  if ! lockf -k -t 0 "$_TEST_LOCK" true 2>/dev/null; then
+    echo "→ another clikae test suite is running on this machine; waiting for it"
+    echo "  (they share the real process table — see the note in scripts/test.sh)"
+  fi
+  exec lockf -k -t 900 "$_TEST_LOCK" "$0" --locked "$@"
+elif command -v flock >/dev/null 2>&1; then
+  if ! flock -n "$_TEST_LOCK" true 2>/dev/null; then
+    echo "→ another clikae test suite is running on this machine; waiting for it"
+  fi
+  exec flock -w 900 "$_TEST_LOCK" "$0" --locked "$@"
+fi
+fi
+
 echo "→ shellcheck (severity=warning)"
-shellcheck -S warning bin/clikae install.sh
-find lib tests -name '*.sh' -print0 | xargs -0 shellcheck -S warning
+# NB: this script lints ITSELF too. It did not until 2026-07-27, and the gap was
+# not theoretical: a prose comment here that happened to begin with the word
+# "shellcheck" was parsed as a directive (SC1072/SC1073) and broke CI for two
+# releases, while every local run stayed green — because the only file the gate
+# never checked was the gate. CI scans the whole tree; make the local run match.
+shellcheck -S warning bin/clikae install.sh "$0"
+# `.bats` as well as `.sh`. Round-8 fix review P3-3: this read `find lib tests
+# scripts -name '*.sh'`, which LOOKS like it covers tests/ and does not — two
+# findings this branch introduced in .bats files sat under a green gate, and
+# the CI action does not scan .bats either (ci.yml has its own step now, so
+# the two match by construction rather than by remembering). shellcheck reads
+# the bats dialect off the extension; no -s override, and `run`/`@test` are
+# understood natively.
+# One shellcheck PROCESS PER FILE (`-n 1`), not one process for the whole tree.
+# The linter's memory grows with everything it was handed in one call: measured
+# 2026-09-22, the single-process form reached 3.7 GB RSS on this tree and, with
+# a second copy running in another worktree, pushed a 16 GB machine into 4 GB of
+# swap — the same path as the 2026-09-11 watchdog panic. Per-file, the peak is
+# the largest single file; the findings are identical, since shellcheck does
+# not analyse across files that are not `source`d with a directive.
+find lib tests scripts \( -name '*.sh' -o -name '*.bats' \) -print0 \
+  | xargs -0 -n 1 shellcheck -S warning
+
+echo "→ doc names (every function a doc names must exist)"
+bash "$(dirname "$0")/doc-names-exist.sh"
+
 echo "→ bats"
-bats -r --print-output-on-failure tests/bats
+# 🔴 STRIP THE LAUNCHING clikae's ENVIRONMENT. The gate is usually run from
+# inside a clikae session, which exports CLIKAE_LIB / CLIKAE_ROOT / CLIKAE_BIN /
+# CLIKAE_VERSION / CLIKAE_TANK_NAME pointing at the INSTALLED clikae — 0.27.0 on
+# the maintainer's machine while the tree said 0.28.2. A test that forgot to pin
+# one of those sourced library code from a five-version-old release and passed,
+# and CI (where nothing is installed) went red for three commits before anyone
+# looked. helpers.bash pins them now; this makes the gate match CI by
+# construction rather than by remembering to.
+env -u CLIKAE_LIB -u CLIKAE_ROOT -u CLIKAE_BIN -u CLIKAE_VERSION -u CLIKAE_TANK_NAME \
+  bats -r --print-output-on-failure tests/bats
+
+# The third leg exists because the first two are structurally blind to the TUI:
+# ShellCheck reads source, bats never presses a key. Every board regression of
+# the last year lived in that gap — most expensively the `exec … 2>/dev/null`
+# family, which discarded the board's stderr (invisible prompts, muted errors,
+# and a dead stderr handed to the launched engine) while this gate stayed green.
+# pty-smoke drives the real binary on a real pty in a throwaway $HOME.
+echo "→ pty smoke (interactive screens — the layer bats cannot reach)"
+if command -v python3 >/dev/null 2>&1; then
+  python3 tests/tools/pty-smoke.py all
+else
+  # Loud, never silent: a skipped leg that says nothing reads as a passed one.
+  echo "   ⚠️  SKIPPED — python3 not found."
+  echo "   ⚠️  The board / resume / prompt key loops were NOT exercised."
+fi
+
 echo "✅ ALL GREEN"
+
+# Stamp what just passed, so a push of the SAME content does not re-run 7 minutes
+# of suite to reach the same answer. hooks/pre-push reads this.
+#
+# Only when the working tree is CLEAN. A dirty tree means the suite exercised
+# content that is not what a push would send, so the stamp would be a claim about
+# something nobody tested — the one way this could weaken the gate rather than
+# just speed it up.
+if git rev-parse --git-dir >/dev/null 2>&1 && [ -z "$(git status --porcelain 2>/dev/null)" ]; then
+  _gd="$(git rev-parse --absolute-git-dir 2>/dev/null || true)"
+  _tree="$(git rev-parse 'HEAD^{tree}' 2>/dev/null || true)"
+  if [ -n "$_gd" ] && [ -n "$_tree" ]; then
+    printf '%s %s\n' "$_tree" "$(date +%s)" > "$_gd/clikae-gate-pass" 2>/dev/null || true
+  fi
+fi

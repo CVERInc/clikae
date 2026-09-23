@@ -93,7 +93,30 @@ _decode() {
 }
 
 @test "tui: bracketed-paste markers (ESC[200~/201~) are unknown, not keystrokes" {
+  # An EMPTY paste is one no-op. (This used to assert TWO unknowns — the markers
+  # decoded individually — which left the PAYLOAD between them being read as real
+  # keys. See the next test for why that mattered.)
   run _decode '\033[200~\033[201~'
-  [ "$status" -eq 0 ]
-  [ "$output" = "$(printf 'unknown\nunknown')" ]
+  [ "$status" -eq 0 ] || false
+  [ "$output" = "unknown" ] || false
+}
+
+@test "tui: a paste's PAYLOAD is swallowed — the whole paste is one no-op" {
+  # 🔴 The vulnerability this closes, reproduced on a real pty before the fix:
+  # pasting `dy\r` into the board ran `d` (delete tank) and then answered its
+  # [y/N] prompt — the tank was rm -rf'd, not moved to the Trash. Decoding only
+  # the fences is not enough; everything between them must never reach a caller
+  # as a keystroke. One paste in, ONE `unknown` out, whatever it contained.
+  run _decode '\033[200~dy\r\033[201~'
+  [ "$status" -eq 0 ] || false
+  [ "$output" = "unknown" ] || false
+}
+
+@test "tui: a paste containing an ESC sequence is still one no-op" {
+  # Payload bytes must not be re-entered into the decoder — an embedded arrow key
+  # or a nested-looking fence must not end the swallow early or leak a keystroke.
+  run _decode '\033[200~a\033[Ab\033[201~q'
+  [ "$status" -eq 0 ] || false
+  # the paste collapses to one unknown; the `q` typed AFTER it still arrives
+  [ "$output" = "$(printf 'unknown\nq')" ] || false
 }

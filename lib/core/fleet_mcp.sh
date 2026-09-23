@@ -39,6 +39,36 @@
 fleet_mcp_root()       { printf '%s/fleet-mcp\n' "$CLIKAE_HOME"; }
 fleet_mcp_store_path() { printf '%s/%s.json\n' "$(fleet_mcp_root)" "$1"; }
 
+# fleet_mcp_missing <engine> <tank dir> -> the name of every fleet-shared MCP
+# server this tank's config does NOT have, one per line. Read-only, so
+# `clikae doctor` (#141) can report the gap without becoming a writer; the
+# answer is derived from the SAME store and the SAME config file the merge
+# above uses, never from a second idea of where either lives.
+#
+# Silent (rc 0) when jq is missing, the store is empty, the engine has no
+# adapter_mcp_config_file hook — or the tank has no config file yet. That last
+# one is deliberate: a tank the engine has never written is not MISSING its
+# shared servers, it simply has nowhere to put them until its first launch,
+# and prelaunch self-heals it then. A line nobody can act on is noise.
+fleet_mcp_missing() {
+  local engine="$1" cfg="$2" store target
+  command -v jq >/dev/null 2>&1 || return 0
+  store="$(fleet_mcp_store_path "$engine")"
+  [ -s "$store" ] || return 0
+  target="$(_fleet_mcp_config_file "$cfg" 2>/dev/null || true)"
+  [ -n "$target" ] && [ -f "$target" ] || return 0
+  jq -rn --slurpfile shared "$store" --slurpfile current "$target" '
+    ($shared[0] // {}) as $s | ($current[0] // {}) as $t |
+    if ($s | type) != "object" or ($t | type) != "object" then empty
+    else ($t.mcpServers // {}) as $have |
+      # `. as $n` FIRST: inside `$have | has(.)` the dot is $have, not the
+      # server name, and `has` on an object argument is an error — which this
+      # swallows, so the check would report nothing missing, always.
+      $s | keys[] | . as $n | select(($have | has($n)) | not)
+    end
+  ' 2>/dev/null || true
+}
+
 _fleet_mcp_require_jq() {
   command -v jq >/dev/null 2>&1 && return 0
   log_err "clikae mcp needs 'jq' to safely merge MCP server config (not installed)."
@@ -56,7 +86,15 @@ _fleet_mcp_config_file() {
 }
 
 # Optional hook: does every non-solo <engine> launch merge in the fleet-wide MCP
-# store? Called from switch.sh / run.sh right where soul_prelaunch is called.
+# store? Called from switch.sh / run.sh / relay.sh / burn.sh / mcp.sh, right
+# where soul_prelaunch is called — plus mcp.sh, which fans the store into tanks
+# rather than launching one. resume.sh is absent on purpose: it hands off to
+# cmd_switch, which does both.
+#
+# 🔴 Keep this list true. It named only switch and run until 2026-08-15, by which
+# point relay had the call and burn did not — and a docstring that enumerates
+# call sites is the thing an audit reads instead of the code, so a stale one
+# hides exactly the gap it exists to expose.
 # No-op (and never fails the launch) when: the tank is solo, the store is
 # empty/absent, jq isn't installed, or the engine has no adapter_mcp_config_file
 # hook (nothing to merge into).
@@ -69,17 +107,21 @@ fleet_mcp_prelaunch() {
   local target; target="$(_fleet_mcp_config_file "$cfg" 2>/dev/null || true)"
   [ -n "$target" ] && [ -f "$target" ] || return 0
 
+  # Decide the no-op INSIDE jq: emit nothing when there is nothing new to fan in.
+  # The old byte-`cmp` never matched — jq reindents the object and drops the
+  # trailing newline the file is written with — so a tank's .claude.json was
+  # rewritten (its inode replaced by `mv`) on EVERY launch, racing any live
+  # session on the same tank. Keys the tank already has are never touched, so the
+  # only reason to write is a genuinely new server: `$new` non-empty.
   local merged
   merged="$(jq -n --slurpfile shared "$store" --slurpfile target "$target" '
     ($shared[0]) as $s | ($target[0]) as $t |
     ($t.mcpServers // {}) as $existing |
     ($s | to_entries | map(select(.key as $k | ($existing | has($k)) | not)) | from_entries) as $new |
-    $t + {mcpServers: ($existing + $new)}
+    if ($new | length) == 0 then empty
+    else $t + {mcpServers: ($existing + $new)} end
   ' 2>/dev/null)" || return 0
-  [ -n "$merged" ] || return 0
+  [ -n "$merged" ] || return 0   # nothing new to add (or jq failed) → leave the file
 
-  # Skip the write if nothing would actually change (avoid needless mtime churn
-  # on a file every launch touches).
-  printf '%s' "$merged" | cmp -s - "$target" 2>/dev/null && return 0
   printf '%s\n' "$merged" > "$target.tmp" && mv "$target.tmp" "$target"
 }

@@ -1,0 +1,6 @@
+# tmux options DESIGN-tmux names but clikae deliberately does not set.
+# One per line: <option> <reason>. An exemption without a reason is a hiding place.
+exit-empty  tmux's own default and the REASON Rule 1 chains options into new-session; clikae relies on it rather than setting it
+remain-on-exit  named in Rule 2b only as an approach that was considered and rejected for the Linux capture gap
+aggressive-resize  named in Rule 1's receipts as context for window-size; not clikae's to set
+default-size  named in Rule 1's receipts as what a window falls back to; setting it would defeat window-size

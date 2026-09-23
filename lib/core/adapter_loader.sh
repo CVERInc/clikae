@@ -44,20 +44,26 @@ _clikae_mtime() { stat -c '%Y' "$1" 2>/dev/null || stat -f '%m' "$1" 2>/dev/null
 newest_transcript_tank() {
   local engine="$1"
   [ -f "$CLIKAE_LIB/adapters/$engine.sh" ] || return 0
-  local root; root="$(profiles_root)/$engine"
-  [ -d "$root" ] || return 0
   (
     load_adapter "$engine" >/dev/null 2>&1 || exit 0
     declare -F adapter_transcript_path >/dev/null 2>&1 || exit 0
-    local pdir tank tpath mt best="" best_mt=0
-    for pdir in "$root"/*/; do
-      [ -d "$pdir" ] || continue
-      tank="$(basename "$pdir")"
-      tpath="$(adapter_transcript_path "${pdir%/}" 2>/dev/null || true)"
+    # #61 round-1 P2-6: used to be its own `for … in profiles_root/$engine/
+    # */` — the walker P2-6 flags as "the closest to a P1", since this
+    # function NAMES a tank that switch/relay/handoff then LAUNCH. Routed
+    # through tanks_for_engine (lib/core/profile_store.sh) so a stray
+    # non-tank directory holding a transcript-shaped file can never win a
+    # source-detection race and get switched into.
+    local tank pdir tpath mt best="" best_mt=0
+    while IFS= read -r tank; do
+      [ -n "$tank" ] || continue
+      pdir="$(profile_dir "$engine" "$tank")"
+      tpath="$(adapter_transcript_path "$pdir" 2>/dev/null || true)"
       [ -n "$tpath" ] && [ -f "$tpath" ] || continue
       mt="$(_clikae_mtime "$tpath")"
       if [ "$mt" -gt "$best_mt" ]; then best_mt="$mt"; best="$tank"; fi
-    done
+    done <<EOF
+$(tanks_for_engine "$engine")
+EOF
     if [ -n "$best" ]; then printf '%s\t%s\n' "$best" "$best_mt"; fi
   )
 }
@@ -170,16 +176,34 @@ load_adapter() {
   # OPTIONAL ones (adapter_relay, adapter_start_with_prompt, …) would otherwise
   # leak across adapters — e.g. `clikae handoff <a> --to <b>` loads two adapters
   # in one process, and a hook b doesn't define must NOT be inherited from a.
+  #
+  # 🔴 THE LIST IS THE GATE, AND IT DRIFTS SILENTLY. Adding a hook to one
+  # adapter and forgetting this list has already shipped twice (#81's
+  # adapter_burn_flags/adapter_audit_flags, #60's
+  # adapter_meta_permission_modes), and a leaked hook does not look like a bug:
+  # `declare -F` says the hook is there, so the caller believes the NEW engine
+  # supports whatever it gates. Four more were missing when round 12 checked
+  # mechanically — adapter_cwd_from_args, adapter_ephemeral_flags,
+  # adapter_mcp_config_file, adapter_tank_fingerprint — so the check is a test
+  # now, not a habit: "every adapter hook is in adapter_loader's unset list"
+  # (tests/bats/adapters/extra.bats) compares this list against every
+  # `adapter_*` definition under lib/adapters/ and names what is missing.
   unset -f adapter_meta_name adapter_meta_cli_binary adapter_meta_env_var \
            adapter_meta_strategy adapter_meta_description \
+           adapter_meta_permission_modes \
            adapter_export_env adapter_run adapter_init \
-           adapter_relay adapter_transcript_path adapter_start_with_prompt \
+           adapter_relay adapter_transcript_path adapter_handoff_extract adapter_start_with_prompt \
            adapter_account_label adapter_migrate_credentials adapter_flag_args \
            adapter_memory_dir adapter_memory_pointer_path adapter_install_hint adapter_burn_flags \
-           adapter_audit_flags \
+           adapter_audit_flags adapter_usage \
            adapter_find_session adapter_session_cwd \
            adapter_resume_args adapter_session_meta adapter_list_sessions \
            adapter_session_title adapter_title_for_file adapter_recent_sids adapter_session_recap \
+           adapter_sid_from_args adapter_new_session_args \
+           adapter_sid_canonical adapter_all_transcripts \
+           adapter_transcript_is_resumable \
+           adapter_cwd_from_args adapter_ephemeral_flags \
+           adapter_mcp_config_file adapter_hooks_config_file adapter_tank_fingerprint \
            2>/dev/null || true
 
   # shellcheck source=/dev/null

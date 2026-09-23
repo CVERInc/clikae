@@ -50,7 +50,7 @@ EOF
 
   # In-use guard (data integrity, NOT --force-able): refuse to delete a tank dir a
   # live session is still bound to — this shell OR another terminal / a background
-  # worker (the phantom-tank bug, HANDOFF §11). Only when actually deleting data,
+  # worker (the phantom-tank bug). Only when actually deleting data,
   # and only if the adapter resolves an env var to scan for.
   if [ "$keep_data" -eq 0 ] && [ -f "$CLIKAE_LIB/adapters/$cli.sh" ]; then
     local _rm_ev
@@ -83,20 +83,23 @@ EOF
 
   if [ "$keep_data" -eq 0 ] && [ -d "$d" ]; then
     rm -rf "$d"
-    log_ok "Removed tank dir."
+    log_done "Removed tank dir."
     # If the cli dir under profiles/ is now empty, clean it up.
     local cli_dir
     cli_dir="$(dirname "$d")"
     rmdir "$cli_dir" 2>/dev/null && log_dim "  (also cleaned empty $cli_dir)"
+    # #74 round-1 P2-2: the burn sidecar is out-of-dir state, keyed by tank
+    # NAME — rm -rf on the dir never touches it.
+    remove_tank_burn_sidecar "$cli" "$profile"
   fi
 
   if rc_has_block "$rc_file" "$rc_id"; then
     rc_remove_block "$rc_file" "$rc_id"
-    log_ok "Removed alias block from $rc_file"
+    log_done "Removed alias block from $rc_file"
   fi
 
   if [ -d "$app_path" ]; then
     rm -rf "$app_path"
-    log_ok "Removed launcher: $app_path"
+    log_done "Removed launcher: $app_path"
   fi
 }

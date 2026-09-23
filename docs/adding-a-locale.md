@@ -1,7 +1,9 @@
 # Adding a language
 
-clikae's board and prompts speak `en-US`, `ja-JP` and `zh-TW` today (bare
-`clikae lang` always prints the live list). Every locale ships **inside** clikae
+clikae's board and prompts speak nine languages today — `en-US`, `ja-JP`, `zh-TW`,
+`zh-Hans`, `ko-KR`, `es-ES`, `de-DE`, `fr-FR` and `pt-BR`. Bare `clikae lang`
+always prints the live list; treat that, not this sentence, as authoritative
+(`_i18n_locales` is where both come from). Every locale ships **inside** clikae
 itself — a language switch is instant, offline, and can never fail on a
 download. Adding one is a self-contained PR touching **two files**.
 
@@ -24,11 +26,12 @@ That's it for almost every language: regional variants resolve through the
 generic language-subtag rule in `_i18n_normalize` (`ko_KR.UTF-8` → `ko` →
 `ko-KR`, `fr_CA` → `fr-FR`) with no extra line. **Two honest exceptions:**
 
-- A **script-split language** needs its own resolver case: Chinese is keyed by
-  writing system, not region — `zh_TW`/`zh_HK`/`*Hant*` → `zh-TW`, and
-  Simplified (`zh_CN`/`zh_SG`/`*Hans*`) → `zh-Hans` once it ships. The exact
-  slot is marked in `_i18n_normalize` (until then, all other `zh` reads
-  `zh-TW`).
+- A **script-split language** needs its own resolver case, because the writing
+  system — not the region — decides which file to load. Chinese is the shipped
+  example: `zh_TW`/`zh_HK`/`*Hant*` → `zh-TW`, `zh_CN`/`zh_SG`/`*Hans*` →
+  `zh-Hans`, and a bare `zh` keeps Traditional as the incumbent default. Both
+  cases are in `_i18n_normalize`; copy their shape if your language splits the
+  same way.
 - Extra human spellings (`日本語`, `english`) are optional case lines in the
   same function.
 

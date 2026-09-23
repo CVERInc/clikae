@@ -1,0 +1,173 @@
+#!/usr/bin/env bats
+# tests/bats/board-width.bats — every row the board prints must fit the terminal.
+#
+# WHY THIS IS SEPARATE FROM home.bats' wrapping test. That one calls
+# `_home_wrap_prefixed` directly and proves the HELPER wraps. It says nothing
+# about a row that never calls the helper — and 35 of the board's printf sites
+# do not. It is the same shape as `resume.sh` calling adapter_run directly while
+# an audit asked "who calls tmux": searching for callers finds drift among the
+# sites that opted in; it cannot find the site that never did.
+#
+# The question that finds it is "what does the board actually PRINT", and it has
+# a definite answer: render it and measure every line.
+#
+# Reported 2026-08-16 from a PineNote over ssh: the board did not fit. Measured
+# on this repo, it overflowed at every width below 72 columns.
+#
+# 🔴 Strip ANSI before measuring. `_dwidth` is not escape-aware — a 3-character
+# red "abc" measures 12 — which is also why the render path passes prefix widths
+# as hardcoded literals (`19` at home.sh:891). The ruler is the render's own,
+# applied to what the eye sees.
+
+load '../helpers'
+
+_visible() { printf '%s' "$1" | sed $'s/\033\\[[0-9;]*[A-Za-z]//g; s/\033\\][^\a]*\a//g'; }
+
+# EVERY overflowing row, not just the widest. A gate that reports one offender
+# per width makes you fix them one at a time and re-run; worse, it reads like
+# "there is one problem here" when there were eleven.
+_over_rows() {  # <cols> -> one "<width>\t<line>" per offending row
+  local cols="$1" line dw
+  while IFS= read -r line || [ -n "$line" ]; do
+    line="$(_visible "$line")"
+    [ -n "$line" ] || continue
+    dw="$(_dwidth "$line")"
+    [ "$dw" -gt "$cols" ] && printf '%s\t%s\n' "$dw" "$line"
+  done < <(COLUMNS="$cols" CLIKAE_NO_UPDATE_CHECK=1 "$CLIKAE_BIN" 2>&1)
+  return 0
+}
+
+# The INTERACTIVE board, which is what a person at a terminal actually sees.
+# `clikae` with no tty renders the STATIC board, so a gate that only runs the
+# binary covers the path the reporter was not on. _home_pick_draw_body composes
+# the whole interactive frame as a string, so it can be measured without a pty.
+_over_rows_interactive() {  # <cols> -> one "<width>\t<line>" per offending row
+  local cols="$1" line dw items
+  _home_items_load 2>/dev/null
+  while IFS= read -r line || [ -n "$line" ]; do
+    line="$(_visible "$line")"
+    [ -n "$line" ] || continue
+    dw="$(_dwidth "$line")"
+    [ "$dw" -gt "$cols" ] && printf '%s\t%s\n' "$dw" "$line"
+  done < <(COLUMNS="$cols" _home_pick_draw_body "$items" 0 "" 2>/dev/null)
+  return 0
+}
+
+# 🔴 THE FIXTURE IS THE GATE. This test was green for its whole life while the
+# board overflowed, because its specimen could not overflow: two 4-5 column
+# ASCII tank names and ZERO sessions, so it never measured a single Resume row —
+# and Resume rows are the widest thing the board draws (name + engine + quoted
+# title). Measured after fixing this: 83 columns at COLUMNS=80.
+#
+# A real specimen needs all three:
+#   · a tank name長 enough to matter. `payments-production` is 19 columns and
+#     perfectly legal — validate_name allows [A-Za-z0-9._-]+, so a CJK name is
+#     NOT a possible specimen here (clikae init rejects it) however tempting.
+#   · at least one SESSION, so the Resume section renders at all.
+#   · a title with the shape real titles have (spaces, punctuation), because the
+#     truncation budget is what is being tested.
+_seed_wide_specimen() {
+  clikae init claude payments-production
+  clikae init claude other
+  local work="$TEST_HOME/w"; mkdir -p "$work"
+  local slug; slug="$(printf '%s' "$work" | LC_ALL=C sed 's/[^A-Za-z0-9]/-/g')"
+  local d="$CLIKAE_HOME/profiles/claude/payments-production/projects/$slug"
+  mkdir -p "$d"
+  {
+    printf '{"type":"user","message":{"role":"user","content":[{"type":"text","text":"first"}]}}\n'
+    printf '{"type":"ai-title","aiTitle":"Refactor the payment reconciliation pipeline","sessionId":"dead0000-0000-0000-0000-000000000000"}\n'
+  } > "$d/dead0000-0000-0000-0000-000000000000.jsonl"
+  cd "$work" || return 1
+  # The static board consumes the session-boundary snapshot. Keep its Resume
+  # specimen visible there as well as in the direct interactive helper below.
+  source "$CLIKAE_LIB/core/reading_cache.sh"
+  source "$CLIKAE_LIB/core/board_state.sh"
+  board_state_refresh claude "$CLIKAE_HOME/profiles/claude/payments-production"
+  run clikae
+  [[ "$output" == *Refactor* ]] || false
+}
+
+@test "board: no row overflows the terminal, at any width a real terminal has" {
+  # The interactive arm calls _home_items, which needs the core libs — sourcing
+  # home.sh alone leaves order_list/list_adapters/profiles_root undefined, and
+  # the frame it measured then contained exactly ONE row (the agy target line)
+  # with empty section headers. A gate measuring a one-row board is not a gate.
+  export CLIKAE_LIB="$CLIKAE_TEST_ROOT/lib"
+  # shellcheck source=/dev/null
+  source "$CLIKAE_TEST_ROOT/lib/core/log.sh"
+  # shellcheck source=/dev/null
+  source "$CLIKAE_TEST_ROOT/lib/core/i18n.sh"
+  # shellcheck source=/dev/null
+  source "$CLIKAE_TEST_ROOT/lib/core/profile_store.sh"
+  # shellcheck source=/dev/null
+  source "$CLIKAE_TEST_ROOT/lib/core/adapter_loader.sh"
+  # shellcheck source=/dev/null
+  source "$CLIKAE_TEST_ROOT/lib/core/limit.sh"
+  # shellcheck source=/dev/null
+  source "$CLIKAE_TEST_ROOT/lib/commands/home.sh"
+  _seed_wide_specimen
+  local cols rows bad=""
+  # 30 is _home_cols' own floor; below that it substitutes 80 by design.
+  for cols in 30 36 40 48 56 64 72 80 100 120; do
+    rows="$(_over_rows "$cols")"
+    [ -n "$rows" ] && bad="$bad
+  --- static, COLUMNS=$cols ---
+$(printf '%s' "$rows" | sed 's/^/    /')"
+    rows="$(_over_rows_interactive "$cols")"
+    [ -n "$rows" ] && bad="$bad
+  --- interactive, COLUMNS=$cols ---
+$(printf '%s' "$rows" | sed 's/^/    /')"
+  done
+  [ -z "$bad" ] || { echo "rows wider than the terminal:$bad"; false; }
+}
+
+@test "board-width: both renderers print the truncation line from the in-process count, and it fits (#113)" {
+  # #113: the count reaches the renderers as $_HOME_RESUME_TRUNC (lifted out of
+  # the items stream by _home_items_load), not as a state/ file. Pin that BOTH
+  # renderers read it — the static one and the interactive frame — and that the
+  # line obeys the same width rule as every other row.
+  export CLIKAE_LIB="$CLIKAE_TEST_ROOT/lib"
+  # shellcheck source=/dev/null
+  source "$CLIKAE_TEST_ROOT/lib/core/log.sh"
+  # shellcheck source=/dev/null
+  source "$CLIKAE_TEST_ROOT/lib/core/i18n.sh"
+  # shellcheck source=/dev/null
+  source "$CLIKAE_TEST_ROOT/lib/core/profile_store.sh"
+  # shellcheck source=/dev/null
+  source "$CLIKAE_TEST_ROOT/lib/core/adapter_loader.sh"
+  # shellcheck source=/dev/null
+  source "$CLIKAE_TEST_ROOT/lib/core/limit.sh"
+  # shellcheck source=/dev/null
+  source "$CLIKAE_TEST_ROOT/lib/commands/home.sh"
+  _seed_wide_specimen
+  local items out line
+  _home_items_load 2>/dev/null
+  [ "$_HOME_RESUME_TRUNC" = 0 ] || false
+  _HOME_RESUME_TRUNC=37
+  out="$(COLUMNS=40 _home_pick_draw_body "$items" 0 "" 2>/dev/null)"
+  [[ "$(_visible "$out")" == *"37 sessions hidden"* ]] || { _visible "$out"; false; }
+  out="$(COLUMNS=40 _home_render_static "$items" "" 2>/dev/null)"
+  [[ "$(_visible "$out")" == *"37 sessions hidden"* ]] || { _visible "$out"; false; }
+  while IFS= read -r line || [ -n "$line" ]; do
+    line="$(_visible "$line")"
+    [ "$(_dwidth "$line")" -le 40 ] || { echo "over 40: $line"; false; }
+  done <<< "$out"
+  # And zero means no line at all.
+  _HOME_RESUME_TRUNC=0
+  out="$(COLUMNS=40 _home_render_static "$items" "" 2>/dev/null)"
+  [[ "$out" != *"hidden as burn"* ]] || false
+}
+
+@test "board-width: the measurement itself can see an over-wide row" {
+  # 🔴 The gate above passes when nothing overflows AND when the measurement is
+  # broken — a stripped-to-nothing line measures 0 and fits any terminal. This
+  # asserts the ruler: a known-wide line, with colour, must be reported.
+  # shellcheck source=/dev/null
+  source "$CLIKAE_TEST_ROOT/lib/commands/home.sh"
+  local wide plain
+  wide="$(printf '\033[31m%s\033[0m' "$(printf 'x%.0s' $(seq 1 50))")"
+  plain="$(_visible "$wide")"
+  [ "$(_dwidth "$plain")" -eq 50 ] || { echo "measured $(_dwidth "$plain"), want 50"; false; }
+  # and the ANSI must actually have been stripped (raw would measure ~59)
+  [ "$(_dwidth "$wide")" -gt 50 ] || { echo "_dwidth is escape-aware now; _visible may be redundant"; false; }
+}

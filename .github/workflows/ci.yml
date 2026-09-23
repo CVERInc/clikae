@@ -18,6 +18,19 @@ jobs:
           severity: warning
           scandir: '.'
           additional_files: 'bin/clikae install.sh'
+      # The action above does not look at `.bats` (round-8 fix review P3-3),
+      # and neither did scripts/test.sh, so a finding in a test file was
+      # invisible on both sides. Same command the local gate runs.
+      - name: Run shellcheck on the bats suite
+        run: find tests -name '*.bats' -print0 | xargs -0 shellcheck -S warning
+
+  signet:
+    name: signet (CLI surface)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - name: Lint the CLI surface against the design system
+        run: bash scripts/signet-lint.sh
 
   smoke:
     name: smoke test (${{ matrix.os }})
@@ -57,6 +70,23 @@ jobs:
       - name: Run tests
         # -r so the tests/bats/adapters/ subdirectory is included.
         run: bats -r --print-output-on-failure tests/bats
+
+  pty-smoke:
+    # shellcheck reads source and bats never presses a key, so BOTH are
+    # structurally blind to the TUI — which is where this project's regressions
+    # keep landing. This job drives the real binary on a real pty in a throwaway
+    # $HOME. It gates: a green shellcheck+bats has shipped an invisible-prompt /
+    # dead-stderr bug before, and that must not be possible again.
+    name: pty smoke (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    steps:
+      - uses: actions/checkout@v5
+      - name: Drive the interactive screens
+        run: python3 tests/tools/pty-smoke.py all
 
   pester:
     # clikae is a macOS/Linux bash tool; the PowerShell module is a

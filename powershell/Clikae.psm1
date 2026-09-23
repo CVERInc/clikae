@@ -32,6 +32,7 @@ Set-StrictMode -Version Latest
 $script:ClikaeAdapters = [ordered]@{
     claude    = @{ Name = 'Claude Code';      Binary = 'claude';    EnvVar = 'CLAUDE_CONFIG_DIR';     Strategy = 'env-dir';  Description = 'Anthropic Claude Code CLI (credentials + settings in CLAUDE_CONFIG_DIR)' }
     codex     = @{ Name = 'OpenAI Codex CLI';  Binary = 'codex';     EnvVar = 'CODEX_HOME';            Strategy = 'env-dir';  Description = 'OpenAI Codex CLI (auth + config + history in CODEX_HOME)' }
+    grok      = @{ Name = 'Grok Build CLI';   Binary = 'grok';      EnvVar = 'GROK_HOME';             Strategy = 'env-dir';  Description = 'xAI Grok Build CLI (auth + config + sessions in GROK_HOME)' }
     gh        = @{ Name = 'GitHub CLI';       Binary = 'gh';        EnvVar = 'GH_CONFIG_DIR';         Strategy = 'env-dir';  Description = 'GitHub CLI (auth + config in GH_CONFIG_DIR)' }
     gcloud    = @{ Name = 'Google Cloud CLI'; Binary = 'gcloud';    EnvVar = 'CLOUDSDK_CONFIG';       Strategy = 'env-dir';  Description = 'Google Cloud CLI (auth + active config in CLOUDSDK_CONFIG)' }
     docker    = @{ Name = 'Docker CLI';       Binary = 'docker';    EnvVar = 'DOCKER_CONFIG';         Strategy = 'env-dir';  Description = 'Docker CLI (registry auth + contexts in DOCKER_CONFIG)' }

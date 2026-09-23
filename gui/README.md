@@ -6,6 +6,11 @@ The CLI is the source of truth; the GUI just calls it (`clikae list`,
 `clikae status`, `clikae run`, `clikae relay`). It does not reimplement
 profile-storage logic in Swift.
 
+> **Vocabulary note.** These GUI docs still say *profile*; the user-facing noun has
+> been **tank** since the v0.5 grammar ([docs/grammar.md](../docs/grammar.md) §2).
+> They are the same thing — the on-disk layout (`profiles/`) and the core function
+> names kept the old name on purpose. Anything new here should say *tank*.
+
 ## ClikaeMenuBar
 
 A SwiftPM + AppKit menu-bar app — builds with the Command Line Tools, no Xcode

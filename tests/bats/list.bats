@@ -87,3 +87,30 @@ load '../helpers'
   [[ "$output" == *"agytester@example.com"* ]] || false    # real email, agrees with the board
   [[ "$output" != *"(active)"* ]] || false                 # no faked active-state in ACCOUNT
 }
+
+# --- #61: burn's reroute walk (and to/resume's) is powered by the SAME
+# enumerator `clikae tanks` uses (list_all_profiles) — this locks down what
+# that enumerator itself accepts, at the command clikae tanks lists directly.
+@test "tanks never shows a lock file, sidecar, dotdir, dangling symlink, or unknown-engine dir (#61)" {
+  clikae init claude x
+  mkdir -p "$CLIKAE_HOME/profiles/claude/.cache"          # dotdir
+  mkdir -p "$CLIKAE_HOME/profiles/claude/hello.lock"       # directory-shaped lock sidecar
+  : > "$CLIKAE_HOME/profiles/claude/plain.lock"            # file-shaped lock sidecar
+  ln -s /nonexistent "$CLIKAE_HOME/profiles/claude/ghost"  # dangling symlink
+  mkdir -p "$CLIKAE_HOME/profiles/notarealengine/foo"      # dir under an unknown "engine"
+
+  run clikae tanks
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"x"* ]] || false
+  [[ "$output" != *".cache"* ]] || false
+  [[ "$output" != *"hello.lock"* ]] || false
+  [[ "$output" != *"plain.lock"* ]] || false
+  [[ "$output" != *"ghost"* ]] || false
+  [[ "$output" != *"notarealengine"* ]] || false
+
+  command -v jq >/dev/null 2>&1 || skip "jq not installed"
+  run clikae tanks --json
+  [ "$status" -eq 0 ]
+  [ "$(printf '%s' "$output" | jq 'length')" = "1" ] || { echo "got: $output"; false; }
+  [ "$(printf '%s' "$output" | jq -r '.[0].profile')" = "x" ]
+}

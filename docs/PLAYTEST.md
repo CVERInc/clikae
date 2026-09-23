@@ -1,9 +1,11 @@
-# clikae Playtest Guide — 10-Minute Get Started (v0.10.0)
+# clikae Playtest Guide — 10-Minute Get Started
 
 > Hi 👋 Thank you for helping playtest **clikae**. This guide will take you from scratch to "Aha, I get it" in about 10 minutes.
 > Even if you've **never used clikae before** or even heard of it, that's fine—just follow along.
 >
-> Note: clikae defaults to an **English interface**. This guide highlights English UI labels with their explanations.
+> Written against v0.10.0 and still accurate; run `clikae --version` to see what you have. Two things arrived after it that this guide doesn't walk through: **`clikae clean`** (disk cleanup — one list, Enter, red confirm) and six more interface languages.
+>
+> Note: clikae defaults to an **English interface**, and this guide highlights English UI labels with their explanations. It speaks nine languages though — `clikae lang` lists them, `clikae lang <code>` switches, and the board's `l` key does the same thing interactively. Playtesting in your own language is a genuinely useful report.
 
 ---
 

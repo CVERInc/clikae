@@ -30,11 +30,42 @@ loads it and calls these hooks. Required functions:
 | `adapter_export_env <profile_dir>` | Lines of `KEY=VALUE` to export for this profile | newline-separated `K=V` lines |
 | `adapter_run <profile_dir> [args...]` | Run the CLI with this profile active | execs the CLI |
 
-Optional:
+Optional. **These are what separate a tank you can switch to from a tank clikae can
+actually work with** — define none and your CLI still switches accounts correctly;
+define the session ones and it joins the board, the resume picker and `clean`. Each
+is independently optional: a caller that doesn't find one degrades honestly rather
+than pretending. Engines listed are the ones that define it today, as a reference
+implementation to read.
 
-| Function | Purpose |
-| --- | --- |
-| `adapter_init <profile_dir>` | Called once at `clikae init`. Seed the profile dir with defaults, etc. |
+| Function | Unlocks | See |
+| --- | --- | --- |
+| `adapter_init <dir>` | Seed the profile dir once, at `clikae init`. | kubectl, npm |
+| `adapter_install_hint` | A useful "not installed" message instead of a bare failure. | claude, codex, grok |
+| `adapter_account_label <dir>` | The ACCOUNT column in `clikae list` / `status` / the board. | claude, codex, grok |
+| `adapter_flag_args <dir>` | The `flag` strategy — args appended instead of env exported. | vercel |
+| `adapter_migrate_credentials <old> <new>` | `--keep-login` on `migrate`/`rename` (macOS Keychain re-key). | claude |
+| **Sessions — the board, `resume`, `clean`** | | |
+| `adapter_transcript_path <dir>` | Your sessions appear in the board's Resume list. | claude, codex, grok |
+| `adapter_handoff_extract <transcript> <role>` | `clikae handoff`'s digest reads YOUR transcript's own shape (`role` is "user"/"assistant") instead of assuming claude's `"role":"…","content":"…"` — text only, newest last. **Lines-per-message is NOT uniform across engines, and that's fine:** claude prints one line per text BLOCK (a message with two text parts becomes two lines — this is the pre-#33 shape, frozen for byte-identical parity, see `tests/fixtures/handoff-claude-golden.txt`); codex/grok print one line per MESSAGE (multiple text parts in one message are joined with a space first) — codex additionally collapses a printed line into its immediately preceding one when the two are byte-identical (round-3 #33 review P2-2; a duplicate is far more often the same turn recorded twice under codex's two overlapping transcript shapes than genuinely repeated input), so lines-per-message is not exactly 1:1 either. A caller doing `tail -n N` therefore gets "last N blocks" on claude vs "last N messages" elsewhere — pick either shape for a new adapter, just say which in your own hook's comment so the next reader isn't surprised. A hook that finds lines SHAPED like a role's turn but can't pull text out of any of them (a real shape mismatch) should say so on stderr (`handoff: <engine> extractor scanned N <role> lines, matched 0` — see codex.sh/grok.sh) rather than degrade silently — but a role with genuinely no turns yet (a brand-new tank the model hasn't replied to) is not a mismatch and should stay silent, or every reader learns to ignore the line (round-2 #33 review P3-2). `_handoff_extract` does NOT swallow hook stderr. Undefined → falls back to the claude-shaped grep (thinner, not broken). | claude, codex, grok |
+| `adapter_title_for_file <file>` | A session's title, derived from the transcript file alone. **Prefer a user-set rename over a machine-generated title**, and scan the tail — a rename lands wherever it was typed. | claude, codex, grok, antigravity |
+| `adapter_session_title` / `adapter_session_recap` / `adapter_session_meta` | Richer board rows (title, one-line recap, age/size). | claude |
+| `adapter_find_session <id>` / `adapter_session_cwd` / `adapter_resume_args` | `clikae resume <id>` can locate, `cd` to, and reopen a past session. | claude, codex, grok, antigravity |
+| `adapter_recent_sids <dir> <n>` | The board's **Continue** list: this tank's recent sessions **in `$PWD`**, newest first. Scope it to the current directory like every other engine does, or your rows compete with theirs on a different meaning and push them off a shared list. | claude, codex, grok, antigravity |
+| `adapter_all_transcripts <dir>` | The **store-wide** enumerator: every session path under a tank, no cwd filter, no limit. `clikae resume`'s picker, its prefix resolution and `clean`'s candidate scan are built from it — define it and your engine appears in all three by construction (there is no engine list anywhere to add yourself to). Also what `burn`'s before/after attribution diffs. | claude, codex, grok, antigravity |
+| `adapter_list_sessions` | An engine-specific session listing, where the two hooks above are not enough. | claude, codex, grok |
+| `adapter_transcript_is_resumable <path>` | Say NO to a transcript your engine writes that is not a conversation anyone reopens — claude's `agent-<id>.jsonl` subagent (sidechain) logs are the shipped case. Undefined means everything counts, which is the right answer for most engines. It narrows only the LISTS and the COUNTS (picker, prefix resolution, board, totals); finding a session by id and `clikae clean`'s disk scan deliberately ignore it, because an unlistable file is still bytes. | claude |
+| **Headless + fleet** | | |
+| `adapter_start_with_prompt` | Marks the engine as an **AI engine** — it's what the new-tank picker classifies on, and what `burn` needs to start a task. | claude, codex, grok |
+| `adapter_burn_flags` / `adapter_audit_flags` | `burn`'s write dialect and `conduct`'s read-only dialect, so a reroute regenerates the *right* flags for the target engine. | claude, codex, grok |
+| `adapter_relay <from> <to>` | `clikae to` / `relay` can carry a **live** session across tanks. Without it, the carry starts a clean session and says so. | claude |
+| `adapter_memory_dir` / `adapter_memory_pointer_path` | Soul membership. Defining `adapter_memory_dir` (a real memory directory) also enables `--ephemeral`; the pointer variant is for engines whose memory is opaque. | claude / codex, grok |
+| `adapter_mcp_config_file` | `clikae mcp share` can fan a server into this engine's tanks. | claude |
+| `adapter_hooks_config_file` | `clikae hooks share` can fan a hook into this engine's tanks. Defining it is a promise that the file is `<tank dir>/settings.json`: the writer is `_settings_write_file` (`lib/commands/settings.sh`), which derives that path from the tank directory, and `fleet_hooks_prelaunch` refuses to write when the adapter names anything else. An engine whose hooks live elsewhere needs a writer of its own first. | claude |
+
+> The classification rule that matters: **never key behaviour on "an adapter file
+> exists."** `antigravity` has an adapter file that is a resume-only shim on a
+> launch-only target. `clikae_is_target` (`lib/core/profile_store.sh`) is the
+> canonical predicate, and it wins.
 
 ## The five strategies
 
@@ -116,4 +147,18 @@ clikae run <cli> testprof
 clikae remove <cli> testprof --force
 ```
 
-Add a bats test under `tests/bats/adapters/<cli>.bats` (v0.2 onwards).
+Add a bats test under `tests/bats/adapters/<cli>.bats`, then run the gate:
+
+```bash
+bash scripts/test.sh        # shellcheck -S warning + the whole bats suite
+```
+
+**One thing will surprise you.** If your adapter uses `env-dir` / `env-file` /
+`env-var` / `flag`, you must also add its row to the `$script:ClikaeAdapters` table
+in `powershell/Clikae.psm1` — `tests/bats/compat.bats` asserts the two stay in sync,
+and it is a **blocking** gate even though Windows itself is an unsupported community
+port whose own CI never blocks. Copy the shape of a neighbouring row; you don't need
+PowerShell installed to satisfy it (the test greps source, it doesn't run pwsh).
+
+A `subcommand`-strategy adapter is exempt: that strategy marks a capability shim on a
+launch-only target rather than a switchable engine, and the test skips it.

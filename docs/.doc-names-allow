@@ -1,0 +1,53 @@
+# Names the docs mention ON PURPOSE although no such function exists.
+# One per line: <name> <reason>. An exemption without a reason is a hiding place.
+clikae_spawn_session  the wrapper DESIGN-tmux specified and nobody wrote; named in Rule 2/5 as the historical record of that gap, implemented since 2026-08-15 as tmux_spawn_session
+
+# --- not functions at all: other systems' tool names, quoted in our docs ---
+ask_question       an MCP/agent tool name quoted in docs/orchestration.md, not ours
+read_url_content   ditto
+run_command        ditto
+search_web         ditto
+write_to_file      ditto
+list_dir           ditto
+# --- our own data, not our own code ---
+away_summary       a JSON field name in the board's live-row payload
+session_summary    a JSON field name
+generated_title    a JSON field name
+dry_store          a state file under $CLIKAE_HOME, not a function
+_exit              shell builtin, quoted while explaining trap semantics
+_                  a literal underscore used as a placeholder in an example
+rerouted_from      a field in `clikae burn --json`'s result object, not a function
+artifact_bytes     ditto
+elapsed_s          ditto
+run_id             a field in `clikae burn --json`'s result object and in #41's status.json, not a function
+left_behind_truncated  a field in `clikae burn --json`'s result object, not a function (deprecated since #112: the sum of left_behind_truncation's buckets)
+left_behind_truncation a field in `clikae burn --json`'s result object, not a function
+left_behind_kill_mode  ditto
+left_behind_unavailable ditto
+repos_over_cap     a bucket inside `clikae burn --json`'s left_behind_truncation object, not a function
+roots_budget_skipped ditto
+markers_budget_skipped ditto
+repos_budget_skipped ditto
+roots_discovery_timeout ditto
+reset_at           a field in #41's status.json (P1-2, 2026-09-09 round-1 review), not a function
+started_at         a field in #41's status.json, not a function
+updated_at         two unrelated fields, both quoted on purpose: a field in #41's status.json (P2-1, 2026-09-14 round-1 fix review), and the field GitHub's search API returns per issue/PR (#92's tail-sweep/cursor field name) — neither is a function
+cached_at          a field in #72's usage cache, state/usage/<engine>/<tank>.json (P2-5, 2026-09-14 round-1 fix review), not a function
+token_count        codex's own rollout event type name, quoted in docs/DESIGN-board-fuel-dots.md
+used_percent       a field in codex's own rate_limits JSON, not a function
+window_minutes     ditto
+resets_at          ditto
+codex_exec         the value of codex's own session_meta.originator field, quoted verbatim
+cache_creation_input_tokens  a field in Anthropic's own API usage JSON (status-line current_usage), quoted in docs/fleet-cost-doctrine.md alongside cache_read_input_tokens, not a function
+clikae_session_id  the per-session tmux user option `@clikae_session_id` (lib/core/tmux.sh's tmux_set_session_id, lib/core/live.sh's live_session_id), not a function
+window_pct         a field in `clikae usage --json`'s result object (#72), not a function
+weekly_pct         ditto
+window_resets_at   ditto
+weekly_resets_at   ditto
+cached_at          a field in `clikae usage --json`'s result object and in the on-disk usage cache (#72), not a function
+scanned_at         a field in the on-disk usage cache only (#72 round-2 review, P3) — when it was last SCANNED, separate from cached_at's "how old is the reading itself"; not a function, never in `clikae usage --json`'s output (usage_read strips both before printing)
+subagent_type      a JSON field name in Claude Code's PreToolUse hook payload (tool_input.subagent_type); docs/usage.md's cockpit section names it to say the guard deliberately never reads it (#63 P3-2)
+alternate_on       a tmux FORMAT name (#{alternate_on}), not a function; #108's drag translation reads it to tell an alternate-screen application apart from a pane with scrollback, and Rule 9 / EXPECTATIONS quote the measured value
+history_size       a tmux FORMAT name (#{history_size}), not a function; quoted alongside alternate_on to record that the measured alternate-screen pane had NO scrollback for copy-mode to scroll
+retry_after        a field in `clikae usage --json`'s result object and in the on-disk usage cache (#136) — the vendor's own Retry-After header in whole seconds, 1..86400; not a function
+weekly_scoped      the vendor's own `kind` value in the OAuth usage API's limits[] array (#137), quoted in docs/DESIGN-board-fuel-dots.md as where the per-model weekly row lives; not a function

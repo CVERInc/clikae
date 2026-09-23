@@ -7,13 +7,18 @@
 > for the basic job below, and **Windows contributors are very welcome** to carry
 > it forward — PRs appreciated.
 
+> 💡 **If you can use WSL, use WSL.** clikae is plain bash and runs there
+> unmodified — the full, maintained CLI, current grammar and all. That is the
+> first-class Windows path (see the README). This module exists for native Windows
+> without WSL, and only covers the basic profile-switching job below.
+
 `Clikae.psm1` is the Windows-native port of the bash `clikae` CLI. There's no
 bash on a stock Windows box and no `.app` launcher, so this module keeps the
 same model with PowerShell mechanics:
 
 - isolated profile dirs at `%USERPROFILE%\.clikae\profiles\<cli>\<profile>\`
   (override the root with `$env:CLIKAE_HOME`),
-- the same 13 built-in adapters (claude, codex, gh, gcloud, docker, helm,
+- the same 14 built-in adapters (claude, codex, grok, gh, gcloud, docker, helm,
   kubectl, aws, az, npm, terraform, pulumi, vercel), kept in sync with
   `lib/adapters/*.sh`,
 - instead of a shell alias (PowerShell aliases can't carry env vars) it writes a

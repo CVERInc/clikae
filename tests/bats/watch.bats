@@ -8,7 +8,8 @@ _slug() { printf '%s' "$1" | LC_ALL=C sed 's/[^A-Za-z0-9]/-/g'; }
 
 _seed() {
   local profile="$1" dir="$2" extra="$3"
-  local d="$CLIKAE_HOME/profiles/claude/$profile/projects/$(_slug "$dir")"
+  local d
+  d="$CLIKAE_HOME/profiles/claude/$profile/projects/$(_slug "$dir")"
   mkdir -p "$d"
   {
     echo '{"type":"user","cwd":"'"$dir"'","message":{"role":"user","content":"do work"},"timestamp":"2026-05-31T01:00:00Z"}'

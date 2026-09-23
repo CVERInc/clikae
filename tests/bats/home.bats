@@ -4,12 +4,21 @@
 
 load '../helpers'
 
+_home_publish_fixture() (
+  source "$CLIKAE_LIB/core/adapter_loader.sh"
+  source "$CLIKAE_LIB/core/profile_store.sh"
+  source "$CLIKAE_LIB/core/reading_cache.sh"
+  source "$CLIKAE_LIB/core/limit.sh"
+  source "$CLIKAE_LIB/core/board_state.sh"
+  board_state_refresh claude "$CLIKAE_HOME/profiles/claude/$1"
+)
+
 @test "bare clikae with no profiles shows the welcome + first step" {
   run clikae
   [ "$status" -eq 0 ]
   [[ "$output" == *"No tanks yet"* ]] || false
   [[ "$output" == *"clikae init"* ]] || false
-  [[ "$output" == *"14 engines"* ]] || false
+  [[ "$output" == *"15 engines"* ]] || false
 }
 
 @test "bare clikae with profiles shows the tank board grouped by CLI" {
@@ -133,9 +142,36 @@ _fake_bin() {
   [[ "$output" != *'\033'* ]]      # no literal escape leaked into the output
 }
 
+# P3-5 (2026-09-14 round-2 review): _human_age moved to lib/core/duration.sh,
+# and 20+ test files source lib/commands/home.sh on its own. The status row's
+# call already checked `declare -F`; home.sh's two call sites did not, so the
+# first test that reached one would print "_human_age: command not found".
+# Asserted on every code line that calls it (comments excluded), because
+# reaching either line needs a real adapter store and a live tmux session.
+@test "every _human_age call in home.sh is guarded by declare -F" {
+  local calls unguarded
+  calls="$(grep -nE '^[^#]*_human_age "' "$CLIKAE_TEST_ROOT/lib/commands/home.sh")"
+  [ -n "$calls" ] || { echo "no call sites found — this test proves nothing"; false; }
+  unguarded="$(printf '%s\n' "$calls" | grep -v 'declare -F _human_age' || true)"
+  [ -z "$unguarded" ] || { echo "unguarded: $unguarded"; false; }
+  # THREE since #89 added the vendor-usage age annotation (`_home_fuel_*`).
+  # The count is here so a NEW call site cannot appear unnoticed and unguarded;
+  # the guard assertion above is the substance and is unchanged.
+  [ "$(printf '%s\n' "$calls" | grep -c .)" -eq 3 ] || { echo "expected 3 call sites: $calls"; false; }
+  # The guarded shape really degrades to an empty age with the function absent.
+  run bash -c 'unset -f _human_age; age=x; age=""; declare -F _human_age >/dev/null 2>&1 && age="$(_human_age 1)"; printf "[%s]" "$age"'
+  [ "$status" -eq 0 ] && [ "$output" = "[]" ] || { echo "rc=$status $output"; false; }
+}
+
 @test "antigravity slots render as tanks with the active one marked (multi mode)" {
   # Simulate the opt-in multi-account state: slots + consent + the ~/.gemini link.
   mkdir -p "$CLIKAE_HOME/profiles/antigravity/default" "$CLIKAE_HOME/profiles/antigravity/work"
+  # #61 round-1 P1-3: a real slot gets its marker from _agy_create_tank /
+  # _agy_takeover at the moment clikae makes it; this fixture builds the
+  # slot directly (no login yet, so no antigravity-cli/ fingerprint either),
+  # so it stamps the same marker those functions would have.
+  printf 'antigravity\n' > "$CLIKAE_HOME/profiles/antigravity/default/.clikae-tank"
+  printf 'antigravity\n' > "$CLIKAE_HOME/profiles/antigravity/work/.clikae-tank"
   : > "$CLIKAE_HOME/antigravity-multi-consent"
   ln -s "$CLIKAE_HOME/profiles/antigravity/work" "$HOME/.gemini"
   run clikae
@@ -148,21 +184,56 @@ _fake_bin() {
 # --- L4: over-quota (dry) tank awareness on the board ---------------------------
 
 # Seed a transcript line under a profile's project dir.
+# Dry rendering fixtures use future observations; expiry has fixed-clock tests
+# in dry-reset-expiry.bats.
 _seed_tx() { # <profile> <jsonl-line>
   local p="$CLIKAE_HOME/profiles/claude/$1/projects/-Users-x"
   mkdir -p "$p"
   printf '%s\n' "$2" >> "$p/s.jsonl"
+  _home_publish_fixture "$1"
+}
+
+# ISO-8601 UTC timestamp <N> minutes before the REAL clock (these tests run
+# `clikae` for real, with no faked `date`; fixed-clock expiry cases live in
+# dry-reset-expiry.bats instead). R1-P2-3: these fixtures used to anchor at a
+# fixed 2099 timestamp — 73 years in the future no real transcript will ever
+# carry — which made the anchor+reset resolve so far ahead of the ACTUAL clock
+# that the new expiry logic these fixtures exist to render around could never
+# fire, whatever it did. now-10min is a real "just observed" anchor instead.
+_iso_ago() { # <minutes>
+  date -u -v-"$1"M +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || date -u -d "$1 minutes ago" +%Y-%m-%dT%H:%M:%SZ
+}
+
+# "H(:MM)am/pm" the way vendor reset text renders it, computed <hours> ahead of
+# the REAL clock in <zone>. R2-P2-1: these fixtures used to hardcode an
+# absolute wall-clock hour (`11pm`, `6:50pm`) with an anchor of now-10min — that
+# made the fixture fail deterministically whenever the suite happened to run in
+# the ten minutes before that wall-clock hour in that zone (a fixed daily
+# 10-minute window, not a random 0.7% flake). Anchoring the PHRASE to the clock
+# too keeps the reset always <hours> ahead of whenever the suite actually runs,
+# so there is no calendar instant where this can go stale.
+_phrase_ahead() { # <hours> <zone>
+  local h="$1" tz="$2" ep hour minute suffix h12
+  ep=$(( $(date -u +%s) + h * 3600 ))
+  hour="$(TZ="$tz" date -d "@$ep" +%H 2>/dev/null || TZ="$tz" date -r "$ep" +%H)"
+  minute="$(TZ="$tz" date -d "@$ep" +%M 2>/dev/null || TZ="$tz" date -r "$ep" +%M)"
+  hour=$((10#$hour)); minute=$((10#$minute))
+  suffix=am; [ "$hour" -ge 12 ] && suffix=pm
+  h12=$(( hour % 12 )); [ "$h12" -eq 0 ] && h12=12
+  if [ "$minute" -eq 0 ]; then printf '%d%s' "$h12" "$suffix"
+  else printf '%d:%02d%s' "$h12" "$minute" "$suffix"; fi
 }
 
 @test "the board badges an over-quota tank with ! and its reset time" {
   clikae init claude dry
   clikae init claude ok
-  _seed_tx dry '{"type":"assistant","isApiErrorMessage":true,"message":{"model":"<synthetic>","content":[{"type":"text","text":"You have hit your session limit, resets 11pm (Asia/Tokyo)"}]},"timestamp":"2026-06-01T10:05:00Z"}'
+  local phrase; phrase="$(_phrase_ahead 6 Asia/Tokyo)"
+  _seed_tx dry '{"type":"assistant","isApiErrorMessage":true,"message":{"model":"<synthetic>","content":[{"type":"text","text":"You have hit your session limit, resets '"$phrase"' (Asia/Tokyo)"}]},"timestamp":"'"$(_iso_ago 10)"'"}'
   _seed_tx ok  '{"type":"assistant","message":{"model":"claude-opus-4-8","content":[{"type":"text","text":"done"}]},"timestamp":"2026-06-01T10:00:00Z"}'
   run clikae
   [ "$status" -eq 0 ]
   [[ "$output" == *"!"* ]] || false
-  [[ "$output" == *"resets 11pm (Asia/Tokyo)"* ]] || false
+  [[ "$output" == *"resets $phrase (Asia/Tokyo)"* ]] || false
   [[ "$output" == *"over quota"* ]] || false
 }
 
@@ -190,10 +261,11 @@ _seed_tx() { # <profile> <jsonl-line>
   # isApiErrorMessage:true, apiErrorStatus:429, error:rate_limit, and a
   # "·"-separated reset phrase. Locks the new wording/structure in forever.
   clikae init claude dry
-  _seed_tx dry '{"type":"assistant","message":{"model":"<synthetic>","content":[{"type":"text","text":"You have hit your session limit · resets 6:50pm (Asia/Tokyo)"}],"stop_reason":"stop_sequence"},"error":"rate_limit","isApiErrorMessage":true,"apiErrorStatus":429,"timestamp":"2026-06-02T09:44:49.962Z"}'
+  local phrase; phrase="$(_phrase_ahead 6 Asia/Tokyo)"
+  _seed_tx dry '{"type":"assistant","message":{"model":"<synthetic>","content":[{"type":"text","text":"You have hit your session limit · resets '"$phrase"' (Asia/Tokyo)"}],"stop_reason":"stop_sequence"},"error":"rate_limit","isApiErrorMessage":true,"apiErrorStatus":429,"timestamp":"'"$(_iso_ago 10)"'"}'
   run clikae
   [ "$status" -eq 0 ]
-  [[ "$output" == *"resets 6:50pm (Asia/Tokyo)"* ]] || false
+  [[ "$output" == *"resets $phrase (Asia/Tokyo)"* ]] || false
   [[ "$output" == *"over quota"* ]] || false
 }
 
@@ -201,10 +273,11 @@ _seed_tx() { # <profile> <jsonl-line>
   # Defensive: if a future Claude Code pretty-prints its JSONL (space after each
   # colon), the structural greps must still match.
   clikae init claude dry
-  _seed_tx dry '{"type": "assistant", "message": {"model": "<synthetic>", "content": [{"type": "text", "text": "You have hit your session limit · resets 6:50pm (Asia/Tokyo)"}]}, "isApiErrorMessage": true, "apiErrorStatus": 429, "timestamp": "2026-06-02T09:44:49.962Z"}'
+  local phrase; phrase="$(_phrase_ahead 6 Asia/Tokyo)"
+  _seed_tx dry '{"type": "assistant", "message": {"model": "<synthetic>", "content": [{"type": "text", "text": "You have hit your session limit · resets '"$phrase"' (Asia/Tokyo)"}]}, "isApiErrorMessage": true, "apiErrorStatus": 429, "timestamp": "'"$(_iso_ago 10)"'"}'
   run clikae
   [ "$status" -eq 0 ]
-  [[ "$output" == *"resets 6:50pm (Asia/Tokyo)"* ]] || false
+  [[ "$output" == *"resets $phrase (Asia/Tokyo)"* ]] || false
   [[ "$output" == *"over quota"* ]] || false
 }
 
@@ -236,12 +309,26 @@ _agy_log() { # <line>
   [[ "$output" != *"over quota"* ]] || false   # clean log → not badged dry
 }
 
-@test "bare clikae changes nothing on disk (read-only)" {
+@test "bare clikae changes nothing on disk (read-only), aside from its own board cache" {
+  # 2026-09-12 round-1 fix review, P1-2: a render now self-heals a MISSING or
+  # stale per-tank board snapshot inline (lib/core/board_state.sh's
+  # board_generation) rather than leaving Resume empty forever for a tank that
+  # never passed through a session boundary. That is a deliberate write to
+  # clikae's OWN derived cache under state/board (and state/readings, the
+  # per-file reading cache) — it is exactly the durable-across-invocations
+  # snapshot the whole feature is.
+  #
+  # Ruling (round-3 fix review, P1-1): a bare render MAY write its own
+  # derived cache under $CLIKAE_HOME/state/ — never under any tank's profile
+  # dir. So this test asserts the boundary exactly: profiles/ (the tank's
+  # SOURCE data — transcripts/config) is byte-for-byte untouched; state/ is
+  # excluded from the comparison because it is allowed, not required, to
+  # change.
   clikae init claude work
-  before="$(find "$CLIKAE_HOME" 2>/dev/null | sort)"
+  before="$(find "$CLIKAE_HOME/profiles" 2>/dev/null | sort)"
   run clikae
   [ "$status" -eq 0 ]
-  after="$(find "$CLIKAE_HOME" 2>/dev/null | sort)"
+  after="$(find "$CLIKAE_HOME/profiles" 2>/dev/null | sort)"
   [ "$before" = "$after" ]
 }
 
@@ -261,6 +348,7 @@ _agy_log() { # <line>
     printf '{"type":"ai-title","aiTitle":"Resume me please","sessionId":"dead0000-0000-0000-0000-000000000000"}\n'
   } > "$d/dead0000-0000-0000-0000-000000000000.jsonl"
   cd "$work"
+  _home_publish_fixture a
   run clikae
   [ "$status" -eq 0 ]
   # Headline present (en-US per the pinned test locale), titled by Claude's
@@ -282,6 +370,312 @@ _agy_log() { # <line>
   [[ "$output" != *"Continue"* ]] || false
 }
 
+# --- agy's Resume rows: this directory first, the tank only as a fallback ----
+# #34's finding stands: on every real agy install history.jsonl's "workspace"
+# is a constant ($HOME), not the directory a session ran in (607/607 indexed
+# conversations, one distinct value), so a STRICT cwd filter leaves the agy
+# rows permanently empty in any project directory. #34 answered that by
+# dropping the filter entirely — and then agy, answering tank-wide, competed
+# in one ranked list against engines answering $PWD-wide and crowded them off
+# it (measured on a real store: all ten rows agy, the one claude session
+# belonging to the directory ranked #13).
+# So: scope to $PWD when this directory has anything, fall back to tank-wide
+# when it has nothing. This test is the first half; the one after it is the
+# fallback, which is what preserves #34.
+# Fixture mirrors the verify report: one session recorded IN this dir, one
+# recorded at $HOME (the realistic case), one with no history.jsonl entry at
+# all (adapter_session_cwd's fallback, also $HOME).
+@test "agy board Resume rows are scoped to this directory when it has any" {
+  mkdir -p "$HOME/.gemini"
+  printf 'y\n' | clikae init agy default >/dev/null 2>&1
+  local base="$CLIKAE_HOME/profiles/antigravity/default/antigravity-cli"
+  mkdir -p "$base/brain"
+  local work="$TEST_HOME/work-project"; mkdir -p "$work"
+
+  local sid_match="aaaaaaaa-0000-4000-8000-000000000001"    # workspace == this dir
+  local sid_homews="bbbbbbbb-0000-4000-8000-000000000002"   # workspace == $HOME (realistic)
+  local sid_nohist="cccccccc-0000-4000-8000-000000000003"   # no history.jsonl entry at all
+
+  mkdir -p "$base/brain/$sid_match/.system_generated/logs"
+  printf '{"content":"CWD-MATCH session content"}\n' > "$base/brain/$sid_match/.system_generated/logs/transcript.jsonl"
+  touch -t 202001010000 "$base/brain/$sid_match/.system_generated/logs/transcript.jsonl"
+
+  mkdir -p "$base/brain/$sid_homews/.system_generated/logs"
+  printf '{"content":"HOME-WORKSPACE session content"}\n' > "$base/brain/$sid_homews/.system_generated/logs/transcript.jsonl"
+  touch -t 202101010000 "$base/brain/$sid_homews/.system_generated/logs/transcript.jsonl"
+
+  mkdir -p "$base/brain/$sid_nohist/.system_generated/logs"
+  printf '{"content":"NO-HISTORY session content"}\n' > "$base/brain/$sid_nohist/.system_generated/logs/transcript.jsonl"
+  touch -t 202201010000 "$base/brain/$sid_nohist/.system_generated/logs/transcript.jsonl"
+
+  {
+    printf '{"conversation_id":"%s","workspace":"%s"}\n' "$sid_match" "$work"
+    printf '{"conversation_id":"%s","workspace":"%s"}\n' "$sid_homews" "$HOME"
+  } > "$base/brain/history.jsonl"
+
+  cd "$work"
+  run clikae
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  # The one session this directory owns — even though it is the OLDEST of the
+  # three, so this cannot pass by accident of mtime ranking.
+  [[ "$output" == *"CWD-MATCH session content"* ]] || { echo "$output"; false; }
+  [[ "$output" != *"HOME-WORKSPACE session content"* ]] || { echo "not scoped: $output"; false; }
+  [[ "$output" != *"NO-HISTORY session content"* ]] || { echo "not scoped: $output"; false; }
+  # …and the two it is not showing are accounted for, not silently dropped.
+  [[ "$output" == *"2 more in this store"* ]] || { echo "$output"; false; }
+}
+
+# The half that preserves #34: on the constant-workspace install #34 measured,
+# NOTHING in the tank names this directory, and an empty Resume section is
+# worse than a tank-wide one. Same fixture, minus the one session recorded here.
+@test "agy board Resume rows fall back to tank-wide only when this directory has none (#34)" {
+  mkdir -p "$HOME/.gemini"
+  printf 'y\n' | clikae init agy default >/dev/null 2>&1
+  local base="$CLIKAE_HOME/profiles/antigravity/default/antigravity-cli"
+  mkdir -p "$base/brain"
+  local work="$TEST_HOME/work-project"; mkdir -p "$work"
+
+  local sid_homews="bbbbbbbb-0000-4000-8000-000000000002"   # workspace == $HOME
+  local sid_nohist="cccccccc-0000-4000-8000-000000000003"   # no history entry
+
+  mkdir -p "$base/brain/$sid_homews/.system_generated/logs"
+  printf '{"content":"HOME-WORKSPACE session content"}\n' > "$base/brain/$sid_homews/.system_generated/logs/transcript.jsonl"
+  touch -t 202101010000 "$base/brain/$sid_homews/.system_generated/logs/transcript.jsonl"
+
+  mkdir -p "$base/brain/$sid_nohist/.system_generated/logs"
+  printf '{"content":"NO-HISTORY session content"}\n' > "$base/brain/$sid_nohist/.system_generated/logs/transcript.jsonl"
+  touch -t 202201010000 "$base/brain/$sid_nohist/.system_generated/logs/transcript.jsonl"
+
+  printf '{"conversation_id":"%s","workspace":"%s"}\n' "$sid_homews" "$HOME" \
+    > "$base/brain/history.jsonl"
+
+  cd "$work"
+  run clikae
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  [[ "$output" == *"HOME-WORKSPACE session content"* ]] || { echo "$output"; false; }
+  [[ "$output" == *"NO-HISTORY session content"* ]] || { echo "$output"; false; }
+  # newest mtime first: NO-HISTORY, then HOME-WORKSPACE.
+  [[ "$output" == *"NO-HISTORY session content"*"HOME-WORKSPACE session content"* ]] \
+    || { echo "wrong order: $output"; false; }
+}
+
+@test "agy board Resume rows are capped at CLIKAE_HOME_RECENT_MAX, not flooded (#34)" {
+  mkdir -p "$HOME/.gemini"
+  printf 'y\n' | clikae init agy default >/dev/null 2>&1
+  local base="$CLIKAE_HOME/profiles/antigravity/default/antigravity-cli"
+  mkdir -p "$base/brain"
+
+  local sid1="dddddddd-0000-4000-8000-000000000001"
+  local sid2="dddddddd-0000-4000-8000-000000000002"
+  local sid3="dddddddd-0000-4000-8000-000000000003"
+  mkdir -p "$base/brain/$sid1/.system_generated/logs" "$base/brain/$sid2/.system_generated/logs" "$base/brain/$sid3/.system_generated/logs"
+  printf '{"content":"SESSION-ONE content"}\n' > "$base/brain/$sid1/.system_generated/logs/transcript.jsonl"
+  touch -t 202001010000 "$base/brain/$sid1/.system_generated/logs/transcript.jsonl"
+  printf '{"content":"SESSION-TWO content"}\n' > "$base/brain/$sid2/.system_generated/logs/transcript.jsonl"
+  touch -t 202101010000 "$base/brain/$sid2/.system_generated/logs/transcript.jsonl"
+  printf '{"content":"SESSION-THREE content"}\n' > "$base/brain/$sid3/.system_generated/logs/transcript.jsonl"
+  touch -t 202201010000 "$base/brain/$sid3/.system_generated/logs/transcript.jsonl"
+
+  local work="$TEST_HOME/work-project"; mkdir -p "$work"; cd "$work"
+  CLIKAE_HOME_RECENT_MAX=2 run clikae
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  [[ "$output" == *"SESSION-THREE content"* ]] || { echo "$output"; false; }
+  [[ "$output" == *"SESSION-TWO content"* ]] || { echo "$output"; false; }
+  [[ "$output" != *"SESSION-ONE content"* ]] || { echo "cap not applied: $output"; false; }
+}
+
+# --- #34 round-1 P3-2: docs said "the active tank", the board shows EVERY tank
+# Not a behaviour change — _home_recent_rows has always walked every tank of
+# every engine — but docs/EXPECTATIONS.md and the CHANGELOG both said "the
+# active tank", so this pins the sentence they now say instead.
+@test "agy Resume rows come from EVERY agy tank, not only the active one (#34)" {
+  mkdir -p "$HOME/.gemini"
+  printf 'y\n' | clikae init agy default >/dev/null 2>&1
+  printf 'y\n' | clikae init agy t1 >/dev/null 2>&1
+  printf 'y\n' | clikae init agy t2 >/dev/null 2>&1
+  local t
+  for t in t1 t2; do
+    local base="$CLIKAE_HOME/profiles/antigravity/$t/antigravity-cli"
+    local sid="eeeeeeee-0000-4000-8000-00000000000$t"
+    mkdir -p "$base/brain/$sid/.system_generated/logs"
+    printf '{"content":"SESSION-OF-%s content"}\n' "$t" \
+      > "$base/brain/$sid/.system_generated/logs/transcript.jsonl"
+  done
+  # active tank = whatever ~/.gemini points at (default, which has no session)
+  local work="$TEST_HOME/work-project"; mkdir -p "$work"; cd "$work"
+  run clikae
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  [[ "$output" == *"SESSION-OF-t1 content"* ]] || { echo "$output"; false; }
+  [[ "$output" == *"SESSION-OF-t2 content"* ]] || { echo "$output"; false; }
+}
+
+# --- the Continue list's scope, said out loud -------------------------------
+# The list is this DIRECTORY's recent sessions; `clikae resume` is the whole
+# store. Nothing on the board said so, and the two lists disagreeing looked
+# like a bug in one of them. Two things make it honest: every engine answers
+# for the same scope, and the section says which scope that is.
+_home_seed_claude() {   # <tank> <dir> <sid-prefix> <title>
+  local tank="$1" dir="$2" pfx="$3" title="$4" slug
+  slug="$(printf '%s' "$dir" | LC_ALL=C sed 's/[^A-Za-z0-9]/-/g')"
+  mkdir -p "$CLIKAE_HOME/profiles/claude/$tank/projects/$slug"
+  printf '{"type":"ai-title","aiTitle":"%s"}\n' "$title" \
+    > "$CLIKAE_HOME/profiles/claude/$tank/projects/$slug/$pfx-0000-4000-8000-000000000001.jsonl"
+}
+
+_home_seed_agy() {      # <tank> <dir> <sid> <title>
+  local tank="$1" dir="$2" sid="$3" title="$4"
+  local base="$CLIKAE_HOME/profiles/antigravity/$tank/antigravity-cli"
+  mkdir -p "$base/brain/$sid/.system_generated/logs"
+  printf '{"content":"%s"}\n' "$title" > "$base/brain/$sid/.system_generated/logs/transcript.jsonl"
+  printf '{"conversation_id":"%s","workspace":"%s"}\n' "$sid" "$dir" >> "$base/brain/history.jsonl"
+}
+
+# claude writes a subagent's transcript beside its parent's as
+# `agent-<id>.jsonl`. They are not conversations (claude itself refuses to
+# resume one) and on a working store they outnumber the real sessions, so a
+# board that lists or counts them describes a store nobody has. The board's
+# warm path has skipped them by basename since board_state.sh round 5; these
+# pin the cold path and the counts to the same answer.
+@test "the Continue list leaves out claude's subagent transcripts, cold and warm" {
+  clikae init claude a
+  local work="$TEST_HOME/work"; mkdir -p "$work"
+  local slug; slug="$(printf '%s' "$work" | LC_ALL=C sed 's/[^A-Za-z0-9]/-/g')"
+  local d="$CLIKAE_HOME/profiles/claude/a/projects/$slug"; mkdir -p "$d"
+  printf '{"type":"ai-title","aiTitle":"REAL-CONVERSATION"}\n' \
+    > "$d/11111111-0000-4000-8000-000000000001.jsonl"
+  sleep 1
+  # Newer than the real one, so mtime ranking would put it FIRST if it counted.
+  printf '{"type":"user","isSidechain":true,"message":{"role":"user","content":"SUBAGENT-BRIEF Effort: high."}}\n' \
+    > "$d/agent-99999999-0000-4000-8000-000000000002.jsonl"
+
+  cd "$work"
+  run clikae                                  # cold: no snapshot yet
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  [[ "$output" == *"REAL-CONVERSATION"* ]] || { echo "$output"; false; }
+  [[ "$output" != *"SUBAGENT-BRIEF"* ]] || { echo "cold path listed it: $output"; false; }
+  # …and it is not counted as a session the list is failing to show, either.
+  [[ "$output" != *"more in this store"* ]] || { echo "counted as a session: $output"; false; }
+
+  run clikae                                  # warm: the snapshot answers
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  [[ "$output" == *"REAL-CONVERSATION"* ]] || { echo "$output"; false; }
+  [[ "$output" != *"SUBAGENT-BRIEF"* ]] || { echo "warm path listed it: $output"; false; }
+  [[ "$output" != *"more in this store"* ]] || { echo "counted as a session: $output"; false; }
+}
+
+@test "the Continue list shows only THIS directory's sessions, for every engine at once" {
+  clikae init claude a
+  mkdir -p "$HOME/.gemini"
+  printf 'y\n' | clikae init agy default >/dev/null 2>&1
+  local A="$TEST_HOME/dir-a" B="$TEST_HOME/dir-b"; mkdir -p "$A" "$B"
+
+  _home_seed_claude a "$A" aaaaaaaa CLAUDE-IN-A
+  _home_seed_claude a "$B" bbbbbbbb CLAUDE-IN-B
+  _home_seed_agy default "$A" "cccccccc-0000-4000-8000-000000000003" AGY-IN-A
+  _home_seed_agy default "$B" "dddddddd-0000-4000-8000-000000000004" AGY-IN-B
+
+  cd "$A"
+  run clikae
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  [[ "$output" == *"CLAUDE-IN-A"* ]] || { echo "$output"; false; }
+  [[ "$output" == *"AGY-IN-A"* ]]    || { echo "$output"; false; }
+  [[ "$output" != *"CLAUDE-IN-B"* ]] || { echo "dir B leaked: $output"; false; }
+  [[ "$output" != *"AGY-IN-B"* ]]    || { echo "dir B leaked: $output"; false; }
+  # The heading names the scope it is showing, so the list cannot be read as
+  # "all your sessions".
+  [[ "$output" == *"Resume — in"* ]] || { echo "$output"; false; }
+  [[ "$output" == *"dir-a"* ]]       || { echo "$output"; false; }
+}
+
+# 🔴 The fallback must never cost a real row its place. Measured on a
+# reproduction of the maintainer's store: one claude session recorded in this
+# directory (mtime Sep 13) against fifteen newer agy sessions recorded at
+# $HOME. Ranked on mtime alone, the fifteen courtesy rows filled the whole
+# board and the one row that genuinely belonged to the directory was #16 —
+# invisible, which is the symptom the cwd scoping exists to end, arriving
+# through the fallback instead.
+@test "a row that belongs to this directory outranks every fallback row" {
+  clikae init claude tuna
+  mkdir -p "$HOME/.gemini"
+  printf 'y\n' | clikae init agy chromis >/dev/null 2>&1
+  local work="$TEST_HOME/Developer/clikae"; mkdir -p "$work"
+  local slug; slug="$(printf '%s' "$work" | LC_ALL=C sed 's/[^A-Za-z0-9]/-/g')"
+  local d="$CLIKAE_HOME/profiles/claude/tuna/projects/$slug"; mkdir -p "$d"
+  printf '{"type":"ai-title","aiTitle":"THE-LOCAL-SESSION"}\n' \
+    > "$d/2f978009-6884-42b4-9300-8dc9fd40711b.jsonl"
+  touch -t 202001010000 "$d/2f978009-6884-42b4-9300-8dc9fd40711b.jsonl"   # OLDEST
+
+  local base="$CLIKAE_HOME/profiles/antigravity/chromis/antigravity-cli"
+  mkdir -p "$base/brain"
+  local i sid
+  for i in 1 2 3 4 5 6 7 8 9 10 11 12; do
+    sid="aaaaaaaa-0000-4000-8000-0000000000$i"
+    mkdir -p "$base/brain/$sid/.system_generated/logs"
+    printf '{"content":"AGY-FILLER-%s"}\n' "$i" \
+      > "$base/brain/$sid/.system_generated/logs/transcript.jsonl"
+    touch -t 202606250000 "$base/brain/$sid/.system_generated/logs/transcript.jsonl"
+    # workspace is the constant every real agy install records — never $work.
+    printf '{"conversation_id":"%s","workspace":"%s"}\n' "$sid" "$HOME" \
+      >> "$base/brain/history.jsonl"
+  done
+
+  cd "$work"
+  run clikae
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  [[ "$output" == *"THE-LOCAL-SESSION"* ]] || { echo "the local row was buried: $output"; false; }
+  # First in the section, ahead of every filler, despite being the oldest.
+  [[ "$output" == *"THE-LOCAL-SESSION"*"AGY-FILLER"* ]] || { echo "wrong order: $output"; false; }
+  # The fillers are still there — #34's need is unchanged, they just rank last.
+  [[ "$output" == *"AGY-FILLER"* ]] || { echo "agy vanished: $output"; false; }
+}
+
+@test "the Continue list says how many more sessions the store holds, with the right count" {
+  clikae init claude a
+  local A="$TEST_HOME/dir-a" B="$TEST_HOME/dir-b"; mkdir -p "$A" "$B"
+  _home_seed_claude a "$A" aaaaaaaa HERE-ONE
+  local slugB; slugB="$(printf '%s' "$B" | LC_ALL=C sed 's/[^A-Za-z0-9]/-/g')"
+  mkdir -p "$CLIKAE_HOME/profiles/claude/a/projects/$slugB"
+  local i
+  for i in 1 2 3; do
+    printf '{"type":"ai-title","aiTitle":"THERE-%s"}\n' "$i" \
+      > "$CLIKAE_HOME/profiles/claude/a/projects/$slugB/eeeeeee$i-0000-4000-8000-000000000001.jsonl"
+  done
+
+  cd "$A"
+  run clikae
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  [[ "$output" == *"HERE-ONE"* ]] || { echo "$output"; false; }
+  [[ "$output" == *"3 more in this store"* ]] || { echo "$output"; false; }
+  [[ "$output" == *"clikae resume"* ]] || { echo "$output"; false; }
+}
+
+@test "the Continue list says nothing about elsewhere when it is showing everything" {
+  clikae init claude a
+  local A="$TEST_HOME/dir-a"; mkdir -p "$A"
+  _home_seed_claude a "$A" aaaaaaaa ONLY-ONE
+
+  cd "$A"
+  run clikae
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  [[ "$output" == *"ONLY-ONE"* ]] || { echo "$output"; false; }
+  [[ "$output" != *"more in this store"* ]] || { echo "spurious note: $output"; false; }
+}
+
+@test "a directory with nothing of its own still learns the store is not empty" {
+  clikae init claude a
+  local A="$TEST_HOME/dir-a" B="$TEST_HOME/dir-b"; mkdir -p "$A" "$B"
+  _home_seed_claude a "$B" bbbbbbbb ELSEWHERE-ONLY
+
+  cd "$A"
+  run clikae
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  [[ "$output" != *"ELSEWHERE-ONLY"* ]] || { echo "leaked: $output"; false; }
+  # No rows at all, so the note prints its own section header — the case a
+  # silent board got most wrong.
+  [[ "$output" == *"Resume — in"* ]] || { echo "$output"; false; }
+  [[ "$output" == *"1 more in this store"* ]] || { echo "$output"; false; }
+}
+
 @test "the continue list shows multiple recent sessions, newest first" {
   clikae init claude a
   local work="$TEST_HOME/work"; mkdir -p "$work"
@@ -291,12 +685,211 @@ _agy_log() { # <line>
   sleep 1
   printf '{"type":"ai-title","aiTitle":"Newer session","sessionId":"b"}\n' > "$d/bbb00000-0000-0000-0000-000000000000.jsonl"
   cd "$work"
+  _home_publish_fixture a
   run clikae
   [ "$status" -eq 0 ]
   [[ "$output" == *"Newer session"* ]] || false
   [[ "$output" == *"Older session"* ]] || false
   # newest first: "Newer" appears before "Older"
   [[ "$output" == *"Newer session"*"Older session"* ]] || false
+}
+
+# #74 round-1 P2-5: the board's Continue list is a SEPARATE query from
+# `clikae resume`'s picker (this dir's newest across engines, not the whole
+# store) and had no burn filter at all — a lane's one-shot session, being by
+# definition the newest thing in the dir it just ran in, kept showing up on
+# the board's first screen even with resume's own hiding "fixed".
+@test "the continue list hides a burn session by default, and a real session takes its slot" {
+  clikae init claude a
+  local work="$TEST_HOME/work"; mkdir -p "$work"
+  local slug; slug="$(printf '%s' "$work" | LC_ALL=C sed 's/[^A-Za-z0-9]/-/g')"
+  local d="$CLIKAE_HOME/profiles/claude/a/projects/$slug"; mkdir -p "$d"
+  printf '{"type":"ai-title","aiTitle":"Human session","sessionId":"human0000"}\n' \
+    > "$d/human0000-0000-0000-0000-000000000000.jsonl"
+  sleep 1
+  printf '{"type":"ai-title","aiTitle":"Lane one-shot","sessionId":"burn0000"}\n' \
+    > "$d/burn0000-0000-0000-0000-000000000000.jsonl"
+  mkdir -p "$CLIKAE_HOME/state/burn-sessions/claude"
+  printf 'burn0000-0000-0000-0000-000000000000\trun-1\t1700000000\n' \
+    > "$CLIKAE_HOME/state/burn-sessions/claude/a"
+  cd "$work"
+  run clikae
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"Human session"* ]] || false
+  [[ "$output" != *"Lane one-shot"* ]] || false
+  CLIKAE_RESUME_ALL=1 run clikae
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"Lane one-shot"* ]] || false
+}
+
+
+# --- #93 fix round 1, P2-1: the burn filter runs BEFORE the adapter's cut ------
+# home.sh's own comment promised "Filtered BEFORE the rank+cut below, or a
+# hidden row would just leave a gap instead of letting a real session take its
+# slot" — but each adapter was asked for exactly CLIKAE_HOME_RECENT_MAX rows and
+# cut to that BEFORE the filter ever saw them. So N burn sessions newer than the
+# human ones handed the filter N rows it had to drop, leaving zero: the Resume
+# block vanished entirely. #34's tank-scoping makes that reachable from any
+# directory on an agy tank (clikae's own doctrine burns agy hard), so the fix is
+# at the root — every engine, one place.
+_seed_burn_flood_agy() {
+  mkdir -p "$HOME/.gemini"
+  printf 'y\n' | clikae init agy default >/dev/null 2>&1
+  local base="$CLIKAE_HOME/profiles/antigravity/default/antigravity-cli"
+  mkdir -p "$base/brain" "$CLIKAE_HOME/state/burn-sessions/antigravity"
+  local i n sid f
+  for i in 1 2 3; do
+    sid="11111111-0000-4000-8000-00000000000$i"
+    mkdir -p "$base/brain/$sid/.system_generated/logs"
+    f="$base/brain/$sid/.system_generated/logs/transcript.jsonl"
+    printf '{"content":"HUMAN-%s content"}\n' "$i" > "$f"
+    touch -t "20200101000$i" "$f"
+  done
+  : > "$CLIKAE_HOME/state/burn-sessions/antigravity/default"
+  for i in 1 2 3 4 5 6 7 8 9 10 11 12; do
+    n="$(printf '%02d' "$i")"
+    sid="22222222-0000-4000-8000-0000000000$n"
+    mkdir -p "$base/brain/$sid/.system_generated/logs"
+    f="$base/brain/$sid/.system_generated/logs/transcript.jsonl"
+    printf '{"content":"BURN-%s content"}\n' "$n" > "$f"
+    touch -t "2021010100$n" "$f"
+    printf '%s\trun-%s\t1700000000\n' "$sid" "$n" >> "$CLIKAE_HOME/state/burn-sessions/antigravity/default"
+  done
+}
+
+@test "12 burn sessions newer than 3 human ones do not empty the continue list (agy tank, #93 P2-1)" {
+  _seed_burn_flood_agy
+  local work="$TEST_HOME/work-project"; mkdir -p "$work"; cd "$work"
+  CLIKAE_HOME_RECENT_MAX=10 run clikae
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  [[ "$output" == *"HUMAN-3 content"* ]] || { echo "$output"; false; }
+  [[ "$output" == *"HUMAN-2 content"* ]] || { echo "$output"; false; }
+  [[ "$output" == *"HUMAN-1 content"* ]] || { echo "$output"; false; }
+  [[ "$output" != *"BURN-"* ]] || { echo "burn leaked: $output"; false; }
+  # newest human first
+  [[ "$output" == *"HUMAN-3 content"*"HUMAN-2 content"*"HUMAN-1 content"* ]] \
+    || { echo "wrong order: $output"; false; }
+}
+
+@test "CLIKAE_RESUME_ALL=1 still shows the burn sessions that flooded the tank (agy, #93 P2-1)" {
+  _seed_burn_flood_agy
+  local work="$TEST_HOME/work-project"; mkdir -p "$work"; cd "$work"
+  CLIKAE_RESUME_ALL=1 CLIKAE_HOME_RECENT_MAX=10 run clikae
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  [[ "$output" == *"BURN-12 content"* ]] || { echo "$output"; false; }
+}
+
+@test "12 burn sessions newer than 3 human ones do not empty the continue list (claude tank, #93 P2-1)" {
+  clikae init claude a
+  local work="$TEST_HOME/work"; mkdir -p "$work"
+  local slug; slug="$(printf '%s' "$work" | LC_ALL=C sed 's/[^A-Za-z0-9]/-/g')"
+  local d="$CLIKAE_HOME/profiles/claude/a/projects/$slug"; mkdir -p "$d"
+  mkdir -p "$CLIKAE_HOME/state/burn-sessions/claude"
+  local i n sid
+  for i in 1 2 3; do
+    sid="11111111-0000-4000-8000-00000000000$i"
+    printf '{"type":"ai-title","aiTitle":"HUMAN-%s session","sessionId":"%s"}\n' "$i" "$sid" > "$d/$sid.jsonl"
+    touch -t "20200101000$i" "$d/$sid.jsonl"
+  done
+  : > "$CLIKAE_HOME/state/burn-sessions/claude/a"
+  for i in 1 2 3 4 5 6 7 8 9 10 11 12; do
+    n="$(printf '%02d' "$i")"
+    sid="22222222-0000-4000-8000-0000000000$n"
+    printf '{"type":"ai-title","aiTitle":"BURN-%s session","sessionId":"%s"}\n' "$n" "$sid" > "$d/$sid.jsonl"
+    touch -t "2021010100$n" "$d/$sid.jsonl"
+    printf '%s\trun-%s\t1700000000\n' "$sid" "$n" >> "$CLIKAE_HOME/state/burn-sessions/claude/a"
+  done
+  cd "$work"
+  CLIKAE_HOME_RECENT_MAX=10 run clikae
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  [[ "$output" == *"HUMAN-3 session"* ]] || { echo "$output"; false; }
+  [[ "$output" == *"HUMAN-2 session"* ]] || { echo "$output"; false; }
+  [[ "$output" == *"HUMAN-1 session"* ]] || { echo "$output"; false; }
+  [[ "$output" != *"BURN-"* ]] || { echo "burn leaked: $output"; false; }
+}
+
+# --- #61 round-6 P2-1: the merge of #93 and this PR, locked from both sides ---
+# The Resume loop answers two independent questions and #93 and #61 each changed
+# a different one: WHICH directories may contribute a row (this PR: the one
+# enumerator, not a glob) and HOW MANY rows to ask each tank for (#93: N + that
+# tank's own hidden burns). Taking either side of the conflict alone silently
+# lost the other, so assert both in ONE store: keeping only main's arm makes the
+# stray row reappear; keeping only this PR's arm leaves $_ask at the outer
+# loop's leftover value and the Resume block empties out again.
+@test "#61 round-6 P2-1: a stray non-tank dir stays out of the Continue list WHILE burns still give up their slots" {
+  clikae init claude a
+  local work="$TEST_HOME/work"; mkdir -p "$work"
+  local slug; slug="$(printf '%s' "$work" | LC_ALL=C sed 's/[^A-Za-z0-9]/-/g')"
+  local d="$CLIKAE_HOME/profiles/claude/a/projects/$slug"; mkdir -p "$d"
+  mkdir -p "$CLIKAE_HOME/state/burn-sessions/claude"
+  local i n sid
+  for i in 1 2 3; do
+    sid="11111111-0000-4000-8000-00000000000$i"
+    printf '{"type":"ai-title","aiTitle":"HUMAN-%s session","sessionId":"%s"}\n' "$i" "$sid" > "$d/$sid.jsonl"
+    touch -t "20200101000$i" "$d/$sid.jsonl"
+  done
+  : > "$CLIKAE_HOME/state/burn-sessions/claude/a"
+  for i in 1 2 3 4 5 6 7 8 9 10 11 12; do
+    n="$(printf '%02d' "$i")"
+    sid="22222222-0000-4000-8000-0000000000$n"
+    printf '{"type":"ai-title","aiTitle":"BURN-%s session","sessionId":"%s"}\n' "$n" "$sid" > "$d/$sid.jsonl"
+    touch -t "2021010100$n" "$d/$sid.jsonl"
+    printf '%s\trun-%s\t1700000000\n' "$sid" "$n" >> "$CLIKAE_HOME/state/burn-sessions/claude/a"
+  done
+  # A directory that clikae never named as a tank, appearing AFTER the one-time
+  # adoption sweep the init above completed, holding something transcript-shaped
+  # and newer than everything else in the store.
+  local sd="$CLIKAE_HOME/profiles/claude/strayone/projects/$slug"; mkdir -p "$sd"
+  sid="33333333-0000-4000-8000-000000000001"
+  printf '{"type":"ai-title","aiTitle":"STRAY-1 session","sessionId":"%s"}\n' "$sid" > "$sd/$sid.jsonl"
+  touch -t "202301010001" "$sd/$sid.jsonl"
+  [ ! -e "$CLIKAE_HOME/profiles/claude/strayone/.clikae-tank" ] || false
+  cd "$work"
+  CLIKAE_HOME_RECENT_MAX=10 run clikae
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  # this PR's half: the stray never becomes a resumable row
+  [[ "$output" != *"STRAY-1 session"* ]] || { echo "stray leaked: $output"; false; }
+  # #93's half: the per-tank ask still widens past the burns
+  [[ "$output" == *"HUMAN-3 session"* ]] || { echo "$output"; false; }
+  [[ "$output" == *"HUMAN-2 session"* ]] || { echo "$output"; false; }
+  [[ "$output" == *"HUMAN-1 session"* ]] || { echo "$output"; false; }
+  [[ "$output" != *"BURN-"* ]] || { echo "burn leaked: $output"; false; }
+}
+
+@test "12 burn sessions newer than 3 human ones do not empty the continue list (codex tank, #93 P2-1)" {
+  clikae init codex a
+  local work="$TEST_HOME/work"; mkdir -p "$work"
+  local sdir="$CLIKAE_HOME/profiles/codex/a/sessions/2026/06/03"; mkdir -p "$sdir"
+  mkdir -p "$CLIKAE_HOME/state/burn-sessions/codex"
+  local i n sid f
+  for i in 1 2 3; do
+    sid="019e0000-0000-7000-8000-00000000000$i"
+    f="$sdir/rollout-2026-06-03T09-00-0$i-$sid.jsonl"
+    {
+      printf '{"timestamp":"2026-06-03T01:00:00.000Z","type":"session_meta","payload":{"id":"%s","cwd":"%s","originator":"codex_exec"}}\n' "$sid" "$work"
+      printf '{"type":"event_msg","payload":{"type":"user_message","message":"HUMAN-%s session"}}\n' "$i"
+    } > "$f"
+    touch -t "20200101000$i" "$f"
+  done
+  : > "$CLIKAE_HOME/state/burn-sessions/codex/a"
+  for i in 1 2 3 4 5 6 7 8 9 10 11 12; do
+    n="$(printf '%02d' "$i")"
+    sid="019e0000-0000-7000-8000-0000000002$n"
+    f="$sdir/rollout-2026-06-03T10-00-$n-$sid.jsonl"
+    {
+      printf '{"timestamp":"2026-06-03T01:00:00.000Z","type":"session_meta","payload":{"id":"%s","cwd":"%s","originator":"codex_exec"}}\n' "$sid" "$work"
+      printf '{"type":"event_msg","payload":{"type":"user_message","message":"BURN-%s session"}}\n' "$n"
+    } > "$f"
+    touch -t "2021010100$n" "$f"
+    printf '%s\trun-%s\t1700000000\n' "$sid" "$n" >> "$CLIKAE_HOME/state/burn-sessions/codex/a"
+  done
+  cd "$work"
+  CLIKAE_HOME_RECENT_MAX=10 run clikae
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  [[ "$output" == *"HUMAN-3 session"* ]] || { echo "$output"; false; }
+  [[ "$output" == *"HUMAN-2 session"* ]] || { echo "$output"; false; }
+  [[ "$output" == *"HUMAN-1 session"* ]] || { echo "$output"; false; }
+  [[ "$output" != *"BURN-"* ]] || { echo "burn leaked: $output"; false; }
 }
 
 @test "a session's recap is shown under its continue row, hint stripped" {
@@ -309,6 +902,7 @@ _agy_log() { # <line>
     printf '{"type":"system","subtype":"away_summary","content":"Fixed the parser; next add tests. (disable recaps in /config)"}\n'
   } > "$d/ccc00000-0000-0000-0000-000000000000.jsonl"
   cd "$work"
+  _home_publish_fixture a
   run clikae
   [ "$status" -eq 0 ]
   [[ "$output" == *"Has a recap"* ]] || false
@@ -339,10 +933,183 @@ _agy_log() { # <line>
   [[ "$output" == *"codex"* ]] || false
 }
 
+@test "_home_total_sessions emits exactly ONE line (and it is the count)" {
+  # 🔴 `set -o pipefail` is load-bearing HERE, not decoration: bin/clikae runs
+  # under it and the bug does not exist without it. A test that forgets it passes
+  # on the broken code. With a claude-only store the codex/antigravity globs go
+  # unmatched, ls exits non-zero, pipefail promotes it, and the trailing
+  # `|| echo 0` appended a SECOND line after the true count — so the footer got
+  # "2\n0", printf died with `invalid number`, and the board printed
+  # "0 sessions total" above the sessions it had just listed.
+  set -o pipefail
+  export CLIKAE_LIB="$CLIKAE_TEST_ROOT/lib"
+  source "$CLIKAE_TEST_ROOT/lib/core/log.sh"
+  source "$CLIKAE_TEST_ROOT/lib/core/i18n.sh"
+  source "$CLIKAE_TEST_ROOT/lib/core/profile_store.sh"
+  source "$CLIKAE_TEST_ROOT/lib/core/adapter_loader.sh"
+  source "$CLIKAE_TEST_ROOT/lib/commands/home.sh"
+  clikae init claude work
+  local p="$CLIKAE_HOME/profiles/claude/work/projects/-w"
+  mkdir -p "$p"; : > "$p/aaa.jsonl"; : > "$p/bbb.jsonl"
+  run _home_total_sessions
+  [ "$status" -eq 0 ] || false
+  [ "$(printf '%s\n' "$output" | grep -c .)" -eq 1 ] || false
+  [ "$output" = "2" ] || false
+}
+
+# The store total is a glob list too, and it had the same hole `clikae resume`
+# had: no grok. It stays a glob (a count on the board's hot path, with no
+# adapter to load), so the engine list is pinned here instead of by
+# construction — the footer under-counted every grok session, and the scope
+# note that subtracts from this total would have too.
+@test "_home_total_sessions counts grok sessions as well as claude's" {
+  set -o pipefail
+  export CLIKAE_LIB="$CLIKAE_TEST_ROOT/lib"
+  source "$CLIKAE_TEST_ROOT/lib/core/log.sh"
+  source "$CLIKAE_TEST_ROOT/lib/core/i18n.sh"
+  source "$CLIKAE_TEST_ROOT/lib/core/profile_store.sh"
+  source "$CLIKAE_TEST_ROOT/lib/core/adapter_loader.sh"
+  source "$CLIKAE_TEST_ROOT/lib/commands/home.sh"
+  clikae init claude work
+  clikae init grok gk
+  local p="$CLIKAE_HOME/profiles/claude/work/projects/-w"
+  mkdir -p "$p"; : > "$p/aaa.jsonl"
+  local g="$CLIKAE_HOME/profiles/grok/gk/sessions/%2Fw/019fb7b0-9b86-7f82-98a4-0000000000aa"
+  mkdir -p "$g"; : > "$g/summary.json"
+  run _home_total_sessions
+  [ "$status" -eq 0 ] || false
+  [ "$output" = "2" ] || { echo "counted '$output', expected 2"; false; }
+}
+
+# The count feeds two sentences about conversations — the footer's "N sessions
+# total" and the Continue list's "N more in this store" — so a subagent
+# transcript in it is a wrong number, and on a real store it is most of the
+# number. Same basename rule as the adapter's adapter_transcript_is_resumable.
+@test "_home_total_sessions does not count claude's subagent transcripts" {
+  set -o pipefail
+  export CLIKAE_LIB="$CLIKAE_TEST_ROOT/lib"
+  source "$CLIKAE_TEST_ROOT/lib/core/log.sh"
+  source "$CLIKAE_TEST_ROOT/lib/core/i18n.sh"
+  source "$CLIKAE_TEST_ROOT/lib/core/profile_store.sh"
+  source "$CLIKAE_TEST_ROOT/lib/core/adapter_loader.sh"
+  source "$CLIKAE_TEST_ROOT/lib/commands/home.sh"
+  clikae init claude work
+  local p="$CLIKAE_HOME/profiles/claude/work/projects/-w"
+  mkdir -p "$p"; : > "$p/aaa.jsonl"
+  : > "$p/agent-bbb.jsonl"; : > "$p/agent-ccc.jsonl"
+  run _home_total_sessions
+  [ "$status" -eq 0 ] || false
+  [ "$output" = "1" ] || { echo "counted '$output', expected 1"; false; }
+}
+
+# 🔴 A store holding ONLY subagent transcripts must still render: the filter
+# stage exits non-zero when it prints nothing, and under bin/clikae's pipefail
+# that used to be the count killing the board. pipefail is load-bearing here.
+@test "_home_total_sessions survives a store with nothing but subagent transcripts" {
+  set -o pipefail
+  export CLIKAE_LIB="$CLIKAE_TEST_ROOT/lib"
+  source "$CLIKAE_TEST_ROOT/lib/core/log.sh"
+  source "$CLIKAE_TEST_ROOT/lib/core/i18n.sh"
+  source "$CLIKAE_TEST_ROOT/lib/core/profile_store.sh"
+  source "$CLIKAE_TEST_ROOT/lib/core/adapter_loader.sh"
+  source "$CLIKAE_TEST_ROOT/lib/commands/home.sh"
+  clikae init claude work
+  local p="$CLIKAE_HOME/profiles/claude/work/projects/-w"
+  mkdir -p "$p"; : > "$p/agent-bbb.jsonl"
+  run _home_total_sessions
+  [ "$status" -eq 0 ] || { echo "the count died: $output"; false; }
+  [ "$output" = "0" ] || { echo "counted '$output', expected 0"; false; }
+}
+
+@test "the burn order is the FLEET: a solo tank holds no position in it" {
+  # solo means out of the fleet (grammar §127) — not a relay target, skipped by
+  # the burn/watch rotation. It was still occupying a slot in the order, which
+  # made the order file disagree with the board: _home_items draws solo tanks in
+  # their own section at the bottom, so what you saw was never what the file
+  # said, and [ / ] wrote the interleaved file order back instead of the screen
+  # order. Measured on a real store: 4 of 9 order entries were solo, at
+  # positions 2, 4, 7 and 8.
+  source "$CLIKAE_TEST_ROOT/lib/core/log.sh"
+  source "$CLIKAE_TEST_ROOT/lib/core/profile_store.sh"
+  source "$CLIKAE_TEST_ROOT/lib/core/adapter_loader.sh"
+  clikae init claude alpha
+  clikae init claude beta
+  clikae init claude gamma
+  clikae solo claude beta                      # beta leaves the fleet
+  run order_list
+  [ "$status" -eq 0 ] || false
+  [[ "$output" != *"claude/beta"* ]] || false  # …so it is not in the burn order
+  [[ "$output" == *"claude/alpha"* ]] || false
+  [[ "$output" == *"claude/gamma"* ]] || false
+  # solo_list is the exact complement: together they cover every tank once.
+  run solo_list
+  [ "$output" = "claude/beta" ] || false
+  # And it comes back the moment it rejoins the fleet.
+  clikae solo claude beta --off
+  run order_list
+  [[ "$output" == *"claude/beta"* ]] || false
+}
+
+@test "_home_alias_forv finds the same alias the per-row reader did" {
+  # The board now reads the shell rc ONCE per frame and looks each tank up in a
+  # memo, instead of forking detect_shell_rc + awk per row. A memo that silently
+  # returned nothing would look exactly like "this tank has no alias" — which is
+  # a legitimate state — so nothing else on the board would go red. Pin it
+  # against the original per-row reader, which is still there.
+  export CLIKAE_LIB="$CLIKAE_TEST_ROOT/lib"
+  source "$CLIKAE_TEST_ROOT/lib/core/log.sh"
+  source "$CLIKAE_TEST_ROOT/lib/core/i18n.sh"
+  source "$CLIKAE_TEST_ROOT/lib/core/shell_rc.sh"
+  source "$CLIKAE_TEST_ROOT/lib/core/profile_store.sh"
+  source "$CLIKAE_TEST_ROOT/lib/core/adapter_loader.sh"
+  source "$CLIKAE_TEST_ROOT/lib/commands/home.sh"
+  clikae init claude alpha
+  clikae alias claude alpha
+  clikae init claude beta
+  clikae alias claude beta --name my-custom-name
+  clikae init claude gamma          # deliberately NO alias
+
+  local _ALIAS_MEMO=$'\n' _ALIASN=""
+  _home_alias_prime
+  _home_alias_forv claude alpha
+  [ "$_ALIASN" = "$(_home_alias_for claude alpha)" ] || false
+  [ "$_ALIASN" = "claude-alpha" ] || false
+  _home_alias_forv claude beta
+  [ "$_ALIASN" = "$(_home_alias_for claude beta)" ] || false
+  [ "$_ALIASN" = "my-custom-name" ] || false      # a custom name is carried
+  _home_alias_forv claude gamma
+  [ -z "$_ALIASN" ] || false                       # no alias stays no alias
+}
+
+@test "reordering never writes a solo tank into the order file" {
+  # _home_reorder materialises the WHOLE order when you press [ or ]. If solo
+  # tanks were still in order_list, one keypress re-wrote them back into the file
+  # even though the board had drawn them in a separate section.
+  source "$CLIKAE_TEST_ROOT/lib/core/log.sh"
+  source "$CLIKAE_TEST_ROOT/lib/core/i18n.sh"
+  source "$CLIKAE_TEST_ROOT/lib/core/profile_store.sh"
+  source "$CLIKAE_TEST_ROOT/lib/core/adapter_loader.sh"
+  source "$CLIKAE_TEST_ROOT/lib/core/limit.sh"
+  source "$CLIKAE_TEST_ROOT/lib/commands/home.sh"
+  clikae init claude alpha
+  clikae init claude beta
+  clikae init claude gamma
+  clikae solo claude beta
+  _home_reorder claude gamma -1                # any reorder rewrites the file
+  # 🔴 Every assertion carries `|| false` (tests/README.md): bats only fails on
+  # the LAST command's status, so a bare `! grep` in the middle is decoration.
+  # Without it this test passed on the very code it was written to catch.
+  [ -f "$CLIKAE_HOME/order" ] || false
+  ! grep -qxF 'claude/beta' "$CLIKAE_HOME/order" || false
+  grep -qxF 'claude/alpha' "$CLIKAE_HOME/order" || false
+  grep -qxF 'claude/gamma' "$CLIKAE_HOME/order" || false
+}
+
 @test "_home_reorder moves a tank within the order file" {
   source "$CLIKAE_TEST_ROOT/lib/core/log.sh"
   source "$CLIKAE_TEST_ROOT/lib/core/i18n.sh"
   source "$CLIKAE_TEST_ROOT/lib/core/profile_store.sh"
+  source "$CLIKAE_TEST_ROOT/lib/core/adapter_loader.sh"
   source "$CLIKAE_TEST_ROOT/lib/core/limit.sh"
   source "$CLIKAE_TEST_ROOT/lib/commands/home.sh"
   clikae init claude alpha
@@ -376,6 +1143,7 @@ _agy_log() { # <line>
 
 @test "agy tanks show the 'agy' name, not 'antigravity'" {
   mkdir -p "$CLIKAE_HOME/profiles/antigravity/main"
+  printf 'antigravity\n' > "$CLIKAE_HOME/profiles/antigravity/main/.clikae-tank"   # #61 round-1 P1-3
   printf 'consented\n' > "$CLIKAE_HOME/antigravity-multi-consent"
   ln -s "$CLIKAE_HOME/profiles/antigravity/main" "$HOME/.gemini"
   clikae init claude work
@@ -393,6 +1161,7 @@ _agy_log() { # <line>
   local long; long="$(printf 'X%.0s' $(seq 1 200))"
   printf '{"type":"ai-title","aiTitle":"%s","sessionId":"a"}\n' "$long" > "$d/aaa00000-0000-0000-0000-000000000000.jsonl"
   cd "$work"
+  _home_publish_fixture a
   run clikae
   [ "$status" -eq 0 ]
   [[ "$output" == *"…"* ]] || false                  # truncated
@@ -425,41 +1194,195 @@ _agy_log() { # <line>
   source "$CLIKAE_TEST_ROOT/lib/core/limit.sh"
   limit_engine_detectable claude
   limit_engine_detectable antigravity
-  ! limit_engine_detectable codex
-  ! limit_engine_detectable gh
+  run limit_engine_detectable codex
+  [ "$status" -eq 1 ]
+  run limit_engine_detectable gh
+  [ "$status" -eq 1 ]
 }
 
-@test "_home_fuel_dot: detectable+clean = ●, un-detectable (codex) = ○ no-reading" {
+@test "_home_fuel_dot: every state has its OWN glyph, not just its own colour" {
   source "$CLIKAE_TEST_ROOT/lib/core/log.sh"
   source "$CLIKAE_TEST_ROOT/lib/core/limit.sh"
   source "$CLIKAE_TEST_ROOT/lib/commands/home.sh"
-  # claude, empty dry set → green ● (a real reading: ready)
+  # 🔴 The glyph carries the meaning; colour only reinforces it. Dry, weekly and
+  # ready all used to print the SAME ● and differ by colour alone — unreadable
+  # with a colour-vision deficiency, under NO_COLOR, or in a piped board.
+  # ready = ● · dry = ○ · weekly = ◐ · no reading = ·
   run _home_fuel_dot "" claude work
   [[ "$output" == *"●"* ]] || false
-  # codex can't be read from disk → honest ○, never a guessed ●
+  # codex can't be read from disk → the faintest mark, never a guessed ●
   run _home_fuel_dot "" codex cheap
-  [[ "$output" == *"○"* ]] || false
+  [[ "$output" == *"·"* ]] || false
   [[ "$output" != *"●"* ]] || false
+  # …and no two states may share a glyph. Strip SGR and compare what the eye sees.
+  local _ready _dry _week
+  _ready="$(_home_fuel_dot "" claude work | sed $'s/\033\\[[0-9;]*[A-Za-z]//g' | cut -d$'\037' -f1)"
+  _dry="$(_home_fuel_dot "$(printf 'claude\037work\037x')" claude work | sed $'s/\033\\[[0-9;]*[A-Za-z]//g' | cut -d$'\037' -f1)"
+  mkdir -p "$CLIKAE_HOME/cache/weekly"
+  printf "used 85%% of your weekly limit\n" > "$CLIKAE_HOME/cache/weekly/claude-work"
+  _week="$(_home_fuel_dot "" claude work | sed $'s/\033\\[[0-9;]*[A-Za-z]//g' | cut -d$'\037' -f1)"
+  [ "$_ready" != "$_dry" ]  || false
+  [ "$_ready" != "$_week" ] || false
+  [ "$_dry"   != "$_week" ] || false
 }
 
-@test "_home_fuel_dot: a dry tank is ● with its verbatim reset phrase" {
+@test "_home_fuel_dot: a codex tank with a real rate_limits reading gets its own light, not the faintest mark" {
+  # Unlike the dry set and the weekly-BETA cache, codex's OWN rate_limits
+  # reading fires on a HEALTHY tank too — see limit_codex_status and
+  # docs/DESIGN-board-fuel-dots.md ("codex gets a real light now").
+  source "$CLIKAE_TEST_ROOT/lib/core/log.sh"
+  source "$CLIKAE_TEST_ROOT/lib/core/profile_store.sh"
+  source "$CLIKAE_TEST_ROOT/lib/core/adapter_loader.sh"
+  source "$CLIKAE_TEST_ROOT/lib/core/limit.sh"
+  source "$CLIKAE_TEST_ROOT/lib/commands/home.sh"
+  local d="$CLIKAE_HOME/profiles/codex/cheap"
+  mkdir -p "$d/sessions/2026/09/10"
+  printf '%s\n' \
+    '{"timestamp": "2026-09-10T09:00:00.000Z", "type": "event_msg", "payload": {"type": "token_count", "info": {}, "rate_limits": {"limit_id": "codex", "limit_name": null, "primary": {"used_percent": 10.0, "window_minutes": 300, "resets_at": 4102444800}, "secondary": {"used_percent": 96.0, "window_minutes": 10080, "resets_at": 4103049600}, "credits": {"has_credits": false}}}}' \
+    > "$d/sessions/2026/09/10/rollout-a.jsonl"
+  # secondary at 96% used (4% left) is the tighter window → yellow, its own
+  # shape (◐, matching the existing weekly-BETA glyph, never a guessed ●).
+  run _home_fuel_dot "" codex cheap
+  [[ "$output" == *"◐"* ]] || false
+  [[ "$output" != *"●"* ]] || false
+  [[ "$output" == *"5h"* ]]     || false   # both windows named in the note
+  [[ "$output" == *"weekly"* ]] || false
+  # An existing hard-dry marker still outranks the proactive reading — a real
+  # persisted dry event is worth more than a vendor "N% left" snapshot.
+  run _home_fuel_dot "$(printf 'codex\037cheap\037x')" codex cheap
+  [[ "$output" == *"○"* ]] || false
+}
+
+@test "_home_fuel_dot: a dry tank is ○ with its verbatim reset phrase" {
   source "$CLIKAE_TEST_ROOT/lib/core/log.sh"
   source "$CLIKAE_TEST_ROOT/lib/core/limit.sh"
   source "$CLIKAE_TEST_ROOT/lib/commands/home.sh"
   run _home_fuel_dot "$(printf 'claude\037work\037Resets in 2h')" claude work
-  [[ "$output" == *"●"* ]] || false
+  [[ "$output" == *"○"* ]] || false
   [[ "$output" == *"Resets in 2h"* ]] || false
 }
 
-@test "_home_fuel_dot: a cached weekly-% (BETA) lights ● with the verbatim phrase" {
+@test "_home_fuel_dot: a cached weekly-% (BETA) lights ◐ with the verbatim phrase" {
   source "$CLIKAE_TEST_ROOT/lib/core/log.sh"
   source "$CLIKAE_TEST_ROOT/lib/core/limit.sh"
   source "$CLIKAE_TEST_ROOT/lib/commands/home.sh"
   mkdir -p "$CLIKAE_HOME/cache/weekly"
   printf "used 85%% of your weekly limit\n" > "$CLIKAE_HOME/cache/weekly/claude-work"
   run _home_fuel_dot "" claude work
-  [[ "$output" == *"●"* ]] || false
+  [[ "$output" == *"◐"* ]] || false
   [[ "$output" == *"85% of your weekly limit"* ]] || false
+}
+
+# P2-1, round-3 review: home.sh:1012-1026 (the usage_board_fields block) used
+# to run BEFORE :1027 (the dry check) — any <24h vendor reading, however
+# fresh, silently painted a percentage dot over a tank that was ACTUALLY
+# dry, eating its verbatim reset string. Per
+# docs/DESIGN-board-fuel-dots.md:41 (red = dry, including a sibling on the
+# same account) and :223-224 (#75: an expired limit precedes proactive
+# percentage snapshots), dry and the expired-limit caution must win FIRST —
+# the vendor reading only gets to colour a tank that clears both.
+@test "_home_fuel_dot: dry and the expired-limit caution win over ANY fresh vendor reading; a healthy tank still gets its percentage (P2-1, round-3 review)" {
+  source "$CLIKAE_TEST_ROOT/lib/core/log.sh"
+  source "$CLIKAE_TEST_ROOT/lib/core/limit.sh"
+  source "$CLIKAE_TEST_ROOT/lib/core/usage.sh"
+  source "$CLIKAE_TEST_ROOT/lib/commands/home.sh"
+  local now t
+  now="$(date +%s)"
+  mkdir -p "$CLIKAE_HOME/state/usage/claude"
+  # Every tank below carries the SAME 30-second-fresh 40% reading — well
+  # under both the 120s TTL and the 24h "too stale to trust" line — so a
+  # percentage dot is available to every one of them; only dry-set
+  # membership decides whether it's allowed to show.
+  for t in owndry siblingdry expiredunverified healthy; do
+    printf '{"window_pct":40,"weekly_pct":40,"window_resets_at":"2099-01-01T00:00:00.000000+00:00","weekly_resets_at":"2099-01-07T00:00:00.000000+00:00","source":"vendor","cached_at":%d,"scanned_at":%d}' \
+      "$((now - 30))" "$((now - 30))" > "$CLIKAE_HOME/state/usage/claude/$t.json"
+  done
+  local unverified="${LIMIT_RESET_UNVERIFIED:-reset passed · unverified}"
+  # owndry/siblingdry: a real, parseable reset phrase in the dry set — home.sh
+  # cannot tell "this tank's own transcript limit" from "a sibling on the
+  # same dry account" apart (both are just an entry keyed by engine/tank; the
+  # dry-set builder is what tells them apart), so both exercise the exact
+  # same code path here. expiredunverified: the phrase IS the unverified
+  # marker itself, the caution path (_home_is_dryv returns false but leaves
+  # $_DRY_RESET set to it).
+  local dry_set
+  dry_set="$(printf 'claude\037owndry\037Resets in 2h\nclaude\037siblingdry\037Resets in 3h\nclaude\037expiredunverified\037%s' "$unverified")"
+
+  run _home_fuel_dot "$dry_set" claude owndry
+  [[ "$output" == *"○"* ]] || false
+  [[ "$output" == *"Resets in 2h"* ]] || false
+  [[ "$output" != *"40%"* ]] || false
+
+  run _home_fuel_dot "$dry_set" claude siblingdry
+  [[ "$output" == *"○"* ]] || false
+  [[ "$output" == *"Resets in 3h"* ]] || false
+  [[ "$output" != *"40%"* ]] || false
+
+  run _home_fuel_dot "$dry_set" claude expiredunverified
+  [[ "$output" == *"◐"* ]] || false
+  [[ "$output" == *"$unverified"* ]] || false
+  [[ "$output" != *"40%"* ]] || false
+
+  # Not in the dry set at all: the fix narrows precedence, it does not blind
+  # the board to a genuinely healthy tank's real reading.
+  run _home_fuel_dot "$dry_set" claude healthy
+  [[ "$output" == *"●"* ]] || false
+  [[ "$output" == *"window 40%"* ]] || false
+}
+
+@test "_home_fuel_dot: window and weekly are judged on SEPARATE thresholds, not peak = max(window,weekly) (2026-09-22 decision)" {
+  # A full 5h window costs "wait up to two hours"; a full week costs days —
+  # so they no longer share one peak number. window's yellow line (90) sits
+  # above weekly's (85, one step before the fleet's own "stop burning a
+  # shared tank at 90%" rule); both axes go red at 100 (fully spent).
+  source "$CLIKAE_TEST_ROOT/lib/core/log.sh"
+  source "$CLIKAE_TEST_ROOT/lib/core/limit.sh"
+  source "$CLIKAE_TEST_ROOT/lib/core/usage.sh"
+  source "$CLIKAE_TEST_ROOT/lib/commands/home.sh"
+  local now
+  now="$(date +%s)"
+  mkdir -p "$CLIKAE_HOME/state/usage/claude"
+  _fdot_seed() {
+    printf '{"window_pct":%s,"weekly_pct":%s,"window_resets_at":"2099-01-01T00:00:00.000000+00:00","weekly_resets_at":"2099-01-07T00:00:00.000000+00:00","source":"vendor","cached_at":%d,"scanned_at":%d}' \
+      "$1" "$2" "$((now - 30))" "$((now - 30))" > "$CLIKAE_HOME/state/usage/claude/$3.json"
+  }
+
+  # window nearly spent (95), weekly barely touched (10) -> yellow on window alone.
+  _fdot_seed 95 10 windowhot
+  run _home_fuel_dot "" claude windowhot
+  [[ "$output" == *"◐"* ]] || false
+  [[ "$output" != *"●"* ]] || false
+  [[ "$output" != *"○"* ]] || false
+
+  # weekly nearly spent (95), window barely touched (10) -> yellow on weekly alone.
+  _fdot_seed 10 95 weeklyhot
+  run _home_fuel_dot "" claude weeklyhot
+  [[ "$output" == *"◐"* ]] || false
+  [[ "$output" != *"●"* ]] || false
+  [[ "$output" != *"○"* ]] || false
+
+  # window fully spent -> red, regardless of weekly's low number.
+  _fdot_seed 100 5 windowdone
+  run _home_fuel_dot "" claude windowdone
+  [[ "$output" == *"○"* ]] || false
+
+  # weekly fully spent -> red, regardless of window's low number.
+  _fdot_seed 5 100 weeklydone
+  run _home_fuel_dot "" claude weeklydone
+  [[ "$output" == *"○"* ]] || false
+
+  # both under their own yellow line -> green.
+  _fdot_seed 89 84 bothok
+  run _home_fuel_dot "" claude bothok
+  [[ "$output" == *"●"* ]] || false
+  [[ "$output" == *"window 89%"* ]] || false
+  [[ "$output" == *"weekly 84%"* ]] || false
+
+  # the transcript-dry path (unrelated to the vendor-percentage thresholds
+  # above) is still red — unchanged by this split.
+  run _home_fuel_dot "$(printf 'claude\037transcriptdry\037Resets in 1h')" claude transcriptdry
+  [[ "$output" == *"○"* ]] || false
+  [[ "$output" == *"Resets in 1h"* ]] || false
 }
 
 @test "limit_weekly_marker (BETA): captures the vendor weekly phrase, ignores noise" {
@@ -572,7 +1495,7 @@ _agy_log() { # <line>
 
   CLIKAE_LANG=en-US run clikae
   [ "$status" -eq 0 ]
-  [[ "$output" == *"14 engines"* ]] || false       # English keeps the space
+  [[ "$output" == *"15 engines"* ]] || false       # English keeps the space
 }
 
 @test "_home_help_row wraps a long es/de/fr/pt description without overflowing 80 cols" {
@@ -580,7 +1503,8 @@ _agy_log() { # <line>
   source "$CLIKAE_TEST_ROOT/lib/core/log.sh"
   local loc
   for loc in es-ES de-DE fr-FR pt-BR; do
-    ( source "$CLIKAE_TEST_ROOT/lib/i18n/$loc.sh"
+    ( # shellcheck source=/dev/null
+      source "$CLIKAE_TEST_ROOT/lib/i18n/$loc.sh"
       source "$CLIKAE_TEST_ROOT/lib/commands/home.sh"
       # T_K_SOLO/T_K_MEMORY are full sentences (82-92 cols) that used to be
       # printed on one unwrapped line via an absolute \033[24G column jump.
@@ -712,4 +1636,495 @@ _agy_log() { # <line>
   [ "$(_dwidth "$got")" -le 30 ]
   [[ "$got" == /Users* ]] || false
   [[ "$got" == *resume.sh ]] || false
+}
+
+# --- board key legend parity --------------------------------------------------
+# The `?` overlay is the ONE screen whose whole job is "here is every key", and
+# it silently drifted: `R` (the cross-tank resume picker) was bound for releases
+# without ever being listed. A source scan is enough to keep the two in step —
+# it reads the case labels of the board's key loop and the rows of the overlay,
+# and fails when a key is reachable but undocumented.
+@test "every key the board binds is listed in the ? help overlay" {
+  local home_sh="$CLIKAE_TEST_ROOT/lib/commands/home.sh"
+  [ -f "$home_sh" ]
+
+  # Rows of the overlay: _home_help_row "<keys>" "<description>"
+  local legend
+  legend="$(grep -oE '_home_help_row "[^"]+"' "$home_sh" | sed -E 's/.*"(.*)"/\1/')"
+
+  # Case labels of the board's live key loop, single-character arms only —
+  # named keys (up/down/enter/esc/pgup…) are covered by the arrow/paging rows,
+  # and a range like [1-9] is listed as "1-9".
+  local labels key missing=""
+  labels="$(sed -n '/^_home_pick()/,/^}/p' "$home_sh" |
+            grep -oE "^      '?[A-Za-z/?]'?\)" |
+            tr -d "')" | tr -d ' ')"
+
+  # R4 review P3-5: `$labels` contains a literal `?` — unquoted word-splitting
+  # here runs it through pathname expansion. On a clean cwd `?` just expands
+  # to itself (a false red: `?` isn't a real _home_pick case, so it prints as
+  # "missing"), but with any single-char file sitting in cwd it silently
+  # expands to that filename INSTEAD and disappears from the loop — the `?`
+  # guard below then never fires, and the real `?` key quietly stops being
+  # checked. Reading `$labels` line-by-line (one key per grep -o match, one
+  # match per line already) sidesteps word-splitting and globbing entirely.
+  while IFS= read -r key; do
+    [ -n "$key" ] || continue
+    # `?` opens the overlay itself — listing it inside would be noise.
+    [ "$key" = "?" ] && continue
+    case "$legend" in
+      *"$key"*) ;;
+      *) missing="$missing $key" ;;
+    esac
+  done <<< "$labels"
+  [ -z "$missing" ] || { echo "keys bound but absent from the ? overlay:$missing"; false; }
+}
+
+@test "the ? overlay key-legend scan survives a stray single-char file in cwd" {
+  # R4 review P3-5: pin the failure mode directly, not just the fix — an
+  # unquoted `for key in $labels` would let pathname expansion swap a real
+  # label (most dangerously `?` itself) for a filename sitting in cwd.
+  local home_sh="$CLIKAE_TEST_ROOT/lib/commands/home.sh"
+  [ -f "$home_sh" ]
+  local stray_dir="$TEST_HOME/stray"; mkdir -p "$stray_dir"
+  : > "$stray_dir/h"
+  : > "$stray_dir/x"
+  cd "$stray_dir"
+
+  local legend labels key missing=""
+  legend="$(grep -oE '_home_help_row "[^"]+"' "$home_sh" | sed -E 's/.*"(.*)"/\1/')"
+  labels="$(sed -n '/^_home_pick()/,/^}/p' "$home_sh" |
+            grep -oE "^      '?[A-Za-z/?]'?\)" |
+            tr -d "')" | tr -d ' ')"
+
+  while IFS= read -r key; do
+    [ -n "$key" ] || continue
+    [ "$key" = "?" ] && continue
+    case "$legend" in
+      *"$key"*) ;;
+      *) missing="$missing $key" ;;
+    esac
+  done <<< "$labels"
+  [ -z "$missing" ] || { echo "keys bound but absent from the ? overlay:$missing"; false; }
+}
+
+@test "_home_refresh returns the fuel scan intact, however big it gets" {
+  # The board now overlaps the fuel scan with the item build instead of running
+  # them back to back. Both halves have to survive that. The dry set is the
+  # fragile one: on a healthy fleet it is EMPTY, so a refresh that silently
+  # dropped it would look perfectly correct on any machine where nothing is dry
+  # — including this one. So feed it a specimen that is large and uneven.
+  source "$CLIKAE_TEST_ROOT/lib/core/log.sh"
+  source "$CLIKAE_TEST_ROOT/lib/commands/home.sh"
+
+  # ~100 KB, well past a pipe buffer: an implementation that handed the scan
+  # over a pipe instead of a file would block its writer and deadlock on `wait`.
+  # Distinct first/last/count so truncation at EITHER end is visible.
+  _home_items()   { printf 'ITEM-ONE\nITEM-TWO\n'; }
+  _home_dry_set() { local i; for ((i = 1; i <= 4000; i++)); do
+                      printf 'engine-%04d\037tank-%04d\037resets at %02d:00\n' "$i" "$i" $(( i % 24 ))
+                    done; }
+
+  local items dry
+  _home_refresh
+
+  [ "$items" = "$(printf 'ITEM-ONE\nITEM-TWO')" ] || false
+  [ "$(printf '%s\n' "$dry" | wc -l | tr -d ' ')" = "4000" ] || false
+  [[ "$dry" == "engine-0001"$'\037'"tank-0001"$'\037'"resets at 01:00"* ]] || false
+  [[ "$dry" == *"engine-4000"$'\037'"tank-4000"$'\037'"resets at 16:00" ]] || false
+}
+
+@test "_home_refresh survives a fuel scan that fails" {
+  # The scan runs as a background job now, so its exit status reaches the board
+  # through `wait`. Under `set -e` an unguarded non-zero there kills the board
+  # outright — you'd lose the whole dashboard because one tank's log was
+  # unreadable. The items must still arrive.
+  source "$CLIKAE_TEST_ROOT/lib/core/log.sh"
+  source "$CLIKAE_TEST_ROOT/lib/commands/home.sh"
+  set -eo pipefail                      # the shell the board actually runs under
+
+  _home_items()   { printf 'STILL-HERE\n'; }
+  _home_dry_set() { printf 'partial\n'; return 3; }
+
+  local items dry
+  _home_refresh
+  [ "$items" = "STILL-HERE" ] || false
+  [ "$dry" = "partial" ] || false       # whatever it managed to emit is kept
+}
+
+@test "_home_refresh falls back to serial when there is no writable temp dir" {
+  # A full or read-only TMPDIR is exactly when you least want to lose the board.
+  # The fallback here is also the one line a careless batch-edit can turn into a
+  # self-call — which does not fail loudly, it recurses until the shell dies.
+  source "$CLIKAE_TEST_ROOT/lib/core/log.sh"
+  source "$CLIKAE_TEST_ROOT/lib/commands/home.sh"
+
+  mktemp() { return 1; }                # the only way in is the fallback
+  _home_items()   { printf 'FELL-BACK\n'; }
+  _home_dry_set() { printf 'dry-row\n'; }
+
+  local items dry
+  _home_refresh
+  [ "$items" = "FELL-BACK" ] || false
+  [ "$dry" = "dry-row" ] || false
+}
+
+@test "the keybar only offers keys that work on the selected row" {
+  # `K` is gated on the selected row being LIVE and `[ ]` on it being a TANK, but
+  # the bar printed both on every row: on a tank row `K` did nothing, on a live
+  # row `[ ]` did nothing, on a resume row neither did. An advertised key that is
+  # byte-identical to an unbound one is the resume picker's dead `?` again.
+  export CLIKAE_LIB="$CLIKAE_TEST_ROOT/lib"
+  source "$CLIKAE_TEST_ROOT/lib/core/log.sh"
+  source "$CLIKAE_TEST_ROOT/lib/core/i18n.sh"
+  source "$CLIKAE_TEST_ROOT/lib/core/profile_store.sh"
+  source "$CLIKAE_TEST_ROOT/lib/core/adapter_loader.sh"
+  source "$CLIKAE_TEST_ROOT/lib/core/limit.sh"
+  source "$CLIKAE_TEST_ROOT/lib/core/autonomy.sh"
+  source "$CLIKAE_TEST_ROOT/lib/commands/home.sh"
+
+  # Three rows, one of each kind, in a known order.
+  # printf -v, not $( ): command substitution strips the trailing newline, so
+  # concatenating three of them glues the rows into ONE line — and then rows 1
+  # and 2 do not exist, their assertions pass vacuously, and the test reports
+  # green for a bar it never looked at. That is how this was first written.
+  local items
+  printf -v items '%s\n%s\n%s\n' \
+    "$(printf 'live\037claude\037alive\037\037\0370\037')" \
+    "$(printf 'resume\037claude\037rtank\037a title\037\0370 5m\037sid1')" \
+    "$(printf 'tank\037claude\037ttank\037acct\037\0370\037')"
+
+  bar() { _home_pick_draw_body "$items" "$1" "" | sed $'s/\033\\[[0-9;?]*[A-Za-z]//g'; }
+
+  # row 0 = live: close, no reorder
+  bar_out="$(bar 0)"
+  [[ "$bar_out" == *"$T_K_CLOSE"* ]]   || { echo "live row lost 'close'"; false; }
+  [[ "$bar_out" != *"$T_K_REORDER"* ]] || { echo "live row still offers reorder"; false; }
+
+  # row 1 = resume: neither
+  bar_out="$(bar 1)"
+  [[ "$bar_out" != *"$T_K_CLOSE"* ]]   || { echo "resume row still offers close"; false; }
+  [[ "$bar_out" != *"$T_K_REORDER"* ]] || { echo "resume row still offers reorder"; false; }
+
+  # row 2 = tank: reorder, no close
+  bar_out="$(bar 2)"
+  [[ "$bar_out" == *"$T_K_REORDER"* ]] || { echo "tank row lost 'reorder'"; false; }
+  [[ "$bar_out" != *"$T_K_CLOSE"* ]]   || { echo "tank row still offers close"; false; }
+
+  # And the keys that work everywhere are always there, on every row.
+  local i
+  for i in 0 1 2; do
+    bar_out="$(bar $i)"
+    [[ "$bar_out" == *"$T_K_MOVE"* ]]   || { echo "row $i lost 'move'"; false; }
+    [[ "$bar_out" == *"$T_K_OPEN"* ]]   || { echo "row $i lost 'open'"; false; }
+    [[ "$bar_out" == *"$T_K_FILTER"* ]] || { echo "row $i lost 'filter'"; false; }
+    [[ "$bar_out" == *"$T_K_QUIT"* ]]   || { echo "row $i lost 'quit'"; false; }
+  done
+}
+
+@test "_home_row_kind_at reads the same row the picker acts on" {
+  # The bar's slot and the key handler must agree about what row you are on. They
+  # find it two different ways — this walks the item list, the handler slices the
+  # sel'th line — so pin them against each other rather than trusting both.
+  export CLIKAE_LIB="$CLIKAE_TEST_ROOT/lib"
+  source "$CLIKAE_TEST_ROOT/lib/core/log.sh"
+  source "$CLIKAE_TEST_ROOT/lib/core/i18n.sh"
+  source "$CLIKAE_TEST_ROOT/lib/commands/home.sh"
+  local items
+  items="$(printf 'live\037c\037a\037\037\0370\037\nresume\037c\037b\037t\037\0370\037s\ntank\037c\037d\037x\037\0370\037\n')"
+  local i want got
+  i=0
+  while IFS= read -r line; do
+    [ -n "$line" ] || continue
+    want="$(printf '%s' "$line" | cut -d$'\037' -f1)"     # how the picker does it
+    got="$(_home_row_kind_at "$items" "$i")"
+    [ "$want" = "$got" ] || { echo "row $i: picker sees '$want', keybar sees '$got'"; false; }
+    i=$(( i + 1 ))
+  done <<EOF
+$items
+EOF
+  [ "$i" -eq 3 ] || { echo "expected 3 rows, walked $i"; false; }
+  # Past the end is empty, not the last row — otherwise an out-of-range selection
+  # would silently offer the previous row's keys.
+  [ -z "$(_home_row_kind_at "$items" 99)" ] || false
+}
+
+# --- #93 fix round 2, P2-1: the ask is widened PER TANK, and the ceiling is the
+# burn sidecar's own cap ------------------------------------------------------
+# Round 1 widened the ask by the WHOLE store's burn count and then clamped it at
+# CLIKAE_HOME_RECENT_SCAN_MAX=200 — so ~190 burn sids ANYWHERE in the store put
+# the clamp back in charge and the bug came back: 195 burns + 50 humans gave 5
+# rows instead of 10, and 250 burns + 3 humans gave no Resume block at all, with
+# nothing on the board saying so. The sidecar's own cap is 2000, so 190 is a
+# routine number for burn-heavy agy use. These pin those exact numbers, on all
+# three board engines, plus the two things that make the bound honest: the ask
+# is per tank (another tank's burns are not this tank's problem) and the board
+# SAYS "truncated" when the ceiling really does bite.
+
+_recent_human_rows() {   # count HUMAN-#### rows in $output
+  printf '%s\n' "$output" | grep -c 'HUMAN-' || true
+}
+
+_seed_bulk_agy() {   # <tank> <humans> <burns>
+  mkdir -p "$HOME/.gemini"
+  printf 'y\n' | clikae init agy "$1" >/dev/null 2>&1
+  local base="$CLIKAE_HOME/profiles/antigravity/$1/antigravity-cli"
+  mkdir -p "$base/brain" "$CLIKAE_HOME/state/burn-sessions/antigravity"
+  local i sid f
+  for ((i=1; i<=$2; i++)); do
+    printf -v sid '11111111-0000-4000-8000-%012d' "$i"
+    mkdir -p "$base/brain/$sid/.system_generated/logs"
+    f="$base/brain/$sid/.system_generated/logs/transcript.jsonl"
+    printf '{"content":"HUMAN-%04d content"}\n' "$i" > "$f"
+    touch -t 202001010000 "$f"      # humans OLD; burns keep "now" => burns win
+  done
+  : > "$CLIKAE_HOME/state/burn-sessions/antigravity/$1"
+  for ((i=1; i<=$3; i++)); do
+    printf -v sid '22222222-0000-4000-8000-%012d' "$i"
+    mkdir -p "$base/brain/$sid/.system_generated/logs"
+    printf '{"content":"BURN-%04d content"}\n' "$i" \
+      > "$base/brain/$sid/.system_generated/logs/transcript.jsonl"
+  done
+  awk -v n="$3" 'BEGIN{for(i=1;i<=n;i++) printf "22222222-0000-4000-8000-%012d\trun\t1700000000\n", i}' \
+    > "$CLIKAE_HOME/state/burn-sessions/antigravity/$1"
+}
+
+_seed_bulk_claude() {   # <tank> <humans> <burns>  (in $TEST_HOME/work)
+  clikae init claude "$1" >/dev/null 2>&1
+  local work="$TEST_HOME/work"; mkdir -p "$work"
+  local slug; slug="$(printf '%s' "$work" | LC_ALL=C sed 's/[^A-Za-z0-9]/-/g')"
+  local d="$CLIKAE_HOME/profiles/claude/$1/projects/$slug"; mkdir -p "$d"
+  mkdir -p "$CLIKAE_HOME/state/burn-sessions/claude"
+  local i sid
+  for ((i=1; i<=$2; i++)); do
+    printf -v sid '33333333-0000-4000-8000-%012d' "$i"
+    printf '{"type":"ai-title","aiTitle":"HUMAN-%04d session","sessionId":"%s"}\n' "$i" "$sid" > "$d/$sid.jsonl"
+    touch -t 202001010000 "$d/$sid.jsonl"
+  done
+  for ((i=1; i<=$3; i++)); do
+    printf -v sid '44444444-0000-4000-8000-%012d' "$i"
+    printf '{"type":"ai-title","aiTitle":"BURN-%04d session","sessionId":"%s"}\n' "$i" "$sid" > "$d/$sid.jsonl"
+  done
+  awk -v n="$3" 'BEGIN{for(i=1;i<=n;i++) printf "44444444-0000-4000-8000-%012d\trun\t1700000000\n", i}' \
+    > "$CLIKAE_HOME/state/burn-sessions/claude/$1"
+}
+
+_seed_bulk_codex() {   # <tank> <humans> <burns>  (in $TEST_HOME/work)
+  clikae init codex "$1" >/dev/null 2>&1
+  local work="$TEST_HOME/work"; mkdir -p "$work"
+  local sdir="$CLIKAE_HOME/profiles/codex/$1/sessions/2026/06/03"; mkdir -p "$sdir"
+  mkdir -p "$CLIKAE_HOME/state/burn-sessions/codex"
+  local i sid f
+  for ((i=1; i<=$2; i++)); do
+    printf -v sid '019e0000-0000-7000-8000-%012d' "$i"
+    f="$sdir/rollout-2026-06-03T09-00-00-$sid.jsonl"
+    {
+      printf '{"timestamp":"2026-06-03T01:00:00.000Z","type":"session_meta","payload":{"id":"%s","cwd":"%s","originator":"codex_exec"}}\n' "$sid" "$work"
+      printf '{"type":"event_msg","payload":{"type":"user_message","message":"HUMAN-%04d session"}}\n' "$i"
+    } > "$f"
+    touch -t 202001010000 "$f"
+  done
+  for ((i=1; i<=$3; i++)); do
+    printf -v sid '019e9999-0000-7000-8000-%012d' "$i"
+    f="$sdir/rollout-2026-06-03T10-00-00-$sid.jsonl"
+    {
+      printf '{"timestamp":"2026-06-03T01:00:00.000Z","type":"session_meta","payload":{"id":"%s","cwd":"%s","originator":"codex_exec"}}\n' "$sid" "$work"
+      printf '{"type":"event_msg","payload":{"type":"user_message","message":"BURN-%04d session"}}\n' "$i"
+    } > "$f"
+  done
+  awk -v n="$3" 'BEGIN{for(i=1;i<=n;i++) printf "019e9999-0000-7000-8000-%012d\trun\t1700000000\n", i}' \
+    > "$CLIKAE_HOME/state/burn-sessions/codex/$1"
+}
+
+@test "195 burns + 50 humans still fill the Continue list — agy (#93 round-2 P2-1)" {
+  _seed_bulk_agy default 50 195
+  local work="$TEST_HOME/work-project"; mkdir -p "$work"; cd "$work"
+  CLIKAE_HOME_RECENT_MAX=10 run clikae
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  # Round 1 gave 5 here (clamped at 200 while asking 10+195=205).
+  [ "$(_recent_human_rows)" -eq 10 ] || { echo "rows=$(_recent_human_rows)"; echo "$output"; false; }
+  [[ "$output" != *"BURN-"* ]] || { echo "burn leaked: $output"; false; }
+  # An agy tank's sidecar lives under its engine id, "antigravity" (#113) — if
+  # this lookup misses, the ask is never widened and this test reads 5.
+  [ -f "$CLIKAE_HOME/state/burn-sessions/antigravity/default" ]
+}
+
+@test "a store written under the old 'agy' sidecar key is migrated before the board reads it — the ask is still widened (#113)" {
+  # The shape every existing install has: burn.sh wrote agy's sidecar under
+  # "agy". The board no longer translates, so without the startup migration
+  # this reads 5 rows (the #93 round-2 bug) instead of 10.
+  _seed_bulk_agy default 50 195
+  mv "$CLIKAE_HOME/state/burn-sessions/antigravity" "$CLIKAE_HOME/state/burn-sessions/agy"
+  local work="$TEST_HOME/work-project"; mkdir -p "$work"; cd "$work"
+  CLIKAE_HOME_RECENT_MAX=10 run clikae
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  [ "$(_recent_human_rows)" -eq 10 ] || { echo "rows=$(_recent_human_rows)"; echo "$output"; false; }
+  [[ "$output" != *"BURN-"* ]] || { echo "burn leaked: $output"; false; }
+  [ -f "$CLIKAE_HOME/state/burn-sessions/antigravity/default" ]
+  [ ! -e "$CLIKAE_HOME/state/burn-sessions/agy" ]
+}
+
+@test "195 burns + 50 humans still fill the Continue list — claude (#93 round-2 P2-1)" {
+  _seed_bulk_claude a 50 195
+  cd "$TEST_HOME/work"
+  CLIKAE_HOME_RECENT_MAX=10 run clikae
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  [ "$(_recent_human_rows)" -eq 10 ] || { echo "rows=$(_recent_human_rows)"; echo "$output"; false; }
+  [[ "$output" != *"BURN-"* ]] || { echo "burn leaked: $output"; false; }
+}
+
+@test "195 burns + 50 humans still fill the Continue list — codex (#93 round-2 P2-1)" {
+  _seed_bulk_codex a 50 195
+  cd "$TEST_HOME/work"
+  CLIKAE_HOME_RECENT_MAX=10 run clikae
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  [ "$(_recent_human_rows)" -eq 10 ] || { echo "rows=$(_recent_human_rows)"; echo "$output"; false; }
+  [[ "$output" != *"BURN-"* ]] || { echo "burn leaked: $output"; false; }
+}
+
+@test "250 burns + 3 humans still show all 3 — the Resume block does not vanish (#93 round-2 P2-1)" {
+  _seed_bulk_agy default 3 250
+  local work="$TEST_HOME/work-project"; mkdir -p "$work"; cd "$work"
+  CLIKAE_HOME_RECENT_MAX=10 run clikae
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  # Round 1 gave 0 rows AND no message at all.
+  [ "$(_recent_human_rows)" -eq 3 ] || { echo "rows=$(_recent_human_rows)"; echo "$output"; false; }
+  [[ "$output" != *"BURN-"* ]] || { echo "burn leaked: $output"; false; }
+}
+
+@test "one tank's burns no longer clamp another tank's ask (#93 round-2 P2-1)" {
+  _seed_bulk_agy burny 0 195      # 195 burns, no humans
+  _seed_bulk_agy humany 50 0      # 50 humans, no burns
+  local work="$TEST_HOME/work-project"; mkdir -p "$work"; cd "$work"
+  CLIKAE_HOME_RECENT_MAX=10 run clikae
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  [ "$(_recent_human_rows)" -eq 10 ] || { echo "rows=$(_recent_human_rows)"; echo "$output"; false; }
+}
+
+@test "when the ceiling really does bite, the board SAYS the list is truncated (#93 round-2 P2-1)" {
+  # The ceiling is normally out of reach, so force it: ask 10, hide 50, ceiling
+  # 20 => the adapter is cut at 20, all 20 are burns, nothing survives. Round 1
+  # drew a silent empty board in exactly this shape.
+  _seed_bulk_agy default 50 50
+  local work="$TEST_HOME/work-project"; mkdir -p "$work"; cd "$work"
+  CLIKAE_HOME_RECENT_SCAN_MAX=20 CLIKAE_HOME_RECENT_MAX=10 run clikae
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  [[ "$output" == *"list truncated"* ]] || { echo "$output"; false; }
+  [[ "$output" == *"clikae resume --all"* ]] || { echo "$output"; false; }
+}
+
+@test "a sidecar past CLIKAE_BURN_SIDECAR_CAP truncates, and says so, at the DEFAULT ceiling (#93 round-2 P2-1)" {
+  # 2,100 burns — more than the sidecar's own cap (2000), which is what the
+  # default ceiling is set to. This is the only shape left that can truncate
+  # without anyone overriding an env var.
+  _seed_bulk_claude a 3 2100
+  cd "$TEST_HOME/work"
+  CLIKAE_HOME_RECENT_MAX=10 run clikae
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  [[ "$output" == *"list truncated"* ]] || { echo "$output"; false; }
+  [[ "$output" == *"2100"* ]] || { echo "$output"; false; }
+}
+
+@test "no truncation note on an ordinary board (#93 round-2 P2-1)" {
+  _seed_bulk_agy default 3 12
+  local work="$TEST_HOME/work-project"; mkdir -p "$work"; cd "$work"
+  CLIKAE_HOME_RECENT_MAX=10 run clikae
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  [[ "$output" != *"list truncated"* ]] || { echo "$output"; false; }
+  [ "$(_recent_human_rows)" -eq 3 ] || { echo "rows=$(_recent_human_rows)"; echo "$output"; false; }
+}
+
+# --- #113 item 3: a codex rollout whose name is not a uuid, on the BOARD ------
+# The adapter-level specimens live in tests/bats/adapters/{codex,grok}.bats; this
+# is the same file seen from the surface the fast path exists for. The resume
+# row's last field is the sid a keypress resumes, so that is what is asserted —
+# on the live adapter path AND on the board index path, which must agree.
+@test "board (#113): a codex rollout with a uuid-SHAPED, non-hex name shows the BODY id, on both the live and the index path" {
+  clikae init codex a >/dev/null 2>&1
+  local work="$TEST_HOME/work"; mkdir -p "$work"
+  local sdir="$CLIKAE_HOME/profiles/codex/a/sessions/2026/06/03"; mkdir -p "$sdir"
+  local body="019e0000-0000-7000-8000-0000000b0d13" bogus="notauuid-zzzz-zzzz-zzzz-zzzzzzzzzzzz"
+  {
+    printf '{"timestamp":"2026-06-03T01:00:00.000Z","type":"session_meta","payload":{"id":"%s","cwd":"%s","originator":"codex_exec"}}\n' "$body" "$work"
+    printf '{"type":"event_msg","payload":{"type":"user_message","message":"HUMAN-ODDNAME session"}}\n'
+  } > "$sdir/rollout-2026-06-03T09-00-00-$bogus.jsonl"
+  cd "$work"
+  run clikae
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  [[ "$output" == *"HUMAN-ODDNAME"* ]] || { echo "$output"; false; }
+
+  export CLIKAE_LIB="$CLIKAE_TEST_ROOT/lib"
+  source "$CLIKAE_TEST_ROOT/lib/core/log.sh"
+  source "$CLIKAE_TEST_ROOT/lib/core/i18n.sh"
+  source "$CLIKAE_TEST_ROOT/lib/core/profile_store.sh"
+  source "$CLIKAE_TEST_ROOT/lib/core/adapter_loader.sh"
+  source "$CLIKAE_TEST_ROOT/lib/core/reading_cache.sh"
+  source "$CLIKAE_TEST_ROOT/lib/core/limit.sh"
+  source "$CLIKAE_TEST_ROOT/lib/core/board_state.sh"
+  source "$CLIKAE_TEST_ROOT/lib/commands/home.sh"
+  local items row mode
+  for mode in 0 1; do
+    _CLIKAE_BOARD="$mode" _home_items_load 2>/dev/null
+    row="$(printf '%s\n' "$items" | grep '^resume'$'\037''codex' || true)"
+    [ -n "$row" ] || { echo "mode=$mode: no codex resume row"; printf '%q\n' "$items"; false; }
+    [ "${row##*$'\037'}" = "$body" ] || { echo "mode=$mode: sid=${row##*$'\037'}"; false; }
+    [[ "$row" != *"$bogus"* ]] || { echo "mode=$mode: bogus id on the board"; false; }
+  done
+}
+
+# --- #113 item 1: the truncation signal is a ROW in the items stream, not a
+# `state/home-recent-truncated.$$` file ---------------------------------------
+# The file had no exit-time cleanup, so every truncating render — and every
+# killed board — left one behind in the user's state dir, keyed by a pid. It
+# also had no concurrency test.
+
+@test "two boards rendering one tank at once each print their own truncation line and leave no marker (#113)" {
+  _seed_bulk_agy default 50 50
+  local work="$TEST_HOME/work-project"; mkdir -p "$work"; cd "$work"
+  # Same ceiling on both (the board index is shared per tank, and its cap is a
+  # function of the ceiling), different LANGUAGES — so "its own line" is
+  # observable: a board that printed the other's line, or its own twice, shows.
+  local a="$TEST_HOME/board-en.out" b="$TEST_HOME/board-zh.out" pa pb ra=0 rb=0
+  CLIKAE_LANG=en-US CLIKAE_HOME_RECENT_SCAN_MAX=20 CLIKAE_HOME_RECENT_MAX=10 clikae > "$a" 2>&1 &
+  pa=$!
+  CLIKAE_LANG=zh-TW CLIKAE_HOME_RECENT_SCAN_MAX=20 CLIKAE_HOME_RECENT_MAX=10 clikae > "$b" 2>&1 &
+  pb=$!
+  wait "$pa" || ra=$?
+  wait "$pb" || rb=$?
+  [ "$ra" -eq 0 ] || { cat "$a"; false; }
+  [ "$rb" -eq 0 ] || { cat "$b"; false; }
+  [ "$(grep -c '50 sessions hidden as burn runs · list truncated' "$a")" -eq 1 ] || { cat "$a"; false; }
+  [ "$(grep -c '50 個 session 被當成 burn 隱藏' "$b")" -eq 1 ] || { cat "$b"; false; }
+  ! grep -q '被當成 burn 隱藏' "$a" || { cat "$a"; false; }
+  ! grep -q 'list truncated' "$b" || { cat "$b"; false; }
+  # Nothing on disk speaks for a board that is no longer running.
+  local left; left="$(find "$CLIKAE_HOME" -name 'home-recent-truncated*' 2>/dev/null)"
+  [ -z "$left" ] || { echo "marker left behind: $left"; false; }
+}
+
+@test "_home_items_load lifts the truncation row out of \$items, anchored to a line start (#113)" {
+  source "$CLIKAE_TEST_ROOT/lib/core/log.sh"
+  source "$CLIKAE_TEST_ROOT/lib/commands/home.sh"
+  local items
+  # Mid-stream: the recent section's first row, ahead of its resume rows.
+  _home_items() { printf 'tank\037agy\037a\n%s\03742\nresume\037agy\037a\037t\n' "$_HOME_TRUNC_KIND"; }
+  _home_items_load
+  [ "$_HOME_RESUME_TRUNC" = 42 ] || { echo "got=$_HOME_RESUME_TRUNC"; false; }
+  [ "$items" = "$(printf 'tank\037agy\037a\nresume\037agy\037a\037t')" ] || { printf '%q\n' "$items"; false; }
+  # Last row: the truncation emptied the Resume list entirely.
+  _home_items() { printf 'tank\037agy\037a\n%s\0377\n' "$_HOME_TRUNC_KIND"; }
+  _home_items_load
+  [ "$_HOME_RESUME_TRUNC" = 7 ] || false
+  [ "$items" = "$(printf 'tank\037agy\037a')" ] || { printf '%q\n' "$items"; false; }
+  # A tank legally NAMED like the kind, mid-row, is a row, not the signal.
+  _home_items() { printf 'tank\037agy\037%s\0379\n' "$_HOME_TRUNC_KIND"; }
+  _home_items_load
+  [ "$_HOME_RESUME_TRUNC" = 0 ] || false
+  [ "$items" = "$(printf 'tank\037agy\037%s\0379' "$_HOME_TRUNC_KIND")" ] || false
+  # A render with no truncation clears the previous render's count.
+  _home_items() { printf 'tank\037agy\037a\n'; }
+  _HOME_RESUME_TRUNC=5
+  _home_items_load
+  [ "$_HOME_RESUME_TRUNC" = 0 ] || false
+  [ "$items" = "$(printf 'tank\037agy\037a')" ] || false
 }

@@ -33,6 +33,21 @@
 # shellcheck source=resume.sh
 source "$CLIKAE_LIB/commands/resume.sh"
 
+# _clean_tank_lock_gc (below) needs three things burn.sh/burn_status.sh own:
+# the tank lock's path convention and its reclaim-mutex reap-with-verify
+# primitive (burn.sh), and the pid+started_at marker check that primitive
+# (and the busy-tank scan) use to tell a live holder from a recycled pid
+# (burn_status.sh) — R5-P1-2 (2026-09-10 round-5 review). Sourced directly
+# here rather than assumed pre-sourced by bin/clikae, same reasoning as the
+# resume.sh source above: this file must work the same way when a test
+# harness sources it standalone. burn.sh defines functions only — sourcing
+# it runs no command and has no side effects (bin/clikae's own dispatcher
+# only ever calls `cmd_burn` after a separate, explicit invocation).
+# shellcheck source=../core/burn_status.sh
+source "$CLIKAE_LIB/core/burn_status.sh"
+# shellcheck source=burn.sh
+source "$CLIKAE_LIB/commands/burn.sh"
+
 # The _rs_* slots are populated by resume.sh's _resume_session_fields (the
 # shared path decoder). Declared here too so shellcheck — which doesn't follow
 # the source above without -x — knows they're ours, not typos (SC2154).
@@ -95,7 +110,25 @@ Options:
                             size is the only filter (no age cutoff); combine with
                             --older-than to require both. Stale copies and orphans
                             ignore both filters.
+  --no-archive-check        Offer session data even though no backup has
+                            confirmed it is archived (see below). Only for a
+                            machine with no backup job by choice — everywhere
+                            else, get the backup running and let the marker
+                            appear instead of overriding this.
   -h, --help                Show this help message.
+
+The archive marker: a session's own transcript is the only copy, so by
+default clean will never offer session data (stale copies, orphaned subagent
+data, old/big sessions — everything EXCEPT the non-conversation GC below)
+unless a backup job has confirmed it archived it first. It looks for one line,
+a Unix epoch, in $CLIKAE_HOME/state/transcripts-archived-at — your backup job
+writes this on every SUCCESSFUL run, meaning "everything written before this
+instant is safely archived elsewhere". A session modified after that instant
+is never offered, in any section, with any flag; the list says how many were
+withheld and why. With no marker at all (or one that can't be read, isn't a
+plain number, or claims to be in the future — all treated the same: not
+archived), clean says so and offers nothing for session data until either the
+marker appears or you pass --no-archive-check.
 
 Examples:
   clikae clean
@@ -103,6 +136,7 @@ Examples:
   clikae clean --min-size 5
   clikae clean --min-size 5 --older-than 30
   clikae clean --dry-run
+  clikae clean --no-archive-check
 
 (`clikae resume cleanup`, where this flow first shipped, still works as a hidden
 back-compat alias and forwards here.)
@@ -336,6 +370,73 @@ _clean_session_is_live() {
   return 1
 }
 
+# ── The archive-marker guard ────────────────────────────────────────────────
+# A session transcript is the only copy — clean moves it to the Trash, never
+# `rm`s it, but the Trash is still local disk. Two of the maintainer's own
+# backup jobs made that promise cheap to break: one machine's backup MIRRORED
+# deletions (so a Trash move propagated straight through to the backup), the
+# other had no backup at all — and "clean says it's safe" stopped meaning
+# anything a person could act on ("I can no longer tell when it is safe to run
+# clikae clean"). Both jobs are being fixed to write ONE marker, on every
+# SUCCESSFUL run, meaning "everything written before this instant is archived
+# elsewhere": $CLIKAE_HOME/state/transcripts-archived-at, one line, a Unix
+# epoch (UTC seconds).
+#
+# _clean_read_archive_marker <now> — read that marker into ARCHIVE_MARKER_EPOCH,
+# or leave it empty and set ARCHIVE_MARKER_REASON to say why: "missing" (no
+# file), "unreadable" (exists but can't be read), "non-numeric" (garbled
+# content — not a plain integer), or "future" (claims to be ahead of <now>, a
+# clock-skewed or hand-edited marker that would otherwise un-withhold
+# everything). All four are treated identically downstream — this function is
+# the ONE place that decides "valid or not", so nothing else carries its own
+# opinion about what a marker looks like.
+ARCHIVE_MARKER_EPOCH=""
+ARCHIVE_MARKER_REASON=""
+_clean_read_archive_marker() {
+  local now="$1" path="${CLIKAE_HOME:-$HOME/.clikae}/state/transcripts-archived-at" raw
+  ARCHIVE_MARKER_EPOCH=""
+  if [ ! -e "$path" ]; then
+    ARCHIVE_MARKER_REASON="missing"; return 1
+  fi
+  if [ ! -r "$path" ]; then
+    ARCHIVE_MARKER_REASON="unreadable"; return 1
+  fi
+  raw="$(head -n 1 "$path" 2>/dev/null)" || { ARCHIVE_MARKER_REASON="unreadable"; return 1; }
+  # Trim surrounding whitespace/CR: a marker written by a plain `echo` or hand
+  # edited in an editor that appends a trailing newline/space is still legit.
+  raw="$(printf '%s' "$raw" | tr -d '[:space:]')"
+  case "$raw" in
+    ''|*[!0-9]*) ARCHIVE_MARKER_REASON="non-numeric"; return 1 ;;
+  esac
+  if [ "$raw" -gt "$now" ]; then
+    ARCHIVE_MARKER_REASON="future"; return 1
+  fi
+  ARCHIVE_MARKER_EPOCH="$raw"
+  ARCHIVE_MARKER_REASON=""
+  return 0
+}
+
+# _clean_archive_withholds <mt> — should the candidate whose transcript (or,
+# for an orphaned sid dir, the directory itself) has mtime <mt> be withheld
+# from EVERY class, the same way a live session is? Reads archive_check_on
+# and ARCHIVE_MARKER_EPOCH, both dynamically scoped from cmd_clean (bash 3.2:
+# no namerefs, same convention _clean_session_is_live's callers already use
+# for live_procs). This is the ONE predicate every session-producing site
+# calls — dedupe's stale/diverged copies, the main scan loop's regular/big
+# rows, and the orphaned-sid-dir sweep — so a session too fresh to be backed
+# up can never slip through as a candidate under a class this guard forgot to
+# cover, the same shape as the 2026-07-11 live-session incident that shaped
+# _clean_session_is_live above. No valid marker at all means "can't prove
+# anything is archived", so it withholds EVERY session-class candidate,
+# regardless of <mt> — that is what makes the "no marker → offer nothing"
+# behaviour fall out of one rule instead of a second, separate branch.
+_clean_archive_withholds() {
+  local mt="$1"
+  [ "$archive_check_on" -eq 1 ] || return 1        # --no-archive-check: never withhold
+  [ -n "$ARCHIVE_MARKER_EPOCH" ] || return 0        # no valid marker: withhold everything
+  [ "$mt" -gt "$ARCHIVE_MARKER_EPOCH" ]             # withheld iff modified after the marker
+}
+
 # ── The Trash move ──────────────────────────────────────────────────────────
 
 # _clean_to_trash <path> — move <path> into $HOME/.Trash instead of destroying
@@ -353,44 +454,58 @@ _clean_session_is_live() {
 #                          <path> was rm'd directly instead — the caller MUST
 #                          say so on that row; a silent fallback would be a lie
 #                          about where the data went.
+# _clean_trash_path -> the Trash directory clikae will use, or empty if it can't
+# have one. Creating it is fine (a fresh account may not have one yet); anything
+# else is a hard no.
+_clean_trash_path() {
+  [ -n "${HOME:-}" ] || return 1
+  local tdir="$HOME/.Trash"
+  # bin/clikae runs under `set -eo pipefail`: a bare mkdir as the last command of
+  # a `||` would abort the whole process. `|| true` keeps this a soft probe.
+  if [ ! -d "$tdir" ]; then mkdir -p "$tdir" 2>/dev/null || true; fi
+  [ -d "$tdir" ] && [ -w "$tdir" ] || return 1
+  printf '%s\n' "$tdir"
+}
+
+# _clean_trash_usable -> 0 if we can move things to the Trash right now.
+# Called BEFORE the red confirm so the question a person answers is the one that
+# will actually happen. It used to be discovered mid-delete, which meant they had
+# already agreed to "move these to the Trash" before clikae found out it couldn't.
+_clean_trash_usable() { [ -n "$(_clean_trash_path 2>/dev/null || true)" ]; }
+
+# _clean_to_trash <path> — move <path> into the Trash. Collision-safe.
+#
+# 🔴 It NEVER deletes. This used to fall back to `rm` when the Trash was
+# unusable, "rather than leaving the row stuck" — but the two outcomes are not
+# symmetric: a stuck row costs you one uncleaned file, a fallback `rm` costs you
+# the file forever, and clean's whole payload is session history that cannot be
+# regenerated. A person who asked to move something to the Trash never asked for
+# that. On any failure the file is LEFT ALONE and the caller is told.
 _clean_to_trash() {
   local item="$1" tdir base dest i
   CLEAN_TRASH_DEST=""
-  CLEAN_TRASH_FELL_BACK=0
+  CLEAN_TRASH_SKIPPED=0
   [ -e "$item" ] || return 0
-  if [ -n "${HOME:-}" ]; then
-    tdir="$HOME/.Trash"
-    # bin/clikae runs the whole tree under `set -eo pipefail`: a bare `mkdir`
-    # as the last command of a `||` statement would abort the ENTIRE clikae
-    # process on failure instead of falling through to the rm fallback below
-    # (mid-deletion-loop, after some rows already moved — worse than the bug
-    # this closes). `|| true` inside the `if` body keeps this graceful.
-    if [ ! -d "$tdir" ]; then mkdir -p "$tdir" 2>/dev/null || true; fi
-    if [ -d "$tdir" ] && [ -w "$tdir" ]; then
-      base="$(basename "$item")"
-      dest="$tdir/$base"
-      if [ -e "$dest" ]; then
-        i=1
-        while [ -e "$tdir/$base ($i)" ]; do i=$((i + 1)); done
-        dest="$tdir/$base ($i)"
-      fi
-      if mv "$item" "$dest" 2>/dev/null; then
-        # shellcheck disable=SC2034  # read by the caller / test harness, not this file
-        CLEAN_TRASH_DEST="$dest"
-        return 0
-      fi
+
+  tdir="$(_clean_trash_path 2>/dev/null || true)"
+  if [ -n "$tdir" ]; then
+    base="$(basename "$item")"
+    dest="$tdir/$base"
+    if [ -e "$dest" ]; then
+      i=1
+      while [ -e "$tdir/$base ($i)" ]; do i=$((i + 1)); done
+      dest="$tdir/$base ($i)"
+    fi
+    if mv "$item" "$dest" 2>/dev/null; then
+      # shellcheck disable=SC2034  # read by the caller / test harness, not this file
+      CLEAN_TRASH_DEST="$dest"
+      return 0
     fi
   fi
-  # Trash unusable, or the mv itself failed (cross-device, permissions, …):
-  # fall back to rm rather than leaving the row stuck — but CLEAN_TRASH_FELL_BACK
-  # tells the caller to say so. `|| true` on both: same set -e note as above —
-  # this fallback must never itself take the whole process down.
-  CLEAN_TRASH_FELL_BACK=1
-  if [ -d "$item" ]; then
-    rm -rf "$item" 2>/dev/null || true
-  elif [ -f "$item" ]; then
-    rm -f "$item" 2>/dev/null || true
-  fi
+
+  # Couldn't move it. Leave it exactly where it is and say so — never destroy
+  # what we were only asked to relocate.
+  CLEAN_TRASH_SKIPPED=1
   return 0
 }
 
@@ -517,12 +632,20 @@ _clean_dedupe_flush() {
   stale_lbl="$(printf "$T_CLEAN_LBL_STALE" "$kept_tank")"
   for ((i=0; i<${#g_f[@]}; i++)); do
     if [ "$i" -eq "$kept" ]; then continue; fi
+    # Claimed either way: a copy the archive guard withholds must never fall
+    # through to the main scan loop below and get re-offered there under
+    # "regular"/"big" instead (same file, wrong section) — same reasoning as
+    # the unconditional claim that already covered the stale/diverged split.
+    dedupe_claimed="$dedupe_claimed"$'\n'"${g_f[i]}"
+    if _clean_archive_withholds "${g_mt[i]}"; then
+      archive_withheld_n=$((archive_withheld_n + 1))
+      continue
+    fi
     if _clean_stale_copy_check "${g_f[kept]}" "${g_f[i]}"; then
       _clean_add_candidate "${g_f[i]}" "${g_mt[i]}" stale "$stale_lbl"
     else
       _clean_add_candidate "${g_f[i]}" "${g_mt[i]}" diverged "$T_CLEAN_LBL_DIVERGED"
     fi
-    dedupe_claimed="$dedupe_claimed"$'\n'"${g_f[i]}"
   done
   return 0
 }
@@ -543,6 +666,10 @@ _clean_scan_orphans() {
     esac
     [ -f "$d.jsonl" ] && continue
     mt="$(stat -c '%Y' "$d" 2>/dev/null || stat -f '%m' "$d" 2>/dev/null || echo 0)"
+    if _clean_archive_withholds "$mt"; then
+      archive_withheld_n=$((archive_withheld_n + 1))
+      continue
+    fi
     _resume_session_fields "$d"    # engine/tank from the path; sid = the dir name
     sz_paths+=("$d"); cand_nsz+=(1)
     candidates+=("$d")
@@ -728,7 +855,7 @@ _clean_select_body() {
     # still says where you are) and whenever the section changes.
     if [ "$i" -gt "$start_idx" ]; then prev_sect="${cand_section[${ord[i-1]}]}"; else prev_sect=""; fi
     if [ "$sect" != "$prev_sect" ]; then
-      printf '  %b%s%b\033[K\n' "$__C_BCYAN" "$(_clean_section_header "$sect")" "$__C_RESET"
+      printf '  %b▸ %s%b\033[K\n' "$__C_BCYAN" "$(_clean_section_header "$sect")" "$__C_RESET"
     fi
     if [ "$i" -eq "$sel" ]; then mark="${__C_GREEN}❯${__C_RESET}"; else mark=" "; fi
     if [ "${cand_checked[idx]}" -eq 1 ]; then box="[x]"; else box="[ ]"; fi
@@ -779,9 +906,9 @@ _clean_select_body() {
 # Returns 0 to proceed, 1 on cancel, 2 when no TTY could be opened (the caller
 # falls back to the printed list + all-or-nothing confirm).
 _clean_select() {
-  exec 3<>/dev/tty 2>/dev/null || return 2
+  { exec 3<>/dev/tty; } 2>/dev/null || return 2
   stty -echo 2>/dev/null || true
-  printf '\033[?1049h\033[?25l' >&3
+  tui_screen_enter >&3
   trap '_home_tty_leave' EXIT
   trap '_home_tty_leave; exit 130' INT TERM
 
@@ -832,16 +959,643 @@ _clean_select() {
     esac
   done
   trap - EXIT INT TERM
-  printf '\033[?25h\033[?1049l' >&3
+  tui_screen_leave >&3
   stty echo 2>/dev/null || true
-  exec 3>&- 2>/dev/null || true
+  { exec 3>&-; } 2>/dev/null || true
   return "$rc"
+}
+
+# ── Tmux Ephemeral GC (Rule 6) ──────────────────────────────────────────────
+# Headless tasks and interactive sessions create a lock at
+# $HOME/.clikae/state/ck-ephem-<id>.lock. When clikae clean runs, it attempts to
+# grab this lock without blocking. If lockf returns 0 (lock acquired), the parent
+# process is dead, so we can safely kill the orphaned tmux session. If rc==75, the
+# lock is held (alive). We NEVER delete the lock file itself.
+#
+# 🔴 The lock dir is PRIVATE ($HOME/.clikae/state, 0700), not world-writable /tmp.
+# When it lived in /tmp another local user could plant a `ck-ephem-<name>.lock`
+# that this glob picks up: its lock is unheld, so the GC reads it as "dead", turns
+# the filename into a session id, and both KILLS your tmux session `ck-<name>` and
+# `rm -f`s your `$HOME/.clikae/state/<name>.*` — a co-tenant DoS on your live
+# sessions and state. A private 0700 dir removes the ability to plant at all; the
+# sid guard below is cheap defence in depth.
+# _clean_scrollback_gc <dry_run> -> delete scrollback files whose writer is gone.
+#
+# 🔴 NOTHING EVER COLLECTED THESE. tmux_attach removes the scrollback it created,
+# on both of its exits — but only if it reaches one. A clikae killed mid-attach
+# (a crash, a reboot, a `kill`) leaves the file behind, and the ephemeral GC above
+# never sees it: that loop is driven by `*-ephem-*.lock` files, and an ordinary
+# `clikae claude x` writes no lock. Found 2026-08-22 on the maintainer's machine:
+# 14 orphans, the oldest a week old, zero locks — so nothing would ever have
+# looked at them. Older than the prefix rename and unrelated to it; they were
+# simply all wearing the old name, which is how they were noticed.
+#
+# 🔴 THE TEST IS THE WRITER'S PID, NOT THE FILE'S AGE. The name ends in the pid
+# of the clikae that created it (switch.sh: `…-$$.scrollback`), and age is the
+# wrong question: a session you stay attached to for three days has a three-day-
+# old scrollback that is very much alive. A recycled pid makes this SKIP a dead
+# file, which leaves litter; there is no direction in which it deletes a live one.
+_clean_scrollback_gc() {
+  local dry_run="$1" dir="$HOME/.clikae/state" f base pid n=0
+  [ -d "$dir" ] || return 0
+  for f in "$dir/"*.scrollback; do
+    [ -e "$f" ] || continue
+    base="${f##*/}"; base="${base%.scrollback}"
+    pid="${base##*-}"
+    # No trailing all-digit field: not a name this code writes. Leave it alone.
+    case "$pid" in ''|*[!0-9]*) continue ;; esac
+    kill -0 "$pid" 2>/dev/null && continue          # its writer is still running
+    if [ "$dry_run" = "1" ]; then
+      log_info "GC: [Dry Run] Would remove orphaned scrollback ${base}.scrollback"
+    else
+      rm -f "$f" && n=$((n + 1))
+    fi
+  done
+  [ "$n" -gt 0 ] && log_info "GC: removed $n orphaned scrollback file(s)."
+  return 0
+}
+
+# _clean_burn_sidecar_gc <dry_run> -> prune state/burn-sessions/<engine>/<tank>
+# (#74 round-1 P2-2): burn appends one line per attempt and NOTHING ever
+# collected it — every infra retry mints its own line forever, and the
+# resume picker pays for every line on every render (8170ms measured at
+# 20,000 lines vs 1287ms at 0). Two independent prunes, per file:
+#   1. drop lines whose sid no longer has a transcript (the session they
+#      recorded is gone — nothing left for them to hide)
+#   2. cap what's left at $CLIKAE_BURN_SIDECAR_CAP (default 2000), newest
+#      kept — an append-only file, so newest = the TAIL
+# A file needing neither prune is left BYTE-IDENTICAL: untouched, no rewrite,
+# same mtime — a store with nothing to prune stays provably unchanged
+# (tests/bats/resume-hide-burn.bats already asserts this for the common case).
+CLIKAE_BURN_SIDECAR_CAP="${CLIKAE_BURN_SIDECAR_CAP:-2000}"
+
+_clean_burn_sidecar_gc() {
+  local dry_run="$1" base="$CLIKAE_HOME/state/burn-sessions" eng_dir f
+  [ -d "$base" ] || return 0
+  local total_dropped=0 total_capped=0 total_files=0
+  for eng_dir in "$base"/*/; do
+    [ -d "$eng_dir" ] || continue
+    local engine; engine="${eng_dir%/}"; engine="${engine##*/}"
+    for f in "$eng_dir"*; do
+      [ -f "$f" ] || continue
+      local tank="${f##*/}"
+      # The sidecar's directory IS the engine id (#113 — agy's used to be
+      # "agy"; burn_sidecar_migrate_legacy moves an old store onto
+      # "antigravity" before any command, this one included, runs).
+      local adapter_name="$engine"
+      local pdir; pdir="$(profile_dir "$adapter_name" "$tank" 2>/dev/null || true)"
+      # #74 round-2 P2-1: load_adapter exit()s the WHOLE PROCESS on a broken
+      # adapter (lib/core/adapter_loader.sh) — `|| true` only catches a
+      # nonzero return, never an exit. home.sh:193-201 already has the fix
+      # for this exact hazard: probe in a subshell first (safe to let exit
+      # there — only the subshell dies), and only load for real in THIS
+      # shell once the probe has proven it won't. A stray/unrecognized
+      # engine dir under state/burn-sessions/ (removed adapter, hand-placed
+      # directory) used to take the entire `clikae clean` down with it —
+      # rc=1, zero output, no GC, no Trash scan, no report.
+      if ! ( load_adapter "$adapter_name" >/dev/null 2>&1 ); then
+        log_warn "clean: no adapter for '$adapter_name' — skipping its burn sidecar ($f)"
+        continue
+      fi
+      load_adapter "$adapter_name" >/dev/null 2>&1 || true
+      local -a lines=()
+      while IFS= read -r _bl || [ -n "$_bl" ]; do
+        [ -n "$_bl" ] && lines+=("$_bl")
+      done < "$f"
+      local n_total="${#lines[@]}"
+      [ "$n_total" -gt 0 ] || continue
+      local -a live=()
+      local _ln _sid dropped_stale=0
+      for _ln in "${lines[@]}"; do
+        # #74 round-2 P3-4: a line failing home.sh's OWN "valid sidecar line"
+        # definition (_burn_sidecar_line_valid, shared — not a second copy of
+        # the rule) is already dead to the reader; it must be just as dead
+        # here, or a hand-corrupted line sits forever, counted "live" and
+        # occupying one of CLIKAE_BURN_SIDECAR_CAP's slots.
+        if ! _burn_sidecar_line_valid "$_ln"; then
+          dropped_stale=$((dropped_stale + 1))
+          continue
+        fi
+        _sid="${_ln%%$'\t'*}"
+        # #74 round-2 P2-2: read adapter_find_session's OUTPUT, not its exit
+        # code — codex/grok both return 0 on a miss (empty stdout), so the
+        # exit-code form never pruned a stale codex/grok line.
+        local _found_transcript=""
+        if [ -n "$_sid" ] && [ -n "$pdir" ] && declare -F adapter_find_session >/dev/null 2>&1; then
+          _found_transcript="$(adapter_find_session "$pdir" "$_sid" 2>/dev/null || true)"
+        fi
+        if [ -n "$_found_transcript" ]; then
+          live+=("$_ln")
+        else
+          dropped_stale=$((dropped_stale + 1))
+        fi
+      done
+      local n_live="${#live[@]}" dropped_cap=0
+      if [ "$n_live" -gt "$CLIKAE_BURN_SIDECAR_CAP" ]; then
+        dropped_cap=$((n_live - CLIKAE_BURN_SIDECAR_CAP))
+        live=("${live[@]:$dropped_cap}")
+      fi
+      total_files=$((total_files + 1))
+      if [ "$dropped_stale" -eq 0 ] && [ "$dropped_cap" -eq 0 ]; then
+        continue   # nothing to prune — leave byte-identical
+      fi
+      total_dropped=$((total_dropped + dropped_stale))
+      total_capped=$((total_capped + dropped_cap))
+      if [ "$dry_run" = "1" ]; then
+        log_info "GC: [Dry Run] Would prune burn sidecar $engine/$tank: $dropped_stale stale, $dropped_cap over cap (kept ${#live[@]} of $n_total)"
+        continue
+      fi
+      if [ "${#live[@]}" -eq 0 ]; then
+        rm -f "$f"
+      else
+        local tmp; tmp="$(mktemp "${f}.XXXXXX" 2>/dev/null || printf '%s.tmp.%s' "$f" "$$")"
+        printf '%s\n' "${live[@]}" > "$tmp" && mv "$tmp" "$f"
+      fi
+    done
+  done
+  if [ "$dry_run" != "1" ] && { [ "$total_dropped" -gt 0 ] || [ "$total_capped" -gt 0 ]; }; then
+    log_info "GC: pruned $total_dropped stale + $total_capped over-cap burn sidecar line(s)."
+  fi
+  return 0
+}
+
+# _clean_session_id_gc <dry_run> -> delete `.session_id` state files whose
+# tmux session is gone.
+#
+# 🔴 NOTHING EVER COLLECTED THESE either (R1-P3-3 / R2-P3-5, 2026-09-12
+# review). tmux_set_session_id (lib/core/tmux.sh) writes
+# `~/.clikae/state/<session>.session_id` as the fallback mirror of the
+# `@clikae_session_id` tmux option, for a caller with no tmux on PATH or a
+# session whose option vanished — but nothing ever removes it once the tmux
+# session itself is gone, and doctor.sh's "old names" line has promised
+# "orphaned state files go on the next `clikae clean`" without this actually
+# being true for this file type.
+#
+# THE TEST IS THE SESSION'S OWN NAME, NOT AGE OR A PID: the file is named
+# after the tmux session it was written for (`<session>.session_id`), and
+# that session's whole lifetime is what makes the file meaningful — a session
+# alive for days is not stale just because the file is old. Without tmux on
+# PATH at all, liveness cannot be determined either way, so nothing here is
+# touched (same conservative direction as the pid check above: inconclusive
+# never deletes).
+_clean_session_id_gc() {
+  local dry_run="$1" dir="$HOME/.clikae/state" f base n=0
+  [ -d "$dir" ] || return 0
+  command -v tmux >/dev/null 2>&1 || return 0
+  for f in "$dir/"*.session_id; do
+    [ -e "$f" ] || continue
+    base="${f##*/}"; base="${base%.session_id}"
+    tmux has-session -t "=$base:" 2>/dev/null && continue   # its session is still alive
+    if [ "$dry_run" = "1" ]; then
+      log_info "GC: [Dry Run] Would remove orphaned ${base}.session_id"
+    else
+      rm -f "$f" && n=$((n + 1))
+    fi
+  done
+  [ "$n" -gt 0 ] && log_info "GC: removed $n orphaned session id file(s)."
+  return 0
+}
+
+# _clean_tank_lock_busy_paths -> newline-separated list of tank-lock PATHS
+# (never the `.reclaim` suffix) whose engine/tank pair has a status file
+# saying a burn is RUNNING or WAITING-RESET on it right now — burn_tank_busy's
+# own #40 test (lib/core/burn_status.sh), applied here as a second, independent
+# signal the GC below must never override: no matter what the lock symlink
+# itself reads as, a live burn's own status file saying it still holds this
+# tank is authoritative. R5-P1-2 (2026-09-10 round-5 review).
+_clean_tank_lock_busy_paths() {
+  local base="$HOME/.clikae/logs" d f json st feng ftk fpid fstarted
+  [ -d "$base" ] || return 0
+  for d in "$base"/burn-*; do
+    [ -d "$d" ] || continue
+    f="$d/status.json"
+    [ -f "$f" ] || continue
+    json="$(cat "$f" 2>/dev/null)" || continue
+    st="$(burn_status_state "$json")"
+    case "$st" in running|waiting-reset) ;; *) continue ;; esac
+    feng="$(burn_status_str "$json" engine)"
+    ftk="$(burn_status_str "$json" tank)"
+    [ -n "$feng" ] && [ -n "$ftk" ] || continue
+    fpid="$(burn_status_str "$json" pid)"
+    case "$fpid" in ''|*[!0-9]*) continue ;; esac
+    kill -0 "$fpid" 2>/dev/null || continue           # stale — the writer is gone
+    fstarted="$(burn_status_str "$json" started_at)"
+    _burn_pid_matches_marker "$fpid" "$fstarted" || continue   # stale — a recycled pid
+    _burn_tank_lock_path "$feng" "$ftk"
+  done
+}
+
+# _clean_tank_lock_gc <dry_run> -> remove per-tank burn locks (and reclaim
+# mutexes) whose recorded holder is no longer running.
+#
+# R4-P3-2 (2026-09-10 round-4 review; R3-P3-3 before it): nothing else EVER
+# swept $HOME/.clikae/state/tank-busy-*.lock[.reclaim]. `_burn_tank_lock_acquire`
+# (lib/commands/burn.sh) already reclaims a dead holder's lock, but only
+# when something calls it AGAIN for that exact engine/tank pair — a tank
+# nobody ever `burn`s again keeps a dead holder's lock (and, before round
+# 4's fix, could keep a permanently wedged reclaim mutex) forever. Same
+# shape as _clean_scrollback_gc above: the test is the recorded pid's
+# LIVENESS, never the file's age — a tank genuinely busy for hours is not
+# garbage just because its lock is old.
+#
+# R5-P1-2 (2026-09-10 round-5 review): this used to `rm -f` the tank lock
+# directly, with no mutex at all — the ONE invariant `docs/orchestration.md`
+# and `_burn_tank_lock_acquire`'s own comment both state in as many words
+# ("the link can only disappear while that mutex is held") had a second,
+# unguarded remover the moment this function shipped. Measured: a real
+# `_burn_tank_lock_acquire`, already past its OWN under-mutex re-verify and
+# about to `rm` a lock it correctly judged stale, racing this GC — 5/5
+# deterministic violations, a fresh contender's legitimate `ln -s` landing
+# on the path GC vacated, followed by the ORIGINAL holder's now-stale `rm`
+# deleting that fresh claim too. Two real burns holding one tank at once —
+# the #40 symptom this whole lock exists to prevent.
+#
+# Fixed by giving GC exactly the discipline every other remover already has:
+# take `_burn_reclaim_mutex_try` on `<lock>.reclaim` FIRST, re-verify under
+# it, and — critically — SKIP this tank (never wait, never retry) if the
+# mutex is busy: a busy mutex means some real `_burn_tank_lock_acquire` or
+# `_burn_tank_lock_release` is mid check-and-act on this exact lock right
+# now, and GC has no business racing it; the next `clean` run, or that
+# process's own eventual release/reclaim, gets another chance. The reclaim
+# mutex ITSELF is now reaped the same way `_burn_reclaim_mutex_try` reaps
+# everything else — mv to a private name, verify what was actually caught,
+# discard only if it still names the pid judged dead, restore otherwise —
+# instead of a bare `kill -0` + unconditional `rm -f`, which was a THIRD,
+# weaker liveness rule for the same object (no `started_at`/30s check, no
+# verify-before-discard).
+#
+# R6-P2-1/R6-P2-2 (2026-09-10 round-6 review): `--dry-run` used to preview
+# a `.lock` removal with NO knowledge of whether its reclaim mutex was even
+# claimable, and a `.lock.reclaim` removal with a bare `kill -0` — a THIRD,
+# weaker liveness rule than the one the real run actually uses (measured:
+# both promises wrong, 2 for 2, on the same fixture). The mutex-busy
+# decision now goes through `_burn_reclaim_mutex_available` (a read-only
+# mirror of `_burn_reclaim_mutex_try`'s own decision — see its header) for
+# the dry-run preview, so a dry run's "busy" and a real run's "busy" are the
+# same predicate, never approximations of each other. And every AMBIGUOUS
+# skip — a lock whose recorded holder is dead but whose reclaim mutex is
+# genuinely busy right now, or a reclaim mutex genuinely held — is reported
+# with why, in both modes, so `clikae clean`'s summary line no longer says
+# "Nothing to clean" over a lock it left behind for a reason it never named
+# (R6-P2-2); an ORDINARY skip (the recorded holder is simply alive, or a
+# status file says so) is not, since that is every routine `clean` run
+# while any tank is legitimately busy — reporting that every time would be
+# the opposite failure, noise nobody can act on. The `.lock.reclaim` loop
+# also no longer requires `-L`: a legacy DIRECTORY left at this path — the
+# exact shape R6-P1-1 found permanently wedged — was invisible to `clean`
+# too. KITT (2026-09-11): `_burn_reclaim_mutex_try`/`_available` now REFUSE
+# a bare directory (and every other foreign shape) rather than "understand"
+# it — this loop's job stays the same either way, report whatever they
+# decide and stop filtering either shape out before asking them.
+#
+# R9-P1-1 (2026-09-11 round-9 review): the `.lock` loop's own reap, further
+# down, used to `rm -f "$f"` directly once it judged the recorded holder
+# stale — a bare readlink-decide-then-rm on the path, not on the entry it
+# verified, racing a live burn's fresh claim into the same window
+# `_burn_reclaim_mutex_try` itself was rewritten (round 3) to close for the
+# MUTEX. Now goes through `_burn_tank_lock_reap_verified`
+# (lib/commands/burn.sh), the same `mv`-then-classify discipline applied to
+# the LOCK: measured, through this exact function via the real `bin/clikae
+# clean`, 5/5 destroyed a genuinely live claim under the old shape — GC's
+# own summary line called it a "dead-holder tank lock" while deleting it.
+_clean_tank_lock_gc() {
+  local dry_run="$1" dir="$HOME/.clikae/state" f target holder hstarted n=0 skipped=0
+  local busy_paths reclaim_dir had_entry got
+  [ -d "$dir" ] || return 0
+  busy_paths="$(_clean_tank_lock_busy_paths 2>/dev/null)"
+
+  for f in "$dir/"tank-busy-*.lock; do
+    [ -L "$f" ] || continue
+    if [ -n "$busy_paths" ] && printf '%s\n' "$busy_paths" | grep -qxF "$f"; then
+      continue   # a status file says a burn is RUNNING here right now -- ordinary, not worth a line every run
+    fi
+    target="$(readlink "$f" 2>/dev/null || true)"
+    holder="${target%%:*}"
+    case "$holder" in
+      ''|*[!0-9]*) : ;;                               # malformed/empty — treat as dead below
+      *) kill -0 "$holder" 2>/dev/null && continue ;;  # its holder is still running -- ordinary, same as above
+    esac
+    reclaim_dir="$f.reclaim"
+    if [ "$dry_run" = "1" ]; then
+      if _burn_reclaim_mutex_available "$reclaim_dir"; then
+        log_info "GC: [Dry Run] Would remove dead-holder tank lock ${f##*/}"
+      elif _burn_reclaim_mutex_is_foreign "$reclaim_dir"; then
+        # KITT (2026-09-11): a foreign object at the reclaim mutex path
+        # (a directory, a symlink to one, or a plain file) is never
+        # reapable, by `try` or by this preview -- report it under its own
+        # reason, not lumped in with an ordinary busy mutex.
+        log_info "GC: [Dry Run] skipping ${f##*/} -- its reclaim mutex is a foreign-mutex at $reclaim_dir -- remove it by hand, then retry"
+        skipped=$((skipped + 1))
+      else
+        log_info "GC: [Dry Run] skipping ${f##*/} -- its reclaim mutex is busy right now"
+        skipped=$((skipped + 1))
+      fi
+      continue
+    fi
+    # R7-P2-1 (2026-09-10 round-7 review): `_burn_reclaim_mutex_try` returns
+    # `1` for two entirely different reasons — a live holder refused it, OR
+    # it just reaped a dead one and, by design, "never claims it for the
+    # caller" — and treating both as "busy" made THIS most common outcome
+    # print a reason that is definitely wrong (nothing is contending) and
+    # left the `.lock` behind for a second `clean` run to remove, needing
+    # two passes where one would do (measured 3/3 on the fixtures where the
+    # mutex was reapable, not genuinely held). Tell the two apart by
+    # re-testing the path itself, not the return code: still occupied means
+    # a live holder genuinely has it; vacant means this very call reaped
+    # it, and the vacancy is ours to claim in the same pass.
+    got=0
+    if _burn_reclaim_mutex_try "$reclaim_dir"; then
+      got=1
+    elif { [ -L "$reclaim_dir" ] || [ -e "$reclaim_dir" ]; }; then
+      got=0   # still occupied -- either genuinely busy, or a foreign-mutex `try` already refused (and logged) above
+    elif _burn_reclaim_mutex_try "$reclaim_dir"; then
+      got=1   # the first try's own call reaped it; the path is vacant now -- claim it
+    fi
+    if [ "$got" -eq 1 ]; then
+      # Re-verify under the mutex before acting — the target may have
+      # changed since the unsynchronized read above (a live holder
+      # released, or a fresh contender's `ln -s` landed on this exact path
+      # in the meantime).
+      #
+      # R9-P1-1 (2026-09-11 round-9 review): this used to `rm -f "$f"`
+      # directly once `$holder`'s liveness said stale — the same bare
+      # readlink-decide-then-rm burn.sh's own re-verify block had, and the
+      # same fix: `_burn_tank_lock_reap_verified` (lib/commands/burn.sh)
+      # `mv`s the lock atomically and only discards it if what it actually
+      # caught still names the exact identity judged stale here, restoring
+      # anything else (a live holder's fresh claim that landed in the
+      # window between this read and the `mv`). Measured through this
+      # exact function, via the real `bin/clikae clean`: 5/5 destroyed a
+      # genuinely live claim under the old shape, with GC's own summary
+      # line calling it a "dead-holder tank lock" as it deleted it.
+      if [ -L "$f" ]; then
+        target="$(readlink "$f" 2>/dev/null || true)"
+        holder="${target%%:*}"
+        hstarted="${target#*:}"
+        case "$holder" in
+          ''|*[!0-9]*) _burn_tank_lock_reap_verified "$f" "$holder" "$hstarted" && n=$((n + 1)) ;;
+          *) kill -0 "$holder" 2>/dev/null || { _burn_tank_lock_reap_verified "$f" "$holder" "$hstarted" && n=$((n + 1)); } ;;
+        esac
+      fi
+      _burn_reclaim_mutex_release "$reclaim_dir"
+    elif _burn_reclaim_mutex_is_foreign "$reclaim_dir"; then
+      log_info "GC: skipping ${f##*/} -- its reclaim mutex is a foreign-mutex at $reclaim_dir -- remove it by hand, then retry"
+      skipped=$((skipped + 1))
+    else
+      log_info "GC: skipping ${f##*/} -- its reclaim mutex is busy right now"
+      skipped=$((skipped + 1))
+    fi
+  done
+
+  for f in "$dir/"tank-busy-*.lock.reclaim; do
+    { [ -L "$f" ] || [ -d "$f" ]; } || continue
+    if [ "$dry_run" = "1" ]; then
+      if _burn_reclaim_mutex_available "$f"; then
+        log_info "GC: [Dry Run] Would remove dead-holder tank lock ${f##*/}"
+      elif _burn_reclaim_mutex_is_foreign "$f"; then
+        # KITT (2026-09-11): a directory, a symlink to one, or a plain file
+        # at this path is never reapable, by `try` or by this preview --
+        # its own reason, never folded into "genuinely held".
+        log_info "GC: [Dry Run] skipping ${f##*/} -- it is a foreign-mutex, not this codebase's own symlink -- remove it by hand, then retry"
+        skipped=$((skipped + 1))
+      else
+        log_info "GC: [Dry Run] skipping ${f##*/} -- it is genuinely held right now"
+        skipped=$((skipped + 1))
+      fi
+      continue
+    fi
+    had_entry=1
+    if _burn_reclaim_mutex_try "$f"; then
+      # Nothing was actually there to reap (the path had just gone empty
+      # on its own) — this only won a fresh, empty claim; release it
+      # immediately, GC has no removal to protect by holding it.
+      _burn_reclaim_mutex_release "$f"
+    elif _burn_reclaim_mutex_is_foreign "$f"; then
+      # Checked BEFORE the generic "still there -- genuinely held" branch
+      # below: a foreign object is also `-L || -d` true, and `try` already
+      # refused (and logged) it for the reason named here, never for being
+      # genuinely held by a live clikae.
+      log_info "GC: skipping ${f##*/} -- it is a foreign-mutex, not this codebase's own symlink -- remove it by hand, then retry"
+      skipped=$((skipped + 1))
+    elif { [ -L "$f" ] || [ -d "$f" ]; }; then
+      # R7-P2-1: `_burn_reclaim_mutex_try` returning `1` here does not mean
+      # "genuinely held" — it also returns `1` after reaping-and-discarding
+      # a dead entry outright (never claims it for the caller). Only say
+      # "genuinely held" once the path is checked and still actually there;
+      # a reap that already removed it needs no line here at all, the same
+      # way the `n` count below already only fires on a real removal.
+      log_info "GC: skipping ${f##*/} -- it is genuinely held right now"
+      skipped=$((skipped + 1))
+    fi
+    # Whether it just reaped-and-discarded a dead mutex, restored a live
+    # one it mistakenly caught, or found a live one and left it alone,
+    # _burn_reclaim_mutex_try already applied the one liveness rule this
+    # object has everywhere else — nothing further for GC to decide here.
+    [ "$had_entry" -eq 1 ] && [ ! -L "$f" ] && [ ! -d "$f" ] && n=$((n + 1))
+  done
+
+  # Graveyard entries — both `_burn_reclaim_mutex_try`'s (the MUTEX family,
+  # `tank-busy-*.lock.reclaim.stale.*`) and `_burn_tank_lock_reap_verified`'s
+  # (the LOCK family, `tank-busy-*.lock.stale.*`, added round 9 —
+  # lib/commands/burn.sh) rename-to-unique-name reaps — are private to the
+  # reaper that created them — its OWN pid is embedded in the filename, not
+  # in the target — and are normally removed by that same reaper a syscall
+  # or two later. One can only outlive it if the reaper itself was killed
+  # between its `mv` and its `rm`, OR its restore raced a live claim back
+  # into an occupied path and deliberately kept the grave as that claim's
+  # only surviving copy (see both reapers' own "could NOT restore"
+  # branches), so the liveness test here is the filename's pid, not the
+  # symlink's target. This is never a live REMOVAL mutex's identity, so it
+  # needs no mutex of its own to sweep. KITT (2026-09-11): every graveyard
+  # either reaper can create is a `mv` of a SYMLINK it caught (a foreign
+  # object at the mutex/lock path is refused before ever reaching that
+  # `mv`, see the KITT ruling above `try`'s own refusal) — never a
+  # directory — but the `-d` half of this filter costs nothing to keep as
+  # a defensive backstop, and the filename's pid, not anything inside the
+  # entry, is still the only thing that ever needs checking.
+  #
+  # R10-P2-1 (2026-09-12 round-10 review): this loop used to sweep ONLY the
+  # mutex family's glob, while this very comment claimed to cover "every
+  # graveyard" — round 9 introduced a SECOND graveyard family (the lock
+  # family, above) that this glob's `.reclaim.` segment structurally cannot
+  # match, so a restore-failure grave for a LOCK (the only surviving copy
+  # of a live claim `_burn_tank_lock_reap_verified` could not put back) had
+  # no sweeper anywhere in this codebase and would accumulate forever.
+  # Fixed by sweeping both globs the same way; they cannot collide with
+  # each other (`.lock.stale.` never appears as a substring of
+  # `.lock.reclaim.stale.…`, verified by direct glob expansion).
+  for f in "$dir/"tank-busy-*.lock.stale.* "$dir/"tank-busy-*.lock.reclaim.stale.*; do
+    { [ -L "$f" ] || [ -d "$f" ]; } || continue
+    holder="${f##*.stale.}"; holder="${holder%%.*}"
+    case "$holder" in
+      ''|*[!0-9]*) : ;;
+      *) kill -0 "$holder" 2>/dev/null && continue ;;
+    esac
+    if [ "$dry_run" = "1" ]; then
+      log_info "GC: [Dry Run] Would remove orphaned graveyard entry ${f##*/}"
+    else
+      rm -rf "$f" && n=$((n + 1))
+    fi
+  done
+  if [ "$n" -gt 0 ] || [ "$skipped" -gt 0 ]; then
+    log_info "GC: removed $n dead-holder tank lock(s), skipped $skipped busy one(s)."
+  fi
+  return 0
+}
+
+_clean_tmux_gc() {
+  local dry_run="$1"
+  local lock_file sid is_dead rc
+  # 🔴 AN UNSET PREFIX MUST NOT BE QUIET. Empty values turn both globs into
+  # `…/ephem-*.lock`, which matches nothing, and this GC becomes a no-op that
+  # reports success — the same silent-absence shape as a $TMUX_TMPDIR pointing at
+  # a deleted directory. bin/clikae sources lib/core/tmux.sh before any command
+  # runs; if something sourced this file alone, say so instead of doing nothing.
+  if [ -z "${CLIKAE_SESS_PREFIX:-}" ]; then
+    log_warn "GC skipped: session-name prefix unset (lib/core/tmux.sh was not loaded)."
+    return 1
+  fi
+  for lock_file in "$HOME/.clikae/state/${CLIKAE_SESS_PREFIX}ephem-"*.lock; do
+    [ -e "$lock_file" ] || continue
+    is_dead=0
+    # R10-P1-1 (2026-09-12 round-10 review): both probes used to be bare
+    # statements (`… ; rc=$?`) under bin/clikae's `set -eo pipefail` — the
+    # exact errexit shape R9-P1-1 fixed at cmd_burn's own acquire call. A
+    # genuinely-held ephemeral lock makes `flock -n`/`lockf -k -t 0` exit
+    # non-zero, which `errexit` treated as this FUNCTION failing outright:
+    # `clikae clean` died here with rc=75 (lockf) or rc=1 (flock) and ZERO
+    # output, and `_clean_scrollback_gc`/`_clean_tank_lock_gc` — the PR's own
+    # documented recovery path — never ran, precisely while a burn holding
+    # this lock is the most likely moment to have left something to clean.
+    # `|| rc=$?` keeps the non-zero exit from ever reaching errexit; the
+    # busy branch below is also no longer silent, so this stops being a
+    # trap nobody can see they walked into.
+    if command -v flock >/dev/null 2>&1; then
+      rc=0
+      flock -n "$lock_file" true 2>/dev/null || rc=$?
+      if [ "$rc" -eq 0 ]; then
+        is_dead=1
+      elif [ "$rc" -eq 1 ]; then
+        : # Lock held
+      fi
+    else
+      rc=0
+      lockf -k -t 0 "$lock_file" true 2>/dev/null || rc=$?
+      if [ "$rc" -eq 0 ]; then
+        is_dead=1
+      elif [ "$rc" -eq 75 ]; then
+        : # Lock held
+      fi
+    fi
+    if [ "$is_dead" -eq 0 ]; then
+      # Named, not silent (R10-P1-1): a busy ephemeral lock is routine while
+      # its burn runs, but the old code left this branch's cost unpaid where
+      # nobody could see it -- one line, same register (and same dry-run/
+      # real distinction) as every other "skipping … busy" line this GC
+      # already prints elsewhere.
+      if [ "$dry_run" = "1" ]; then
+        log_info "GC: [Dry Run] skipping ${lock_file##*/} -- a running clikae burn holds this ephemeral lock"
+      else
+        log_info "GC: skipping ${lock_file##*/} -- a running clikae burn holds this ephemeral lock"
+      fi
+    fi
+    if [ "$is_dead" -eq 1 ]; then
+      sid="${lock_file##*-ephem-}"
+      sid="${sid%.lock}"
+      # Defence in depth: a real sid is validated engine/tank names + a digest, so
+      # an empty or dot-leading value is a malformed file — never act on it.
+      case "$sid" in ''|.*) continue ;; esac
+      local _sb_new="$HOME/.clikae/state/${CLIKAE_SESS_PREFIX}${sid}.scrollback"
+      # Orphans under any older name are swept by _clean_scrollback_gc, which
+      # keys on the writer's pid rather than on the prefix.
+      local _sb_old=""
+      local CLIKAE_TMUX_SESS CLIKAE_TMUX_SESS_EXISTS
+      tmux_sessv "$sid"
+      if [ "$CLIKAE_TMUX_SESS_EXISTS" -eq 1 ]; then
+        if [ "$dry_run" = "1" ]; then
+          log_info "GC: [Dry Run] Would clean up abandoned tmux session $CLIKAE_TMUX_SESS"
+        else
+          tmux kill-session -t "=$CLIKAE_TMUX_SESS"
+          log_info "GC: Cleaned up abandoned tmux session $CLIKAE_TMUX_SESS"
+          rm -f "$lock_file" "$HOME/.clikae/state/${sid}.sh" "$HOME/.clikae/state/${sid}_exit" "$_sb_new" "$_sb_old"
+        fi
+      else
+        if [ "$dry_run" != "1" ]; then
+          rm -f "$lock_file" "$HOME/.clikae/state/${sid}.sh" "$HOME/.clikae/state/${sid}_exit" "$_sb_new" "$_sb_old"
+        fi
+      fi
+    fi
+  done
+}
+
+# _clean_board_gc <dry_run> -> per-tank board snapshot generations beyond the
+# newest few. board_state_refresh (lib/core/board_state.sh) already GCs its
+# OWN tank on every publish via board_gc_generations, but a tank nobody has
+# launched in a while (so nothing re-publishes it) still deserves a sweep —
+# same reasoning as _clean_session_id_gc just above. 2026-09-12 round-1 fix
+# review, P2-3.
+_clean_board_gc() {
+  local dry_run="$1" root="${CLIKAE_HOME:-$HOME/.clikae}/state/board"
+  local keep="${CLIKAE_BOARD_KEEP_GENERATIONS:-5}" tdir gd n=0
+  [ -d "$root" ] || return 0
+  for tdir in "$root"/*/; do
+    [ -d "$tdir" ] || continue
+    tdir="${tdir%/}"
+    while IFS= read -r gd; do
+      [ -n "$gd" ] || continue
+      if [ "$dry_run" = "1" ]; then
+        log_info "GC: [Dry Run] Would remove old board snapshot ${gd#"$root"/}"
+      else
+        rm -rf "$gd" && n=$((n + 1))
+      fi
+    done < <(
+      # P3-4 (2026-09-12 round-3 fix review): this used to keep its OWN copy
+      # of board_gc_generations' ranking (mtime desc, directory name as the
+      # tie-break) so the two could not disagree on which generation keep-N
+      # protects. Round-8 made that rule bigger than a sort — a generation is
+      # now a link in a chain and the whole chain from `current` has to be
+      # protected outright (see _board_gc_candidates' own header,
+      # lib/core/board_state.sh) — and a second copy of a rule that just grew
+      # a second clause is exactly how the two drift. There is one copy now,
+      # and this sweep calls it.
+      _board_gc_candidates "$tdir" "$keep"
+    )
+  done
+  [ "$n" -gt 0 ] && log_info "GC: removed $n old board snapshot generation(s)."
+  return 0
+}
+
+# _clean_readings_gc <dry_run> -> per-file reading-cache entries
+# (lib/core/reading_cache.sh) whose OWN source file no longer exists. Nothing
+# ever wrote these back out: a transcript deleted (by this very command, or by
+# the vendor's own retention) left its cache entry behind forever. The saved
+# key is "<path>:<size>:<mtime>" — strip the two trailing ":"-fields to recover
+# the path even if it itself contained a colon.
+_clean_readings_gc() {
+  local dry_run="$1" root="${CLIKAE_HOME:-$HOME/.clikae}/state/readings"
+  local f saved path n=0
+  [ -d "$root" ] || return 0
+  for f in "$root"/*; do
+    [ -f "$f" ] || continue
+    saved=""
+    IFS= read -r saved < "$f" 2>/dev/null || true
+    path="${saved%:*}"; path="${path%:*}"
+    [ -n "$path" ] && [ -f "$path" ] && continue
+    if [ "$dry_run" = "1" ]; then
+      log_info "GC: [Dry Run] Would remove orphaned reading cache ${f##*/}"
+    else
+      rm -f "$f" && n=$((n + 1))
+    fi
+  done
+  [ "$n" -gt 0 ] && log_info "GC: removed $n orphaned reading cache file(s)."
+  return 0
 }
 
 cmd_clean() {
   local dry_run=0
   local older_than=30 older_given=0
   local min_size_mb=""
+  local archive_check_on=1
   while [ $# -gt 0 ]; do
     case "$1" in
       -h|--help) _clean_help; return 0 ;;
@@ -860,12 +1614,34 @@ cmd_clean() {
         min_size_mb="$2"
         shift 2
         ;;
+      --no-archive-check) archive_check_on=0; shift ;;
       *)
         # shellcheck disable=SC2059
         log_fail "$(printf "$T_CLEAN_ERR_UNKNOWN_ARG" "$1")"
         ;;
     esac
   done
+
+  # Run the Tmux Ephemeral GC before doing file scans
+  _clean_tmux_gc "$dry_run"
+  _clean_scrollback_gc "$dry_run"
+  _clean_session_id_gc "$dry_run"
+  _clean_tank_lock_gc "$dry_run"
+  _clean_board_gc "$dry_run"
+  _clean_readings_gc "$dry_run"
+  _clean_burn_sidecar_gc "$dry_run"
+  # P3-3 (2026-09-13 fix-round-3 review): burn.sh is already sourced above —
+  # its own day-based log retention (burn-*, and watch-github-* as of this
+  # round) used to run ONLY as a side effect of `clikae burn` itself;
+  # `clikae clean` had no notion of ~/.clikae/logs at all. Runs under
+  # --dry-run too now (P3-2, 2026-09-14 fix-round-4 review) — it just
+  # previews instead of deleting, same as every other GC above.
+  _burn_sweep_old_logs "$dry_run"
+  # Same GC `clikae burn` itself runs opportunistically at the start of its
+  # prelaunch block (lib/commands/burn.sh, _burn_prelaunch_lock_gc) — a
+  # `clean` run gets the identical mtime-based sweep, on both the current
+  # `state/locks/` location and the pre-migration `state/` top level.
+  _burn_prelaunch_lock_gc "$dry_run"
 
   # Which filters gate the section-2 pool. --min-size alone means size is the
   # only axis (space lives in big recent files, not old ones); age applies by
@@ -879,11 +1655,25 @@ cmd_clean() {
   # precisely what remains after every transcript is gone, so the orphan sweep
   # below must still run over a transcript-less store.
   local files
+  # 🔴 No `--resumable` here, deliberately. That flag hides claude's
+  # `agent-*.jsonl` subagent transcripts from the LISTS of conversations (the
+  # picker, prefix resolution, the board) because nobody reopens one. They are
+  # still bytes on the disk — often the biggest bytes on a working store — and
+  # reclaiming bytes is this command's entire job, so clean sees everything.
   files="$(_resume_all_sessions)"
 
   local now; now="$(date +%s)"
   local limit_secs=$((older_than * 86400))
   local cutoff=$((now - limit_secs))
+
+  # Read the archive marker once, before any candidate is considered — every
+  # session-producing site below (dedupe, the main scan loop, orphan sweep)
+  # calls _clean_archive_withholds, which reads archive_check_on/
+  # ARCHIVE_MARKER_EPOCH set here. Unaffected by --no-archive-check: read it
+  # regardless (a withheld count needs the marker even when overridden would
+  # be wrong; here we simply never rely on it when the override is on).
+  _clean_read_archive_marker "$now" || true
+  local archive_withheld_n=0
 
   local -a candidates=()
   local -a cand_engine=()
@@ -964,6 +1754,13 @@ EOF2
     # silently — an unchecked row under "Big but recent" is still one keypress
     # from deletion, which is exactly the 2026-07-11 incident this closes.
     _clean_session_is_live "$f" "$live_procs" && continue
+    # Same archive-marker guard as the dedupe/orphan paths: a session written
+    # after the last confirmed-archived instant is never a candidate, in any
+    # section — see _clean_archive_withholds.
+    if _clean_archive_withholds "$mt"; then
+      archive_withheld_n=$((archive_withheld_n + 1))
+      continue
+    fi
     if [ "$apply_age" -eq 1 ] && [ "$mt" -gt "$cutoff" ]; then
       _clean_add_candidate "$f" "$mt" big ""
     else
@@ -1022,16 +1819,44 @@ EOF
 $ordered
 EOF
 
+  # ── Archive-marker note ───────────────────────────────────────────────────
+  # Printed once, before either the "nothing to clean" short-circuit or the
+  # list itself, in BOTH --dry-run and a real run: the guard above dropped
+  # candidates silently and class-agnostically (see _clean_archive_withholds),
+  # so this is the one place that says why the count is smaller than the
+  # store on disk — never letting "clean" quietly mean less than it used to.
+  if [ "$archive_check_on" -eq 1 ]; then
+    if [ -n "$ARCHIVE_MARKER_EPOCH" ]; then
+      if [ "$archive_withheld_n" -gt 0 ]; then
+        # shellcheck disable=SC2059
+        _clean_prose "$__C_DIM" "$(printf "$T_CLEAN_ARCHIVE_WITHHELD" \
+          "$archive_withheld_n" "$(_human_age "$ARCHIVE_MARKER_EPOCH" "$now")")"
+        echo
+      fi
+    else
+      local archive_reason_str
+      case "$ARCHIVE_MARKER_REASON" in
+        unreadable)  archive_reason_str="$T_CLEAN_ARCHIVE_REASON_UNREADABLE" ;;
+        non-numeric) archive_reason_str="$T_CLEAN_ARCHIVE_REASON_NONNUMERIC" ;;
+        future)      archive_reason_str="$T_CLEAN_ARCHIVE_REASON_FUTURE" ;;
+        *)           archive_reason_str="$T_CLEAN_ARCHIVE_REASON_MISSING" ;;
+      esac
+      # shellcheck disable=SC2059
+      _clean_prose "$__C_DIM" "$(printf "$T_CLEAN_ARCHIVE_ABSENT" "$archive_reason_str")"
+      echo
+    fi
+  fi
+
   if [ "${#ord[@]}" -eq 0 ]; then
     if [ -n "$min_size_mb" ] && [ "$apply_age" -eq 0 ]; then
       # shellcheck disable=SC2059
-      log_ok "$(printf "$T_CLEAN_NONE_MINSIZE" "$min_size_mb")"
+      log_pass "$(printf "$T_CLEAN_NONE_MINSIZE" "$min_size_mb")"
     elif [ -n "$min_size_mb" ]; then
       # shellcheck disable=SC2059
-      log_ok "$(printf "$T_CLEAN_NONE_AGE_MINSIZE" "$older_than" "$min_size_mb")"
+      log_pass "$(printf "$T_CLEAN_NONE_AGE_MINSIZE" "$older_than" "$min_size_mb")"
     else
       # shellcheck disable=SC2059
-      log_ok "$(printf "$T_CLEAN_NONE_ALL" "$older_than" "$CLIKAE_CLEAN_BIG_MB")"
+      log_pass "$(printf "$T_CLEAN_NONE_ALL" "$older_than" "$CLIKAE_CLEAN_BIG_MB")"
     fi
     return 0
   fi
@@ -1090,14 +1915,24 @@ EOF
     _clean_print_list
     echo
   elif [ "$sel_rc" -ne 0 ]; then
-    log_ok "$T_CLEAN_CANCELLED"
+    log_done "$T_CLEAN_CANCELLED"
     return 0
   fi
 
   _clean_tally
   if [ "$sel_n" -eq 0 ]; then
-    log_ok "$T_CLEAN_NOTHING_SELECTED"
+    log_pass "$T_CLEAN_NOTHING_SELECTED"
     return 0
+  fi
+
+  # Ask BEFORE the red confirm, not during the delete. The question a person
+  # answers has to be the one that will actually happen: this used to be
+  # discovered mid-loop, so they agreed to "move these to the Trash" and only
+  # afterwards did clikae find out it couldn't. Nothing is touched here.
+  if ! _clean_trash_usable; then
+    log_err "$T_CLEAN_TRASH_UNUSABLE"
+    log_dim "$T_CLEAN_TRASH_UNUSABLE_HINT"
+    return 1
   fi
 
   # shellcheck disable=SC2059
@@ -1110,25 +1945,30 @@ EOF
   read -r _ || log_fail "$T_CLEAN_NO_CONFIRM"
 
   log_dim "$T_CLEAN_DELETING"
-  local deleted_kb=0 pth
+  local deleted_kb=0 pth row_skipped skipped=0
   local -a path_list=()
   for ((oi=0; oi<${#ord[@]}; oi++)); do
     idx="${ord[oi]}"
     [ "${cand_checked[idx]}" -eq 1 ] || continue
     IFS=';' read -ra path_list <<< "${cand_files_to_delete[idx]}"
+    row_skipped=0
     for pth in "${path_list[@]}"; do
       _clean_to_trash "$pth"
-      if [ "$CLEAN_TRASH_FELL_BACK" -eq 1 ]; then
-        # A silent rm fallback would lie about where the data went — say so on
-        # this row, every time it happens.
+      if [ "$CLEAN_TRASH_SKIPPED" -eq 1 ]; then
+        # Nothing was destroyed — this row is simply still on disk. Say which,
+        # so "the number went down less than I expected" has an answer.
+        row_skipped=1; skipped=$((skipped + 1))
         # shellcheck disable=SC2059
         log_warn "$(printf "$T_CLEAN_TRASH_UNAVAILABLE" "$pth")"
       fi
     done
-    deleted_kb=$((deleted_kb + ${cand_size_kb[idx]}))
+    # Only bank the size of a row that actually moved, or the summary overstates
+    # what it did — the exact class of lie this whole change is about.
+    [ "$row_skipped" -eq 0 ] && deleted_kb=$((deleted_kb + ${cand_size_kb[idx]}))
   done
+  [ "$skipped" -eq 0 ] || log_warn "$(printf "$T_CLEAN_SKIPPED_N" "$skipped")"
 
   local deleted_sz_str; deleted_sz_str="$(_kb_human "$deleted_kb")"
   # shellcheck disable=SC2059
-  log_ok "$(printf "$T_CLEAN_DONE" "$deleted_sz_str")"
+  log_done "$(printf "$T_CLEAN_DONE" "$deleted_sz_str")"
 }

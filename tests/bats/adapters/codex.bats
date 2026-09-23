@@ -128,3 +128,132 @@ seed_rollout() {
   [ "$status" -eq 0 ]
   [[ "$output" == *"000000000abc"* ]] || false
 }
+
+# --- #74 round-1 P1-1: burn's sidecar writer and resume's picker used to
+# derive a codex session's sid two different ways (payload.id from the file
+# body vs "everything after the last hyphen" in the filename) and could never
+# agree once the uuid itself has internal hyphens — the picker's derivation
+# then never matched what burn recorded, so codex burn sessions were NEVER
+# actually hidden despite the sidecar holding a line for every one of them. ---
+
+@test "codex adapter_sid_canonical recovers the FULL uuid from a rollout path, not just its last hyphen segment" {
+  _setup_codex
+  local sid="019e0000-0000-7000-8000-00000000abcd"
+  local f="$SDIR/2026/06/03/rollout-2026-06-03T10-00-00-$sid.jsonl"
+  run adapter_sid_canonical "$f"
+  [ "$status" -eq 0 ]
+  [ "$output" = "$sid" ]
+  [ "$output" != "00000000abcd" ]   # the old (broken) last-hyphen-segment answer
+}
+
+@test "codex adapter_sid_canonical matches adapter_recent_sids's own sid, byte for byte" {
+  _setup_codex
+  local sid="019e0000-0000-7000-8000-0000000beefd"
+  seed_rollout "$sid" "$WORK" "fix the build"
+  local f="$SDIR/2026/06/03/rollout-2026-06-03T10-00-00-$sid.jsonl"
+  run adapter_recent_sids "$PROFILE"
+  [ "$status" -eq 0 ]
+  local from_recent="${output##*$'\037'}"
+  run adapter_sid_canonical "$f"
+  [ "$status" -eq 0 ]
+  [ "$output" = "$from_recent" ]
+}
+
+# --- #74 round-4 P3-1: adapter_cwd_from_args argv shapes, measured against a
+# real codex 0.154.0 binary (clap accepts `=`-joined long AND short forms). --
+
+@test "codex adapter_cwd_from_args recognises -C <dir> (spaced)" {
+  _setup_codex
+  run adapter_cwd_from_args exec -C /tmp/one -s workspace-write 'go'
+  [ "$status" -eq 0 ]
+  [ "$output" = /tmp/one ]
+}
+
+@test "codex adapter_cwd_from_args recognises -C<dir> (attached)" {
+  _setup_codex
+  run adapter_cwd_from_args exec -C/tmp/two -s workspace-write 'go'
+  [ "$status" -eq 0 ]
+  [ "$output" = /tmp/two ]
+}
+
+@test "codex adapter_cwd_from_args recognises --cd <dir> (spaced long alias)" {
+  _setup_codex
+  run adapter_cwd_from_args exec --cd /tmp/three -s workspace-write 'go'
+  [ "$status" -eq 0 ]
+  [ "$output" = /tmp/three ]
+}
+
+@test "codex adapter_cwd_from_args recognises --cd=<dir> (clap long = form)" {
+  _setup_codex
+  run adapter_cwd_from_args exec --cd=/tmp/four -s workspace-write 'go'
+  [ "$status" -eq 0 ]
+  [ "$output" = /tmp/four ]
+}
+
+@test "codex adapter_cwd_from_args recognises -C=<dir> (clap short = form) without leaking the '='" {
+  _setup_codex
+  run adapter_cwd_from_args exec -C=/tmp/five -s workspace-write 'go'
+  [ "$status" -eq 0 ]
+  [ "$output" = /tmp/five ]
+  [[ "$output" != =* ]] || false
+}
+
+@test "codex adapter_cwd_from_args returns empty (rc 1) with no -C/--cd at all" {
+  _setup_codex
+  run adapter_cwd_from_args exec -s workspace-write 'go'
+  [ "$status" -eq 1 ]
+  [ -z "$output" ]
+}
+
+# --- #113 item 3: counter-specimens for recent_sids' sid-from-FILENAME fast path.
+# #93 round 2 made adapter_recent_sids take the sid from the rollout name instead
+# of reading session_meta, falling back to the read "when the name carries no
+# uuid" — and produced no specimen where it doesn't. These are those specimens.
+
+@test "codex recent_sids (#113): a rollout whose name carries NO uuid falls back to the body id" {
+  _setup_codex
+  local body="019e0000-0000-7000-8000-00000000b0d1"
+  {
+    printf '{"timestamp":"2026-06-03T01:00:00.000Z","type":"session_meta","payload":{"id":"%s","cwd":"%s"}}\n' "$body" "$WORK"
+    printf '{"type":"event_msg","payload":{"type":"user_message","message":"renamed by hand"}}\n'
+  } > "$SDIR/2026/06/03/rollout-2026-06-03T10-00-00.jsonl"
+  run adapter_recent_sids "$PROFILE" 10
+  [ "$status" -eq 0 ]
+  [ "${output#*$'\037'}" = "$body" ] || { printf '%q\n' "$output"; false; }
+}
+
+@test "codex recent_sids (#113): uuid-SHAPED but not hex in the name is not a uuid — the body id wins" {
+  # 36 characters with dashes exactly where a uuid has them. The pre-#113
+  # `????????-????-????-????-????????????` glob accepted this and put
+  # "notauuid-zzzz-zzzz-zzzz-zzzzzzzzzzzz" on the board as a session id.
+  _setup_codex
+  local body="019e0000-0000-7000-8000-00000000b0d2"
+  {
+    printf '{"timestamp":"2026-06-03T01:00:00.000Z","type":"session_meta","payload":{"id":"%s","cwd":"%s"}}\n' "$body" "$WORK"
+    printf '{"type":"event_msg","payload":{"type":"user_message","message":"odd name"}}\n'
+  } > "$SDIR/2026/06/03/rollout-2026-06-03T10-00-00-notauuid-zzzz-zzzz-zzzz-zzzzzzzzzzzz.jsonl"
+  run adapter_recent_sids "$PROFILE" 10
+  [ "$status" -eq 0 ]
+  [ "${output#*$'\037'}" = "$body" ] || { printf '%q\n' "$output"; false; }
+}
+
+@test "codex recent_sids (#113): a uuid-named rollout keeps the FAST path — the name is used, the body id is not read" {
+  # The proof the fast path is still taken: the body's id DIFFERS from the name,
+  # and the answer is the name's. (The repo's own sid->file lookup,
+  # _codex_find_rollout, resolves by that same name, so this is the id resume
+  # can find the file by.)
+  _setup_codex
+  local name_sid="019e0000-0000-7000-8000-0000000fa57a"
+  {
+    printf '{"timestamp":"2026-06-03T01:00:00.000Z","type":"session_meta","payload":{"id":"%s","cwd":"%s"}}\n' "019e0000-0000-7000-8000-00000000d1ff" "$WORK"
+    printf '{"type":"event_msg","payload":{"type":"user_message","message":"fast path"}}\n'
+  } > "$SDIR/2026/06/03/rollout-2026-06-03T10-00-00-$name_sid.jsonl"
+  run adapter_recent_sids "$PROFILE" 10
+  [ "$status" -eq 0 ]
+  [ "${output#*$'\037'}" = "$name_sid" ] || { printf '%q\n' "$output"; false; }
+  # Upper-case hex is still hex.
+  mv "$SDIR/2026/06/03/rollout-2026-06-03T10-00-00-$name_sid.jsonl" \
+     "$SDIR/2026/06/03/rollout-2026-06-03T10-00-00-019E0000-0000-7000-8000-0000000FA57A.jsonl"
+  run adapter_recent_sids "$PROFILE" 10
+  [ "${output#*$'\037'}" = "019E0000-0000-7000-8000-0000000FA57A" ] || { printf '%q\n' "$output"; false; }
+}

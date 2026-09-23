@@ -25,8 +25,8 @@ _relay_preview_card() {
   printf '    %-9s%s  %b· ≈%s msgs · last active %s%b\n' \
     "session" "${sid%%-*}" "$__C_DIM" "$msgs" "$last" "$__C_RESET"
   printf '    %-9s%b%s%b\n' "carrying" "$__C_DIM" "$title" "$__C_RESET"
-  printf '    %-9snew turns burn %b%s%b · %s untouched %b✓%b\n\n' \
-    "quota" "$__C_BOLD" "$to" "$__C_RESET" "$from" "$__C_GREEN" "$__C_RESET"
+  printf '    %-9snew turns burn %b%s%b · %s untouched\n\n' \
+    "quota" "$__C_BOLD" "$to" "$__C_RESET" "$from"
 }
 
 # Generic arrow-key menu drawn on /dev/tty. Args: <title> then one label per
@@ -40,11 +40,11 @@ _relay_menu() {
   local n=${#opts[@]}
   [ "$n" -gt 0 ] || return 1
   # Read-write fd so we can both draw to and read keys from the terminal.
-  exec 3<>/dev/tty 2>/dev/null || return 1
+  { exec 3<>/dev/tty; } 2>/dev/null || return 1
   local sel=0 i key rest
-  printf '\033[?1049h\033[?25l' >&3
+  tui_screen_enter >&3
   # shellcheck disable=SC2064
-  trap "printf '\033[?25h\033[?1049l' >&3 2>/dev/null; exec 3>&- 2>/dev/null" RETURN
+  trap "tui_screen_leave >&3 2>/dev/null; { exec 3>&-; } 2>/dev/null" RETURN
   while :; do
     {
       printf '\033[H\033[2J'
@@ -64,12 +64,12 @@ _relay_menu() {
       j) sel=$(((sel + 1) % n)) ;;
       q) break ;;
       ''|$'\n'|$'\r')
-        printf '\033[?25h\033[?1049l' >&3; exec 3>&-; trap - RETURN
+        tui_screen_leave >&3; exec 3>&-; trap - RETURN
         printf '%s\n' "$sel"
         return 0 ;;
     esac
   done
-  printf '\033[?25h\033[?1049l' >&3; exec 3>&-; trap - RETURN
+  tui_screen_leave >&3; exec 3>&-; trap - RETURN
   return 1
 }
 
@@ -114,6 +114,7 @@ _relay_pick_target() {
     [ -d "$d" ] || continue
     name="$(basename "$d")"
     [ "$name" = "$from" ] && continue
+    tank_is_solo "$cli" "$name" && continue   # solo tanks are out of the fleet — never a relay target
     lbl=""
     if declare -F adapter_account_label >/dev/null; then
       lbl="$(adapter_account_label "${d%/}" 2>/dev/null || true)"
@@ -238,11 +239,21 @@ EOF
   validate_name profile "$to"
   [ "$from" != "$to" ] || log_fail "Source and target are the same tank ('$from'). Nothing to relay."
 
+  # A SOLO tank is deliberately out of the fleet: docs/grammar.md §127 says it is
+  # never a `to`/relay target. next_tank already skips it for AUTO carries and
+  # `memory share` refuses it — but an EXPLICIT `clikae to <solo>` / `relay … <solo>`
+  # slipped straight through and carried the session onto it anyway. Refuse, loudly.
+  if tank_is_solo "$cli" "$to"; then
+    log_err "$cli/$to is SOLO (standalone, out of the fleet) — refusing to carry a session onto it."
+    log_fail "If you really mean it, return it to the fleet first:  clikae solo $cli $to --off"
+  fi
+
   local from_dir to_dir
   from_dir="$(ensure_profile --require "$cli" "$from")"
   to_dir="$(ensure_profile --require "$cli" "$to")"
   soul_prelaunch "$cli" "$to" "$to_dir"   # member tank → fan this dir into its Soul
   fleet_mcp_prelaunch "$cli" "$to" "$to_dir"   # non-solo tank → fan in the shared MCP list
+  fleet_hooks_prelaunch "$cli" "$to" "$to_dir" # …and the shared hooks (#141)
 
   # --fresh means: switch tanks but start a NEW conversation — don't carry the old
   # session. The deliberate "different account, clean slate" path, kept distinct

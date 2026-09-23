@@ -28,6 +28,29 @@ load '../helpers'
   [ -d "$CLIKAE_HOME/profiles/claude/cver" ]
 }
 
+@test "rename carries the burn-order entry across (tank keeps its board position)" {
+  clikae init claude a
+  clikae init claude b
+  clikae init claude c
+  # Materialise an explicit order with 'a' pinned at the TOP.
+  printf 'claude/a\nclaude/c\nclaude/b\n' > "$CLIKAE_HOME/order"
+  clikae rename claude a cver --force
+  # The order file now names the new tank, in the SAME position (first line).
+  run head -n 1 "$CLIKAE_HOME/order"
+  [ "$output" = "claude/cver" ] || false
+  ! grep -qxF "claude/a" "$CLIKAE_HOME/order"
+}
+
+@test "rename carries the dry marker across (red badge follows the new name)" {
+  clikae init claude a
+  mkdir -p "$CLIKAE_HOME/dry/claude"
+  printf '%s\tresets 11pm\n' "$(date +%s)" > "$CLIKAE_HOME/dry/claude/a"
+  clikae rename claude a cver --force
+  [ ! -f "$CLIKAE_HOME/dry/claude/a" ]
+  [ -f "$CLIKAE_HOME/dry/claude/cver" ]
+  grep -qF "resets 11pm" "$CLIKAE_HOME/dry/claude/cver"
+}
+
 @test "rename refuses when the target already exists" {
   clikae init claude a
   clikae init claude cver
@@ -92,4 +115,70 @@ load '../helpers'
   run clikae list
   [ "$status" -eq 0 ]
   [[ "$output" == *"gh"*"personal"*"-"* ]] || false
+}
+
+# #74 round-1 P2-2: the burn sidecar is out-of-dir state keyed by tank NAME —
+# rename_tank_state's twin for burn-order/the dry marker, added here too.
+@test "rename carries the burn sidecar across (a renamed tank's burn sessions stay hidden under the new name)" {
+  clikae init claude a
+  mkdir -p "$CLIKAE_HOME/state/burn-sessions/claude"
+  printf 'aaaaaaaa-1111-4111-8111-111111111111\trun\t1700000000\n' > "$CLIKAE_HOME/state/burn-sessions/claude/a"
+  clikae rename claude a cver --force
+  [ ! -f "$CLIKAE_HOME/state/burn-sessions/claude/a" ]
+  [ -f "$CLIKAE_HOME/state/burn-sessions/claude/cver" ]
+  grep -qF "aaaaaaaa-1111-4111-8111-111111111111" "$CLIKAE_HOME/state/burn-sessions/claude/cver"
+}
+
+@test "rename with no burn sidecar on record is a no-op (no file created)" {
+  clikae init claude a
+  clikae rename claude a cver --force
+  [ ! -d "$CLIKAE_HOME/state/burn-sessions" ]
+}
+
+# ── the tank's own engine config across a rename (#141) ─────────────────────
+# 🔴 THIS IS A VERIFICATION, NOT A FEATURE. A tank's hooks (settings.json) and
+# its user-scope MCP servers (.claude.json) live INSIDE the directory rename
+# moves, so they were always carried — the defect reported in #141 was that
+# nobody could tell. Adding code to "carry" them would have been a second
+# mover racing the `mv`. So the carry is asserted here, and cmd_rename only
+# says out loud what it did.
+
+@test "rename carries the tank's hooks and MCP servers across, and says so" {
+  command -v jq >/dev/null 2>&1 || skip "needs jq to write the fixtures"
+  clikae init claude a
+  local old="$CLIKAE_HOME/profiles/claude/a"
+  jq '.hooks.Stop = [{hooks: [{type: "command", command: "/bin/echo snapshot"}]}]' \
+    "$old/settings.json" > "$old/settings.json.x" && mv "$old/settings.json.x" "$old/settings.json"
+  printf '{"oauthAccount":{"emailAddress":"a@example.com"},"mcpServers":{"stripe":{"type":"http","url":"https://mcp.stripe.com/"}}}\n' \
+    > "$old/.claude.json"
+
+  run clikae rename claude a cver --force
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"Carried the tank's own config across"* ]] || false
+  [[ "$output" == *"hooks (settings.json)"* ]] || false
+  [[ "$output" == *"MCP servers (.claude.json)"* ]] || false
+
+  local new="$CLIKAE_HOME/profiles/claude/cver"
+  run jq -r '.hooks.Stop[0].hooks[0].command' "$new/settings.json"
+  [ "$output" = "/bin/echo snapshot" ]
+  run jq -r '.mcpServers.stripe.url' "$new/.claude.json"
+  [ "$output" = "https://mcp.stripe.com/" ]
+  [ ! -e "$old" ]
+}
+
+@test "rename says nothing about carried config when the tank has none" {
+  # The negative control: the line must describe what is there, not appear
+  # unconditionally — a caption that is always printed states nothing.
+  clikae init claude a --no-template
+  rm -f "$CLIKAE_HOME/profiles/claude/a/settings.json"
+  run clikae rename claude a cver --force
+  [ "$status" -eq 0 ]
+  [[ "$output" != *"Carried the tank's own config across"* ]] || false
+}
+
+@test "rename carries the solo marker, so a solo tank is not re-fleeted by a new name" {
+  clikae init claude a
+  clikae solo claude a
+  clikae rename claude a cver --force
+  [ -f "$CLIKAE_HOME/profiles/claude/cver/clikae-meta/solo" ]
 }

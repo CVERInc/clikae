@@ -218,6 +218,15 @@ _stub_gh() {
   [ "${got[0]}" = "-p" ]
   [ "${got[1]}" = "do it" ]
   printf '%s\n' "${got[@]}" | grep -q "dangerously-skip-permissions" && false   # read-only: NO write grant
+  printf '%s\n' "${got[@]}" | grep -q -- "--no-session-persistence"             # a leg is not a resumable session
+  # 🔴 Read-only must be ENFORCED. Withholding --dangerously-skip-permissions is
+  # not a boundary: a tank whose settings carry permissions.defaultMode "auto"
+  # approves writes without asking. Measured 2026-08-16 — a leg told to create a
+  # file created it, and one editing this repo changed two tracked files while
+  # conduct's own help said READ-ONLY. codex's recipe has always passed
+  # `-s read-only`; this one enforced nothing.
+  printf '%s\n' "${got[@]}" | grep -q -- "--permission-mode"                    # read-only, enforced
+  printf '%s\n' "${got[@]}" | grep -q -- "plan"
   return 0
 }
 
@@ -238,7 +247,14 @@ _stub_agy_conduct() {
   local bin="$BATS_TEST_TMPDIR/bin"; mkdir -p "$bin"
   cat > "$bin/agy" <<'STUB'
 #!/usr/bin/env bash
-log="$HOME/.gemini/antigravity-cli/cli.log"
+# clikae asks for a per-run log with --log-file (see _conduct_one_agy); honour it
+# and fail loudly if the flag is ever dropped.
+log=""
+while [ $# -gt 0 ]; do
+  [ "$1" = "--log-file" ] && { log="$2"; break; }
+  shift
+done
+[ -n "$log" ] || { echo "stub: clikae did not pass --log-file" >&2; exit 64; }
 mkdir -p "$(dirname "$log")"
 if [ -f "$HOME/.gemini/antigravity-cli/.dry" ]; then
   echo "RESOURCE_EXHAUSTED (code 429): Individual quota reached. Resets in 3h32m48s." > "$log"
@@ -308,4 +324,79 @@ _agy_setup_active() {
   [[ "$output" == *"2 captured"* ]] || false
   grep -q "AUDIT from agy" "$D/agy-default.txt"
   grep -q "AUDIT from codex" "$D/codex-H.txt"
+}
+
+# --json — clikae never judges, so the caller has to rank the legs. Until
+# 2026-08-16 that meant knowing conduct's on-disk layout and parsing status
+# words out of prose.
+
+@test "conduct --json: one object on stdout, every leg rankable" {
+  _stub_codex
+  clikae init codex A
+  clikae init codex B
+  local D="$BATS_TEST_TMPDIR/out"
+  clikae conduct --prompt "audit this" --leg codex/A --leg codex/B --out-dir "$D" --json \
+    > "$BATS_TEST_TMPDIR/j.txt" 2> "$BATS_TEST_TMPDIR/e.txt"
+  run python3 -c "
+import json,sys
+d=json.load(open(sys.argv[1]))
+legs=sorted(d['legs'], key=lambda l: l['tank'])
+print(d['captured'], d['dry'], len(legs),
+      ','.join(l['tank']+':'+l['status'] for l in legs),
+      all(l['output_bytes'] and l['output_bytes']>0 for l in legs))
+" "$BATS_TEST_TMPDIR/j.txt"
+  [ "$status" -eq 0 ] || { echo "stdout was not valid JSON:"; cat "$BATS_TEST_TMPDIR/j.txt"; false; }
+  [ "$output" = "2 0 2 A:CAPTURED,B:CAPTURED True" ] || { echo "got: $output"; false; }
+  # the table still happened, just not on stdout
+  grep -q '2 captured' "$BATS_TEST_TMPDIR/e.txt" || { cat "$BATS_TEST_TMPDIR/e.txt"; false; }
+}
+
+@test "conduct --json: a dry leg is distinguishable from a captured one" {
+  _stub_codex
+  clikae init codex A
+  clikae init codex B
+  : > "$CLIKAE_HOME/profiles/codex/A/.dry"
+  local D="$BATS_TEST_TMPDIR/out"
+  clikae conduct --prompt "audit this" --leg codex/A --leg codex/B --out-dir "$D" --json \
+    > "$BATS_TEST_TMPDIR/j.txt" 2>/dev/null || true
+  run python3 -c "
+import json,sys
+d=json.load(open(sys.argv[1]))
+s={l['tank']: l['status'] for l in d['legs']}
+print(d['captured'], d['dry'], s['A'], s['B'])
+" "$BATS_TEST_TMPDIR/j.txt"
+  [ "$status" -eq 0 ] || { cat "$BATS_TEST_TMPDIR/j.txt"; false; }
+  [ "$output" = "1 1 DRY CAPTURED" ] || { echo "got: $output"; false; }
+}
+
+@test "conduct without --json prints no JSON at all" {
+  _stub_codex
+  clikae init codex A
+  run clikae conduct --prompt "audit this" --leg codex/A --out-dir "$BATS_TEST_TMPDIR/out"
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  [[ "$output" != *'"out_dir"'* ]] || { echo "$output"; false; }
+}
+
+# --- P1-1 (round-2 fix review, this PR): limit_codex_output_dry used to be
+# fed only the last 20 lines of a leg's captured output — conduct.sh has no
+# concept of an artifact at all, so a limit line more than 20 lines from the
+# end (the run kept going after it) read as CAPTURED, reporting a dried-out
+# leg as having a usable answer. The window is gone: the whole leg's output
+# is scanned. exit rc is deliberately non-zero (real codex exits 0 dry, but
+# this leg's own classification must not depend on that).
+
+@test "conduct: a limit line far from the tail is still caught as dry, not CAPTURED (P1-1)" {
+  local bin="$BATS_TEST_TMPDIR/bin"; mkdir -p "$bin"
+  cat > "$bin/codex" <<'STUB'
+#!/usr/bin/env bash
+echo "You've hit your usage limit. Try again at Jul 7th, 2026 2:17 PM."
+for i in $(seq 1 25); do echo "    at codex::exec::run (src/exec.rs:$i)"; done
+exit 3
+STUB
+  chmod +x "$bin/codex"; PATH="$bin:$PATH"; export PATH
+  clikae init codex A
+  run clikae conduct --prompt "x" --leg codex/A --out-dir "$BATS_TEST_TMPDIR/out"
+  [ "$status" -ne 0 ]
+  [[ "$output" == *"codex/A — ran dry"* ]] || { echo "$output"; false; }
+  [[ "$output" == *"0 captured · 1 dry"* ]] || { echo "$output"; false; }
 }

@@ -7,16 +7,42 @@
 ```
 tests/
 ├── helpers.bash              # shared setup/teardown (isolated $HOME + $CLIKAE_HOME)
+├── tools/
+│   └── pty-smoke.py          # real-pty driver for the interactive screens (GATED)
 └── bats/
-    ├── init.bats
-    ├── alias.bats
-    ├── list.bats
-    ├── remove.bats
+    ├── <one .bats per command / core lib>   # init, alias, list, remove, burn, clean, …
     ├── app.bats              # macOS-only, skipped elsewhere
-    ├── compat.bats           # guards against bash 4+/GNU-isms (bash 3.2 must work)
-    └── adapters/
-        └── claude.bats
+    ├── compat.bats           # bash 3.2 / GNU-ism guards + the PowerShell adapter-table mirror
+    ├── tui.bats              # the shared keyboard decoder
+    ├── helpers/              # `load`-able helpers (not tests; bats -r ignores them)
+    │   └── bounded.bash      # `bounded_run` — a wall-clock bound with no timeout(1)
+    └── adapters/             # claude, codex, extra, session-meta
 ```
+
+`bats/` is one file per command or core library — roughly forty of them; the names
+above are the ones with a rule attached rather than a full listing.
+
+**`tools/pty-smoke.py` is the third leg of the gate.** shellcheck reads source and
+bats never presses a key, so both are structurally blind to the TUI — which is where
+this project's regressions keep landing. pty-smoke drives the real binary on a real
+pty, in a throwaway `$HOME` it builds itself, with `CLIKAE_LANG=en-US` pinned and a
+stub engine on `PATH`. It never touches your store and never launches a real engine.
+
+```bash
+python3 tests/tools/pty-smoke.py all       # what the gate runs
+python3 tests/tools/pty-smoke.py prompts   # just the prompt / stderr checks
+```
+
+Its `prompts` mode is the regression net for a specific failure: bash writes
+`read -p` prompts to **stderr**, so when the board's stderr was accidentally
+redirected to `/dev/null`, three prompts went blank while the process stayed alive
+and kept accepting input — a hang that no test could see. Every assertion in that
+mode is about something *reaching the terminal*, including the engine's own stderr
+after the board `exec`s into it.
+
+**When you add an assertion here, prove it can fail.** Check out a commit from
+before the fix into a worktree, copy this file in, and confirm the new check goes
+red — an interactive assertion that passes on the broken code is decoration.
 
 Every test runs against a throwaway `$HOME` and `$CLIKAE_HOME` created with
 `mktemp`, so the suite never touches your real config or shell rc. `$SHELL` is
@@ -31,6 +57,37 @@ bats -r tests/bats            # -r recurses into adapters/ (without it, those sk
 
 The `app.bats` cases need `osacompile` (a macOS built-in) and are skipped
 automatically on Linux.
+
+**A test that needs its own ceiling uses `bounded_run`, never a bare
+`timeout`.** A test that deliberately wedges a `find`, a `stat` or a
+`.git/HEAD` needs a hard bound around the real binary, because a bats test that
+never returns does not fail — it wedges the whole suite. Reaching for
+`timeout`/`gtimeout` and skipping when neither is there means skipping on stock
+macOS, which is how burn.bats ended up with six tests that had never run on the
+platform they were written for (#112). `bounded_run <secs> <cmd…>`
+(`tests/bats/helpers/bounded.bash`, `load 'helpers/bounded'`) prefers
+`timeout`/`gtimeout` when present and otherwise enforces the same ceiling in
+bash itself — background in its own process group, sleep, kill the group.
+
+```bash
+CLIKAE_TEST_FORCE_BASH_BOUND=1 bats tests/bats/burn.bats   # take the in-bash path on a box that has timeout
+```
+
+## Never read the result through a pipe
+
+```bash
+bats -r tests/bats | tail -5; echo $?     # ❌ reports tail's exit status — always 0
+bats -r tests/bats                        # ✅ the shell sees bats' own exit status
+```
+
+A pipeline's exit status is its **last** command's, and `tail`/`head` succeed
+whatever they were fed. This has masked real failures here before: a run with five
+failing tests reported success because the verdict was read off `tail`. If you need
+both the output and the verdict, redirect to a file and check `$?` on its own line:
+
+```bash
+bats -r tests/bats > /tmp/bats.log 2>&1; echo "EXIT=$?"
+```
 
 ## Every assertion must count — the `|| false` convention
 
@@ -49,11 +106,191 @@ stay green while the code is wrong. We close that gap two ways:
    [[ "$output" == *"some text"* ]]                # ❌ silently ignored mid-body
    ```
 
-**When you add a `[[ … ]]` assertion, append `|| false`.** Plain `[ … ]` checks
-don't need it. If a command in a test body may legitimately return non-zero and
-is *not* an assertion, guard it with `|| true`. Sanity check (should print
-nothing):
+3. **The same exemption applies to a bare `! cmd`** — a command prefixed with
+   `!` never triggers `set -e` on its own (round-1 review of PR #87/#84,
+   P3-1: this convention only documented `[[ … ]]` until then, and a bare
+   `! cmd` assertion sitting mid-body was a silent no-op — found once already
+   fixed elsewhere in the same PR, then found AGAIN one test over, unfixed).
+   Unlike `[[ … ]]`, though, this only matters **mid-body**: bats itself
+   fails a test on its last command's exit status regardless of `set -e`
+   (round-4 review: `@test { ! true; }` alone *does* fail — verified against
+   bats 1.10.0), so a bare `! cmd` as the test's own last statement needs no
+   `|| false`. Mid-body it still does:
+
+   ```bash
+   ! grep -q "some text" <<<"$output" || false    # ✅ fails the test if found, mid-body
+   ! grep -q "some text" <<<"$output"               # ❌ silently ignored — but only
+                                                     #    when NOT the last statement
+   ```
+
+**When you add a `[[ … ]]` assertion, append `|| false`** — always. **A bare
+`! cmd` needs it everywhere except as the test's own last statement.** Plain
+`[ … ]` checks don't need it. If a command in a test body may legitimately
+return non-zero and is *not* an assertion, guard it with `|| true`. Sanity
+check (should print nothing):
+
+A grep alone cannot do this, and one that tries is worse than none: the
+`! cmd` version of this check shipped in round-4 of PR #87's review printed
+19 lines on this very tree, 14 of them perfectly correct last statements —
+a documented check that is red the day it lands and that nobody can make
+green. (Round-5 review, P3-5. The 5 lines it was right about, plus 4 bare
+`[[ … ]]` of the same shape — one of which the old `[[:space:]]*$` anchor
+could never have seen, because it carried a trailing comment — are fixed.) One `awk` pass, which can look at
+the next line, covers both shapes and really does print nothing:
 
 ```bash
-grep -rnE '^[[:space:]]*\[\[ .* \]\][[:space:]]*$' tests/bats
+# A bare `[[ … ]]` or `! cmd` assertion with no `||` and no line
+# continuation, EXCEPT as a test's own last statement (the line right
+# before the closing `}`) — bats fails a test on its last command's status
+# on its own, so there it is already load-bearing.
+find tests/bats -name '*.bats' -print0 | xargs -0 awk '
+  pend != "" { if ($0 !~ /^[[:space:]]*}/) print pf":"pl": "pend; pend="" }
+  /^[[:space:]]*(! |\[\[ )/ && !/\|/ && !/&&/ && !/\\$/ { pend=$0; pf=FILENAME; pl=FNR }
+  END { if (pend != "") print pf":"pl": "pend }'
 ```
+
+## Proving a guard is load-bearing (`scripts/mutate.sh`)
+
+A green suite says the code behaves on the inputs someone thought to write. It
+does not say a guard exists. A test can assert an outcome the code reaches for
+some other reason — or never call the function it names at all:
+
+```bash
+run bash -c 'wake_ask_once claude work < /dev/null'
+```
+
+`bash -c` forks, and shell functions do not cross a fork. That line asserted
+that a "command not found" message lacks the word ASKED, which is true however
+`wake_ask_once` behaves. It passed for two months. (Fixed 2026-08-16; the other
+25 `bash -c` sites in the suite were swept and are all real subprocesses.)
+
+The only evidence that a guard is load-bearing is watching the suite go red when
+you take it away. `scripts/mutate.sh` does that for docs/memory.md §4's locked
+values — the promises clikae makes about the human's data. It is **not** part of
+`scripts/test.sh`: it copies the repo per mutation, so it costs minutes.
+
+```bash
+scripts/mutate.sh      # 4 guard(s) proven, 0 hollow
+```
+
+Add a row when you add a guard worth that. Two traps, both hit on the first run:
+
+- **A mutation that did not apply looks exactly like a working guard.** The
+  first run reported three hollow guards; all three were the ruler (the function
+  lived in another file, or I guessed its name). Every row checksums its target
+  before and after, and a no-op mutation reports ⛔ rather than a verdict.
+- **Use `!` as the `s///` delimiter, never `{}`.** Perl needs balanced braces
+  inside `s{}{}`, and a shell function's replacement almost always has an
+  unmatched `{` — perl dies of a syntax error, the file is untouched, and you
+  land in the trap above.
+
+## Checks the suite cannot make (`scripts/verify-*.sh`)
+
+Some claims are about the real machine, and bats cannot reach them. These are
+run by hand, and each reports **three** states — a check it could not perform is
+`skip`, never a pass, because the bug being guarded against is a green light
+that means "I did not look".
+
+| script | the claim it checks | why not a bats test |
+|---|---|---|
+| `verify-tmux-birth.sh` | DESIGN-tmux Rule 7: what the tmux **server** inherited at birth | a property of a real server against real macOS TCC; the suite covers the logic with an injected stub |
+| `verify-agy-shapes.sh` | the agy adapter's model of agy still matches agy | it parses a self-updating vendor binary's undocumented files; fixtures only prove the parser matches *our* model of the format |
+
+`verify-agy-shapes.sh` is the answer to a specific hole. `antigravity.bats` is
+green against fixtures we wrote, so if agy renames a key tomorrow, every one of
+those tests still passes. This runs the same extraction against the real files
+agy wrote on this machine — including the *rate* (`"workspace"` on 646/646
+history lines across 3 tanks, verified 2026-08-16 against agy 1.1.13), because a
+single surviving line satisfies `grep -q` while the feature is broken for
+everything else.
+
+Its own first draft is worth knowing about. `grep -c` **prints `0` and exits
+`1`** when nothing matches, so a `|| echo 0` fallback fired *as well* and the
+arithmetic got `"0\n0"` — a syntax error that killed the script mid-run while it
+still exited 0. Every individual check was correct; the only thing that could
+have caught it was the total. So the script now fails with a distinct code when
+it performed no checks at all.
+
+## The class `bash -n` cannot see (bash 3.2 and `$( … )`)
+
+`compat.bats` is a source **scanner**: it greps for bash-4 idioms and GNU-isms.
+That works because those constructs are visible as text. One class is not, and
+it is the one macOS pays for.
+
+bash 3.2 — what macOS ships, and what the `bats (macos-latest)` job really runs
+clikae under — does not parse the body of a command substitution when it parses
+the file. Its scanner walks forward to the first unbalanced `)` and defers the
+rest until the substitution is *expanded*. A `case` pattern inside `$( … )` has
+exactly that `)`:
+
+```sh
+sorted="$(for gd in "$1"/generation.*; do
+  case "$gseq" in ''|*[!0-9]*) gseq=0 ;; esac    # <- this ) ends the substitution, to 3.2
+  …
+done)"
+```
+
+`bash -n` says nothing. `shellcheck -S warning` says nothing. The CI syntax gate
+says nothing. Every source-scanning guard in `compat.bats` says nothing. On
+bash 3.2 and only there, the substitution fails **at runtime** with
+
+```
+command substitution: line NNN: syntax error near unexpected token `newline'
+```
+
+on stderr, yields the empty string, and the enclosing function returns **0**.
+`_board_gc_candidates` shipped that shape (fixed in `2f51d15`): the board GC
+returned an empty candidate list, swept nothing on macOS, and reported success.
+
+Two consequences for anything added here:
+
+* **Hoist the `case` into a helper function** called inside the substitution
+  (`_board_gc_rows`). Do not try to spell the pattern so 3.2 can follow it.
+* **A guard for this class has to EXECUTE, not read.** `compat.bats`'s
+  "board GC still RUNS under a real bash 3.2" does, via
+  `docker run --rm bash:3.2`. It `skip`s — with the reason — when docker or the
+  image is absent, rather than passing, and it carries a **control**: a known-bad
+  `$( … )` in its own file that must fail in that container, so a green result
+  means "fixed", not "quietly ran on bash 5".
+
+One trap if you extend it: `bash:3.2` is an Alpine image, so its userland is
+busybox. `_clikae_statv` asks whether `stat` says GNU, busybox says no, the BSD
+branch runs `stat -f '%m'` — and in busybox that is *filesystem* information, so
+`file_mtime` answers with several lines of the wrong thing and rc=1. That is the
+container, not the code (macOS' BSD `stat -f %m` is correct); the probe stubs
+`file_mtime` so it measures the subject instead of the image.
+
+## One suite at a time (`scripts/test.sh` takes a lock)
+
+Some tests read the **real process table**. `clean`'s live guard runs
+`ps -axo command=` so it can never offer a session a process still has open —
+that is the right thing for the command and it makes the suite unsafe to run
+beside a copy of itself. Suite A's `clikae` processes appear in suite B's
+snapshot, the fixtures use fixed session ids, and B decides those sessions are
+live and skips the rows it is asserting on.
+
+That is not hypothetical and it is not rare, because **the pre-commit hook runs
+this suite and so does pre-push** — `git commit && git push` overlaps them by
+construction.
+
+Reproduced 2026-08-16 by starting a second run 25 s into the first:
+
+```
+round 1  A=0 B=0  notok_A=0 notok_B=0
+round 2  A=1 B=1  notok_A=4 notok_B=2     <- both red
+round 3  A=1 B=1  notok_A=2 notok_B=1
+round 4  A=1      notok_B=1
+```
+
+Every failure was `[ "$status" -eq 0 ]` on a `clikae clean` invocation. It is
+also the best explanation for a single unexplained pre-push red that ~218
+isolated runs could not reproduce — including 200 of the exact file, at the
+exact commit, in a worktree.
+
+`scripts/test.sh` now takes `$TMPDIR/clikae-test-suite.lock` and **waits** for
+the other run rather than racing it, saying so. A suite that is red for a reason
+outside the code teaches you to ignore red, which is the one thing a gate cannot
+afford.
+
+(`lockf -k`, not `lockf`. Without `-k` two processes both get rc=0 — the same
+trap the ephemeral slot lock hit in 0.25.0.)

@@ -222,3 +222,921 @@ STUB
   [ "$status" -ne 0 ]
   [[ "$output" == *"No session for this directory"* ]] || false
 }
+
+# --- #33: per-engine transcript shapes (adapter_handoff_extract) -----------
+#
+# codex's ASSISTANT turns wrap as a "response item" (OpenAI Responses API
+# shape): `role` is present but `content` is an ARRAY of typed parts, not a
+# string — the claude-shaped `"role":"user","content":"` anchor never
+# matches it. codex's USER turns are the UNION of event_msg/user_message and
+# response_item/role:user (round-2 review P2-1 made the assistant side read
+# both too, for the same reason): on a real 0.154.0 codex_exec rollout,
+# event_msg/user_message never appears at all, and a human-typed prompt only
+# exists as response_item/role:user — but that shape ALSO carries
+# machine-injected context (AGENTS.md dumps, environment_context, plugin
+# recommendations) recorded the same way, which round-3 review P2-1 filters
+# out (per part, and via the real files' own content_item_kinds field — see
+# codex.sh's own comment; a separate test below covers that filtering).
+# grok's chat_history.jsonl has no `role` key at all: the message kind IS
+# the top-level `type` ("user"/"assistant"), with the same array-of-parts
+# `content`. Both fixtures also carry one garbage line (malformed JSON) to
+# prove a bad line is skipped, not fatal.
+
+_seed_codex_transcript() {
+  local profile="$1" dir="$2" sid="$3"
+  local d="$CLIKAE_HOME/profiles/codex/$profile/sessions/2026/09/10"
+  mkdir -p "$d"
+  {
+    echo '{"timestamp":"2026-09-10T12:00:00.000Z","type":"session_meta","payload":{"id":"'"$sid"'","cwd":"'"$dir"'"}}'
+    echo '{"timestamp":"2026-09-10T12:00:01.000Z","type":"event_msg","payload":{"type":"user_message","message":"codex first real prompt"}}'
+    echo '{"timestamp":"2026-09-10T12:00:02.000Z","type":"response_item","payload":{"type":"message","role":"assistant","content":[{"type":"output_text","text":"codex working note"}]}}'
+    echo 'THIS LINE IS NOT JSON AT ALL {{{ garbage SHOULD-NOT-APPEAR'
+    echo '{"timestamp":"2026-09-10T12:00:03.000Z","type":"event_msg","payload":{"type":"user_message","message":"codex second real prompt"}}'
+    echo '{"timestamp":"2026-09-10T12:00:04.000Z","type":"response_item","payload":{"type":"message","role":"assistant","content":[{"type":"output_text","text":"codex last assistant note"}]}}'
+  } > "$d/rollout-2026-09-10T12-00-00-$sid.jsonl"
+}
+
+@test "#33 handoff on codex extracts prompts (user_message) + notes (response_item) (malformed line skipped, not fatal)" {
+  clikae init codex work
+  local work="$TEST_HOME/work-codex"; mkdir -p "$work"
+  _seed_codex_transcript work "$work" "11111111-1111-1111-1111-111111111111"
+  cd "$work"
+  # The raw (no-summarizer) brief only ever shows prompts (see
+  # _handoff_raw_brief) — assistant notes are part of the CLEAN-TAIL digest,
+  # which only a summarizer sees. `cat` as the summarizer echoes that digest
+  # back verbatim, so this exercises BOTH _handoff_extract call sites (user
+  # AND assistant) for the codex shape in one command, same as the
+  # "handoff pipes the session to a summarizer" test above does for claude.
+  CODEX_HOME="$CLIKAE_HOME/profiles/codex/work" \
+    run clikae handoff codex work --summarizer cat
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"codex first real prompt"* ]] || false
+  [[ "$output" == *"codex second real prompt"* ]] || false
+  [[ "$output" == *"codex working note"* ]] || false
+  [[ "$output" == *"codex last assistant note"* ]] || false
+  # The malformed line neither crashed the command nor leaked into the brief.
+  [[ "$output" != *"SHOULD-NOT-APPEAR"* ]] || false
+  # Also prove the plain raw-extract path (no summarizer) survives codex's
+  # shape and shows the real prompt, not just metadata.
+  CODEX_HOME="$CLIKAE_HOME/profiles/codex/work" run clikae handoff codex work
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"codex second real prompt"* ]] || false
+  [[ "$output" == *"raw extract"* ]] || false
+}
+
+_seed_codex_whitespace_transcript() {
+  # Round-1 review P1-1: the "confirmed against a real rollout" shape
+  # (tests/bats/limit-codex-status.bats:215, lib/core/limit.sh's whole codex
+  # family) writes a SPACE after every colon — Python's json.dumps default,
+  # not the compact form the #33 fixture above uses. A whitespace-blind
+  # extractor matches zero lines on exactly this shape and stays silent
+  # about it (that was the whole bug); this fixture proves the fix without
+  # retiring the compact-JSON coverage above.
+  #
+  # session_meta stays COMPACT on purpose: `_codex_meta_field` (the
+  # unrelated cwd/id lookup `_codex_rollouts_for_cwd` uses to find this file
+  # at all) is its own, pre-existing, literal-quote parser — spacing IT is a
+  # real gap too, but a different one, out of scope for this fix. Keeping it
+  # compact here isolates the test to the thing P1-1 actually changed:
+  # adapter_handoff_extract's own anchor/key matching, below.
+  local profile="$1" dir="$2" sid="$3"
+  local d="$CLIKAE_HOME/profiles/codex/$profile/sessions/2026/09/12"
+  mkdir -p "$d"
+  {
+    echo '{"timestamp":"2026-09-12T00:00:00.000Z","type":"session_meta","payload":{"id":"'"$sid"'","cwd":"'"$dir"'"}}'
+    echo '{"timestamp": "2026-09-12T00:00:01.000Z", "type": "event_msg", "payload": {"type": "user_message", "message": "spaced codex prompt"}}'
+    echo '{"timestamp": "2026-09-12T00:00:02.000Z", "type": "response_item", "payload": {"type": "message", "role": "assistant", "content": [{"type": "output_text", "text": "spaced codex note"}]}}'
+  } > "$d/rollout-2026-09-12T00-00-00-$sid.jsonl"
+}
+
+@test "#33 round-1 P1-1: codex handoff survives real-rollout JSON whitespace (space after every colon)" {
+  clikae init codex spacedwork
+  local work="$TEST_HOME/work-codex-spaced"; mkdir -p "$work"
+  _seed_codex_whitespace_transcript spacedwork "$work" "55555555-5555-5555-5555-555555555555"
+  cd "$work"
+  CODEX_HOME="$CLIKAE_HOME/profiles/codex/spacedwork" \
+    run clikae handoff codex spacedwork --summarizer cat
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"spaced codex prompt"* ]] || false
+  [[ "$output" == *"spaced codex note"* ]] || false
+}
+
+_seed_codex_injected_transcript() {
+  # Round-3 review P2-1: the REAL 0.154.0 codex_exec shape (see codex.sh's
+  # own comment above adapter_handoff_extract, and its round-3 review) is
+  # ONE message with THREE content parts, not one part per message — the
+  # round-1 fixture this replaces put the tag at the START of its own,
+  # single-part message, which happened to line up with the (buggy)
+  # line-anchored filter and stayed green while the real files still leaked.
+  # Part order matches the real files: plugin list, then the whole
+  # AGENTS.md dump, then environment_context, all inside ONE response_item
+  # — the shape that got joined into a single line BEFORE the old filter
+  # ever ran. content_item_kinds is the real files' own field naming what
+  # each part is; the human turn that follows is a SEPARATE message whose
+  # only kind is "user.text" (the shape the real files use for a typed
+  # prompt — event_msg/user_message does not appear in them at all).
+  #
+  # Round-4 review P3-1 (#110): that one fixture carried BOTH defences'
+  # trigger at once — content_item_kinds naming injected kinds AND every part
+  # opening with an injected tag — so mutation-testing found neither defence
+  # individually load-bearing: whichever one you deleted, the other could
+  # still have kept the fixture green. It now takes a VARIANT, so each
+  # defence also gets an input where it is the only thing standing:
+  #
+  #   real        — both signals, exactly as a 0.154.0 rollout writes them.
+  #                 Kept: it is the only fixture that is a real file's shape.
+  #   kinds-only  — content_item_kinds present, parts NOT tag-prefixed. Only
+  #                 the kinds check (codex.sh, `kinds !~ /"user\./`) can drop
+  #                 this; the per-part prefix filter has nothing to match.
+  #   prefix-only — no content_item_kinds field at all, parts tag-prefixed.
+  #                 Only the per-part prefix filter can drop this; the kinds
+  #                 check has no field to read.
+  local profile="$1" dir="$2" sid="$3" variant="${4:-real}"
+  local d="$CLIKAE_HOME/profiles/codex/$profile/sessions/2026/09/11"
+  mkdir -p "$d"
+  local injected human
+  human='{"timestamp":"2026-09-11T00:00:02.000Z","type":"response_item","payload":{"type":"message","role":"user","content_item_kinds":["user.text"],"content":[{"type":"input_text","text":"the actual human prompt"}]}}'
+  case "$variant" in
+    real)
+      injected='{"timestamp":"2026-09-11T00:00:01.000Z","type":"response_item","payload":{"type":"message","role":"user","content_item_kinds":["plugins.recommendations","agents_md.instructions","environments.environment_context"],"content":[{"type":"input_text","text":"<recommended_plugins>\nHere is a list of recommended plugins"},{"type":"input_text","text":"# AGENTS.md instructions\n\n<INSTRUCTIONS>secret house rules</INSTRUCTIONS>"},{"type":"input_text","text":"<environment_context>\n  <cwd>/x</cwd>\n</environment_context>"}]}}'
+      ;;
+    kinds-only)
+      # Same kinds, same three roles of content — but written as plain prose
+      # that opens with no bracketed tag and no "# AGENTS.md instructions"
+      # heading, so the per-part prefix filter cannot recognise a single part.
+      injected='{"timestamp":"2026-09-11T00:00:01.000Z","type":"response_item","payload":{"type":"message","role":"user","content_item_kinds":["plugins.recommendations","agents_md.instructions","environments.environment_context"],"content":[{"type":"input_text","text":"Recommended plugins for this workspace: none installed"},{"type":"input_text","text":"Repository guidelines: secret house rules"},{"type":"input_text","text":"The working directory is /x and the shell is zsh"}]}}'
+      ;;
+    prefix-only)
+      # The same tag-prefixed parts on a rollout that carries NO
+      # content_item_kinds field (an older/other codex build), on the human
+      # turn too — the kinds check has nothing to read on either line.
+      injected='{"timestamp":"2026-09-11T00:00:01.000Z","type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"<recommended_plugins>\nHere is a list of recommended plugins"},{"type":"input_text","text":"# AGENTS.md instructions\n\n<INSTRUCTIONS>secret house rules</INSTRUCTIONS>"},{"type":"input_text","text":"<environment_context>\n  <cwd>/x</cwd>\n</environment_context>"}]}}'
+      human='{"timestamp":"2026-09-11T00:00:02.000Z","type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"the actual human prompt"}]}}'
+      ;;
+    *)
+      echo "unknown _seed_codex_injected_transcript variant: $variant" >&2
+      return 1
+      ;;
+  esac
+  {
+    echo '{"timestamp":"2026-09-11T00:00:00.000Z","type":"session_meta","payload":{"id":"'"$sid"'","cwd":"'"$dir"'"}}'
+    echo "$injected"
+    echo "$human"
+  } > "$d/rollout-2026-09-11T00-00-00-$sid.jsonl"
+}
+
+@test "#33 round-3 review P2-1: codex user extract on the REAL 0.154.0 three-part injected shape keeps only the human prompt (first line is the human one, not a plugin/AGENTS.md/environment_context blob)" {
+  clikae init codex work2
+  local work="$TEST_HOME/work-codex-injected"; mkdir -p "$work"
+  _seed_codex_injected_transcript work2 "$work" "44444444-4444-4444-4444-444444444444" real
+  cd "$work"
+  export CLIKAE_LIB="$CLIKAE_TEST_ROOT/lib"
+  source "$CLIKAE_LIB/adapters/codex.sh"
+  local rollout="$CLIKAE_HOME/profiles/codex/work2/sessions/2026/09/11/rollout-2026-09-11T00-00-00-44444444-4444-4444-4444-444444444444.jsonl"
+  run adapter_handoff_extract "$rollout" user
+  [ "$status" -eq 0 ]
+  # Exactly ONE line, and it IS the human prompt verbatim — not the ~4.5 kB
+  # injected blob the pre-fix code emitted as "the first prompt" on a real
+  # rollout of this shape.
+  [ "$output" = "the actual human prompt" ]
+
+  CODEX_HOME="$CLIKAE_HOME/profiles/codex/work2" run clikae handoff codex work2
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"the actual human prompt"* ]] || false
+  [[ "$output" != *"recommended_plugins"* ]] || false
+  [[ "$output" != *"AGENTS.md"* ]] || false
+  [[ "$output" != *"secret house rules"* ]] || false
+  [[ "$output" != *"environment_context"* ]] || false
+  [[ "$output" != *"cwd=/x"* ]] || false
+}
+
+@test "#110 round-4 review P3-1: the content_item_kinds check is load-bearing ON ITS OWN — injected parts that open with no tag at all are still dropped" {
+  # Mutation receipt: delete `kinds !~ /"user\./` from codex.sh and THIS test
+  # goes red. Nothing else in the extractor can catch this input — the
+  # per-part prefix filter has no tag and no "# AGENTS.md instructions"
+  # heading to recognise on any of the three parts, and the line-anchored
+  # grep after the awk only knows <environment_context>/<user_instructions>.
+  local work="$TEST_HOME/work-codex-kindsonly"; mkdir -p "$work"
+  _seed_codex_injected_transcript kindsonly "$work" "44444444-aaaa-4444-4444-444444444444" kinds-only
+  export CLIKAE_LIB="$CLIKAE_TEST_ROOT/lib"
+  source "$CLIKAE_LIB/adapters/codex.sh"
+  local rollout="$CLIKAE_HOME/profiles/codex/kindsonly/sessions/2026/09/11/rollout-2026-09-11T00-00-00-44444444-aaaa-4444-4444-444444444444.jsonl"
+  run adapter_handoff_extract "$rollout" user
+  [ "$status" -eq 0 ]
+  [ "$output" = "the actual human prompt" ]
+  [[ "$output" != *"secret house rules"* ]] || false
+  [[ "$output" != *"Recommended plugins"* ]] || false
+  [[ "$output" != *"the shell is zsh"* ]] || false
+}
+
+@test "#110 round-4 review P3-1: the per-part prefix filter is load-bearing ON ITS OWN — tag-prefixed injected parts with no content_item_kinds are still dropped" {
+  # The mirror of the test above: delete the per-part prefix filter from
+  # codex.sh and THIS test goes red. The kinds check cannot help — this
+  # rollout carries no content_item_kinds field at all, on either line.
+  local work="$TEST_HOME/work-codex-prefixonly"; mkdir -p "$work"
+  _seed_codex_injected_transcript prefixonly "$work" "44444444-bbbb-4444-4444-444444444444" prefix-only
+  export CLIKAE_LIB="$CLIKAE_TEST_ROOT/lib"
+  source "$CLIKAE_LIB/adapters/codex.sh"
+  local rollout="$CLIKAE_HOME/profiles/codex/prefixonly/sessions/2026/09/11/rollout-2026-09-11T00-00-00-44444444-bbbb-4444-4444-444444444444.jsonl"
+  run adapter_handoff_extract "$rollout" user
+  [ "$status" -eq 0 ]
+  [ "$output" = "the actual human prompt" ]
+  [[ "$output" != *"secret house rules"* ]] || false
+  [[ "$output" != *"recommended_plugins"* ]] || false
+  [[ "$output" != *"cwd"* ]] || false
+}
+
+@test "#33 round-4 review P2-1: content_item_kinds=user.text is authoritative — a human prompt that itself opens with a bare tag is never dropped by the per-part prefix filter" {
+  # Round-4 review found the per-part prefix filter above ran UNCONDITIONALLY,
+  # even on a part content_item_kinds already said was "user.text" — so a
+  # human pasting a front-end snippet that happens to start with a lowercase
+  # tag (<div>, <template>, <script setup>) or a Markdown heading lost the
+  # whole prompt, plus a false "matched 0" mismatch line when it was the only
+  # prompt in the file. content_item_kinds must win: when present and it says
+  # user.text, the prefix filter must not run at all.
+  export CLIKAE_LIB="$CLIKAE_TEST_ROOT/lib"
+  source "$CLIKAE_LIB/adapters/codex.sh"
+  local t="$TEST_HOME/tag-prefixed-human.jsonl"
+  {
+    echo '{"type":"response_item","payload":{"type":"message","role":"user","content_item_kinds":["user.text"],"content":[{"type":"input_text","text":"<div>fix this layout</div>"}]}}'
+    echo '{"type":"response_item","payload":{"type":"message","role":"user","content_item_kinds":["user.text"],"content":[{"type":"input_text","text":"<template>\n  <div/>\n</template> why no render"}]}}'
+    echo '{"type":"response_item","payload":{"type":"message","role":"user","content_item_kinds":["user.text"],"content":[{"type":"input_text","text":"<script setup>const x = 1</script> broken"}]}}'
+    echo '{"type":"response_item","payload":{"type":"message","role":"user","content_item_kinds":["user.text","user.text"],"content":[{"type":"input_text","text":"look at this:"},{"type":"input_text","text":"<table><tr><td>x</td></tr></table>"}]}}'
+    echo '{"type":"response_item","payload":{"type":"message","role":"user","content_item_kinds":["user.text"],"content":[{"type":"input_text","text":"# Heading\nplease fix"}]}}'
+  } > "$t"
+  run adapter_handoff_extract "$t" user
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"<div>fix this layout</div>"* ]] || false
+  [[ "$output" == *"<template>"*"why no render"* ]] || false
+  [[ "$output" == *"<script setup>const x = 1</script> broken"* ]] || false
+  [[ "$output" == *"look at this: <table><tr><td>x</td></tr></table>"* ]] || false
+  [[ "$output" == *"# Heading please fix"* ]] || false
+  # Every prompt in the file was preserved, so the loud mismatch line — the
+  # regression's other symptom — never fires either.
+  [[ "$output" != *"matched 0"* ]] || false
+}
+
+@test "#33 round-4 review P2-1: without content_item_kinds, the fallback filter is a closed list of known injected tags — a human <div> prompt survives, a known injected tag is still dropped" {
+  # Fix #2 from the round-4 review: the pre-fix fallback matched ANY
+  # `^<[a-z_ ]+>`, which is indistinguishable from a human pasting arbitrary
+  # markup on a rollout with no content_item_kinds field (an older/other
+  # shape). Narrowed to the exact injected tag names this adapter documents.
+  export CLIKAE_LIB="$CLIKAE_TEST_ROOT/lib"
+  source "$CLIKAE_LIB/adapters/codex.sh"
+  local t="$TEST_HOME/no-kinds-tag-prefixed.jsonl"
+  {
+    echo '{"type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"<div>fix this layout, no kinds field</div>"}]}}'
+    echo '{"type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"<user_instructions>AGENTS.md contents here</user_instructions>"},{"type":"input_text","text":"old human prompt"}]}}'
+  } > "$t"
+  run adapter_handoff_extract "$t" user
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"<div>fix this layout, no kinds field</div>"* ]] || false
+  [[ "$output" == *"old human prompt"* ]] || false
+  [[ "$output" != *"AGENTS.md contents here"* ]] || false
+}
+
+@test "#33 round-4 review P2-1: a response_item filtered down to nothing but known injected tags does not starve matched and trigger a false mismatch diagnostic" {
+  # A message whose parts were ALL removed by the tag filter (no real human
+  # text alongside them) is the filter doing its job, not a shape the
+  # anchors failed to recognize — it must not print the loud "matched 0"
+  # line, same reasoning as the round-3 P3-3 empty-value fix above.
+  export CLIKAE_LIB="$CLIKAE_TEST_ROOT/lib"
+  source "$CLIKAE_LIB/adapters/codex.sh"
+  local t="$TEST_HOME/all-filtered.jsonl"
+  echo '{"type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"<recommended_plugins>\nlist"},{"type":"input_text","text":"<environment_context>\ncwd=/x\n</environment_context>"}]}}' > "$t"
+  run adapter_handoff_extract "$t" user
+  [ "$status" -eq 0 ]
+  [ -z "$output" ]
+}
+
+@test "#110 round-4 review P3-3: joining the parts of a message — escaped quotes, a part whose TEXT spells the part key, CJK, and an empty part" {
+  # #110 replaced the left-to-right join with a pairwise binary merge, for
+  # speed. Reassociating a join is only safe if the operation is associative,
+  # so this pins the four inputs where it could have gone wrong:
+  #
+  #   1. a part whose text contains an ESCAPED copy of the part key. The walk
+  #      is now one `split()` over the WHOLE line instead of a scan that
+  #      stopped at each value's closing quote, so "could the split cut inside
+  #      a value?" is a new question. It cannot: in JSON the quotes of an
+  #      embedded key are backslash-escaped, and the split pattern has no
+  #      backslashes in it. Pinned anyway, because the reasoning is the kind
+  #      that is right until the day it is not.
+  #   2. CJK, and a value ending in an escaped backslash — the escape subset
+  #      codex.sh unescapes is unchanged, and must stay unchanged.
+  #   3. an empty part in the MIDDLE. This is the ONE output the merge
+  #      changes: the old form emitted a double space here, the identity form
+  #      emits one. Documented in codex.sh, pinned here so nobody has to take
+  #      the comment's word for it.
+  #   4. an empty part FIRST — unchanged, no leading space, either way.
+  export CLIKAE_LIB="$CLIKAE_TEST_ROOT/lib"
+  source "$CLIKAE_LIB/adapters/codex.sh"
+  local t="$TEST_HOME/join-edges.jsonl"
+  {
+    echo '{"type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"he said \"hi\" and \\\"type\\\": \\\"input_text\\\", \\\"text\\\": \\\" is not a key"},{"type":"input_text","text":"second part"}]}}'
+    echo '{"type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"測試繁體中文 path\\\\"},{"type":"input_text","text":"後面這段"}]}}'
+    echo '{"type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"a"},{"type":"input_text","text":""},{"type":"input_text","text":"b"}]}}'
+    echo '{"type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":""},{"type":"input_text","text":"c"}]}}'
+    echo '{"type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"lone"}]}}'
+  } > "$t"
+  run adapter_handoff_extract "$t" user
+  [ "$status" -eq 0 ]
+  [ "$output" = "$(printf '%s\n%s\n%s\n%s\n%s' \
+    'he said "hi" and \"type\": \"input_text\", \"text\": \" is not a key second part' \
+    '測試繁體中文 path\\ 後面這段' \
+    'a b' \
+    'c' \
+    'lone')" ]
+}
+
+@test "#33 round-4 review P3-2: content_item_kinds naming no user.-prefixed kind on every candidate line still fires a loud diagnostic, not silence" {
+  # Before this fix, a response_item/role:user line whose content_item_kinds
+  # names no "user."-prefixed kind (an empty array, or a renamed kind on a
+  # future rollout) was skipped by `next` BEFORE scanned++ ran — so the
+  # bottom-of-script "scanned N, matched 0" diagnostic never had anything to
+  # count, and the whole prompt vanished with zero stderr output. This is the
+  # exact silent failure codex.sh's own comment above adapter_handoff_extract
+  # rules out.
+  export CLIKAE_LIB="$CLIKAE_TEST_ROOT/lib"
+  source "$CLIKAE_LIB/adapters/codex.sh"
+  local t="$TEST_HOME/empty-kinds.jsonl"
+  echo '{"type":"response_item","payload":{"type":"message","role":"user","content_item_kinds":[],"content":[{"type":"input_text","text":"a real human prompt"}]}}' > "$t"
+  run adapter_handoff_extract "$t" user
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"content_item_kinds named no"* ]] || false
+  [[ "$output" != *"a real human prompt"* ]] || false
+}
+
+_seed_codex_agent_message_transcript() {
+  # Round-2 review P2-1: the repo-documented event_msg/agent_message shape
+  # (the SAME shape lib/core/limit.sh's whole codex family reads,
+  # "confirmed against a real rollout" — limit.sh:322) with NO response_item
+  # lines at all, proving the assistant branch reads this shape on its own,
+  # not only as a side effect of also matching response_item.
+  local profile="$1" dir="$2" sid="$3"
+  local d="$CLIKAE_HOME/profiles/codex/$profile/sessions/2026/09/13"
+  mkdir -p "$d"
+  {
+    echo '{"timestamp":"2026-09-13T00:00:00.000Z","type":"session_meta","payload":{"id":"'"$sid"'","cwd":"'"$dir"'"}}'
+    echo '{"timestamp":"2026-09-13T00:00:01.000Z","type":"event_msg","payload":{"type":"user_message","message":"please fix the parser"}}'
+    echo '{"timestamp":"2026-09-13T00:00:02.000Z","type":"event_msg","payload":{"type":"agent_message","message":"I changed lib/foo.sh and ran the tests; two still fail."}}'
+    echo '{"timestamp":"2026-09-13T00:00:03.000Z","type":"event_msg","payload":{"type":"token_count","info":{},"rate_limits":{}}}'
+    echo '{"timestamp":"2026-09-13T00:00:04.000Z","type":"event_msg","payload":{"type":"agent_message","message":"Done: all green now."}}'
+  } > "$d/rollout-2026-09-13T00-00-00-$sid.jsonl"
+}
+
+@test "#33 round-2 review P2-1: codex assistant notes read the repo-documented event_msg/agent_message shape (the same shape lib/core/limit.sh trusts), not only response_item" {
+  clikae init codex work3
+  local work="$TEST_HOME/work-codex-agentmsg"; mkdir -p "$work"
+  _seed_codex_agent_message_transcript work3 "$work" "66666666-1111-1111-1111-111111111111"
+  cd "$work"
+  CODEX_HOME="$CLIKAE_HOME/profiles/codex/work3" run clikae handoff codex work3 --summarizer cat
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"I changed lib/foo.sh and ran the tests; two still fail."* ]] || false
+  [[ "$output" == *"Done: all green now."* ]] || false
+}
+
+_seed_codex_dual_shape_same_turn() {
+  # Round-3 review P2-2, shape B2: the SAME turn recorded in BOTH shapes,
+  # back to back -- the union rule (no dedup) printed every prompt/note
+  # TWICE on exactly this input; adjacent dedup must collapse each pair to
+  # one line without touching the OTHER turn's lines.
+  local profile="$1" dir="$2" sid="$3"
+  local d="$CLIKAE_HOME/profiles/codex/$profile/sessions/2026/09/14"
+  mkdir -p "$d"
+  {
+    echo '{"timestamp":"2026-09-14T00:00:00.000Z","type":"session_meta","payload":{"id":"'"$sid"'","cwd":"'"$dir"'"}}'
+    echo '{"timestamp":"2026-09-14T00:00:01.000Z","type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"prompt one"}]}}'
+    echo '{"timestamp":"2026-09-14T00:00:01.500Z","type":"event_msg","payload":{"type":"user_message","message":"prompt one"}}'
+    echo '{"timestamp":"2026-09-14T00:00:02.000Z","type":"response_item","payload":{"type":"message","role":"assistant","content":[{"type":"output_text","text":"reply one"}]}}'
+    echo '{"timestamp":"2026-09-14T00:00:02.500Z","type":"event_msg","payload":{"type":"agent_message","message":"reply one"}}'
+    echo '{"timestamp":"2026-09-14T00:00:03.000Z","type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"prompt two"}]}}'
+    echo '{"timestamp":"2026-09-14T00:00:03.500Z","type":"event_msg","payload":{"type":"user_message","message":"prompt two"}}'
+    echo '{"timestamp":"2026-09-14T00:00:04.000Z","type":"response_item","payload":{"type":"message","role":"assistant","content":[{"type":"output_text","text":"reply two"}]}}'
+    echo '{"timestamp":"2026-09-14T00:00:04.500Z","type":"event_msg","payload":{"type":"agent_message","message":"reply two"}}'
+  } > "$d/rollout-2026-09-14T00-00-00-$sid.jsonl"
+}
+
+@test "#33 round-3 review P2-2 (B2 shape): same turn recorded in both event_msg AND response_item prints each prompt/note ONCE, not twice" {
+  clikae init codex work7
+  local work="$TEST_HOME/work-codex-dualshape"; mkdir -p "$work"
+  _seed_codex_dual_shape_same_turn work7 "$work" "77777777-2222-2222-2222-222222222222"
+  cd "$work"
+  export CLIKAE_LIB="$CLIKAE_TEST_ROOT/lib"
+  source "$CLIKAE_LIB/adapters/codex.sh"
+  local rollout="$CLIKAE_HOME/profiles/codex/work7/sessions/2026/09/14/rollout-2026-09-14T00-00-00-77777777-2222-2222-2222-222222222222.jsonl"
+  run adapter_handoff_extract "$rollout" user
+  [ "$status" -eq 0 ]
+  [ "$output" = "$(printf 'prompt one\nprompt two')" ]
+  run adapter_handoff_extract "$rollout" assistant
+  [ "$status" -eq 0 ]
+  [ "$output" = "$(printf 'reply one\nreply two')" ]
+}
+
+_seed_codex_dual_shape_same_turn_event_first() {
+  # Round-4 review P3-1 (#110): the B2 fixture above always writes
+  # response_item BEFORE event_msg, so the pair is always collapsed by the
+  # dedupe inside the EVENT_MSG rule — the response_item rule's own
+  # `(!have_prev || res != prev)` guard never had to do anything, and
+  # deleting it left the whole suite green. A real rollout has no rule about
+  # which shape lands first, so here is the same turn in the OTHER order:
+  # event_msg first, response_item second. Now the response_item side is the
+  # one that must recognise the line it is about to duplicate.
+  local profile="$1" dir="$2" sid="$3"
+  local d="$CLIKAE_HOME/profiles/codex/$profile/sessions/2026/09/14"
+  mkdir -p "$d"
+  {
+    echo '{"timestamp":"2026-09-14T00:00:00.000Z","type":"session_meta","payload":{"id":"'"$sid"'","cwd":"'"$dir"'"}}'
+    echo '{"timestamp":"2026-09-14T00:00:01.000Z","type":"event_msg","payload":{"type":"user_message","message":"prompt one"}}'
+    echo '{"timestamp":"2026-09-14T00:00:01.500Z","type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"prompt one"}]}}'
+    echo '{"timestamp":"2026-09-14T00:00:02.000Z","type":"event_msg","payload":{"type":"agent_message","message":"reply one"}}'
+    echo '{"timestamp":"2026-09-14T00:00:02.500Z","type":"response_item","payload":{"type":"message","role":"assistant","content":[{"type":"output_text","text":"reply one"}]}}'
+    echo '{"timestamp":"2026-09-14T00:00:03.000Z","type":"event_msg","payload":{"type":"user_message","message":"prompt two"}}'
+    echo '{"timestamp":"2026-09-14T00:00:03.500Z","type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"prompt two"}]}}'
+    echo '{"timestamp":"2026-09-14T00:00:04.000Z","type":"event_msg","payload":{"type":"agent_message","message":"reply two"}}'
+    echo '{"timestamp":"2026-09-14T00:00:04.500Z","type":"response_item","payload":{"type":"message","role":"assistant","content":[{"type":"output_text","text":"reply two"}]}}'
+  } > "$d/rollout-2026-09-14T00-00-00-$sid.jsonl"
+}
+
+@test "#110 round-4 review P3-1 (B2 shape, event_msg FIRST): the response_item side's own dedupe collapses the pair too, not just the event_msg side's" {
+  local work="$TEST_HOME/work-codex-dualshape-eventfirst"; mkdir -p "$work"
+  _seed_codex_dual_shape_same_turn_event_first eventfirst "$work" "77777777-3333-3333-3333-333333333333"
+  export CLIKAE_LIB="$CLIKAE_TEST_ROOT/lib"
+  source "$CLIKAE_LIB/adapters/codex.sh"
+  local rollout="$CLIKAE_HOME/profiles/codex/eventfirst/sessions/2026/09/14/rollout-2026-09-14T00-00-00-77777777-3333-3333-3333-333333333333.jsonl"
+  run adapter_handoff_extract "$rollout" user
+  [ "$status" -eq 0 ]
+  [ "$output" = "$(printf 'prompt one\nprompt two')" ]
+  run adapter_handoff_extract "$rollout" assistant
+  [ "$status" -eq 0 ]
+  [ "$output" = "$(printf 'reply one\nreply two')" ]
+}
+
+@test "#110 round-4 review P3-1: two consecutive byte-identical turns (a human typing \"continue\" twice) DO collapse into one line — the documented trade-off, pinned" {
+  # codex.sh states this out loud as the accepted cost of adjacent dedup:
+  # "two turns with byte-identical text that really ARE consecutive (the user
+  # typing 'continue' twice in a row) collapse into one line too — accepted,
+  # since a handoff brief cares about what was said, not how many times."
+  # Nothing tested it, so a future change could quietly reverse the decision
+  # (or an over-eager dedupe could widen past ADJACENT) without a red.
+  # Pinned here on BOTH rules, since each carries its own copy of the guard.
+  export CLIKAE_LIB="$CLIKAE_TEST_ROOT/lib"
+  source "$CLIKAE_LIB/adapters/codex.sh"
+  local t="$TEST_HOME/continue-continue.jsonl"
+
+  # response_item side (the `(!have_prev || res != prev)` guard).
+  {
+    echo '{"type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"continue"}]}}'
+    echo '{"type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"continue"}]}}'
+  } > "$t"
+  run adapter_handoff_extract "$t" user
+  [ "$status" -eq 0 ]
+  [ "$output" = "continue" ]
+
+  # event_msg side (the `(!have_prev || seg != prev)` guard).
+  {
+    echo '{"type":"event_msg","payload":{"type":"user_message","message":"continue"}}'
+    echo '{"type":"event_msg","payload":{"type":"user_message","message":"continue"}}'
+  } > "$t"
+  run adapter_handoff_extract "$t" user
+  [ "$status" -eq 0 ]
+  [ "$output" = "continue" ]
+
+  # NOT adjacent: the same word either side of a different turn is kept twice
+  # — the dedupe is adjacent-only, and that half of the trade-off matters as
+  # much as the half above.
+  {
+    echo '{"type":"event_msg","payload":{"type":"user_message","message":"continue"}}'
+    echo '{"type":"event_msg","payload":{"type":"user_message","message":"now run the tests"}}'
+    echo '{"type":"event_msg","payload":{"type":"user_message","message":"continue"}}'
+  } > "$t"
+  run adapter_handoff_extract "$t" user
+  [ "$status" -eq 0 ]
+  [ "$output" = "$(printf 'continue\nnow run the tests\ncontinue')" ]
+}
+
+_seed_codex_shape_switch_mid_file() {
+  # Round-3 review P2-2, shape B1: DIFFERENT turns, each recorded in only
+  # ONE shape (a file that switches shape mid-way, e.g. a version upgrade
+  # mid-session) -- adjacent dedup must not eat a turn just because the
+  # line before it happens to come from a DIFFERENT shape's rule.
+  local profile="$1" dir="$2" sid="$3"
+  local d="$CLIKAE_HOME/profiles/codex/$profile/sessions/2026/09/14"
+  mkdir -p "$d"
+  {
+    echo '{"timestamp":"2026-09-14T00:00:00.000Z","type":"session_meta","payload":{"id":"'"$sid"'","cwd":"'"$dir"'"}}'
+    echo '{"timestamp":"2026-09-14T00:00:01.000Z","type":"event_msg","payload":{"type":"user_message","message":"old prompt 1"}}'
+    echo '{"timestamp":"2026-09-14T00:00:02.000Z","type":"event_msg","payload":{"type":"agent_message","message":"old reply 1"}}'
+    echo '{"timestamp":"2026-09-14T00:00:03.000Z","type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"new prompt 2"}]}}'
+    echo '{"timestamp":"2026-09-14T00:00:04.000Z","type":"response_item","payload":{"type":"message","role":"assistant","content":[{"type":"output_text","text":"new reply 2"}]}}'
+  } > "$d/rollout-2026-09-14T00-00-00-$sid.jsonl"
+}
+
+@test "#33 round-3 review P2-2 (B1 shape): a file that switches shape mid-way loses nothing (different turns, different shapes)" {
+  clikae init codex work8
+  local work="$TEST_HOME/work-codex-shapeswitch"; mkdir -p "$work"
+  _seed_codex_shape_switch_mid_file work8 "$work" "88888888-2222-2222-2222-222222222222"
+  cd "$work"
+  export CLIKAE_LIB="$CLIKAE_TEST_ROOT/lib"
+  source "$CLIKAE_LIB/adapters/codex.sh"
+  local rollout="$CLIKAE_HOME/profiles/codex/work8/sessions/2026/09/14/rollout-2026-09-14T00-00-00-88888888-2222-2222-2222-222222222222.jsonl"
+  run adapter_handoff_extract "$rollout" user
+  [ "$status" -eq 0 ]
+  [ "$output" = "$(printf 'old prompt 1\nnew prompt 2')" ]
+  run adapter_handoff_extract "$rollout" assistant
+  [ "$status" -eq 0 ]
+  [ "$output" = "$(printf 'old reply 1\nnew reply 2')" ]
+}
+
+@test "#33 round-2 review P3-3: a non-text content part's own \"text\" key doesn't leak into the digest" {
+  clikae init codex work4
+  local work="$TEST_HOME/work-codex-reasoning"; mkdir -p "$work"
+  local d="$CLIKAE_HOME/profiles/codex/work4/sessions/2026/09/13"
+  mkdir -p "$d"
+  local sid="99999999-1111-1111-1111-111111111111"
+  {
+    echo '{"timestamp":"2026-09-13T00:00:00.000Z","type":"session_meta","payload":{"id":"'"$sid"'","cwd":"'"$work"'"}}'
+    echo '{"timestamp":"2026-09-13T00:00:01.000Z","type":"response_item","payload":{"type":"message","role":"assistant","content":[{"type":"reasoning","text":"INTERNAL-REASONING-LEAK"},{"type":"output_text","text":"visible codex answer"}]}}'
+  } > "$d/rollout-2026-09-13T00-00-00-$sid.jsonl"
+  cd "$work"
+  CODEX_HOME="$CLIKAE_HOME/profiles/codex/work4" run clikae handoff codex work4 --summarizer cat
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"visible codex answer"* ]] || false
+  [[ "$output" != *"INTERNAL-REASONING-LEAK"* ]] || false
+}
+
+@test "#33 round-2 review P3-2: a brand-new tank the model hasn't replied to stays silent (no loud diagnostic), unlike a real shape mismatch" {
+  clikae init codex work5
+  local work="$TEST_HOME/work-codex-newtank"; mkdir -p "$work"
+  local d="$CLIKAE_HOME/profiles/codex/work5/sessions/2026/09/13"
+  mkdir -p "$d"
+  local sid="88888888-1111-1111-1111-111111111111"
+  {
+    echo '{"timestamp":"2026-09-13T00:00:00.000Z","type":"session_meta","payload":{"id":"'"$sid"'","cwd":"'"$work"'"}}'
+    echo '{"timestamp":"2026-09-13T00:00:01.000Z","type":"event_msg","payload":{"type":"user_message","message":"first prompt, no reply yet"}}'
+  } > "$d/rollout-2026-09-13T00-00-00-$sid.jsonl"
+  cd "$work"
+  CODEX_HOME="$CLIKAE_HOME/profiles/codex/work5" run clikae handoff codex work5 --summarizer cat
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"first prompt, no reply yet"* ]] || false
+  [[ "$output" != *"matched 0"* ]] || false
+}
+
+@test "#33 round-2 review P3-2: a genuine shape mismatch (structurally an assistant turn, no extractable text) still fires the loud diagnostic" {
+  export CLIKAE_LIB="$CLIKAE_TEST_ROOT/lib"
+  source "$CLIKAE_LIB/adapters/codex.sh"
+  local t="$TEST_HOME/mismatch.jsonl"
+  echo '{"type":"response_item","payload":{"type":"message","role":"assistant","content":[{"type":"weird_part","nottext":"nope"}]}}' > "$t"
+  run adapter_handoff_extract "$t" assistant
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"scanned 1 assistant lines, matched 0"* ]] || false
+}
+
+@test "#33 round-3 review P3-3: a legitimately empty agent_message counts as matched (no loud diagnostic, even though it prints nothing)" {
+  # {"payload":{"type":"agent_message","message":""}} is a shape that
+  # WORKED -- the key was found, the value is just "" -- not a mismatch
+  # (codex.sh:324's old `if (seg != "")` guard starved `matched` on this
+  # exact case and fired "scanned 1 assistant lines, matched 0" for a
+  # value that was never wrong, just empty).
+  export CLIKAE_LIB="$CLIKAE_TEST_ROOT/lib"
+  source "$CLIKAE_LIB/adapters/codex.sh"
+  local t="$TEST_HOME/empty-agent-message.jsonl"
+  echo '{"type":"event_msg","payload":{"type":"agent_message","message":""}}' > "$t"
+  run adapter_handoff_extract "$t" assistant
+  [ "$status" -eq 0 ]
+  [ -z "$output" ]
+}
+
+_seed_grok_transcript() {
+  local profile="$1" dir="$2" sid="$3"
+  local d="$CLIKAE_HOME/profiles/grok/$profile/sessions/group1/$sid"
+  mkdir -p "$d"
+  printf '{"info":{"id":"%s","cwd":"%s"},"generated_title":"test"}\n' "$sid" "$dir" > "$d/summary.json"
+  {
+    echo '{"type":"user","content":[{"type":"text","text":"grok first real prompt"}]}'
+    echo '{"type":"assistant","content":[{"type":"text","text":"grok working note"}]}'
+    echo 'NOT VALID JSON AT ALL ][{ SHOULD-NOT-APPEAR'
+    echo '{"type":"user","content":[{"type":"text","text":"grok second real prompt 測試繁體中文"}]}'
+    echo '{"type":"assistant","content":[{"type":"text","text":"grok last assistant note"}]}'
+  } > "$d/chat_history.jsonl"
+}
+
+@test "#33 handoff on grok extracts prompts+notes from the no-role/array-content shape (CJK survives, malformed line skipped)" {
+  clikae init grok work
+  local work="$TEST_HOME/work-grok"; mkdir -p "$work"
+  _seed_grok_transcript work "$work" "22222222-2222-2222-2222-222222222222"
+  cd "$work"
+  # Same reasoning as the codex test above: `cat` as the summarizer surfaces
+  # the assistant-notes section too (raw-extract only ever shows prompts).
+  GROK_HOME="$CLIKAE_HOME/profiles/grok/work" \
+    run clikae handoff grok work --summarizer cat
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"grok first real prompt"* ]] || false
+  [[ "$output" == *"grok second real prompt 測試繁體中文"* ]] || false
+  [[ "$output" == *"grok working note"* ]] || false
+  [[ "$output" == *"grok last assistant note"* ]] || false
+  [[ "$output" != *"SHOULD-NOT-APPEAR"* ]] || false
+  GROK_HOME="$CLIKAE_HOME/profiles/grok/work" run clikae handoff grok work
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"grok second real prompt 測試繁體中文"* ]] || false
+  [[ "$output" == *"raw extract"* ]] || false
+}
+
+_seed_grok_whitespace_transcript() {
+  # Round-1 review P1-1: no real grok chat_history.jsonl was available to
+  # confirm it writes spaced JSON (unlike codex's rollout, which is
+  # "confirmed against a real rollout" — see codex.sh's own comment), but
+  # tolerating a space after the colon costs nothing and keeps this the
+  # SAME idiom as every other whitespace-tolerant scanner in the repo.
+  local profile="$1" dir="$2" sid="$3"
+  local d="$CLIKAE_HOME/profiles/grok/$profile/sessions/group1/$sid"
+  mkdir -p "$d"
+  printf '{"info": {"id": "%s", "cwd": "%s"}, "generated_title": "test"}\n' "$sid" "$dir" > "$d/summary.json"
+  {
+    echo '{"type": "user", "content": [{"type": "text", "text": "spaced grok prompt"}]}'
+    echo '{"type": "assistant", "content": [{"type": "text", "text": "spaced grok note"}]}'
+  } > "$d/chat_history.jsonl"
+}
+
+@test "#33 round-1 P1-1: grok handoff survives JSON whitespace (space after every colon)" {
+  clikae init grok spacedwork
+  local work="$TEST_HOME/work-grok-spaced"; mkdir -p "$work"
+  _seed_grok_whitespace_transcript spacedwork "$work" "66666666-6666-6666-6666-666666666666"
+  cd "$work"
+  GROK_HOME="$CLIKAE_HOME/profiles/grok/spacedwork" \
+    run clikae handoff grok spacedwork --summarizer cat
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"spaced grok prompt"* ]] || false
+  [[ "$output" == *"spaced grok note"* ]] || false
+}
+
+@test "#33 round-2 review P3-3: grok — a non-text content part's own \"text\" key (e.g. an image's alt text) doesn't leak into the digest" {
+  clikae init grok work6
+  local work="$TEST_HOME/work-grok-imageleak"; mkdir -p "$work"
+  local d="$CLIKAE_HOME/profiles/grok/work6/sessions/group1/aaaaaaaa-1111-1111-1111-111111111111"
+  mkdir -p "$d"
+  printf '{"info": {"id": "aaaaaaaa-1111-1111-1111-111111111111", "cwd": "%s"}, "generated_title": "test"}\n' "$work" > "$d/summary.json"
+  echo '{"type":"assistant","content":[{"type":"image","text":"ALT-TEXT-LEAK"},{"type":"text","text":"visible grok answer"}]}' > "$d/chat_history.jsonl"
+  cd "$work"
+  GROK_HOME="$CLIKAE_HOME/profiles/grok/work6" run clikae handoff grok work6 --summarizer cat
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"visible grok answer"* ]] || false
+  [[ "$output" != *"ALT-TEXT-LEAK"* ]] || false
+}
+
+@test "#33 handoff on codex survives a 20 kB single-line transcript (no truncation crash/hang)" {
+  clikae init codex work
+  local work="$TEST_HOME/work-codex-20k"; mkdir -p "$work"
+  local d="$CLIKAE_HOME/profiles/codex/work/sessions/2026/09/11"
+  mkdir -p "$d"
+  local sid="33333333-3333-3333-3333-333333333333"
+  local pad; pad="$(head -c 20000 /dev/zero | tr '\0' 'x')"
+  {
+    echo '{"timestamp":"2026-09-11T00:00:00.000Z","type":"session_meta","payload":{"id":"'"$sid"'","cwd":"'"$work"'"}}'
+    # user_message (round-1 P2-2 shape, not response_item) so this still
+    # exercises the actual escape-scanning loop the "user" branch runs.
+    echo '{"timestamp":"2026-09-11T00:00:01.000Z","type":"event_msg","payload":{"type":"user_message","message":"START-MARKER-'"$pad"'-END-MARKER"}}'
+  } > "$d/rollout-2026-09-11T00-00-00-$sid.jsonl"
+  cd "$work"
+  CODEX_HOME="$CLIKAE_HOME/profiles/codex/work" run clikae handoff codex work
+  [ "$status" -eq 0 ]
+}
+
+_codex_timing_awk() {
+  # Which awk the two timing tests below run under, and the bound that goes
+  # with it. mawk is preferred: it is Debian/Ubuntu's DEFAULT `awk`, and its
+  # cheap-substr/expensive-concat profile is what made the round-2 O(n^2)
+  # scream loudest, so on a box that has it we hold the tests to a tight
+  # bound. On a box that does NOT (stock macOS, where `awk` is BWK — i.e.
+  # the macOS half of CI), the old test SKIPPED, which is how #110's
+  # many-part quadratic survived a round of review while looking covered.
+  # It now runs under whatever `awk` the host resolves to, with a looser
+  # bound, because a test that runs on one platform and disappears on the
+  # other is only half a gate. Both bounds are far below what a restored
+  # quadratic costs at these sizes (measured on this repo's fix branch:
+  # 4.8s gawk / 3.9s busybox / 11.7s BWK before, ~0.2s after).
+  CODEX_TIMING_AWK_DIR="$TEST_HOME/timing-awk-bin"
+  mkdir -p "$CODEX_TIMING_AWK_DIR"
+  if command -v mawk >/dev/null 2>&1; then
+    ln -sf "$(command -v mawk)" "$CODEX_TIMING_AWK_DIR/awk"
+    CODEX_TIMING_AWK_NAME=mawk
+    CODEX_TIMING_BOUND=15
+  else
+    ln -sf "$(command -v awk)" "$CODEX_TIMING_AWK_DIR/awk"
+    CODEX_TIMING_AWK_NAME="the host awk"
+    CODEX_TIMING_BOUND=60
+  fi
+}
+
+@test "#33 round-2 review P2-2: codex handoff extracts a 1 MB single-line transcript in roughly linear time (no O(n^2) hang)" {
+  # The O(n^2) regression this guards against (character-by-character
+  # `seg = seg c` accumulation, measured 95.9s @ 1.6 MB on mawk in the
+  # round-2 review) does NOT reproduce on gawk, which is what `awk` resolves
+  # to on a dev box with both installed — the exact "my machine is not a
+  # neutral place to measure" trap the review hit first. So prefer mawk, but
+  # never skip: see _codex_timing_awk above.
+  _codex_timing_awk
+  clikae init codex work
+  local work="$TEST_HOME/work-codex-1m"; mkdir -p "$work"
+  local d="$CLIKAE_HOME/profiles/codex/work/sessions/2026/09/13"
+  mkdir -p "$d"
+  local sid="77777777-7777-7777-7777-777777777777"
+  local pad; pad="$(head -c 1000000 /dev/zero | tr '\0' 'x')"
+  {
+    echo '{"timestamp":"2026-09-13T00:00:00.000Z","type":"session_meta","payload":{"id":"'"$sid"'","cwd":"'"$work"'"}}'
+    echo '{"timestamp":"2026-09-13T00:00:01.000Z","type":"event_msg","payload":{"type":"user_message","message":"START-MARKER-'"$pad"'-END-MARKER"}}'
+  } > "$d/rollout-2026-09-13T00-00-00-$sid.jsonl"
+  cd "$work"
+  local t0=$SECONDS
+  PATH="$CODEX_TIMING_AWK_DIR:$PATH" CODEX_HOME="$CLIKAE_HOME/profiles/codex/work" \
+    run clikae handoff codex work
+  local elapsed=$((SECONDS - t0))
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"START-MARKER-"* ]] || false
+  [ "$elapsed" -lt "$CODEX_TIMING_BOUND" ] \
+    || { echo "took ${elapsed}s under $CODEX_TIMING_AWK_NAME -- O(n^2) regression?"; false; }
+}
+
+@test "#110 round-4 review P3-3: codex extracts a 2 MB message of 8,800 content PARTS in linear time, on EVERY awk this host has (no O(parts x line) walk, no O(parts^2) join)" {
+  # The test above has ONE part, so neither of the two quadratics #110 found
+  # could show up in it: walking the parts by re-slicing the remainder, and
+  # joining the kept parts left to right. Both are per-PART costs.
+  #
+  # Two things this test does NOT copy from the one above, both because a
+  # bound only gates if the broken code would have BLOWN it:
+  #
+  #  * It does not prefer mawk. mawk is the one implementation this
+  #    particular quadratic barely touches (0.27s at 4,400 parts, 0.84s at
+  #    8,800, against gawk's 5.2s and 20.1s) — its substr is cheap enough to
+  #    hide the walk. Pinning the test to mawk would have made it pass on
+  #    the very code it is here to reject. So it runs under EVERY awk the
+  #    host has, which also means it never skips: plain `awk` always exists.
+  #
+  #  * 8,800 parts, not 4,400. Measured on the pre-fix extractor, 8,800 is
+  #    where the quadratic clears the bound by a wide margin on the three
+  #    implementations that show it — gawk 20.1s, busybox awk 16.0s, BWK
+  #    20250116 48.8s, against 0.44s / 0.37s / 0.39s after the fix. 10s sits
+  #    between the two with >20x headroom on the fixed side.
+  export CLIKAE_LIB="$CLIKAE_TEST_ROOT/lib"
+  source "$CLIKAE_LIB/adapters/codex.sh"
+  local t="$TEST_HOME/manyparts.jsonl"
+  # Generated by awk, not a bash loop: 8,800 iterations of `s="$s…"` in bash
+  # is its own quadratic, and a fixture that takes longer to build than the
+  # thing it measures makes the number meaningless.
+  awk 'BEGIN{
+    pad = ""; for (j = 0; j < 20; j++) pad = pad "xxxxxxxxxx"
+    printf "{\"timestamp\":\"2026-09-16T00:00:00.000Z\",\"type\":\"response_item\",\"payload\":{\"type\":\"message\",\"role\":\"user\",\"content\":["
+    for (i = 0; i < 8800; i++) {
+      if (i > 0) printf ","
+      printf "{\"type\":\"input_text\",\"text\":\"MANYPART-%d-%s\"}", i, pad
+    }
+    printf "]}}\n"
+  }' > "$t"
+  [ "$(wc -c < "$t")" -gt 2000000 ] || false
+
+  local ran=0 impl bin d t0 elapsed
+  for impl in gawk mawk busybox awk; do
+    if [ "$impl" = busybox ]; then
+      command -v busybox >/dev/null 2>&1 || continue
+      bin="$(command -v busybox) awk"
+    else
+      command -v "$impl" >/dev/null 2>&1 || continue
+      bin="$(command -v "$impl")"
+    fi
+    # A wrapper, not a symlink, so `busybox awk` can be one of them. It execs
+    # an ABSOLUTE path, so putting it on PATH as `awk` cannot recurse.
+    d="$TEST_HOME/awkshim-$impl"; mkdir -p "$d"
+    printf '#!/bin/sh\nexec %s "$@"\n' "$bin" > "$d/awk"
+    chmod +x "$d/awk"
+
+    t0=$SECONDS
+    PATH="$d:$PATH" run adapter_handoff_extract "$t" user
+    elapsed=$((SECONDS - t0))
+    [ "$status" -eq 0 ] || { echo "$impl: rc=$status"; false; }
+    # One line out, every part on it, in order.
+    [ "${#lines[@]}" -eq 1 ] || { echo "$impl: ${#lines[@]} lines"; false; }
+    [[ "$output" == "MANYPART-0-"* ]] || { echo "$impl: bad head"; false; }
+    [[ "$output" == *"MANYPART-8799-"* ]] || { echo "$impl: bad tail"; false; }
+    # …joined by exactly ONE space. Each part ends in the x-padding, so a
+    # doubled or missing separator between part 0 and part 1 shows up here —
+    # the binary merge reassociates the join, and this is what pins that it
+    # still produces the same bytes.
+    [[ "$output" == *"x MANYPART-1-"* ]] || { echo "$impl: bad separator"; false; }
+    [[ "$output" != *"x  MANYPART-1-"* ]] || { echo "$impl: doubled separator"; false; }
+    [ "$elapsed" -lt 10 ] \
+      || { echo "$impl took ${elapsed}s on 8,800 parts -- quadratic part walk/join?"; false; }
+    ran=$((ran + 1))
+  done
+  # `awk` is POSIX-required, so this can only be 0 if the loop above is broken.
+  [ "$ran" -gt 0 ] || { echo "no awk implementation was exercised"; false; }
+}
+
+@test "#33 an engine with no adapter_handoff_extract hook falls back to the claude-shaped extraction" {
+  export CLIKAE_LIB="$CLIKAE_TEST_ROOT/lib"
+  source "$CLIKAE_LIB/core/log.sh"
+  source "$CLIKAE_LIB/core/profile_store.sh"
+  source "$CLIKAE_LIB/core/handoff.sh"
+  # No adapter loaded in this process at all -> adapter_handoff_extract is
+  # undefined, exactly the third-party-adapter case.
+  unset -f adapter_handoff_extract 2>/dev/null || true
+  local t="$TEST_HOME/fallback.jsonl"
+  printf '%s\n' '{"type":"user","message":{"role":"user","content":"fallback claude-shaped prompt"},"timestamp":"2026-05-31T01:00:00.000Z"}' > "$t"
+  run _handoff_recent_prompts "$t" 5
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"fallback claude-shaped prompt"* ]] || false
+}
+
+# --- #33 round-1 review P2-1 -------------------------------------------------
+# The test this replaces compared `_handoff_default_extract` against
+# `adapter_handoff_extract` — but BOTH were added by the #33 commit itself,
+# so all it could prove is that two copies pasted into the same commit agree
+# with EACH OTHER. It never touched the pre-#33 code, despite its name
+# claiming "byte-identical to the pre-#33 inline extraction". A round-1
+# review caught this (P2-1): if #33 had drifted claude's behaviour, both
+# copies would have drifted together and this test would have stayed green.
+#
+# The fix: compare against a FROZEN artefact of the ACTUAL pre-#33 code
+# (a real ref, not a second guess at what it did). Grepped the test suite
+# first for a precedent of reading another git ref inside a bats test (none
+# found — `tests/helpers.bash` gives every test its own throwaway $HOME, no
+# git plumbing), so the golden output is captured to a fixture file instead,
+# generated ONCE and frozen:
+#
+#   git show 4496a6d980dfb87ae97400f06126a3df4a0d3bae:lib/core/handoff.sh \
+#     > /tmp/handoff-pre33.sh
+#   # 4496a6d980dfb87ae97400f06126a3df4a0d3bae is `git merge-base` of this
+#   # branch and origin/main — the exact commit #33 branched from.
+#   HOME="$(mktemp -d)" CLIKAE_HOME="$(mktemp -d)" bash -c '
+#     . /tmp/handoff-pre33.sh
+#     _handoff_clean_tail /path/to/the/fixture/below.jsonl
+#   ' > tests/fixtures/handoff-claude-golden.txt
+#
+# The fixture pinned above is a real, unmodified pre-#33 file — no
+# reimplementation of what it "should" have done. If a future change to
+# claude's shape is ever intentional, this test is meant to go red and the
+# golden file regenerated by rerunning the recipe above against the NEW
+# code, with the reason written into the commit that touches it.
+@test "#33 claude's handoff digest matches a FROZEN pre-#33 golden fixture byte-for-byte" {
+  export CLIKAE_LIB="$CLIKAE_TEST_ROOT/lib"
+  source "$CLIKAE_LIB/core/log.sh"
+  source "$CLIKAE_LIB/core/profile_store.sh"
+  source "$CLIKAE_LIB/core/handoff.sh"
+  source "$CLIKAE_LIB/adapters/claude.sh"
+  local t="$TEST_HOME/golden-parity.jsonl"
+  {
+    echo '{"type":"user","message":{"role":"user","content":"first real prompt"},"timestamp":"2026-05-31T01:00:00.000Z"}'
+    echo '{"type":"user","isMeta":true,"message":{"role":"user","content":"<command-name>/clear</command-name>"},"timestamp":"2026-05-31T01:00:01.000Z"}'
+    echo '{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"working on it, quote: he said \"hi\""}]},"timestamp":"2026-05-31T01:00:02.000Z"}'
+    echo '{"type":"user","toolUseResult":true,"message":{"role":"user","content":[{"type":"tool_result","content":"SHOULD NOT APPEAR file dump"}]},"timestamp":"2026-05-31T01:00:03.000Z"}'
+    # Round-2 review P3-1: the three lines below are the reviewer's own named
+    # additions — the frozen fixture above happened to make 8 of claude.sh's
+    # 12 pipeline stages deletable with the golden test staying green (every
+    # filter deletion left SOME other filter, or the anchor itself, already
+    # excluding that same line). Each new line below is the ONE thing that
+    # would leak if that one specific filter were the only thing standing in
+    # its way, so mutating any one of these filter lines now goes red.
+    echo '{"type":"user","isSidechain":true,"message":{"role":"user","content":"SHOULD NOT APPEAR sidechain turn"},"timestamp":"2026-05-31T01:00:04.000Z"}'
+    echo '{"type":"user","message":{"role":"user","content":"<local-command-stdout>SHOULD NOT APPEAR local command output</local-command-stdout>"},"timestamp":"2026-05-31T01:00:05.000Z"}'
+    echo '{"type":"user","message":{"role":"user","content":"second real prompt with 中文 too"},"timestamp":"2026-05-31T01:05:00.000Z"}'
+    echo '{"type":"user","message":{"role":"user","content":"third real prompt with a quote \"hi\" and a newline\nhere"},"timestamp":"2026-05-31T01:05:01.000Z"}'
+    # Round-3 review P3-1: the golden mutation table found 5 MORE of
+    # claude.sh's 12 pipeline stages deletable with this test staying
+    # green (7/12 caught a mutation, brief wants 12/12). Each line below is
+    # the ONE thing that would leak if that one specific stage were the
+    # only thing standing in its way.
+    # (a) toolUseResult with STRING content — the existing toolUseResult
+    # line above has ARRAY content, which the user anchor (":user","content":"
+    # requires a STRING) never matches anyway, so deleting the toolUseResult
+    # filter alone changed nothing; this one reaches the anchor.
+    echo '{"type":"user","toolUseResult":true,"message":{"role":"user","content":"SHOULD NOT APPEAR tool result"},"timestamp":"2026-05-31T01:00:06.000Z"}'
+    # (b) isMeta:true with NON-tag content — the existing isMeta line above
+    # is ALSO <command-name>-tagged, so the <command- filter backs it up;
+    # this one has nothing else standing in its way.
+    echo '{"type":"user","isMeta":true,"message":{"role":"user","content":"SHOULD NOT APPEAR isMeta content"},"timestamp":"2026-05-31T01:00:07.000Z"}'
+    # (c) <command-name> WITHOUT isMeta — the mirror of (b): the existing
+    # <command-name> line above is ALSO isMeta, so removing the <command-
+    # filter alone changed nothing; this one has no isMeta backup.
+    echo '{"type":"user","message":{"role":"user","content":"<command-name>SHOULD NOT APPEAR bare command</command-name>"},"timestamp":"2026-05-31T01:00:08.000Z"}'
+    # (d) a user turn and an assistant turn whose ENTIRE value is "\n" —
+    # unescapes to a single space, which only the trailing blank-line
+    # filter on each branch catches; no prior fixture line was ever
+    # whitespace-only after unescaping, so those two filters were dead.
+    echo '{"type":"user","message":{"role":"user","content":"\n"},"timestamp":"2026-05-31T01:00:09.000Z"}'
+    echo '{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"\n"}]},"timestamp":"2026-05-31T01:00:10.000Z"}'
+    # (e) a user turn with ARRAY content whose part carries its OWN
+    # "text":"…" key (the shape a real claude turn uses for image+text) —
+    # not a string content, so it never touches the USER anchor, but it
+    # DOES carry a "text":"…" key the ASSISTANT branch's own value regex
+    # would match if its role:assistant anchor were ever swapped for a
+    # bare `cat` (which the golden test previously couldn't tell apart —
+    # no other non-assistant line in this fixture had its own "text" key).
+    echo '{"type":"user","message":{"role":"user","content":[{"type":"text","text":"SHOULD NOT APPEAR user text part"}]},"timestamp":"2026-05-31T01:00:11.000Z"}'
+  } > "$t"
+  # _handoff_clean_tail is the FULL digest pipeline (both roles, header lines
+  # included) — the same function handoff_render feeds a summarizer, so this
+  # exercises the real call path, not just the raw extractor.
+  local actual golden
+  actual="$(_handoff_clean_tail "$t")"
+  golden="$(cat "$CLIKAE_TEST_ROOT/tests/fixtures/handoff-claude-golden.txt")"
+  [ "$actual" = "$golden" ]
+  [ -n "$actual" ]
+}

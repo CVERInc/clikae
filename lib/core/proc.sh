@@ -4,14 +4,14 @@
 #
 # WHY: the old in-use guard checked only the env var of the shell running clikae.
 # An engine open in ANOTHER terminal — or a background daemon/spare — kept writing
-# to the old path and regenerated a "phantom tank" (HANDOFF §11, hit live). This
+# to the old path and regenerated a "phantom tank" (hit live in dogfood). This
 # scans ALL of the current user's processes. Pure ps/awk/grep, bash 3.2, BSD- and
 # Linux-safe. Best-effort: if process environments can't be read it returns
 # nothing rather than blocking the user's work.
 #
 # PLATFORM LIMIT (honest): on macOS `ps` can only read the ENVIRONMENT of
 # tty-attached processes. So this catches an interactive session in another
-# Terminal — the case that actually regenerates a phantom tank (HANDOFF §11) — but
+# Terminal — the case that actually regenerates a phantom tank — but
 # NOT a no-tty background daemon/spare (its env is invisible to `ps` there), so the
 # daemon→soft-warn path effectively only fires on Linux, where /proc/<pid>/environ
 # is readable regardless of tty. Verified 2026-06-04: `ps eww` surfaces a live
@@ -36,7 +36,7 @@ live_dir_users() {
       # The trailing `|| true` is LOAD-BEARING: on a locked-down host (CI runners,
       # some sandboxes) `ps eww` can exit non-zero, and under the caller's
       # `set -eo pipefail` a leaked failure would abort rename/migrate/remove
-      # entirely (HANDOFF §11: this MUST be best-effort — no reading ⇒ no users,
+      # entirely (this MUST be best-effort — no reading ⇒ no users,
       # never a hard error).
       ps eww -o pid=,command= 2>/dev/null | awk -v self="$self" -v var="$envvar" -v want="$want" '
         {
@@ -68,7 +68,7 @@ live_dir_users() {
 }
 
 # _proc_is_background <cmdline> — true if the command looks like a background
-# daemon / spare / pty-host rather than an interactive session (HANDOFF §11).
+# daemon / spare / pty-host rather than an interactive session.
 # Those recreate the dir more softly, so they warn instead of hard-failing.
 #
 # CRITICAL ASYMMETRY: this guard fails CLOSED. A false *negative* (a real

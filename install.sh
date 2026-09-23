@@ -46,14 +46,30 @@ fi
 
 say "Copying clikae -> $DEST"
 mkdir -p "$DEST"
-cp -R "$SRC_DIR/bin" "$SRC_DIR/lib" "$DEST/"
+cp -R "$SRC_DIR/bin" "$SRC_DIR/lib" "$SRC_DIR/templates" "$DEST/"
 [ -d "$SRC_DIR/assets" ] && cp -R "$SRC_DIR/assets" "$DEST/"   # logo for the welcome screen
 cp "$SRC_DIR/LICENSE" "$SRC_DIR/README.md" "$SRC_DIR/CHANGELOG.md" "$DEST/" 2>/dev/null || true
 
 chmod +x "$DEST/bin/clikae"
+# The tmux guard shim (lib/shims/tmux, #97) must stay executable — `cp -R`'s
+# handling of the mode bit is not guaranteed across platforms, and an
+# unreadable-as-executable shim fails open (tmux_usable's `command -v tmux`
+# would then skip straight past it to the next PATH entry, silently unguarded)
+# rather than failing loud.
+[ -f "$DEST/lib/shims/tmux" ] && chmod +x "$DEST/lib/shims/tmux"
 ln -sf "$DEST/bin/clikae" "$BIN_LINK"
 
 say "Installed."
+
+# clikae itself is pure bash; the cockpit guard (lib/hooks/cockpit-guard.sh)
+# is the one feature with a runtime dependency — it parses each Agent tool
+# call with jq AT HOOK EXECUTION TIME, and fails closed (refuses every spawn
+# on the cockpit tank) when jq is missing. Warn, don't install: this script
+# has no package manager of its own and picking one for the operator is not
+# its job.
+command -v jq >/dev/null 2>&1 || \
+  printf '\033[1;33m==>\033[0m %s\n' "jq is not on PATH — everything works except \`clikae cockpit\`, whose guard refuses every Agent spawn without it. Install jq (brew install jq / apt install jq) if you want that feature."
+
 echo ""
 echo "  Binary  : $BIN_LINK"
 echo "  Library : $DEST"

@@ -61,7 +61,7 @@ EOF
   # the confirmation below is already in the new language. A subshell would lose
   # that reload and the cache reset.
   if i18n_set "$1"; then
-    log_ok "$(printf "$T_LANG_SET" "$(_lang_display "$CLIKAE_LANG_RESOLVED")")"
+    log_done "$(printf "$T_LANG_SET" "$(_lang_display "$CLIKAE_LANG_RESOLVED")")"
   else
     log_fail "$(printf "$T_LANG_UNKNOWN" "$1" "$(_lang_choices)")"
   fi

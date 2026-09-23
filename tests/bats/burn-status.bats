@@ -1,0 +1,206 @@
+#!/usr/bin/env bats
+# tests/bats/burn-status.bats — #41: every burn writes ONE machine-readable
+# status file, updated at every transition, so a cockpit never has to grep a
+# burn log for "ran dry" / "[ FAIL ]" — both of which a task's own PROMPT can
+# contain (the false alarm that opened this issue). See docs/orchestration.md
+# ("Status file — #41") for the contract this pins.
+# (`[[ … ]]` carry `|| false`; see tests/README.md.)
+
+load '../helpers'
+
+# Same stub shape as burn.bats: a ".dry" marker in the tank dir makes codex
+# emit the limit line and write nothing; `run <path>` (raw-argv form) writes
+# the artifact.
+_stub_codex() {
+  local bin="$BATS_TEST_TMPDIR/bin"
+  mkdir -p "$bin"
+  cat > "$bin/codex" <<'STUB'
+#!/usr/bin/env bash
+if [ -f "$CODEX_HOME/.dry" ]; then
+  echo "You've hit your usage limit. Try again at Jul 7th, 2026 2:17 PM."
+  exit 0
+fi
+if [ "$1" = "run" ] && [ -n "$2" ]; then : > "$2"; fi
+exit 0
+STUB
+  chmod +x "$bin/codex"
+  PATH="$bin:$PATH"; export PATH
+}
+
+_stub_codex_never_succeeds() {
+  local bin="$BATS_TEST_TMPDIR/bin"
+  mkdir -p "$bin"
+  printf '#!/usr/bin/env bash\nexit 0\n' > "$bin/codex"
+  chmod +x "$bin/codex"
+  PATH="$bin:$PATH"; export PATH
+}
+
+# The one status.json this test's TEST_HOME should hold — each test gets a
+# fresh $HOME, so there is exactly one burn-* run directory per test.
+_the_status_file() {
+  local f
+  f="$(ls "$CLIKAE_HOME"/logs/burn-*/status.json 2>/dev/null | head -n 1)"
+  [ -n "$f" ] || { echo "no status.json under \$CLIKAE_HOME/logs/burn-*/" >&2; return 1; }
+  printf '%s' "$f"
+}
+
+_field() {
+  # tiny helper: extract "field":value (quoted or bare) from a status.json
+  grep -oE "\"$2\":(\"[^\"]*\"|null|true|false|-?[0-9]+|\[[^]]*\])" "$1" | head -n1 | sed -E "s/^\"$2\"://"
+}
+
+@test "burn-status: a completed burn's status file ends in state done with every contract field" {
+  _stub_codex
+  clikae init codex T1
+  local A="$BATS_TEST_TMPDIR/out.md"
+  run clikae burn codex T1 --artifact "$A" -- run "$A"
+  [ "$status" -eq 0 ]
+
+  local f; f="$(_the_status_file)"
+  [ -f "$f" ] || false
+
+  [ "$(_field "$f" state)" = '"done"' ] || false
+  [ "$(_field "$f" ok)" = "true" ] || false
+  [ "$(_field "$f" engine)" = '"codex"' ] || false
+  [ "$(_field "$f" tank)" = '"T1"' ] || false
+  [ "$(_field "$f" artifact)" = "\"$A\"" ] || false
+  [ "$(_field "$f" pid)" != "" ] || false
+  [ "$(_field "$f" run_id)" != "null" ] || false
+  [ "$(_field "$f" started_at)" != "null" ] || false
+  [ "$(_field "$f" updated_at)" != "null" ] || false
+  [ "$(_field "$f" rerouted_from)" = "[]" ] || false
+  # a completed run's own log file is a real, readable file
+  local logp; logp="$(_field "$f" log)"
+  logp="${logp#\"}"; logp="${logp%\"}"
+  [ -f "$logp" ] || false
+}
+
+@test "burn-status: the run directory is private (0700) like the task-text copy it lives beside" {
+  _stub_codex
+  clikae init codex T1
+  local A="$BATS_TEST_TMPDIR/out.md"
+  run clikae burn codex T1 --artifact "$A" -- run "$A"
+  [ "$status" -eq 0 ]
+  local f; f="$(_the_status_file)"
+  local d; d="$(dirname "$f")"
+  # `stat`'s -f/-c flags mean DIFFERENT things on BSD vs GNU stat (and this
+  # machine's PATH can put either first — see hub-env), so ask perl instead of
+  # guessing which dialect answered.
+  local perms; perms="$(perl -e 'printf "%o\n", (stat(shift))[2] & 07777' "$d")"
+  [ "$perms" = "700" ] || false
+}
+
+@test "burn-status: a real task failure ends in state fail, not dry" {
+  _stub_codex_never_succeeds
+  clikae init codex T1
+  run clikae burn codex T1 --artifact "$BATS_TEST_TMPDIR/out.md" -- noop
+  [ "$status" -ne 0 ]
+  local f; f="$(_the_status_file)"
+  [ "$(_field "$f" state)" = '"fail"' ] || false
+  [ "$(_field "$f" ok)" = "false" ] || false
+}
+
+@test "burn-status: rerouting from a dry tank records rerouted_from and lands on state done" {
+  _stub_codex
+  clikae init codex T1
+  clikae init codex T2
+  : > "$CLIKAE_HOME/profiles/codex/T1/.dry"
+  local A="$BATS_TEST_TMPDIR/out.md"
+  run clikae burn codex T1 --artifact "$A" -- run "$A"
+  [ "$status" -eq 0 ]
+
+  local f; f="$(_the_status_file)"
+  [ "$(_field "$f" state)" = '"done"' ] || false
+  [ "$(_field "$f" tank)" = '"T2"' ] || false
+  [[ "$(_field "$f" rerouted_from)" == *"codex/T1"* ]] || false
+}
+
+# P2-6 (2026-09-14 round-2 review): round 1 sized this at a 64 KB `reason`
+# on the premise that burn writes up to `_BURN_REDACT_TAIL_BYTES` of stderr
+# into it. It does not — that constant bounds how much stderr is READ; the
+# line written is cut by `_burn_truncate_utf8 … 200`, every other writer call
+# passes a short literal, and 97 real status.json files measured 349-414
+# bytes. So the true bound is pinned where it is decided — through the real
+# writer — and the reader is exercised at that bound and 10x it. No timing
+# claim: at these sizes the old quadratic reader was also sub-millisecond, and
+# a stopwatch that cannot tell the two apart is not a guard.
+@test "burn-status: a failed lane's reason is capped at 200 bytes in status.json, whatever stderr held" {
+  local bin="$BATS_TEST_TMPDIR/bin"
+  mkdir -p "$bin"
+  cat > "$bin/codex" <<'STUB'
+#!/usr/bin/env bash
+head -c 100000 /dev/zero | tr '\0' 'x' >&2   # one 100 KB stderr line, past the redaction read window too
+printf '\n' >&2
+exit 0
+STUB
+  chmod +x "$bin/codex"
+  PATH="$bin:$PATH"; export PATH
+  clikae init codex T1
+  run clikae burn codex T1 --artifact "$BATS_TEST_TMPDIR/out.md" -- noop
+  [ "$status" -ne 0 ]
+  local f; f="$(_the_status_file)"
+  [ "$(_field "$f" state)" = '"fail"' ] || { cat "$f"; false; }
+  local reason; reason="$(_field "$f" reason)"
+  [ "${#reason}" -eq 202 ] || { echo "reason is ${#reason} bytes with quotes, want 202"; false; }
+  local size; size="$(wc -c < "$f" | tr -d ' ')"
+  [ "$size" -lt 1024 ] || { echo "status.json is $size bytes"; false; }
+}
+
+@test "burn-status: burn_status_fieldv reads every field at the real reason cap and at 10x it" {
+  # shellcheck source=/dev/null
+  . "$CLIKAE_TEST_ROOT/lib/core/burn_status.sh"
+  local n reason json
+  for n in 200 2000; do
+    reason="$(head -c "$n" /dev/zero | tr '\0' 'x')"
+    json="$(printf '{"ok":false,"engine":"claude","tank":"wrasse","artifact":"/x","artifact_bytes":null,"reason":"%s","reset":null,"rerouted_from":[],"elapsed_s":12,"run_id":"burn-1","state":"fail","started_at":1,"updated_at":2,"pid":123,"log":"/x","reset_at":null}' "$reason")"
+    burn_status_fieldv "$json" state
+    [ "$_BSF" = '"fail"' ] || { echo "$n: state got [$_BSF]"; false; }
+    burn_status_fieldv "$json" pid
+    [ "$_BSF" = "123" ] || { echo "$n: pid got [$_BSF]"; false; }
+    burn_status_fieldv "$json" reason
+    [ "${#_BSF}" -eq $((n + 2)) ] || { echo "$n: reason length ${#_BSF}"; false; }
+    # prefix trap: artifact vs artifact_bytes
+    burn_status_fieldv "$json" artifact
+    [ "$_BSF" = '"/x"' ] || { echo "$n: artifact got [$_BSF]"; false; }
+    burn_status_fieldv "$json" artifact_bytes
+    [ "$_BSF" = "null" ] || { echo "$n: artifact_bytes got [$_BSF]"; false; }
+  done
+}
+
+# P3-1 (2026-09-14 round-2 review): `reason` is engine stderr, json_str escapes
+# a `"` in it as `\"`, and the reader's string alternative stopped at that
+# escaped quote — `say "hi", ok` came back as `"say \"hi\"`. The expectation
+# here is the WRITER's own encoding, not a second reader.
+@test "burn-status: burn_status_fieldv returns a string field exactly as json_str wrote it" {
+  # shellcheck source=/dev/null
+  . "$CLIKAE_TEST_ROOT/lib/core/json.sh"
+  # shellcheck source=/dev/null
+  . "$CLIKAE_TEST_ROOT/lib/core/burn_status.sh"
+  local s enc json
+  for s in 'say "hi", ok' 'a}b' 'ends in \' 'x\"y' 'q"state":"LIE"' 'tab	and
+newline' 'plain'; do
+    enc="$(json_str "$s")"
+    json="{\"ok\":false,\"artifact\":\"/x\",\"artifact_bytes\":null,\"reason\":$enc,\"rerouted_from\":[\"codex/T1\"],\"state\":\"fail\",\"pid\":42}"
+    burn_status_fieldv "$json" reason
+    [ "$_BSF" = "$enc" ] || { echo "[$s]: got [$_BSF], writer wrote [$enc]"; false; }
+    burn_status_fieldv "$json" state
+    [ "$_BSF" = '"fail"' ] || { echo "[$s]: state [$_BSF]"; false; }
+    burn_status_fieldv "$json" pid
+    [ "$_BSF" = 42 ] || { echo "[$s]: pid [$_BSF]"; false; }
+    burn_status_fieldv "$json" rerouted_from
+    [ "$_BSF" = '["codex/T1"]' ] || { echo "[$s]: rerouted_from [$_BSF]"; false; }
+  done
+}
+
+@test "burn-status: every burn writes a status file even without --json" {
+  # #41 is "every burn", not "every --json burn" — the whole point is that a
+  # cockpit reading a DIFFERENT process never needs the burn to have opted in.
+  _stub_codex
+  clikae init codex T1
+  local A="$BATS_TEST_TMPDIR/out.md"
+  run clikae burn codex T1 --artifact "$A" -- run "$A"
+  [ "$status" -eq 0 ]
+  [[ "$output" != *'"ok":'* ]] || false   # confirms --json's own stdout object was NOT requested
+  local f; f="$(_the_status_file)"
+  [ -f "$f" ] || false
+}

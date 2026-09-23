@@ -84,8 +84,20 @@ _mcp_of() {
   [[ "$output" == "{}" ]] || false
 }
 
+# Stub `claude`: this is the one test here that actually LAUNCHES the engine, and
+# without a stub it passes only on a machine that happens to have claude
+# installed — which is why it was green locally and red on both CI runners
+# (`clikae run … -- --version` exiting 127). Same idiom as conduct.bats /
+# ephemeral.bats; the prelaunch hook is what's under test, not the engine.
+_stub_claude() {
+  local bin="$BATS_TEST_TMPDIR/bin"; mkdir -p "$bin"
+  printf '#!/usr/bin/env bash\nexit 0\n' > "$bin/claude"
+  chmod +x "$bin/claude"; PATH="$bin:$PATH"; export PATH
+}
+
 @test "fleet_mcp_prelaunch (via clikae run): a non-solo tank picks up the shared server at launch" {
   jq_only
+  _stub_claude
   clikae init claude a
   clikae init claude b
   _stamp_mcp a '{"stripe":{"type":"http","url":"https://mcp.stripe.com/"}}'
@@ -95,6 +107,27 @@ _mcp_of() {
   clikae run claude c -- --version
   run _mcp_of c
   [[ "$output" == *'"stripe"'* ]] || false
+}
+
+@test "fleet_mcp_prelaunch: a second launch with nothing new to merge doesn't rewrite the tank's config" {
+  jq_only
+  _stub_claude
+  clikae init claude a
+  _stamp_mcp a '{"stripe":{"type":"http","url":"https://mcp.stripe.com/"}}'
+  clikae mcp share stripe claude a
+  clikae init claude c
+  _stamp_mcp c '{}'
+  clikae run claude c -- --version                       # first launch: fans stripe in
+  run _mcp_of c
+  [[ "$output" == *'"stripe"'* ]] || false
+  # The file already has every shared server, so a second launch has nothing to
+  # do. It must NOT rewrite the file — the old byte-cmp always "changed", so the
+  # inode was replaced on every launch (racing a live session on the same tank).
+  local target="$CLIKAE_HOME/profiles/claude/c/.claude.json"
+  local ino_before; ino_before="$(ls -i "$target" | awk '{print $1}')"
+  clikae run claude c -- --version                       # second launch: no-op
+  local ino_after; ino_after="$(ls -i "$target" | awk '{print $1}')"
+  [ "$ino_before" = "$ino_after" ] || false
 }
 
 @test "mcp unshare: removes from the fleet store but leaves tanks that already got it alone" {
@@ -128,11 +161,12 @@ _mcp_of() {
 @test "mcp share: fails clearly without jq" {
   local jq_path; jq_path="$(command -v jq || true)"
   [ -n "$jq_path" ] || skip "jq not installed (nothing to hide)"
-  local stripped="/usr/bin:/bin"
-  PATH="$stripped" command -v jq >/dev/null 2>&1 && skip "jq also lives in $stripped on this host"
+  local nojq="$BATS_TEST_TMPDIR/nojq"
+  path_without_jq "$nojq"
+  PATH="$nojq" command -v jq >/dev/null 2>&1 && skip "jq is on PATH even without /usr/bin and /bin"
   clikae init claude a
   _stamp_mcp a '{"stripe":{"type":"http","url":"https://mcp.stripe.com/"}}'
-  run env PATH="$stripped" "$CLIKAE_BIN" mcp share stripe claude a
+  run env PATH="$nojq" "$CLIKAE_BIN" mcp share stripe claude a
   [ "$status" -ne 0 ]
   [[ "$output" == *"jq"* ]] || false
 }

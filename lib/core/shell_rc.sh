@@ -53,7 +53,7 @@ rc_has_block() {
 
 # rc_wrap_block <id>  < content_on_stdin   -> sentinel-wrapped block on stdout.
 # Single source of truth for the on-disk block format (used by rc_add_block and
-# `clikae migrate`). Changing this format is a breaking change — see HANDOFF §7.
+# `clikae migrate`). Changing this format is a breaking change (existing user rc files carry it).
 rc_wrap_block() {
   local id="$1"
   printf '\n# >>> clikae:%s >>>\n' "$id"
@@ -96,5 +96,10 @@ rc_remove_block() {
     $0 == "# <<< clikae:" id " <<<" { skip=0; next }
     skip == 0 { print }
   ' "$rc_file" > "$tmp"
-  mv "$tmp" "$rc_file"
+  # Write THROUGH the rc file, don't `mv` onto it: a dotfile is often a symlink into
+  # a dotfiles repo, and `mv` would replace the symlink with a detached regular file
+  # (mode 0600 from mktemp). `cat >` follows the link and keeps its inode + mode. The
+  # backup above covers a partial write.
+  cat "$tmp" > "$rc_file"
+  rm -f "$tmp"
 }

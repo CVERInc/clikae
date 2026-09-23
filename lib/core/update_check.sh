@@ -6,13 +6,13 @@
 # scripts and the test suite never see a prompt or a network call.
 #
 # DNA: help quietly, never nag, stay honest.
-#   • Throttled — the network check runs at most once per CLIKAE_UPDATE_TTL (24h),
+#   · Throttled — the network check runs at most once per CLIKAE_UPDATE_TTL (24h),
 #     stamped in a cache; every other open just reads the cache (instant, offline-OK).
-#   • Opt-out — CLIKAE_NO_UPDATE_CHECK=1 disables the check AND the prompt entirely.
-#   • Honest about the upgrade — "Update now" runs the command for the install method
+#   · Opt-out — CLIKAE_NO_UPDATE_CHECK=1 disables the check AND the prompt entirely.
+#   · Honest about the upgrade — "Update now" runs the command for the install method
 #     we can actually detect (brew / curl); if we CAN'T tell, we only SHOW the command
 #     rather than guess-and-run something wrong.
-#   • Self-limiting — "skip this version" suppresses the nag until a version newer
+#   · Self-limiting — "skip this version" suppresses the nag until a version newer
 #     than the skipped one appears.
 
 : "${CLIKAE_UPDATE_TTL:=86400}"     # 24h, in seconds — how long a SUCCESSFUL check is trusted
@@ -78,6 +78,12 @@ update_check_refresh() {
   tag="$(curl -fsSL --max-time 5 "https://api.github.com/repos/CVERInc/clikae/releases/latest" 2>/dev/null \
         | grep -m1 '"tag_name"' \
         | sed -E 's/.*"tag_name"[[:space:]]*:[[:space:]]*"v?([^"]+)".*/\1/')"
+  # The tag comes off the network, and this value is later PRINTED to the terminal
+  # (the update banner) and written to the cache. Keep only version characters so a
+  # tampered/garbage release name can't smuggle an escape sequence onto the screen
+  # or a control byte into the cache. A legitimate tag (0.27.0, v1.2.3-beta.1) is
+  # unaffected; anything else is treated as "no usable tag" → the failure branch.
+  tag="$(printf '%s' "$tag" | LC_ALL=C tr -cd '0-9A-Za-z._-')"
   if [ -n "$tag" ]; then
     printf '%s\t%s\n' "$now" "$tag" > "$f" 2>/dev/null || true   # success → trust for a full TTL
   else

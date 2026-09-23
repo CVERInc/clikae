@@ -17,13 +17,30 @@
 # through the adapter-driven loop below — it gets its own loop, _agy_burn.
 # shellcheck source=./antigravity.sh
 source "$CLIKAE_LIB/commands/antigravity.sh"
+# shellcheck source=../core/duration.sh
+source "$CLIKAE_LIB/core/duration.sh"
+# shellcheck source=./cockpit.sh
+source "$CLIKAE_LIB/commands/cockpit.sh"
+
+# Exit-code contract (also documented in _burn_help's "Outcomes:" below — ONE
+# place, this constant is what both the code and the prose actually use).
+# 0 = done (artifact produced). 1 = ran and produced neither an artifact nor a
+# limit signal — a real task failure, OR a tool-host infra failure after
+# retries; burn does not distinguish those two from EACH OTHER by rc (only
+# `reason` does). 2 (#61) = the reserve is exhausted — every reachable tank is
+# dry, in interactive use, or shares an already-dry account — reason
+# "no-tank-available". This is the one an agent most needs to tell apart from
+# rc 1's "the task itself is broken, don't retry it elsewhere": it means "not
+# this fleet, right now", never "this task fails everywhere".
+CLIKAE_BURN_RC_NO_TANK=2
 
 _burn_help() {
   cat <<'EOF'
 Usage: clikae burn <engine> <tank> --artifact <path>
                    ( --prompt-file <f> | --prompt <str> | -- <engine command...> )
                    [--add-dir <dir>]... [--to <target>] [--timeout <secs>]
-                   [--no-reroute] [--allow-active] [--fresh]
+                   [--no-reroute] [--allow-active] [--fresh] [--wait-for-reset <dur>]
+                   [--permission <mode>] [--force-cockpit]
 
 Run a headless engine task on <tank>, verify it by the ARTIFACT it should
 produce (never the exit code — codex exec exits 0 even when it hit its limit and
@@ -31,17 +48,27 @@ wrote nothing), and if the tank ran dry, re-fire the SAME task on the next tank
 in your reserve.
 
 Give the task in one of two ways:
-  • the easy way — --prompt-file <f> / --prompt <str>: clikae fills in each
+  · the easy way — --prompt-file <f> / --prompt <str>: clikae fills in each
     engine's own headless-write flags (claude's -p / codex's exec …) from its
     adapter, so you never hand-assemble them and a cross-engine reroute stays
     sound (the flags are regenerated for the new engine).
-  • the power-user way — -- <engine command...>: pass the raw engine argv yourself.
+  · the power-user way — -- <engine command...>: pass the raw engine argv yourself.
+    For agy there is no adapter to compose, so `--` means EXTRA AGY FLAGS riding
+    alongside --prompt, not a whole command. Headless dispatch usually wants:
+      -- --dangerously-skip-permissions     let agy write (print mode auto-denies)
+      -- -c                                 continue the previous conversation
+  Either way, a claude run gets two guards: `--disallowedTools Agent,Task` (a
+    headless lane must not delegate to a sub-agent — `claude -p` kills the run,
+    sub-agent included, after its background wait ceiling) unless you pass your
+    own tools flag, and CLAUDE_CODE_PRINT_BG_WAIT_CEILING_MS=0 unless you set it.
 
   --prompt-file <f>   read the task prompt from a file (no quoting hell).
   --prompt <str>      inline prompt, for one-liners. (Mutually exclusive with the above.)
   --add-dir <dir>     a directory the engine may write in. Defaults to the
-                      artifact's parent. Repeatable. (codex uses the first as its cwd.)
-  --artifact <path>   the file the task must produce. Success = it appears, or (if
+                      artifact's parent. Repeatable. (codex uses the first as its cwd;
+                      it must be a git work tree, or use --codex-skip-git-check.)
+  --codex-skip-git-check  opt in to codex --skip-git-repo-check for generated commands.
+  --artifact <path>   checked at engine exit. Success = it appears, or (if
                       it already existed) its timestamp changes — a STALE file from
                       a previous run is NOT counted as success.
   --fresh             delete <artifact> before running, for a clean slate.
@@ -49,25 +76,84 @@ Give the task in one of two ways:
                       tank of this engine). Otherwise burn walks this engine's
                       other tanks. A cross-engine --to runs the SAME command under
                       that engine — only sensible if the command is engine-agnostic.
+  --permission <mode> Claude: acceptEdits (default) or auto. Codex maps
+                      acceptEdits -> workspace-write, bypassPermissions ->
+                      danger-full-access, plan/default -> read-only. Without
+                      this flag, Codex honours the tank's sandbox_mode in
+                      config.toml, else uses workspace-write. Unmapped modes
+                      warn and keep existing flags — see docs/orchestration.md.
+                      Applies to composed prompt argv; raw commands after --
+                      stay verbatim.
+  Codex sandbox vs --add-dir: only the first directory becomes the cwd; extras
+  are not writable roots under workspace-write. A git worktree cannot commit
+  there: its gitdir is under the main repository. Lanes needing commit/push/network
+  use --permission bypassPermissions or a profile sandbox_mode = "danger-full-access"
+  with no explicit --permission.
+
   --timeout <secs>    bound the run. Uses `timeout`/`gtimeout` (coreutils) if present,
                       else a `perl` alarm (SIGALRM, direct child only). With none of
                       the three on PATH the run is NOT bounded and a warning is printed.
-  --no-reroute        run once; on a dry tank, stop instead of falling through.
-  --allow-active      let auto-reroute use a tank an interactive session is on.
-                      By default the reserve SKIPS such tanks (rerouting a headless
-                      job onto the tank you're mid-conversation on would silently
-                      burn that quota) and tanks sharing an already-dry account.
+  --json              print ONE result object on stdout and every word of
+                      progress on stderr — so a script never parses prose to
+                      learn what happened. Rule 1 is "judge by the artifact,
+                      never the exit code", and with rerouting the tank that did
+                      the work is often not the one you named:
+                        {ok, engine, tank, artifact, artifact_bytes, reason,
+                         reset, rerouted_from[], elapsed_s, run_id, left_behind[],
+                         left_behind_truncated, left_behind_truncation{},
+                         left_behind_kill_mode, left_behind_unavailable}
+                      `artifact_bytes` is the artifact's own measurement, so the
+                      evidence travels with the verdict.
+  --infra-retries <n> retry tool-host infrastructure failures on the SAME tank
+                      up to n times (default 2; 0 disables retries).
+  --infra-delay <s>   initial retry delay in whole seconds (default 5), doubled
+                      for each subsequent retry. --timeout bounds each attempt.
+  --no-reroute        on a dry tank, stop instead of falling through.
+  --allow-active      let auto-reroute use a tank an interactive session is on,
+                      AND (#40) let a burn start on a tank that already has a
+                      running burn on it — by default both are refused/skipped:
+                      the reserve SKIPS such tanks (rerouting a headless job onto
+                      the tank you're mid-conversation on would silently burn
+                      that quota, and two burns on one tank collide on the tmux
+                      session name) and tanks sharing an already-dry account.
+  --force-cockpit     operator override: burn the tank recorded by `clikae
+                      cockpit` anyway. Without it, every launch onto the
+                      cockpit — the tank you name, a --to hop, an agy walk — is
+                      refused before the engine starts (#63): a burn there
+                      spends the steering tank's own budget. With it, burn says
+                      on stderr that it is doing exactly that. Auto-reroute
+                      never picks the cockpit, with or without this flag.
+  --wait-for-reset <dur>   (#38) when a tank runs dry AND its vendor-reported
+                      reset falls within <dur> (e.g. `30m`, `2h`, `90s`, or a
+                      bare integer of seconds), sleep until the reset and re-fire
+                      the SAME tank instead of rerouting or stopping. A reset
+                      further out than <dur>, or one burn can't parse into an
+                      instant (docs/orchestration.md's limit_reset_epoch — two
+                      grammars, both English), falls through to the normal
+                      reroute-or-stop behaviour unchanged.
 
-Outcomes: artifact present -> done (exit 0); dry on every reachable tank -> fail;
-no artifact but no limit -> a real task failure (NOT rerouted — it'd fail the same
-on every tank).
+Outcomes: artifact present -> done (exit 0); every reachable tank dry/skipped
+(in interactive use, or sharing an already-dry account) -> reason:
+no-tank-available (exit 2 — #61, distinguishable from a task failure; reset
+is the EARLIEST parseable reset among the dry tanks, null if none parsed);
+tool-host failure -> retry the same tank, then reason: infra (exit 1);
+no artifact, limit, or infrastructure signal -> a real task failure (NOT rerouted — it'd fail the same
+on every tank; exit 1).
+
+Without a fresh artifact, report left-behind Git work and up to 10 recent files
+per repository in cwd/--add-dir roots; show a push hint, never push.
+
+Every burn writes ONE machine-readable status file, updated at every
+transition, so a cockpit never has to grep a log for "ran dry" or "[ FAIL ]"
+(#41 — those are just as likely to be words from the task's own PROMPT). See
+"Status file" in docs/orchestration.md for the path and the field contract.
 
 Examples:
   clikae burn claude L --artifact out/core.test.cjs \
       --prompt-file task.txt --add-dir "$PWD"      # the easy way
   clikae burn codex M --artifact /tmp/out.md \
-      --prompt-file task.txt --add-dir /tmp        # same task, different engine, no flag changes
-  clikae burn codex M --artifact /tmp/out.md -- exec -C /tmp -s workspace-write \
+      --prompt-file task.txt --add-dir "$PWD"      # put the git repository first
+  clikae burn codex M --artifact /tmp/out.md -- exec -C /tmp --skip-git-repo-check -s workspace-write \
       "read /tmp/in.txt, write /tmp/out.md"        # the power-user way (raw argv)
 
 burn is the headless sibling of the interactive switch: pre-stage inputs to /tmp
@@ -89,52 +175,644 @@ docs/terms-and-your-accounts.md (shown once before your first carry).
 EOF
 }
 
+# Infrastructure signatures must name the tool host: a generic timeout can be
+# a task failure and must not spend another attempt automatically. This is a
+# hand-written whitelist, not a real-corpus one like limit.sh's 175-line
+# fixture (P2-5, 2026-09-08 review) — five plausible real tool-host failure
+# sentences all NO-MATCHED, one by a single word ("waiting" vs "negotiating").
+# Widened to cover more real phrasings of the same four shapes (a timeout/
+# failure/closed-connection/disconnect NAMING the tool host) without
+# loosening the "must name the host" discipline that keeps this from becoming
+# a P1-2-style generic-timeout catcher.
+#
+# P1-2 (2026-09-08 round-2 review): the widening above turned the two
+# "host <gap> verb" alternatives into a prose catcher — `[^."]*` has no upper
+# bound, so ANY sentence that happens to mention "tool host" and, later in
+# the same period-free run, one of the failure verbs fired (e.g. "the tool
+# host section of the runbook explains why our Redis connection closed",
+# PROBE C-live in the review). Every real shape in the corpus — this round's
+# and the last — has the verb within a handful of characters of "host" (a
+# single connecting word like "was"/"'s", never a clause); bounding the gap
+# to 6 chars keeps every real corpus row matching while rejecting prose that
+# merely mentions the host somewhere upstream of an unrelated failure.
+_burn_output_infra() {
+  # P2-1 (2026-09-08 round-4 review): a here-string, not a pipe from a
+  # separate `printf` process — see limit_codex_reset's comment for why a
+  # pipe risks hanging on a large, untruncated haystack. This one has no
+  # early-exit flag (no `-q`/`-m1`) so it was never actually exposed to that
+  # specific hang, but it reads the SAME out_for_class a large capture can
+  # now carry, so it gets the same safer plumbing on general principle.
+  grep -aiE 'timed out (negotiating with|waiting for|connecting to) (the )?(code[ -]mode|tool)[ -]host|(failed|unable) to (connect to|establish (a )?connection (with|to)|reach) (the )?(code[ -]mode|tool)[ -]host|error (connecting to|reaching) (the )?(code[ -]mode|tool)[ -]host|(code[ -]mode|tool)[ -]host[^."]{0,6}(connection (closed|refused|lost|timed out)|disconnected|handshake failed|exited unexpectedly|is (unreachable|unavailable))|connection to (the )?(code[ -]mode|tool)[ -]host[^."]{0,6}(closed|refused|timed out|lost)|mcp server "[^"]*(code[ -]mode|tool)[^"]*" connection (closed|refused|lost|reset)' <<< "$1" >/dev/null
+}
+
+# _burn_redact <text> [replacement] -> <text> with the task's own content
+# taken out (or swapped for <replacement>, default empty) — whichever
+# dispatch form supplied it. P1-1 (2026-09-08 round-2 review): the previous
+# redaction only ever looked at $prompt, which is UNSET for the raw
+# `-- <engine argv...>` form ("the power-user way" — AGENTS.md's front door
+# and docs/orchestration.md both document it) — so an engine echoing its own
+# argv back on stdout sailed through unredacted on that path (PROBE B: two
+# extra full engine calls, a leaked task-text tail, and the wrong `reason`).
+# $cmd holds the raw argv for that form and is never reassigned by a
+# cross-engine reroute (unlike --prompt mode's regenerated flags), so
+# looping over it stays correct across the whole retry loop. Whichever form
+# supplied the task, exactly one of $prompt / $cmd is populated at any call
+# site, so checking $prompt first is enough to pick the right one.
+#
+# P1-2 (2026-09-08 round-3 review): bash's ${text//needle/repl} is
+# super-linear in the haystack's size, so redacting the WHOLE captured
+# output cost tens of seconds to minutes of pure bash string time AFTER the
+# engine had already exited — no progress output, outside --timeout's reach
+# (it bounds the engine, not this). Measured on an 8 MB capture: 1MB/4MB/8MB
+# single-pass costs of 382ms/5125ms/20209ms, and end-to-end ×23 (--prompt
+# form) to ×129 (raw argv, four minutes) versus a main-branch clone on the
+# same stub. burn's own purpose — long, unattended tasks — produces exactly
+# the large captures this is slowest on. The classifiers only need the
+# FINAL message anyway (limit.sh's own doc: "a genuine vendor sentence IS
+# the line, or leads it"), so bound the haystack to its own tail before
+# ever substituting into it — this is what P2-1's boundary/length fix below
+# also relies on to stay fast.
+_BURN_REDACT_TAIL_BYTES=${_BURN_REDACT_TAIL_BYTES:-65536}
+
+# P2-1 (2026-09-08 round-3 review): the raw `-- <argv>` form redacted every
+# item of $cmd with NO minimum length and no word boundary — argv is full of
+# short tokens (`exec` `-C` `.` `-s` `workspace-write`), and each one got
+# blindly stripped out of the engine's ENTIRE reply. A day-to-day `-C .`
+# deleted every period in the reply, merging two sentences into one and
+# flipping "a real task failure" into "infra" (the tool-host bounded-gap
+# pattern only holds because a period normally separates unrelated
+# sentences); a short task string like `"hit"` shredded a genuine
+# "…hit your usage limit…" line into unrecognizable pieces. Short flags and
+# path fragments are not "the task's own text echoed back" — redacting them
+# buys no privacy and only corrupts unrelated prose. Below this length,
+# skip the item entirely; at or above it, replace only BOUNDARY-safe
+# occurrences (the byte immediately before/after the match, if any, is not
+# itself a word character) — plain substring search, not regex, so a
+# needle full of shell/path metacharacters is never mis-parsed.
+_BURN_REDACT_MIN_LEN=${_BURN_REDACT_MIN_LEN:-20}
+
+# P1-3 (2026-09-08 round-5 review): round-4's P2-1 fix (below this comment)
+# made classification read the UNTRUNCATED capture, which put the awk loop's
+# per-match `substr(t, i)` back on the hook for every byte of a multi-MB
+# reply — and that copy is taken once PER MATCH, not once total, so a dense
+# needle (burn's own PROMPT or a repeated argv path, exactly what long
+# unattended tasks echo back a lot of) reopened round-3's P1-2 in a new
+# shape: O(matches × remaining-length) instead of O(capture-size). Measured
+# on this machine: a 4 MB capture with the needle on every line (53774
+# hits) took 26.5s, quadratic in the hit count (doubling MB ~4x'd the time).
+# Reworking the awk loop to avoid the copy (`split()`, `gsub()`) does not
+# help THIS awk (macOS's BWK build, `awk version 20200816`): raw `split()`
+# alone on 300000 matches took 55s CPU — the slowdown lives in its
+# many-match path generally, not in this loop's shape specifically.
+#
+# A SEPARATE, bigger cost hid behind that one: whichever tool does the
+# substitution, `_burn_redact_full` used to invoke it ONCE PER ARGV ITEM
+# (below), reassigning `text` through a bash command substitution each
+# time — even for items too short to redact. bash 3.2 (macOS's own
+# `/bin/bash`) turns out to be the real bottleneck for a multi-MB haystack:
+# measured, six bare pass-throughs of an 8 MB string via `local t="$1"` +
+# `printf '%s' "$t"` inside `$( )` took 75s — no awk or perl involved at
+# all. A raw `-- <argv>` task commonly has 2+ items at or above the minimum
+# length (a long `-C <path>` plus the task string itself), so this fired on
+# every dense-capture burn regardless of which substitution engine was
+# fixed. The fix is to stop reassigning `text` per item: gather every
+# qualifying needle first, then make exactly ONE pass over the haystack
+# (`perl` builds one alternation of all of them; that regex engine is
+# linear in matches — 0.11s CPU on a 300000-match input, 0.04s on the
+# 53774-hit/7 MB case — and is already an accepted dependency here,
+# `_burn_timeout_bin` falls back to it for `--timeout`). The no-perl
+# fallback below still loops per item (rare path, correct but slower).
+_BURN_REDACT_NEEDLE_SEP=$'\001'   # SOH — see the RS comment on the awk fallback for why not NUL
+
+_burn_redact_one_awk() {
+  local text="$1" needle="$2" repl="$3"
+  # P2-1 (2026-09-08 round-4 review): the haystack used to travel through
+  # ENVIRON (an exported env var), which is what forced the 64 KiB
+  # truncation below in the first place — a multi-MB capture in an env var
+  # risks E2BIG. Feed it over stdin instead, with RS set to a byte that
+  # never splits it, so the whole capture arrives as ONE record; only the
+  # small needle/repl still go through ENVIRON.
+  #
+  # P1-2 (2026-09-08 round-5 review): RS="\x00" was that byte, on the theory
+  # that bash strings are NUL-free so it could never appear in $text. False
+  # on macOS's own /usr/bin/awk (BWK awk, `awk version 20200816`): its RS
+  # cannot HOLD a NUL byte at all, and a "\x00" value silently collapses to
+  # RS="" — awk's PARAGRAPH-mode sentinel — not "no separator". A capture
+  # with a blank line (routine engine output formatting) then arrived as
+  # MULTIPLE records glued back together by `printf "%s"` below with no
+  # separator at all: "Working on it.\n\nYou've hit your usage limit\n\nBye."
+  # became "Working on it.You've hit your usage limitBye." — destroying the
+  # `^` line anchors both classifiers rely on (a real limit line stopped
+  # matching) and fabricating brand-new ones (two sentences fused at a blank
+  # line could spell a false infra match). Verified on this machine: `awk
+  # 'BEGIN{RS="\x00"}{print NR}' ` on a 3-blank-line-separated file reports
+  # NR=3, not 1. "\001" (SOH) is an ordinary byte, not the string
+  # terminator, so no awk implementation needs to special-case it — verified
+  # NR=1 on the same input. It is not impossible for an engine to emit a raw
+  # SOH byte, but it is not the C-string terminator every string primitive
+  # already treats specially, which NUL is.
+  printf '%s' "$text" | RNEEDLE="$needle" RREPL="$repl" awk '
+    BEGIN {
+      RS = "\001"
+      n = ENVIRON["RNEEDLE"]; r = ENVIRON["RREPL"]
+      nlen = length(n)
+    }
+    {
+      t = $0; tlen = length(t)
+      out = ""; i = 1
+      while (i <= tlen) {
+        p = index(substr(t, i), n)
+        if (p == 0) { out = out substr(t, i); break }
+        start = i + p - 1; endc = start + nlen - 1
+        before = (start > 1)   ? substr(t, start - 1, 1) : ""
+        after  = (endc < tlen) ? substr(t, endc + 1, 1)  : ""
+        ok = 1
+        if (before != "" && before ~ /[A-Za-z0-9_]/) ok = 0
+        if (after  != "" && after  ~ /[A-Za-z0-9_]/) ok = 0
+        out = out substr(t, i, start - i) (ok ? r : substr(t, start, nlen))
+        i = endc + 1
+      }
+      printf "%s", out
+    }'
+}
+
+# _burn_redact_full <text> [replacement] -> <text> with the task's own
+# content taken out, over the WHOLE haystack, no truncation.
+#
+# P2-1 (2026-09-08 round-4 review): _burn_redact (below) truncated to the
+# tail BEFORE substituting, which — since P1-2's fix made the substitution
+# an O(n) awk pass instead of bash's super-linear ${text//…} — was no longer
+# needed to keep substitution fast, but it was still unconditionally in the
+# path CLASSIFICATION reads (`out_for_class` in cmd_burn), so any dry/infra
+# signal past the last 64 KiB went blind: a task's own tool-host failure,
+# typically mid-run since the engine keeps talking afterward, drifts exactly
+# there on a long capture — burn's whole reason to exist. Substitution
+# staying bounded is fine; classification silently narrowing its view is
+# not. Split the two: this variant never truncates, and is what feeds the
+# classifiers. _burn_redact still truncates, but only for the short
+# human-facing diagnostic tail below, where a bound is genuinely harmless.
+#
+# P1-3 (2026-09-08 round-5 review): gather every needle at/above the
+# minimum length FIRST, then substitute all of them in exactly ONE pass
+# over `text` (one `perl`/`awk` invocation, one command substitution) —
+# see the cost comment above `_burn_redact_one_awk` for why looping this
+# per argv item was the actual bottleneck, independent of which tool did
+# the matching. $prompt is always a single item (and may be genuinely
+# multi-line, e.g. a `--prompt-file` task echoed back verbatim) so it skips
+# the multi-needle join entirely — joining/splitting on SOH would still be
+# safe (a raw SOH in a needle is exactly as unlikely, and exactly as
+# tolerated, as the awk fallback's RS byte above), but there is no reason
+# to pay for it when there is only one needle.
+_burn_redact_full() {
+  local text="$1" repl="${2:-}"
+  local -a needles=()
+  if [ -n "${prompt:-}" ]; then
+    [ "${#prompt}" -ge "$_BURN_REDACT_MIN_LEN" ] && needles=("$prompt")
+  else
+    local c
+    for c in "${cmd[@]}"; do
+      [ "${#c}" -ge "$_BURN_REDACT_MIN_LEN" ] && needles+=("$c")
+    done
+  fi
+  [ "${#needles[@]}" -gt 0 ] || { printf '%s' "$text"; return 0; }
+  if command -v perl >/dev/null 2>&1; then
+    local needle_list; needle_list="$(printf "%s${_BURN_REDACT_NEEDLE_SEP}" "${needles[@]}")"
+    # -0777 slurps the whole input as one string (undef $/), so a needle
+    # spanning multiple lines still matches as one unit. \Q..\E (via
+    # quotemeta) makes every needle a literal, never a regex — a path full
+    # of `.`/`/` must never be parsed as one. The lookaround pair is the
+    # same boundary rule as the awk fallback's before/after byte check,
+    # native instead of hand-rolled: a word character on either side means
+    # "not a citation of the task's own text", so leave it alone. Perl's
+    # backtracking tries each alternative in order and only commits once
+    # the trailing lookahead also holds, so a needle that is a PREFIX of
+    # another (rare, but possible across several argv items) still resolves
+    # to the longest real match at that position rather than a truncated
+    # one. $r is substituted as a whole Perl SCALAR, never re-parsed for
+    # `$`/`@`/backslash escapes of its own content.
+    printf '%s' "$text" | RNEEDLES="$needle_list" RREPL="$repl" RSEP="$_BURN_REDACT_NEEDLE_SEP" perl -0777 -pe '
+      BEGIN {
+        $r = $ENV{"RREPL"};
+        my @ns = split /\Q$ENV{"RSEP"}\E/, $ENV{"RNEEDLES"};
+        $pat = join("|", map { quotemeta($_) } @ns);
+      }
+      s/(?<![A-Za-z0-9_])(?:$pat)(?![A-Za-z0-9_])/$r/g if length($pat);
+    '
+    # P3-1 (round-3 fix review, this PR): this used to `return 0` no matter
+    # what — a huge needle_list (e.g. a >128 KiB --prompt-file, #99) can make
+    # the exec of perl ITSELF fail (E2BIG, rc=126), which prints nothing on
+    # stdout; the caller then read an empty string as "redacted to nothing"
+    # and said so, when really nothing was redacted at all — the tool
+    # crashed. Report that distinctly via a non-zero return instead.
+    [ "${PIPESTATUS[1]}" -eq 0 ] && return 0
+    return 1
+  fi
+  local n
+  for n in "${needles[@]}"; do
+    text="$(_burn_redact_one_awk "$text" "$n" "$repl")"
+  done
+  printf '%s' "$text"
+}
+
+_burn_redact() {
+  local text="$1" repl="${2:-}"
+  if [ "${#text}" -gt "$_BURN_REDACT_TAIL_BYTES" ]; then
+    text="$(printf '%s' "$text" | tail -c "$_BURN_REDACT_TAIL_BYTES")"
+  fi
+  # P3-1 (round-3 fix review, this PR): _burn_redact_full can now return 1
+  # when its own redaction tool fails to run (see its comment) — this
+  # wrapper's contract has always been "best-effort text back, never abort
+  # the caller under bin/clikae's `set -e`", so swallow that here; the one
+  # call site that needs to tell "redacted to nothing" apart from "the tool
+  # crashed" calls _burn_redact_full directly and checks its own rc.
+  _burn_redact_full "$text" "$repl" || true
+}
+
+# Redact an engine's exact echo of the task BEFORE taking a diagnostic tail.
+# Raw engine output stays in its capture log; burn's progress never repeats
+# the task, on either dispatch form (see _burn_redact).
+_burn_output_tail() {
+  local text="$1" lines="${2:-5}"
+  [ -n "${saved_prompt:-}" ] && text="$(_burn_redact "$text" "[prompt: $saved_prompt]")"
+  printf '%s\n' "$text" | tail -n "$lines" | sed 's/^/    /'
+}
+
+# P2 (round-4 review): the reroute refresh budget — see _burn_next_same_engine
+# below. Named once, used at every site that used to hardcode "3" (the cap
+# check itself, its own comment, and docs/DESIGN-board-fuel-dots.md's prose)
+# so the three copies can't drift from each other again.
+_BURN_REROUTE_REFRESH_CAP=${_BURN_REROUTE_REFRESH_CAP:-3}
+# P3-6 (round-5 review): an EXPLICITLY-set non-numeric override used to fail
+# SILENTLY at the `while` check inside _burn_next_same_engine (`[: abc:
+# integer expression expected` on stderr, but the loop condition simply
+# never fires) — the whole live-verification mechanism went dark, zero
+# calls spent on every reroute from then on, with only that one
+# bash-internal stderr line as any trace. A loud, named warning plus a safe
+# default beats either that bash-internal message or a QUIET fallback
+# (`CLIKAE_USAGE_TTL`'s own pattern elsewhere in this codebase) — this knob
+# controls whether burn ever verifies a reroute target at all, worth
+# calling out by name. The unset/empty case above already resolved to the
+# default and is never "invalid" — only a value that's actually SET to
+# something non-numeric reaches this check.
+#
+# P3-4 (round-6 review): "all digits" was not enough. `99999999999999999999`
+# passed the check and then walked straight back into the failure P3-6 above
+# was written to kill: `[ "$calls" -lt 99999999999999999999 ]` is an
+# arithmetic OVERFLOW, not a comparison, so the loop condition errors out
+# (`[: …: integer expression expected`) and never fires — zero live
+# verification calls on every reroute, no warning, one bash-internal stderr
+# line as the only trace. Measured identically on bash 5.2 and bash 3.2.57.
+# So bound the DIGIT COUNT too: `??????????*` is ten characters or more, i.e.
+# anything that cannot fit in a signed 32-bit integer's ten digits with room
+# to spare. Nine digits (999,999,999) is already absurd for either knob — a
+# billion reroute verification calls, or an age ceiling of 31 years — so
+# nothing legitimate is refused here.
+case "$_BURN_REROUTE_REFRESH_CAP" in
+  *[!0-9]*|??????????*)
+    log_warn "_BURN_REROUTE_REFRESH_CAP=\"$_BURN_REROUTE_REFRESH_CAP\" is not a non-negative integer of at most 9 digits — using the default (3). A reroute's live verification budget silently drops to zero calls otherwise."
+    _BURN_REROUTE_REFRESH_CAP=3
+    ;;
+esac
+# _burn_dry_epoch <reset-phrase> -> the phrase's reset instant as an epoch on
+# stdout, or nothing (rc 1) when it does not parse — limit_reset_epoch's own
+# contract, just anchored to "now" for the caller. A tiny wrapper so both
+# reroute loops (the shared one below and agy's own) rank resets the same way
+# instead of comparing phrase STRINGS (which sort nothing meaningful).
+_burn_dry_epoch() {
+  [ -n "$1" ] || return 1
+  limit_reset_epoch "$1" "$(date +%s)"
+}
+
+# _burn_cockpit_gate <engine> <tank> <force_cockpit> -> 0 when a burn may launch
+# on <engine>/<tank>; 1 (sentence in $_BURN_COCKPIT_REFUSAL) when it is the
+# recorded cockpit and the operator did not pass --force-cockpit.
+#
+# #63 round-5 P2-1: cockpit-guard.sh is an in-session tripwire — a PreToolUse
+# hook on the cockpit's own Agent tool. It never sees a HEADLESS launch, and
+# before this gate the only launch-side protection was _burn_next_same_engine
+# skipping the cockpit during AUTOMATIC reroute: `clikae burn claude <cockpit>`
+# named explicitly (or reached with --to, or by agy's own walk) ran straight
+# through, rc=0. This extends the issue's tripwire to the launch path: ONE
+# predicate (_cockpit_is_recorded — by name or by physical tank identity),
+# asked before every engine launch, refusing with the guard's own sentence.
+# The override is explicit and loud, never silent.
+#
+# #63 round-6 P3-2: a state file that EXISTS but does not parse as a clean
+# "<engine>/<tank>" record (mode 000, a symlink, a stray CR) used to read
+# back as EMPTY — identical to no cockpit ever having been recorded — so
+# every launch sailed through onto whatever the corrupt file was failing to
+# protect. "Cannot read" is a reason to refuse EVERY burn (not just one
+# whose target happens to match), because clikae has no way to know which
+# tank the file meant; --force-cockpit does not override this, since there
+# is nothing named here to knowingly force. Absent state (never recorded)
+# is unaffected.
+_burn_cockpit_gate() {
+  _BURN_COCKPIT_REFUSAL=""
+  if _cockpit_state_unparseable; then
+    _BURN_COCKPIT_REFUSAL="cockpit-guard: refused — $(_cockpit_state_file) exists but does not read back as a clean <engine>/<tank> cockpit record, so clikae cannot tell whether $1/$2 is the recorded cockpit. Run \`clikae doctor\` to see what's wrong, then \`clikae cockpit --off\` to clear it (or \`clikae cockpit <engine> <tank>\` to re-record it) before burning."
+    return 1
+  fi
+  _cockpit_is_recorded "$1" "$2" || return 0
+  if [ "$3" = 1 ]; then
+    log_warn "--force-cockpit: burning $1/$2 even though it is the recorded cockpit (operator override — this spends the steering tank's own budget)."
+    return 0
+  fi
+  _BURN_COCKPIT_REFUSAL="cockpit-guard: refused — $1/$2 is the recorded cockpit (the tank that dispatches burns); burning it spends the steering tank's own budget. Dispatch to another tank, or pass --force-cockpit to override."
+  return 1
+}
+
 # _burn_next_same_engine <cli> <tried> <dried_accts> <envvar> <allow_active>
-# The next same-engine tank to reroute a dry burn onto, in listing order — but the
-# reserve is no longer naive (the 2026-06-04 "burn-out" dogfood):
-#   • P0 — SKIP a tank an INTERACTIVE session is live on (live_dir_users finds a proc
+# The next same-engine tank to reroute a dry burn onto — the reserve is not
+# naive (the 2026-06-04 "burn-out" dogfood):
+#   · P0 — SKIP a tank an INTERACTIVE session is live on (live_dir_users finds a proc
 #     holding <envvar>=<tank dir>). Rerouting a headless job onto the tank you're
 #     using right now silently burns the quota you're mid-conversation on. Pass
 #     allow_active=1 to override.
-#   • P1 — SKIP a tank whose ACCOUNT is one we already dried (<dried_accts>, newline-
+#   · P0-cockpit (#63 P3-5, round-4 review) — SKIP the recorded cockpit tank,
+#     EXPLICITLY, unconditionally (not even --allow-active lifts this one).
+#     This used to be covered only BY ACCIDENT, through P0 above: a cockpit
+#     tank normally has an interactive session sitting on it, so the
+#     live-session check happened to catch it. But cockpit-guard.sh is a
+#     Claude Code PreToolUse hook — it only ever fires from inside a live
+#     Claude Code session — and a headless `clikae burn` run is exactly the
+#     kind of caller it can never see. The moment the cockpit's own session
+#     isn't there (the operator stepped away; the role outlives that one
+#     session), nothing else here would have stopped a dry-tank reroute from
+#     landing dispatched work directly on the tank that's supposed to be
+#     doing the dispatching — the guard that exists is architecturally
+#     unable to catch it from this caller. cockpit-guard.sh's OWN reserve
+#     listing (the one it prints in a refusal) already excludes the cockpit
+#     this same way; auto-reroute needed the identical rule, not a
+#     coincidence of P0.
+#   · P1 — SKIP a tank whose ACCOUNT is one we already dried (<dried_accts>, newline-
 #     joined): same login = same quota = already dry, so hopping there is wasted.
+#   · P2-6 (round-1 review) — SKIP a tank whose account is the SAME as the hop
+#     we just left ($tried's last entry): same login, same real quota, so it
+#     is a wasted hop even before dried_accts knows it. And among the
+#     candidates that remain, tanks sharing an account are ranked as ONE —
+#     see the "collapse" pass below — never offered as two independent
+#     options in the same ranking.
+#   · P2-9 (round-1 review) — a tank we KNOW is nearly exhausted (peak >=90%)
+#     must not outrank a tank we simply have no reading for. Ranking is three
+#     tiers, best first: known headroom <90% -> unknown -> known >=90%
+#     (tiering itself uses peak = max(window_pct, weekly_pct): a tank with
+#     PLENTY of weekly room left but its 5h window nearly gone still lands in
+#     the worst tier, because a burn starting NOW hits that wall in minutes).
+#   · P2-3 (round-2 review) — WITHIN a tier, ordered by lowest window_pct
+#     first, weekly_pct only as the tie-break. A burn is about to run NOW: a
+#     tank with a great weekly number but its 5-hour window nearly spent
+#     would be picked over one with hours of window left just because its
+#     weekly digit looks nicer — a real reroute to the WORSE choice for the
+#     run about to happen. Tiering above already weighs window heavily (via
+#     peak); ordering used to weigh it only as a tie-break, the two
+#     disagreeing about which window matters — this makes them agree.
 # Echoes the tank name, or nothing when the reserve is exhausted. Note: log_warn
 # writes to stderr, so a skip notice can't corrupt this function's captured stdout.
 _burn_next_same_engine() {
   local cli="$1" tried="$2" dried_accts="$3" envvar="$4" allow_active="$5" t tdir tacct
+  local fallback=""
+  local last_hop="" last_acct=""
+  last_hop="${tried##* }"
+  case "$last_hop" in "$cli/"*) last_acct="$(_limit_tank_account "$cli" "${last_hop#*/}" 2>/dev/null || true)" ;; esac
+
+  # Pass 1: every ELIGIBLE candidate (unchanged guards) -> parallel arrays,
+  # read CACHE-ONLY (usage_cache_peek never forks the adapter or calls the
+  # vendor — see lib/core/usage.sh's header). peak/up/uw empty = no usable
+  # reading (unknown). P2 (round-4 review): this pass used to spend the live
+  # vendor budget HERE, on listing-order candidates, before ranking existed —
+  # so the calls landed on whoever sorted first alphabetically, not on
+  # whoever could actually win, and the tank that DID win was routinely the
+  # one unverified candidate left holding a stale, flattering number
+  # (usage_cache_peek's own contract: "A STALE reading is still returned
+  # here"). Rank first (Pass 3, on-disk readings only); the live budget is
+  # spent AFTER that ranking exists, only on candidates it says could win —
+  # see Pass 4 below.
+  local -a c_tank=() c_acct=() c_up=() c_uw=() c_peak=() c_stale=()
   while IFS= read -r t; do
     [ -n "$t" ] || continue
     case " $tried " in *" $cli/$t "*) continue ;; esac
     tank_is_solo "$cli" "$t" && continue   # solo tanks are out of the fleet — never an auto-reroute target
+    if _cockpit_is_recorded "$cli" "$t"; then
+      log_warn "skipping $cli/$t — it is the cockpit (dispatches burns; never a reroute target, see \`clikae cockpit\`)."
+      continue
+    fi
     tdir="$(profile_dir "$cli" "$t")"
     if [ "$allow_active" != "1" ] && [ -n "$envvar" ] \
        && [ -n "$(live_dir_users "$tdir" "$envvar" 2>/dev/null)" ]; then
       log_warn "skipping $cli/$t — an interactive session is using it (burn would spend that quota; --allow-active to override)."
       continue
     fi
-    if [ -n "$dried_accts" ]; then
-      tacct="$(_limit_tank_account "$cli" "$t" 2>/dev/null || true)"
-      if [ -n "$tacct" ] && printf '%s\n' "$dried_accts" | grep -qxF "$tacct"; then
-        log_warn "skipping $cli/$t — same account as a tank already dry (shared quota)."
-        continue
-      fi
+    tacct="$(_limit_tank_account "$cli" "$t" 2>/dev/null || true)"
+    if [ -n "$dried_accts" ] && [ -n "$tacct" ] && printf '%s\n' "$dried_accts" | grep -qxF "$tacct"; then
+      log_warn "skipping $cli/$t — same account as a tank already dry (shared quota)."
+      continue
     fi
-    printf '%s\n' "$t"; return 0
+    if [ -n "$last_acct" ] && [ -n "$tacct" ] && [ "$tacct" = "$last_acct" ]; then
+      log_warn "skipping $cli/$t — same account as the tank just tried (shared quota; not a real second option)."
+      continue
+    fi
+    # P2 (#40) — SKIP a tank that already has a RUNNING burn on it, per #41's
+    # status files (never tmux session names: two burns on one tank collide
+    # on the tmux session name before either gets far enough to prove
+    # anything from tmux). $$ excludes the tank THIS burn is on right now,
+    # which would otherwise appear busy on its own account.
+    if [ "$allow_active" != "1" ] && burn_tank_busy "$cli" "$t" "$$"; then
+      log_warn "skipping $cli/$t — another burn is already running on it (#40; --allow-active to override)."
+      continue
+    fi
+    [ -n "$fallback" ] || fallback="$t"
+    local up="" uw="" peak="" fields stale=0
+    if declare -F usage_cache_peek >/dev/null && fields="$(usage_cache_peek "$cli" "$t")"; then
+      IFS=$'\t' read -r up uw peak <<< "$fields"
+      up="${up%%.*}"; uw="${uw%%.*}"; peak="${peak%%.*}"
+    fi
+    # P3-4 (round-5 review): a reading too old for usage_cache_peek's ceiling
+    # is still worth spending Pass 4's budget on SOONER than a candidate with
+    # no on-disk reading at all — see usage_cache_has_reading's own header.
+    declare -F usage_cache_has_reading >/dev/null && usage_cache_has_reading "$cli" "$t" && stale=1
+    c_tank+=("$t"); c_acct+=("$tacct"); c_up+=("$up"); c_uw+=("$uw"); c_peak+=("$peak"); c_stale+=("$stale")
   done <<EOF
 $(list_all_profiles | awk -F'\t' -v c="$cli" '$1==c{print $2}')
 EOF
+
+  # Pass 2 (P2-6) — collapse same-account candidates to ONE. The account's
+  # reading is the WORST (highest) window/weekly seen across its candidate
+  # tanks this call — never overstate a shared quota just because one
+  # sibling's cache snapshot happens to look better. Only the FIRST such
+  # tank (listing order) stays a candidate; every other sibling is dropped
+  # from ranking outright (a `c_skip` flag, not a fake "unknown" — an
+  # unknown reading must never let a dropped, actually-known-bad sibling
+  # sneak ahead of a genuine unknown, see P2-9 above).
+  local n="${#c_tank[@]}" i j
+  local -a c_skip=()
+  for (( i = 0; i < n; i++ )); do c_skip[i]=0; done
+  local seen=$'\n'
+  for (( i = 0; i < n; i++ )); do
+    [ -n "${c_acct[i]}" ] || continue
+    case "$seen" in *$'\n'"${c_acct[i]}"$'\n'*) continue ;; esac
+    seen="$seen${c_acct[i]}"$'\n'
+    local first=-1 wu="" ww="" hasstale=0
+    for (( j = 0; j < n; j++ )); do
+      [ "${c_acct[j]}" = "${c_acct[i]}" ] || continue
+      [ "$first" -ge 0 ] || first=$j
+      if [ "$j" != "$first" ]; then c_skip[j]=1; fi
+      [ "${c_stale[j]}" = 1 ] && hasstale=1
+      [ -n "${c_up[j]}" ] || continue
+      { [ -n "$wu" ] && [ "${c_up[j]}" -le "$wu" ]; } || wu="${c_up[j]}"
+      { [ -n "$ww" ] && [ "${c_uw[j]}" -le "$ww" ]; } || ww="${c_uw[j]}"
+    done
+    c_up[first]="$wu"; c_uw[first]="$ww"
+    c_stale[first]="$hasstale"
+    if [ -n "$wu" ]; then
+      c_peak[first]="$wu"; [ "$ww" -le "$wu" ] || c_peak[first]="$ww"
+    else
+      c_peak[first]=""
+    fi
+  done
+
+  # Pass 3 — freeze a tier for every surviving (non-skipped) candidate on
+  # WHATEVER is already known (cache, age-penalised by usage_cache_peek's own
+  # ceiling — see lib/core/usage.sh) — a snapshot taken once, before any live
+  # call this invocation makes, so Pass 4 can decide who is worth a vendor
+  # call without one candidate's fresh reading shadowing another's untested
+  # one. tier 0 = known <90% (best), 1 = unknown, 2 = known >=90% (worst) —
+  # same three tiers Pass 5's final ranking below uses.
+  local -a c_tier0=()
+  for (( i = 0; i < n; i++ )); do
+    if [ -z "${c_peak[i]}" ]; then c_tier0[i]=1
+    elif [ "${c_peak[i]}" -ge 90 ]; then c_tier0[i]=2
+    else c_tier0[i]=0
+    fi
+  done
+
+  # Pass 4 — P2 (round-4 review): spend the live budget on the candidates
+  # that Pass 3's on-disk snapshot says could actually win — not on whoever
+  # sorted first alphabetically. That was the bug: 3 vendor calls landed on
+  # the first 3 candidates BY LISTING ORDER, so a 4th candidate holding a
+  # stale but flattering on-disk number could win the whole ranking without
+  # ever being verified this call (usage_cache_peek's own contract: "A STALE
+  # reading is still returned here"). Selection-sort the top
+  # _BURN_REROUTE_REFRESH_CAP candidates OFF THE FROZEN SNAPSHOT (never off
+  # each other's just-refreshed numbers, so a same-tier sibling that hasn't
+  # been checked yet is never skipped just because the one picked first
+  # happened to verify well), refresh each with one real vendor call. A
+  # same-account sibling was already collapsed to one candidate in Pass 2
+  # (c_skip), so this can never spend two calls on one account — one refresh
+  # per account, reusing that one reading.
+  #
+  # P3-4 (round-5 review): tier 0 (confident, FRESH) always outranked tier 1
+  # (unknown) here, with no distinction WITHIN tier 1 between "never
+  # scanned" and "on-disk reading too old for usage_cache_peek's ceiling" —
+  # so a candidate the board itself still shows a percentage for (aged past
+  # 15 minutes) could sit behind cap-many confident tier-0 candidates
+  # forever, never verified and never selectable, no matter how good its
+  # true headroom actually was. Priority for THIS pass only (never Pass 5's
+  # final ranking) now has 4 levels instead of 3: a stale-but-evidenced tier
+  # 1 candidate (`c_stale`) goes FIRST — it is the one case where refreshing
+  # could reveal a genuinely better tank that confident tier 0 already
+  # accounts for — then confident tier 0, then a blank (never-scanned) tier
+  # 1, then tier 2 last (already known bad, least worth spending on).
+  local -a c_picked=()
+  for (( i = 0; i < n; i++ )); do c_picked[i]=0; done
+  local calls=0 pick pick_prio pick_up pick_uw
+  while [ "$calls" -lt "$_BURN_REROUTE_REFRESH_CAP" ]; do
+    pick=-1; pick_prio=9; pick_up=999999; pick_uw=999999
+    for (( i = 0; i < n; i++ )); do
+      [ "${c_skip[i]}" = 0 ] || continue
+      [ "${c_picked[i]}" = 0 ] || continue
+      local tier up uw prio
+      tier="${c_tier0[i]}"
+      if [ "$tier" = 1 ]; then
+        up=0; uw=0
+        if [ "${c_stale[i]:-0}" = 1 ]; then prio=0; else prio=2; fi
+      elif [ "$tier" = 0 ]; then
+        up="${c_up[i]}"; uw="${c_uw[i]}"; prio=1
+      else
+        up="${c_up[i]}"; uw="${c_uw[i]}"; prio=3
+      fi
+      if [ "$prio" -lt "$pick_prio" ] ||
+         { [ "$prio" -eq "$pick_prio" ] && { [ "$up" -lt "$pick_up" ] ||
+           { [ "$up" -eq "$pick_up" ] && [ "$uw" -lt "$pick_uw" ]; }; }; }; then
+        pick=$i; pick_prio=$prio; pick_up=$up; pick_uw=$uw
+      fi
+    done
+    [ "$pick" -ge 0 ] || break
+    c_picked[pick]=1
+    declare -F usage_read >/dev/null && usage_read "$cli" "${c_tank[pick]}" 1 >/dev/null 2>&1 || true
+    calls=$((calls + 1))
+    local up="" uw="" peak="" fields
+    if declare -F usage_cache_peek >/dev/null && fields="$(usage_cache_peek "$cli" "${c_tank[pick]}")"; then
+      IFS=$'\t' read -r up uw peak <<< "$fields"
+      up="${up%%.*}"; uw="${uw%%.*}"; peak="${peak%%.*}"
+      c_up[pick]="$up"; c_uw[pick]="$uw"; c_peak[pick]="$peak"
+      # P3-3 (round-5 review): a VERIFIED 0% window is the absolute floor —
+      # nothing left in this pool can beat it, so stop spending the refresh
+      # budget rather than always burning all _BURN_REROUTE_REFRESH_CAP
+      # calls even after the winner is already provably unbeatable.
+      [ "$peak" = 0 ] && break
+    else
+      # The refresh this call just spent was PROOF this candidate isn't
+      # readable right now (usage_read already overwrote its cache with
+      # source:"unknown" — see lib/core/usage.sh). Leaving Pass 1's stale
+      # in-memory numbers in place would let this candidate win on a reading
+      # it just failed to reproduce, ahead of a sibling that verified clean
+      # this same call (round-5 review P2-1).
+      #
+      # P3-1 (round-6 review): but blanket "demote to unknown" is only half a
+      # rule, and the other half ran backwards. Pass 5 ranks unknown (tier 1)
+      # AHEAD of known >=90% (tier 2) — deliberately, P2-9: no reading at all
+      # is a better bet than a reading that says "this tank is nearly out".
+      # So clearing a tier-2 candidate PROMOTED it: a tank last read at 99%
+      # sixty seconds ago, whose token happens to be dead this call, jumped
+      # from "known nearly-full" to "unknown" and beat a sibling that
+      # verified clean at 95% in this same call. Same shape as round-5 P2-1,
+      # mirrored onto the bad side.
+      #
+      # The rule that covers both: a FAILED refresh may only ever rank a
+      # candidate the SAME or WORSE than the evidence already on disk — never
+      # better. tier 0 (known <90%) -> 1, because "cannot read it now" is
+      # genuinely worse than a verified sibling; tier 1 stays 1; tier 2 KEEPS
+      # its last good reading and stays tier 2. That reading is already
+      # bounded by the ranking ceiling (usage_cache_peek applied it in Pass 1,
+      # so anything older than the ceiling was tier 1 here to begin with) —
+      # this branch never resurrects a number the ceiling had already thrown
+      # away, it only declines to launder a bad one into a blank.
+      if [ "${c_tier0[pick]}" != 2 ]; then
+        c_up[pick]=""; c_uw[pick]=""; c_peak[pick]=""
+      fi
+    fi
+  done
+
+  # Pass 5 — pick the best surviving candidate, three tiers, using whatever
+  # is now known: freshly-verified where Pass 4 spent the budget, the Pass 3
+  # snapshot everywhere else. P2-3 (round-2 review): WITHIN a tier, ordered
+  # by window_pct (the 5-hour clock a burn starting now actually runs
+  # against) first, weekly_pct only breaking a tie — swapped from the
+  # round-1 shape, which ordered by weekly_pct first. See this function's
+  # own header for why.
+  local best="" best_tier=9 best_uw=999999 best_up=999999
+  for (( i = 0; i < n; i++ )); do
+    [ "${c_skip[i]}" = 0 ] || continue
+    local tier up uw
+    if [ -z "${c_peak[i]}" ]; then tier=1; up=0; uw=0
+    elif [ "${c_peak[i]}" -ge 90 ]; then tier=2; up="${c_up[i]}"; uw="${c_uw[i]}"
+    else tier=0; up="${c_up[i]}"; uw="${c_uw[i]}"
+    fi
+    if [ "$tier" -lt "$best_tier" ] ||
+       { [ "$tier" -eq "$best_tier" ] && { [ "$up" -lt "$best_up" ] ||
+         { [ "$up" -eq "$best_up" ] && [ "$uw" -lt "$best_uw" ]; }; }; }; then
+      best="${c_tank[i]}"; best_tier=$tier; best_uw=$uw; best_up=$up
+    fi
+  done
+  printf '%s\n' "${best:-$fallback}"
 }
 
-# _burn_timeout_bin -> echo `timeout` or `gtimeout` if one is on PATH; otherwise echo
-# NOTHING and warn that the run will be UNBOUNDED. Factored out so the "no tool →
-# honest warning, still runs" contract is unit-testable (stock macOS ships neither).
-_burn_timeout_bin() {
-  if command -v timeout  >/dev/null 2>&1; then printf 'timeout';  return 0; fi
-  if command -v gtimeout >/dev/null 2>&1; then printf 'gtimeout'; return 0; fi
-  if command -v perl     >/dev/null 2>&1; then printf 'perl';     return 0; fi
-  log_warn "--timeout needs \`timeout\`/\`gtimeout\` (coreutils) or \`perl\` on PATH — running WITHOUT a time bound."
-  return 0
-}
+# _burn_timeout_bin moved to lib/core/timeout_bin.sh (P2-2, round-2 review):
+# lib/adapters/claude.sh's Keychain read needs the same three-arm resolver
+# (timeout -> gtimeout -> perl -> honest warning) and an adapter has no
+# business sourcing a command file for it — see that file's header for why.
+# Sourced globally in bin/clikae like every other lib/core/*.sh, so it's
+# still just `_burn_timeout_bin` here, unchanged call sites below.
 
 # Artifact freshness uses _clikae_mtime (lib/core/adapter_loader.sh) — epoch mtime,
 # 0 if absent, GNU-stat-first for Linux portability — so a STALE file from a prior
@@ -146,6 +824,114 @@ _burn_size() {
   if [ -e "$1" ]; then wc -c < "$1" 2>/dev/null | tr -d ' '; else printf '?'; fi
 }
 
+# _burn_sweep_old_logs — best-effort retention for burn's own prompt-copy run
+# dirs. #43 made every burn write the FULL task text to
+# ~/.clikae/logs/burn-<pid>/prompt.txt (0600) so progress/diagnostic tails
+# never repeat it — a real privacy win over "it's in a log line" — but the net
+# effect was to trade a transient exposure for a PERMANENT one: nothing ever
+# swept these directories (P2-4, 2026-09-08 review; `clikae clean` has no
+# notion of ~/.clikae/logs at all). One sweep per burn invocation is enough —
+# this isn't a daemon and doesn't need to be. $CLIKAE_BURN_LOG_RETENTION_DAYS
+# overrides the default (7); 0 disables the sweep (kept forever, old
+# behaviour). Best-effort: a `find`/`rm` failure never aborts the burn itself.
+# Also sweeps `watch-github-*` run dirs (P3-3, 2026-09-13 fix-round-3
+# review): those had ONLY _wg_runs_rotate's 200-directory count cap, no
+# day-based retention — same directory, same shape, same policy belongs.
+#
+# <dry_run> (P3-2, 2026-09-14 fix-round-4 review): `clikae clean --dry-run`
+# skips the actual `rm -rf` (unchanged) but now names what it WOULD have
+# swept — round 3 wired this sweep into `clean` and left its own preview
+# silently incomplete ("the sweep itself has none"), the one command whose
+# whole point is a caller checking before the real run.
+# shellcheck disable=SC2120  # called with an arg from clean.sh, a separate
+# sourced file shellcheck's per-invocation call-site scan doesn't see.
+_burn_sweep_old_logs() {
+  local dry_run="${1:-0}" base="$HOME/.clikae/logs" days="${CLIKAE_BURN_LOG_RETENTION_DAYS:-7}"
+  case "$days" in ''|*[!0-9]*) return 0 ;; esac
+  [ "$days" -gt 0 ] || return 0
+  [ -d "$base" ] || return 0
+  local d n=0
+  while IFS= read -r -d '' d; do
+    # 🔴 P2-3 (2026-09-14 watch-github fix-round-7 review): the
+    # `watch-github-*` glob also matched the org's DURABLE log
+    # `watch-github-<org>/events.jsonl`, whose directory mtime never moves
+    # on append — every burn/clean eight days after a watcher started
+    # deleted its whole history. A run directory always has status.json
+    # (_wg_status_write); the durable one never does. The name alone can't
+    # tell them apart: an org may itself be called `foo-2024`.
+    case "${d##*/}" in
+      watch-github-*) [ -f "$d/status.json" ] || continue ;;
+    esac
+    n=$((n + 1))
+    [ "$dry_run" -eq 1 ] || rm -rf "$d" 2>/dev/null || true
+  done < <(find "$base" -maxdepth 1 -type d \( -name 'burn-*' -o -name 'watch-github-*-[0-9]*' \) -mtime "+$days" -print0 2>/dev/null)
+  if [ "$dry_run" -eq 1 ] && [ "$n" -gt 0 ]; then
+    log_info "clean --dry-run: would also sweep $n old burn/watch-github log director$([ "$n" -eq 1 ] && printf y || printf ies) (older than ${days}d)."
+  fi
+}
+
+# _burn_prelaunch_lock_gc <dry_run> -> reclaim abandoned prelaunch-lock files
+# — the per (engine/tank, $PWD) blocking lock the loop above takes around
+# soul_prelaunch/fleet_mcp_prelaunch (see its own 🔴 2026-09-06 comment).
+#
+# 🔴 NEVER unlink a prelaunch lock right after releasing it — the loop above
+# doesn't, on purpose. Deleting a lock file a concurrent burn may already have
+# open is the classic lock-file race: a THIRD burn then creates a fresh inode
+# at the same path, and two burns end up holding "the same" lock on two
+# different files. So the file is left behind on every release, forever,
+# unless something else reclaims it — this is that something else, and it
+# only ever acts on a file, never on an fd another process might be blocked
+# on.
+#
+# 🔴 mtime, never a recorded holder: unlike the tank-busy locks GC'd above,
+# this lock file carries no pid/identity to check liveness against — it is
+# opened with `exec 7>"$_prelock"`, which TRUNCATES the file on every
+# acquisition, and a truncate is a write that bumps mtime. A held (or very
+# recently held) lock is therefore always YOUNGER than any reasonable
+# threshold; only a file nobody has touched in over a day is provably
+# abandoned — never a live one, no matter how long that burn's engine run
+# itself takes (the lock is released long before the run starts).
+#
+# Sweeps BOTH locations: the current `state/locks/` and the pre-migration
+# `state/` top level directly — a one-time tidy-up for a machine that
+# accumulated lock files there before this GC (and the `locks/` subdir)
+# existed. `-mtime +0` is the same cross-platform idiom `_burn_sweep_old_logs`
+# uses just above (identical on BSD/macOS and GNU find: "more than 1*24h
+# old"), one bounded `-maxdepth 1` find per location, never recursive.
+_burn_prelaunch_lock_gc() {
+  local dry_run="${1:-0}" n=0 f d
+  local -a dirs=("$HOME/.clikae/state/locks" "$HOME/.clikae/state")
+  for d in "${dirs[@]}"; do
+    [ -d "$d" ] || continue
+    while IFS= read -r -d '' f; do
+      n=$((n + 1))
+      [ "$dry_run" -eq 1 ] || rm -f "$f" 2>/dev/null || true
+    done < <(find "$d" -maxdepth 1 -type f -name "${CLIKAE_SESS_PREFIX}prelaunch-*.lock" -mtime +0 -print0 2>/dev/null)
+  done
+  if [ "$n" -gt 0 ]; then
+    if [ "$dry_run" -eq 1 ]; then
+      log_info "GC: [Dry Run] Would remove $n stale prelaunch lock(s) (older than 1 day)."
+    else
+      log_info "GC: removed $n stale prelaunch lock(s) (older than 1 day)."
+    fi
+  fi
+  return 0
+}
+
+# Capture evidence beside the engine, before publishing completion. Consumers
+# may move/delete the artifact as soon as they see DONE; the parent must never
+# re-stat it to reconstruct an earlier outcome. Publish the pair atomically.
+_burn_snapshot() {
+  local artifact="$1" before="$2" evidence="$3" fresh=0 bytes=null
+  if [ -e "$artifact" ]; then
+    bytes="$(_burn_size "$artifact")"
+    [ "$(_clikae_mtime "$artifact")" = "$before" ] || fresh=1
+  fi
+  case "$bytes" in ''|*[!0-9]*) bytes=null ;; esac
+  printf '%s %s\n' "$fresh" "$bytes" > "$evidence.tmp"
+  mv -f "$evidence.tmp" "$evidence"
+}
+
 # _burn_compose <prompt> <post_cmd_count> <post_cmd...> -- <add_dir...>
 # Build the full engine argv into the global array BURN_ARGV: the per-engine
 # headless-write flags from adapter_burn_flags (which must be defined for the
@@ -153,6 +939,42 @@ _burn_size() {
 # per engine so a cross-engine reroute regenerates the flags for the NEW engine
 # (fixing the old "ship claude's -p flags to codex" unsoundness). Newline-per-item
 # read keeps a multi-line prompt with spaces intact.
+# _burn_claude_headless_guards — make a headless claude run unable to wander off
+# into a sub-agent and unable to be killed for waiting on one. Two mechanical
+# guards, applied to BOTH prompt forms (the composed recipe and the raw `--`
+# argv) and again after a cross-engine reroute lands on claude:
+#
+#   · `--disallowedTools Agent,Task` is appended when the argv is a print run
+#     (`-p`/`--print`) and the caller gave no tools flag of their own. A lane
+#     that reaches for the Agent tool delegates the whole task to a background
+#     sub-agent, ends its own turn with "I'll be notified", and `claude -p`
+#     then terminates the process — sub-agent included — after its background
+#     wait ceiling. Measured 2026-09-13 (clikae #78 fix lane on reefbox): 651 s,
+#     nothing on disk. 2026-09-10 had the same shape. A brief that says "no
+#     sub-agents" is a reminder; this is the guard.
+#   · `CLAUDE_CODE_PRINT_BG_WAIT_CEILING_MS=0` is exported unless the operator
+#     set it: if a run still spawns background work, print mode waits for it
+#     instead of terminating at 600 s. The env reaches the engine through the
+#     wrapper's `compgen -e` export block (tmux path) and the inherited
+#     environment (fallback path) alike.
+#
+# Only claude: codex's sandbox and agy have no Agent tool. Operators who really
+# want sub-agents pass their own `--allowedTools`/`--disallowedTools`, which
+# switches the argv guard off; the env default is harmless either way.
+_burn_claude_headless_guards() {
+  [ "$cli" = claude ] || return 0
+  export CLAUDE_CODE_PRINT_BG_WAIT_CEILING_MS="${CLAUDE_CODE_PRINT_BG_WAIT_CEILING_MS:-0}"
+  local a is_print=0 has_tools=0
+  for a in "${cmd[@]}"; do
+    case "$a" in
+      -p|--print) is_print=1 ;;
+      --disallowedTools|--disallowed-tools|--allowedTools|--allowed-tools) has_tools=1 ;;
+    esac
+  done
+  [ "$is_print" -eq 1 ] && [ "$has_tools" -eq 0 ] || return 0
+  cmd+=(--disallowedTools "Agent,Task")
+}
+
 _burn_compose() {
   local prompt="$1"; shift
   local n="$1"; shift
@@ -161,12 +983,50 @@ _burn_compose() {
   shift   # drop the literal "--" separator
   BURN_ARGV=()
   local line
+  # P2-1/P2-2 (2026-09-12 round-1 review): gate on whether an adapter DECLARES
+  # a --permission mapping (adapter_meta_permission_modes),
+  # not on its binary name — and gate on whether the caller ASKED for a mode
+  # ($permission_set), not on which mode. An explicit acceptEdits on an unmapped
+  # engine used to be silent, which read as "you got what you asked for" even
+  # though the engine's own fixed mode may differ (grok always runs
+  # --permission-mode bypassPermissions, never acceptEdits). cli/burn_permission/
+  # permission_set are cmd_burn locals, inherited here via bash dynamic scoping,
+  # same convention as adapter_burn_flags' own burn_permission read below.
+  local modes=""
+  if declare -F adapter_meta_permission_modes >/dev/null; then
+    modes=" $(adapter_meta_permission_modes) "
+  fi
+  if [ "${permission_set:-0}" -eq 1 ] && [[ "$modes" != *" ${burn_permission:-acceptEdits} "* ]]; then
+    if [ "$cli" = grok ]; then
+      log_warn "clikae does not map --permission for grok; the grok burn runs with the adapter's fixed permission mode."
+    else
+      log_warn "$cli has no equivalent for --permission ${burn_permission:-acceptEdits}; keeping its existing burn flags."
+    fi
+    # Shadow only for this composition; preserve the requested mode for reroutes.
+    local burn_permission=acceptEdits
+  fi
   # NUL-delimited read so a multi-line prompt survives as a single argv item.
   while IFS= read -r -d '' line; do BURN_ARGV+=("$line"); done < <(adapter_burn_flags "$prompt" "$@")
+  if [ "$cli" = codex ] && [ "${codex_skip_git_check:-0}" -eq 1 ]; then
+    local has_skip=0
+    for line in "${post[@]}"; do
+      [ "$line" != --skip-git-repo-check ] || has_skip=1
+    done
+    [ "$has_skip" -eq 1 ] || BURN_ARGV=("${BURN_ARGV[0]}" --skip-git-repo-check "${BURN_ARGV[@]:1}")
+  fi
   BURN_ARGV+=("${post[@]}")
 }
 
-# _agy_burn <starting-tank> <prompt> <artifact> <timeout_s> <fresh> <add_dirs...>
+# _agy_burn <starting-tank> <prompt> <artifact> <timeout_s> <fresh> <reroute>
+#           <wait_for_reset_s> <allow_active> <launch_cwd> <n_extra> <extra-agy-flags...> <add_dirs...>
+# The extras are whatever followed `--` on the command line. agy has no adapter,
+# so clikae cannot compose its flags for you; what it CAN do is stop dropping the
+# ones you asked for. Two that headless dispatch actually needs:
+#   --dangerously-skip-permissions   agy's print mode auto-denies file tools, so
+#                                    without this a burn can read but never write
+#   -c / --conversation <id>         continue a previous run instead of starting cold
+# Counted rather than sentinel-delimited because add_dirs is already a variadic
+# tail and a second `--` inside argv is exactly the ambiguity this is fixing.
 # agy's own burn loop. agy has no adapter (no per-shell env; one global
 # ~/.gemini symlink), so it can't go through cmd_burn's adapter-driven engine
 # loop below — this is a dedicated SEQUENTIAL dry→next-tank loop, reusing the
@@ -179,7 +1039,10 @@ _burn_compose() {
 # concern from an interactive session being mid-use on a DIFFERENT tank — this
 # still moves the ONE global active tank, same as `clikae agy <tank>` always has.
 _agy_burn() {
-  local start_tank="$1" prompt="$2" artifact="$3" timeout_s="$4" fresh="$5" reroute="$6"; shift 6
+  local start_tank="$1" prompt="$2" artifact="$3" timeout_s="$4" fresh="$5" reroute="$6" wait_for_reset_s="$7" allow_active="$8" launch_cwd="$9"; shift 9
+  local n_extra="$1"; shift
+  local -a extra=()
+  while [ "$n_extra" -gt 0 ]; do extra+=("$1"); shift; n_extra=$((n_extra - 1)); done
   local -a add_dirs=("$@")
 
   if [ "$fresh" -eq 1 ] && [ -e "$artifact" ]; then
@@ -194,6 +1057,8 @@ _agy_burn() {
 
   local cur="$start_tank" tank_count; tank_count="$(_agy_tank_names | grep -c . || true)"
   local -a agy_tried=("$start_tank")
+  local tried=""   # "agy/<tank>"-per-hop, mirrors cmd_burn's own $tried — feeds #41's rerouted_from
+  local earliest_reset="" earliest_epoch=""   # #61: earliest parseable reset across every dry hop
   while :; do
     [ -d "$(_agy_slots)/$cur" ] || log_fail "No such agy tank: $cur  (create it:  clikae init agy $cur)"
     if [ "$cur" != "$(_agy_active)" ]; then
@@ -205,10 +1070,28 @@ _agy_burn() {
       _agy_kc_verify_restore "$cur"
       rm -f "$(_agy_link)"; ln -s "$(_agy_slots)/$cur" "$(_agy_link)"
     fi
-    log_info "burn agy/$cur → agy -p ..."
+    log_info "burn agy/$cur → agy (task: $saved_prompt)"
+    _burn_status_write running null "$status_engine" "$cur" "$artifact" "" ""
 
-    local -a gen=(-p "$prompt") d
+    # Give THIS run its own log. agy's ~/.gemini/antigravity-cli/cli.log is a
+    # symlink shared by every agy process on the tank, repointed by whichever
+    # one started last — so reading it after our run can pick up an INTERACTIVE
+    # session's quota event and blame it on us. Measured 2026-08-11: the same
+    # request came back "ran dry" once and fine twice, while our own log carried
+    # zero markers and two long-lived session logs carried 15 and 2.
+    # --log-file leaves the shared symlink untouched (verified: readlink before
+    # == after), so this neither reads nor disturbs anyone else's run.
+    local runlog; runlog="$(mktemp "${TMPDIR:-/tmp}/clikae-agy-log.XXXXXX")"
+    local -a gen=(-p "$prompt" --log-file "$runlog") d
     for d in "${add_dirs[@]}"; do gen+=(--add-dir "$d"); done
+    # agy enforces its OWN print budget, default 5 minutes, and it does not know
+    # about clikae's --timeout. Without this, `burn agy --timeout 1200` was a
+    # fiction: agy self-terminated at 5m and clikae's outer bound never applied.
+    # Only passed when the user actually asked for a budget — clikae has no
+    # business inventing one.
+    [ -n "$timeout_s" ] && gen+=(--print-timeout "${timeout_s}s")
+    # Yours last, so an explicit flag beats clikae's default for the same option.
+    [ "${#extra[@]}" -gt 0 ] && gen+=("${extra[@]}")
     local -a runner=()
     if [ -n "$timeout_s" ]; then
       local tb; tb="$(_burn_timeout_bin)"
@@ -217,37 +1100,2588 @@ _agy_burn() {
         perl)             runner=(perl -e 'alarm shift; exec @ARGV or exit 127' "$timeout_s") ;;
       esac
     fi
-    local out; out="$("${runner[@]}" agy "${gen[@]}" </dev/null 2>&1)" || true
+    local run_id="agy-${cur}-burn-$$"
+    local evidence_file; evidence_file="$(mktemp "${TMPDIR:-/tmp}/clikae-agy-artifact.XXXXXX")"
+    local artifact_fresh=0 artifact_bytes_snapshot=null
+    art_pre="$(_clikae_mtime "$artifact")"
+    # #74 round-1 P1-2: a BEFORE snapshot, not a mtime cutoff. The old
+    # "newest transcript with mtime >= attempt start" heuristic had nothing
+    # tying it to THIS run's own process — a human's concurrent session in the
+    # same tank has a newer mtime too, and got its transcript recorded (and
+    # then hidden) as if it were the lane's. A file that didn't exist before
+    # launch and does after is proof; a mtime comparison is a guess.
+    load_adapter "antigravity" 2>/dev/null || true
+    local -a _agy_pre_snap=()
+    if declare -F adapter_all_transcripts >/dev/null 2>&1; then
+      while IFS= read -r _agy_snap_line; do
+        [ -n "$_agy_snap_line" ] && _agy_pre_snap+=("$_agy_snap_line")
+      done < <(adapter_all_transcripts "$(_agy_slots)/$cur" 2>/dev/null || true)
+    fi
+    local out; out="$(
+      "${runner[@]}" agy "${gen[@]}" </dev/null 2>&1 || true
+      _burn_snapshot "$artifact" "$art_pre" "$evidence_file"
+    )" || true
+    read -r artifact_fresh artifact_bytes_snapshot < "$evidence_file"
+    rm -f "$evidence_file"
 
-    local logf reset; logf="$(_agy_link)/antigravity-cli/cli.log"
-    if reset="$(limit_log_dry "$logf")"; then
+    local sid_to_record=""
+    if declare -F adapter_all_transcripts >/dev/null 2>&1; then
+      local -a _agy_post_snap=() _agy_new=()
+      while IFS= read -r _agy_snap_line; do
+        [ -n "$_agy_snap_line" ] && _agy_post_snap+=("$_agy_snap_line")
+      done < <(adapter_all_transcripts "$(_agy_slots)/$cur" 2>/dev/null || true)
+      local _agy_pf _agy_bf _agy_is_new
+      for _agy_pf in "${_agy_post_snap[@]}"; do
+        _agy_is_new=1
+        for _agy_bf in "${_agy_pre_snap[@]}"; do
+          [ "$_agy_pf" = "$_agy_bf" ] && { _agy_is_new=0; break; }
+        done
+        [ "$_agy_is_new" -eq 1 ] && _agy_new+=("$_agy_pf")
+      done
+      # exactly one new transcript -> proven attribution. Zero -> a dry/failed
+      # run made nothing to hide (no ghost sid, P2-3). More than one -> only
+      # trust the count if cwd narrows it back to exactly one; otherwise this
+      # run's own session cannot be told apart from someone else's concurrent
+      # one, and recording ANY of them risks hiding a human's conversation —
+      # "never hide what is not proven" outranks "always record something".
+      case "${#_agy_new[@]}" in
+        0) : ;;
+        1)
+          if declare -F adapter_sid_canonical >/dev/null 2>&1; then
+            sid_to_record="$(adapter_sid_canonical "${_agy_new[0]}" 2>/dev/null || true)"
+          fi
+          ;;
+        *)
+          local -a _agy_cwd_match=()
+          local _agy_cf _agy_ccwd
+          for _agy_cf in "${_agy_new[@]}"; do
+            _agy_ccwd="$(adapter_session_cwd "$_agy_cf" 2>/dev/null || true)"
+            [ "${_agy_ccwd%/}" = "${launch_cwd%/}" ] && _agy_cwd_match+=("$_agy_cf")
+          done
+          if [ "${#_agy_cwd_match[@]}" -eq 1 ] && declare -F adapter_sid_canonical >/dev/null 2>&1; then
+            sid_to_record="$(adapter_sid_canonical "${_agy_cwd_match[0]}" 2>/dev/null || true)"
+          else
+            log_warn "burn: could not attribute session (${#_agy_new[@]} candidates)"
+          fi
+          ;;
+      esac
+    fi
+    if [ -n "$sid_to_record" ]; then
+      # Keyed by engine id, "antigravity" — the directory every reader walks —
+      # not the "agy" binary name it used to be written under (#113; see
+      # burn_sidecar_migrate_legacy in lib/core/profile_store.sh).
+      local sidecar_file="$CLIKAE_HOME/state/burn-sessions/antigravity/$cur"
+      mkdir -p "$(dirname "$sidecar_file")" 2>/dev/null || true
+      printf '%s\t%s\t%s\n' "$sid_to_record" "$run_id" "$(date +%s)" >> "$sidecar_file"
+    fi
+
+    # Consume the run log once, then drop it on every path below — not just the
+    # dry one — so a long reroute loop doesn't litter $TMPDIR.
+    local reset dry=1
+    reset="$(limit_log_dry "$runlog")" && dry=0
+    rm -f "$runlog"
+    if [ "$dry" -eq 0 ]; then
       log_warn "agy/$cur ran dry${reset:+  — }${reset}"
-    elif [ -e "$artifact" ] && [ "$(_clikae_mtime "$artifact")" != "$art_pre" ]; then
-      log_ok "Done on agy/$cur — artifact present: $artifact"
-      log_info "summary: tank=agy/$cur  reroutes=$((${#agy_tried[@]} - 1))  elapsed=$((SECONDS - t0))s  artifact=$(_burn_size "$artifact")B"
+
+      # P1-2 (2026-09-09 round-1 review): the terminal `dry` write used to
+      # land HERE, before the --wait-for-reset check below — which means a
+      # tank that is about to sleep 30 seconds and finish the SAME task
+      # published "this run is OVER, and it went dry" to every reader
+      # (`wait`, `burn_tank_busy`) for the entire sleep, up to `<dur>`. Decide
+      # whether this tank is actually being abandoned FIRST; only write the
+      # terminal `dry` on the branches that really do abandon it.
+      if [ -n "$wait_for_reset_s" ] && [ -n "$reset" ] \
+         && _burn_wait_for_reset "$status_engine" "$cur" "$artifact" "$reset" "$wait_for_reset_s"; then
+        log_info "agy/$cur should be reset now — re-firing on the same tank."
+        continue
+      fi
+
+      _burn_status_write dry false "$status_engine" "$cur" "$artifact" "tank ran dry" "$reset"
+      # #61: track the EARLIEST parseable reset across the whole walk, not
+      # just this hop's — an earlier hop's window may reopen before this
+      # one's, and that's the number a caller waiting on "no-tank-available"
+      # actually wants.
+      local _rst_epoch; _rst_epoch="$(_burn_dry_epoch "$reset" || true)"
+      if [ -n "$_rst_epoch" ] && { [ -z "$earliest_epoch" ] || [ "$_rst_epoch" -lt "$earliest_epoch" ]; }; then
+        earliest_epoch="$_rst_epoch"; earliest_reset="$reset"
+      fi
+    elif [ "$artifact_fresh" -eq 1 ]; then
+      log_done "Done on agy/$cur — artifact present at engine exit: $artifact"
+      _burn_status_write "done" true "$status_engine" "$cur" "$artifact" "artifact produced" ""
+      _burn_result true agy "$cur" "$artifact" "artifact produced"
+      log_info "summary: tank=agy/$cur  reroutes=$((${#agy_tried[@]} - 1))  elapsed=${burn_elapsed_s:-$((SECONDS - t0))}s  artifact=${artifact_bytes_snapshot}B"
       return 0
-    else
-      log_err "agy/$cur produced no fresh artifact and shows no limit — a real task failure, not a dry tank."
-      printf '%s\n' "$out" | tail -n 5 | sed 's/^/    /'
+    elif printf '%s' "$out" | grep -qi "no output produced"; then
+      # agy REFUSED and said so. It exits 0 either way (verified 2026-07-27), and
+      # its refusal arrives on the same stdout an answer would — so capturing
+      # stdout blindly turned "the tool declined" into a DONE row with the
+      # decline text sitting in the artifact. That is a false success, which is
+      # worse than the honest failure it replaced; caught within the hour by
+      # dogfooding this very path. `no output produced` is agy telling us it
+      # yielded nothing — a status claim, not prose about an answer, and the
+      # closest thing to a structured marker it offers.
+      log_err "agy/$cur declined the task — nothing was produced."
+      _burn_status_write fail false "$status_engine" "$cur" "$artifact" "agy declined the task" ""
+      _burn_output_tail "$out" 3
+      log_dim  "agy's headless mode auto-denies file tools on your paths. Fence the task so it needs none (answer from the prompt text, print the answer), or run it yourself with the permission you're willing to grant."
       log_info "summary: tank=agy/$cur  reroutes=$((${#agy_tried[@]} - 1))  elapsed=$((SECONDS - t0))s  artifact=none"
+      return 1
+    elif [ -n "$out" ]; then
+      # burn's contract is "the artifact proves it happened". agy's headless mode
+      # AUTO-DENIES the file tools on your paths — it cannot prompt for
+      # permission with no terminal — so asking agy to write the artifact itself
+      # fails 100% of the time, and did (field report 2026-07-27). The two
+      # contracts are incompatible, but only in who holds the pen: agy prints
+      # perfectly well, and clikae already had the output in hand for its error
+      # tail. So clikae writes it.
+      #
+      # Deliberately NOT the alternatives: adding an allow-rule to the user's agy
+      # settings would have clikae widen an engine's permissions on their behalf
+      # (the same line `--dangerously-skip-permissions` sits on), and refusing
+      # --artifact outright would remove the only verification burn has.
+      if printf '%s\n' "$out" > "$artifact" 2>/dev/null; then
+        artifact_bytes_snapshot="$(_burn_size "$artifact")"
+        log_done "agy/$cur finished — clikae captured its output into: $artifact"
+        _burn_status_write "done" true "$status_engine" "$cur" "$artifact" "clikae captured stdout into the artifact" ""
+        _burn_result true agy "$cur" "$artifact" "clikae captured stdout into the artifact"
+        log_dim  "CAPTURED, NOT VERIFIED. For claude/codex the artifact is proof the ENGINE did the work; here clikae only relocated whatever agy printed. Read the file before you trust it — a large answer may be the pointer agy printed rather than the content it buffered into its own brain dir."
+        log_info "summary: tank=agy/$cur  reroutes=$((${#agy_tried[@]} - 1))  elapsed=${burn_elapsed_s:-$((SECONDS - t0))}s  artifact=${artifact_bytes_snapshot}B"
+        return 0
+      fi
+      log_err "agy/$cur produced output but clikae could not write $artifact"
+      _burn_status_write fail false "$status_engine" "$cur" "$artifact" "clikae could not write the artifact" ""
+      _burn_result false agy "$cur" "$artifact" "clikae could not write the artifact"
+      log_info "summary: tank=agy/$cur  reroutes=$((${#agy_tried[@]} - 1))  elapsed=${burn_elapsed_s:-$((SECONDS - t0))}s  artifact=none"
+      return 1
+    else
+      log_err "agy/$cur produced NOTHING and shows no limit — a real task failure, not a dry tank."
+      _burn_status_write fail false "$status_engine" "$cur" "$artifact" "engine produced nothing and showed no limit" ""
+      _burn_result false agy "$cur" "$artifact" "engine produced nothing and showed no limit"
+      log_dim  "agy buffers a large answer into its own brain dir and can print nothing at all; a silent run is not proof it did no work — check ~/.gemini/antigravity-cli/brain/ before re-firing."
+      _burn_output_tail "$out"
+      log_info "summary: tank=agy/$cur  reroutes=$((${#agy_tried[@]} - 1))  elapsed=${burn_elapsed_s:-$((SECONDS - t0))}s  artifact=none"
       return 1
     fi
 
-    [ "$reroute" -eq 1 ] || { log_info "Dry, and --no-reroute is set. Stopping."; return 1; }
-    # `|| true`: under `set -e -o pipefail`, grep exiting 1 (every tank already
-    # tried — nothing left to select) would otherwise abort the script here
-    # instead of falling through to the "all dry" log_fail below.
-    local nxt; nxt="$(_agy_tank_names | grep -vxF -f <(printf '%s\n' "${agy_tried[@]}") | head -1)" || true
-    [ -n "$nxt" ] || log_fail "All $tank_count agy tank(s) are dry — nothing left after: ${agy_tried[*]}. Add a tank (clikae init agy <name>) or wait for a reset."
+    [ "$reroute" -eq 1 ] || {
+      log_info "Dry, and --no-reroute is set. Stopping."
+      _burn_status_write dry false "$status_engine" "$cur" "$artifact" "tank ran dry and --no-reroute is set" "${reset:-}"
+      _burn_result false "$cli" "$cur" "$artifact" "tank ran dry and --no-reroute is set" "${reset:-}"
+      # #61 round-1 P2-5: this used to `return 1` — the SAME rc a real task
+      # failure gets, even though the status file right above it already
+      # says `state: dry`. `reason` was the only discriminator any consumer
+      # had, and clikae wait's own rc doesn't read `reason` (see docs/
+      # orchestration.md). rc now agrees with the state it just wrote: both
+      # ways a burn can stop on a dry tank without reroute exhausting the
+      # reserve — --no-reroute here, and a fully exhausted walk below — are
+      # $CLIKAE_BURN_RC_NO_TANK; only a REAL task failure keeps rc 1.
+      exit "$CLIKAE_BURN_RC_NO_TANK"
+    }
+    # P2-2 (2026-09-09 round-1 review): this picker never called
+    # burn_tank_busy — the ONE engine where that matters most, since agy's
+    # login is a single GLOBAL Keychain entry (§2 above) and the ~/.gemini
+    # swap is machine-wide and exclusive: agy structurally CANNOT run two
+    # tanks at once, unlike claude/codex where a busy tank is merely
+    # inconvenient to collide with. The start-of-run refusal in cmd_burn
+    # already guards the tank named on the command line; it never guarded a
+    # REROUTE target, which is exactly what this walk picks next.
+    local nxt=""
+    local _agy_cand
+    while IFS= read -r _agy_cand; do
+      [ -n "$_agy_cand" ] || continue
+      case " ${agy_tried[*]} " in *" $_agy_cand "*) continue ;; esac
+      # #63 round-5 P2-1: the same launch gate cmd_burn asks, applied to agy's
+      # own walk — the cockpit is skipped, never launched.
+      # #63 round-6 P3-1: `_agy_burn`'s automatic walk (picking the NEXT
+      # tank after a dry one) always passed force_cockpit through, so
+      # `burn agy default --force-cockpit` — a flag the operator gave for
+      # the NAMED target — also let the WALK land on the cockpit, exactly
+      # what the help text (`--force-cockpit … Auto-reroute never picks the
+      # cockpit, with or without this flag`) and fix5's own report both
+      # promised would never happen. Pass 0 here, unconditionally: the walk
+      # is automatic, never named by the operator, so nothing it picks is
+      # ever "forced" onto the cockpit — same rule _burn_next_same_engine
+      # already follows for claude/codex's own auto-reroute.
+      if ! _burn_cockpit_gate agy "$_agy_cand" 0; then
+        log_warn "skipping agy/$_agy_cand — it is the cockpit (dispatches burns; never a reroute target, see \`clikae cockpit\`)."
+        continue
+      fi
+      if [ "$allow_active" != "1" ] && burn_tank_busy "$status_engine" "$_agy_cand" "$$"; then
+        log_warn "skipping agy/$_agy_cand — another burn is already running on it (#40; --allow-active to override)."
+        continue
+      fi
+      nxt="$_agy_cand"
+      break
+    done < <(_agy_tank_names)
+    if [ -z "$nxt" ]; then
+      # #61 round-2 P3: the order below is deliberate, not what an earlier
+      # version of this comment claimed. log_err writes the human-readable
+      # line to stderr first — it does NOT exit — then the machine-readable
+      # status file and result are written, and only THEN does the explicit
+      # `exit` below actually leave this rc; a caller reading either stream
+      # sees the full picture regardless of which one it reads first. reset
+      # is the EARLIEST parseable reset seen across the whole walk (null if
+      # none parsed), not just this hop's.
+      log_err "All $tank_count agy tank(s) are dry — nothing left after: ${agy_tried[*]}. Add a tank (clikae init agy <name>) or wait for a reset."
+      _burn_status_write dry false "$status_engine" "$cur" "$artifact" "no-tank-available" "$earliest_reset"
+      _burn_result false agy "$cur" "$artifact" "no-tank-available" "$earliest_reset"
+      exit "$CLIKAE_BURN_RC_NO_TANK"
+    fi
     agy_tried+=("$nxt")
+    tried="${tried:+$tried }agy/$cur"
     cur="$nxt"
     log_info "Rerouting (dry) → agy/$cur"
   done
 }
 
+# P2-1 (round-2 review): round-1's wall budget wrapped the file-list `find`
+# ONLY — the four `_burn_lb_git` calls below ran bare. Measured: `find` is
+# the CHEAP half (0.016s on a 20k-file repo vs git status's 0.108s with
+# fsmonitor/locks both off — the exact config P3-4 forces on every call
+# here), so the budget guarded the 1/7-cost side and left the expensive,
+# hang-prone side (a FIFO for `.git/HEAD`, a stuck `git status` on a dead
+# NFS mount) able to block `_burn_left_behind` — and therefore all of
+# `burn` — forever. `timeout`/`gtimeout` don't fix this portably: stock
+# macOS ships neither (see `_burn_timeout_bin`'s own comment), and its
+# `perl` fallback is explicitly skipped there because an alarm-killed
+# perl's exit code isn't reliably 124. `_burn_lb_bounded` needs no external
+# binary at all — background, blocking `wait` (not a `kill -0` poll loop —
+# see that tradeoff below), TERM+KILL past the deadline — so it bounds git
+# and find identically on every platform bash itself runs on (P2-1, round-3
+# review: identically requires never backgrounding a builtin — see
+# `_burn_lb_git`'s own comment). P3-3 (round-4 review): "identically" also
+# assumes `"$@"` execs into a single process — TERM+KILL only ever reaches
+# the one pid `$!` names; a child that forks and does NOT exec (or traps
+# TERM) leaves ITS child running past the deadline, still holding
+# `_burn_left_behind`'s pipe open.
+# P2-1 (round-5 review): round-4 answered that with a comment claiming "real
+# git and find don't do this". They do — `find`'s own `-exec` is exactly
+# that shape, and it is THIS FILE's file-list scan that runs it: `-exec test
+# -e {}/.git \;` forks once per directory walked, `-exec stat … {} +` once
+# per batch. Measured on the pre-fix code, with only `stat` stubbed: a stub
+# that slept 25s made a real `clikae burn` take 25s against a 5s bound and a
+# 10s global budget; a stub that never returned made it produce NOTHING —
+# killed by an external `timeout -s KILL 45` with no "left behind:" block
+# and no JSON at all, because the orphaned grandchild still held the scan's
+# own `$(...)` open (so much for "never change burn's exit code or --json
+# shape"); the same shape on real bash 3.2.57 had not returned after 13
+# minutes. The fix is below and it is structural: the bounded child gets its
+# OWN process group and the deadline kills the GROUP. Backgrounding here is safe specifically
+# BECAUSE this whole scan
+# already runs inside `_burn_left_behind`'s own `$(...)` subshell (see the
+# P1 note below): the "&" below can only ever background a child of THAT
+# subshell, so nothing it starts can outlive the one process substitution
+# that already scopes every other failure mode in this function.
+# P2-1 (round-5 review): `kill -- -$pid` is the whole fix, and it is also the
+# one call in this file that could be catastrophic if it silently aimed at the
+# wrong thing — a `-$pid` that is NOT a process group of its own is the
+# SCAN's process group, i.e. burn itself and whatever shell launched it. So
+# the capability is verified once per scan against a throwaway child rather
+# than assumed, and anything short of proof leaves `_BURN_LB_PGROUP=0`, where
+# every kill below falls back to the exact single-pid behaviour this function
+# had before — never worse, just not better.
+# The test is `kill -0 -- -$p`, and it is EXACT rather than approximate: a
+# process group's id is always some process's pid, and that pid here is our
+# own child, so a group with id `$p` can exist only if `$p` itself leads it.
+# It is also the bash builtin, which matters more than it looks — the first
+# cut asked `ps -o pgid= -p "$p"`, and on a real `bash:3.2.57` container
+# (busybox `ps`, no such option) it answered nothing, silently disabling the
+# whole fix on the one bash version this round exists to protect. Measured
+# there: `PGROUP=0`, the grandchild survived, `survivors=1`. With this
+# version, on the same container: `PGROUP=1`, zero survivors.
+_burn_lb_pgroup_probe() {
+  _BURN_LB_PGROUP=0
+  # #112 item 6: the fallback below ("every kill is a single-pid kill, exactly
+  # what this function did before process groups") is deliberate and, until now,
+  # exercised by nothing — it only happens on a platform that will not give a
+  # backgrounded child a group of its own, and neither CI runner is one. This
+  # seam forces it, so the path has a test instead of an assumption. It is not a
+  # tuning knob and is documented nowhere a user would look: turning it on makes
+  # a forking child's grandchildren outlive the bound, which is the very defect
+  # round-5's P2-1 fixed.
+  if [ "${CLIKAE_BURN_LB_SINGLE_PID:-0}" = 1 ]; then return 0; fi
+  local mflag p
+  case "$-" in *m*) mflag=1 ;; *) mflag=0 ;; esac
+  { set -m; } 2>/dev/null
+  sleep 30 &
+  p=$!
+  [ "$mflag" -eq 1 ] || { set +m; } 2>/dev/null
+  kill -0 -- "-$p" 2>/dev/null && _BURN_LB_PGROUP=1
+  kill "$p" 2>/dev/null || true
+  wait "$p" 2>/dev/null || true
+  return 0
+}
+
+# Our own process group id, resolved at most once per shell and cached as the
+# empty string when the platform will not say (busybox `ps` has no `-o pgid` —
+# the same platform that made `_burn_lb_pgroup_probe` stop trusting `ps`).
+# `_burn_left_behind` resolves it up front so the per-repo `$(...)` subshells
+# inherit the answer instead of forking a `ps` each.
+_burn_lb_self_pgid() {
+  case "${_BURN_LB_PGID+set}" in set) return 0 ;; esac
+  _BURN_LB_PGID="$(ps -o pgid= -p $$ 2>/dev/null)" || _BURN_LB_PGID=''
+  _BURN_LB_PGID="${_BURN_LB_PGID// /}"
+  _BURN_LB_PGID="${_BURN_LB_PGID//$'\t'/}"
+  case "$_BURN_LB_PGID" in ''|*[!0-9]*) _BURN_LB_PGID='' ;; esac
+  return 0
+}
+
+# Says out loud what it refused and why. `log_warn` (stderr) when log.sh is
+# loaded — burn's `--json` payload goes to fd 4/stdout, never here — and a
+# bare printf when this file was sourced on its own.
+_burn_lb_kill_refused() {
+  if command -v log_warn >/dev/null 2>&1; then
+    log_warn "left-behind scan: refusing to signal \`-$2\` with $1 ($3) — see _burn_lb_kill."
+  else
+    printf 'left-behind scan: refusing to signal -%s with %s (%s)\n' "$2" "$1" "$3" >&2
+  fi
+  return 0
+}
+
+# _burn_lb_kill <signal> <pid> — the pid's whole process group when this
+# platform gave it one, the pid alone otherwise.
+# P3-1 (round-6 review): `_burn_lb_pgroup_probe` above proves the PLATFORM can
+# be aimed at a process group. It proves nothing about the VALUE this function
+# is handed, and `kill -- -$2` is exactly as catastrophic for a bad value as
+# the probe's own comment says: POSIX reads `-0` as "the CALLER's process
+# group", i.e. burn plus whatever shell launched it. Measured on this box (in
+# an isolated `setsid` session, so only that session died): `_burn_lb_kill TERM
+# 0` never returned, the caller exited with rc=15, and its own children went
+# with it. `-1` is the same shape aimed at every process the user may signal.
+# Today no call site can produce either — `$!` after `cmd &` is never 0, 1 or
+# empty — so this is a guard against the next caller, not a live bug; the blast
+# radius is the operator's terminal and the guard is a `case`.
+# Refusals are loud (`log_warn`) and return 1: a caller that gets here has a
+# bug, and silently doing nothing is how the wrong pid got this far.
+_burn_lb_kill() {
+  local sig="$1" target="${2:-}"
+  case "$target" in
+    ''|*[!0-9]*)
+      _burn_lb_kill_refused "$sig" "$target" 'not a pid'
+      return 1 ;;
+  esac
+  if [ "$target" -lt 2 ] 2>/dev/null; then
+    _burn_lb_kill_refused "$sig" "$target" \
+      'reserved: 0 means the callers own process group, 1 means every process'
+    return 1
+  fi
+  # The one value that looks like an ordinary pid and is still the disaster:
+  # our own process group's leader. A child's pgid is always its own fresh pid,
+  # so a legitimate target can never collide with it — but a stale/reused
+  # variable can.
+  _burn_lb_self_pgid
+  if [ -n "${_BURN_LB_PGID:-}" ] && [ "$target" = "$_BURN_LB_PGID" ]; then
+    _burn_lb_kill_refused "$sig" "$target" "that is burn's own process group"
+    return 1
+  fi
+  if [ "${_BURN_LB_PGROUP:-0}" = 1 ]; then
+    kill "-$sig" -- "-$target" 2>/dev/null && return 0
+  fi
+  kill "-$sig" "$target" 2>/dev/null || true
+  return 0
+}
+
+# Milliseconds since the epoch, or nothing at all when neither clock exists.
+# P3-5 (round-6 review): the 137/143 fallback at the end of `_burn_lb_bounded`
+# is the last place in this file that still compares `$SECONDS` — an integer
+# clock that ticks on ABSOLUTE second boundaries, the exact defect round-5's
+# P3-3 removed from the main path. `$EPOCHREALTIME` (bash 5) and GNU `date
+# +%s%N` both give sub-second resolution; BSD `date` prints a literal `N` for
+# `%N`, which the digit test below rejects, and then the caller keeps the old
+# whole-second comparison rather than inventing precision it does not have.
+_burn_lb_now_ms() {
+  local t s f
+  t="${EPOCHREALTIME:-}"
+  case "$t" in
+    *[.,]*)
+      s="${t%%[.,]*}"; f="${t#*[.,]}000"
+      case "$s" in
+        ''|*[!0-9]*) ;;
+        *) printf '%s' "$(( s * 1000 + 10#${f:0:3} ))"; return 0 ;;
+      esac ;;
+  esac
+  t="$(date +%s%N 2>/dev/null)" || t=''
+  case "$t" in ''|*[!0-9]*) return 1 ;; esac
+  # BSD `date` prints a literal `N` (caught by the digit test above), but
+  # busybox `date` — the one on the real `bash:3.2` image — expands `%N` to
+  # NOTHING, which leaves a plain 10-digit epoch that looks like a valid
+  # answer and reads as 1789 milliseconds. Epoch nanoseconds are the epoch's
+  # 10 digits plus 9 more; anything shorter is not this clock.
+  [ "${#t}" -ge 19 ] || return 1
+  printf '%s' "${t%??????}"
+  return 0
+}
+
+# Remembers the caller's own INT disposition once per shell so the trap
+# `_burn_lb_bounded` installs can be taken back off exactly, not with a blanket
+# `trap - INT` — `cmd_burn` installs `_burn_exit_guard` on INT (see below), and
+# a helper that quietly deletes it would trade this round's fix for a worse bug.
+_burn_lb_int_save() {
+  case "${_BURN_LB_INT_PREV+set}" in set) return 0 ;; esac
+  _BURN_LB_INT_PREV="$(trap -p INT 2>/dev/null)" || _BURN_LB_INT_PREV=''
+  return 0
+}
+
+_burn_lb_bounded() {
+  local secs="$1"; shift
+  local start=$SECONDS pid watcher rc mflag kill_mark
+  local start_ms='' now_ms='' timed_out=0
+  # Lazily probed so a direct caller (the unit tests in burn.bats) gets the
+  # same guarantee; `_burn_left_behind` probes ONCE up front so the four
+  # per-repo `_burn_lb_git` calls — each inside its own `$(...)` subshell,
+  # where a global set here would not survive — inherit the answer instead
+  # of re-probing 4x per repo.
+  [ -n "${_BURN_LB_PGROUP:-}" ] || _burn_lb_pgroup_probe
+  # $1 must never be a shell builtin (`command`, `builtin`, `eval`, a
+  # function) — on real bash 3.2 (not this repo's bash 5), backgrounding a
+  # builtin forks an intermediate subshell to run it, so `$!` below is that
+  # subshell, not whatever the builtin itself execs. Every caller passes an
+  # absolute path or a bare external command name for exactly this reason
+  # (P2-1, round-3 review; `_burn_lb_git`'s own comment has the repro).
+  # Job control, on for exactly the length of this fork, is what puts the
+  # child in a process group of its own (pgid == its pid) — real bash 3.2.57
+  # does this too (verified in a `bash:3.2.57` container: the child's pgid is
+  # its own pid and the group kill leaves zero survivors).
+  # `{ set -m; } 2>/dev/null` rather than a bare `set -m`: bash initialises
+  # job control against `fileno(stderr)` and, with a terminal there, can take
+  # the controlling terminal's foreground process group — which would be a
+  # new way to wreck a `clikae burn` running under a pty. Redirecting fd 2
+  # for the duration of the `set` builtin itself keeps that path away from
+  # the tty (verified under `script`: this shell's own pgid AND the
+  # terminal's foreground pgid are unchanged across this block, while the
+  # child still gets its own pgid).
+  case "$-" in *m*) mflag=1 ;; *) mflag=0 ;; esac
+  { set -m; } 2>/dev/null
+  "$@" &
+  pid=$!
+  # P3-3 (round-5 review, same root as r3 P3-1): the watchdog leaves a mark
+  # when it actually fires, so "did this time out" stops being an integer
+  # comparison of a second-granularity clock — see the `return` at the end of
+  # this function for what that comparison got wrong. Cleared first, with a
+  # builtin test so the common (no-timeout) path still forks nothing: the
+  # path is unique among LIVE processes, but a previous call killed between
+  # its own `kill` and its own `rm` could have left one behind under the same
+  # `$$`/pid pair.
+  # P3-6 (round-6 review): this used to be `"${TMPDIR:-/tmp}/clikae-lb-kill.$$.$pid"`
+  # — the only path in this function assembled by hand while `disc`, `scan` and
+  # `rank` all use `mktemp`. Both of its ingredients are readable by every other
+  # user of a shared `/tmp`, which buys them two things: create the file first
+  # and this call reports a timeout that never happened, or point it at a
+  # symlink and the watchdog's write truncates whatever it names (the `rm -f`
+  # that followed removed the link, not the damage). `mktemp` is O_EXCL, 0600
+  # and unguessable, so neither move exists any more.
+  # The file is created EMPTY and now carries the answer in its SIZE, not in
+  # its existence: `mktemp` made it, so "it exists" no longer means "the
+  # watchdog fired" — `[ -s ]` does. An empty `kill_mark` (mktemp failed, e.g.
+  # a full or read-only $TMPDIR) is the one case that has no evidence to read,
+  # and only that case falls back to the clock at the end of this function.
+  kill_mark="$(mktemp "${TMPDIR:-/tmp}/clikae-lb-kill.XXXXXX" 2>/dev/null)" || kill_mark=''
+  if [ -z "$kill_mark" ]; then
+    start_ms="$(_burn_lb_now_ms)" || start_ms=''
+  fi
+  # A `kill -0`-poll-then-`sleep 1` loop was the first cut here and it was
+  # wrong in a way that only showed up under real load: every bounded call
+  # — even one that finishes instantly — pays up to ~1s of pure polling
+  # latency (the loop only notices the child is gone on its NEXT wake-up).
+  # With 4 bounded calls per repo that turned "30 small repos, instant
+  # git" into 3 repos before the 10s global budget (P2-1, same review)
+  # tripped — measured on this box under a normal shared-runner load.
+  # `wait "$pid"` is a real blocking wait (kernel-level, zero polling
+  # tax); the watchdog subshell is the only thing that sleeps, and only
+  # once, for exactly `secs`.
+  # This function is always called from inside `_burn_left_behind`'s own
+  # `$(...)` — a command substitution never returns until every process
+  # holding its output pipe's write end has closed it, INCLUDING a
+  # process that never writes anything. The watchdog's `sleep "$secs"` is
+  # forked as ITS child, not `_burn_lb_bounded`'s — killing the watchdog
+  # subshell (below) does not kill that grandchild, which then runs
+  # orphaned for its full duration, silently holding the pipe open the
+  # whole time. Measured: every bounded call took exactly `secs` — the
+  # RIGHT value came back immediately (rc was correct at $SECONDS+0), the
+  # command substitution just didn't unblock until the orphaned `sleep`
+  # finally exited. `>/dev/null 2>&1` on the watchdog gives it (and
+  # anything it forks) a redirected fd 1 from the start, so an orphaned
+  # `sleep` holds no reference to the real pipe.
+  # P2-3 (round-3 review): 1/2 being redirected wasn't enough — the watchdog
+  # (and its orphaned `sleep`, same reasoning as above) still inherited every
+  # OTHER fd open in the caller, including fd 4, which `cmd_burn` holds open
+  # as `--json`'s real stdout for the whole run. Every failed burn call
+  # measured a fixed ~5s gap between the process exiting and the caller's
+  # `$(clikae burn --json …)`/`| jq` actually seeing EOF — the orphaned
+  # `sleep` was the last writer-side holder of that pipe. `3>&- 4>&-` closes
+  # the two fds this file itself is known to open (fd 3: `_burn_run_and_tee`;
+  # fd 4: the json result pipe) so the watchdog can't hold either past its
+  # own exit.
+  # P3-2 (round-4 review, #112 item 9 — a documented limit, deliberately not
+  # fixed): those two are the only descriptors closed by name. Every OTHER fd
+  # open in the caller is still inherited here — a caller's own fd 5, the
+  # collision lock's fd 9 in the launched wrapper. With a real process group
+  # that is moot (the watchdog's `sleep` dies with its group instead of
+  # orphaning while holding whatever it inherited); on the single-pid fallback
+  # (`_BURN_LB_PGROUP=0`) the pre-fix shape remains, the same trade that
+  # fallback makes everywhere else: never worse than before, just not better.
+  # The watchdog is backgrounded while job control is STILL on, so it gets a
+  # group of its own as well — which is what finally retires the orphaned
+  # `sleep` this function's comments above spend three paragraphs on: killing
+  # the watchdog's GROUP takes its `sleep` with it instead of leaving a
+  # grandchild holding whatever fds it inherited.
+  # TERM first (a child with a cleanup trap gets to run it), then KILL a
+  # second later for one that ignores TERM. `wait "$pid"` below does not
+  # return until the child is actually dead, so the parent cannot reap this
+  # watchdog before that escalation has happened.
+  ( sleep "$secs"
+    # Gate on the child still existing so the deadline and a command that
+    # finished on its own at the very same instant do not both claim it.
+    if kill -0 "$pid" 2>/dev/null; then
+      [ -z "$kill_mark" ] || printf '1\n' > "$kill_mark" 2>/dev/null || true
+      _burn_lb_kill TERM "$pid" || true
+      sleep 1
+      # P3-3 (round-6 review): this KILL is a GROUP kill (`kill -KILL -- -$pid`,
+      # since a bounded child's pgid is its own pid) and it is the only thing
+      # that reaches a grandchild which ignores TERM. It used to be unreachable:
+      # the parent's `wait "$pid"` returns the instant the DIRECT child dies of
+      # TERM, and the parent then killed this watchdog — mid-`sleep 1`, before
+      # the escalation. Measured: child `trap "" TERM` => 0 survivors (the
+      # parent was still blocked in `wait`), but a child that dies of TERM with
+      # a TERM-ignoring GRANDCHILD => 1 survivor, still alive 3s later. The
+      # parent now waits this subshell out instead whenever the mark says it
+      # fired.
+      _burn_lb_kill KILL "$pid" || true
+    fi
+  ) >/dev/null 2>&1 3>&- 4>&- &
+  watcher=$!
+  [ "$mflag" -eq 1 ] || { set +m; } 2>/dev/null
+  # P3-2 (round-6 review): `set -m` above is what puts the child in a process
+  # group of its own — and a terminal delivers SIGINT only to its FOREGROUND
+  # process group, so from the moment that fix landed, Ctrl-C during a scan
+  # stopped reaching the `find`/`git` the scan is waiting on. Measured: burn
+  # died instantly and its bounded child plus the watchdog's `sleep` kept
+  # running, orphaned (`ppid=1`), chewing the disk for the rest of the bound.
+  # Forwarding INT to the child's GROUP restores the pre-`set -m` behaviour:
+  # the scan stops now, the watchdog's TERM/KILL is still there as the backstop
+  # for a child that ignores INT, and the interrupt is re-raised below so burn
+  # exits the way an interrupted command is supposed to and the operator gets
+  # their shell back.
+  _burn_lb_int_save
+  _BURN_LB_INT=0
+  # `$pid` is baked in ON PURPOSE (SC2064): by the time this fires, `$pid` may
+  # already belong to the NEXT bounded call, and signalling that one's group
+  # would be the very footgun the guard above exists to stop.
+  # shellcheck disable=SC2064
+  trap "_BURN_LB_INT=1; _burn_lb_kill INT $pid || true" INT
+  # This whole function runs under the caller's `set -eo pipefail`
+  # (bin/clikae:6, same as every other git call in this file). `wait`'s
+  # own exit status is the waited-on job's exit status — non-zero for
+  # ANY command this bounds that legitimately fails (not just a timeout:
+  # `git rev-list --count '@{u}..HEAD'` with no upstream configured,
+  # which round-1's own tests exercise constantly). A bare `wait`/`kill`
+  # left unguarded here matches the exact P1 shape (round-1 review)
+  # `_burn_left_behind`'s own comment already warns about — every git call
+  # in this file is individually `||`-guarded for that reason, and a new
+  # function that forgets it reopens the same class of bug even though it
+  # wasn't, in the end, this round's actual macOS failure (see
+  # `_burn_left_behind`'s own comment on the process-substitution bug that
+  # was). Bare `kill` is the same hazard: it returns non-zero when the
+  # target has already exited (the common, non-timeout case).
+  rc=0
+  wait "$pid" 2>/dev/null || rc=$?
+  if [ -n "${_BURN_LB_INT_PREV:-}" ]; then eval "$_BURN_LB_INT_PREV"; else trap - INT; fi
+  if [ -n "$kill_mark" ] && [ -s "$kill_mark" ]; then
+    # The watchdog fired and is inside its own TERM→KILL grace (P3-3 above).
+    # Waiting it out costs one extra second on a path that has already spent
+    # `secs`, and it is what makes the group KILL exist at all.
+    timed_out=1
+    wait "$watcher" 2>/dev/null || true
+  else
+    _burn_lb_kill TERM "$watcher" || true
+    wait "$watcher" 2>/dev/null || true
+  fi
+  # P3-3 (round-5 review): this used to be `[ $((SECONDS - start)) -lt
+  # "$secs" ] && return "$rc"; return 124` — an integer comparison of
+  # `$SECONDS`, which ticks on ABSOLUTE second boundaries (bash reads
+  # time(2)), not on this call's own start. A command launched 0.01s before a
+  # tick and finishing in 4.1s measures as 5 under a 5s bound and was
+  # reported as a timeout it never hit. That was already known (r3 P3-1,
+  # deferred); round-4 gave it a consumer that turns it into a visible lie —
+  # a discovery `find` that FINISHED gets counted as a truncation,
+  # so the report grows an "… and 1 more" repository that does not exist and
+  # `left_behind_truncated` counts it. Measured on the pre-fix code with a
+  # discovery `find` shimmed to 4.6s (well inside the 5s bound, and really
+  # finishing): 4 of 8 identical runs reported a phantom.
+  # The watchdog's own mark answers the question directly instead: it exists
+  # only if the deadline passed with the child still alive.
+  # P3-5 (round-6 review): the fallback below used to run whenever the mark was
+  # absent, which is NOT the same question. With `mktemp` making the file up
+  # front (P3-6), "absent" means one thing only — we could not make a mark at
+  # all — and that is the only case the comment ever claimed to cover. Before,
+  # every ordinary run had no mark, so ANY child killed from outside (the OOM
+  # killer, a maintainer's `pkill`, another lane's cleanup) was reported as a
+  # timeout burn invented, complete with a repo that "timed out" and a
+  # `discovery timed out after 5s` line. Now a usable mark is the whole answer
+  # and the clock is never consulted.
+  if [ -n "$kill_mark" ]; then
+    rm -f "$kill_mark" 2>/dev/null || true
+  else
+    # No mark was possible. A child that died FROM A SIGNAL at or past the
+    # deadline was probably killed by the watchdog — both halves are needed,
+    # since the signal alone misreads an externally-killed command. The clock
+    # is milliseconds when the platform has one (`$EPOCHREALTIME`, GNU `date
+    # +%s%N`); `$SECONDS` is the last resort and keeps its old whole-second
+    # window, which is why it is now reached only when BOTH the mark and every
+    # sub-second clock are unavailable.
+    case "$rc" in
+      137|143)
+        if [ -n "$start_ms" ]; then
+          now_ms="$(_burn_lb_now_ms)" || now_ms=''
+          if [ -n "$now_ms" ] && [ "$(( now_ms - start_ms ))" -ge "$(( secs * 1000 ))" ]; then
+            timed_out=1
+          fi
+        elif [ $((SECONDS - start)) -ge "$secs" ]; then
+          timed_out=1
+        fi
+        ;;
+    esac
+  fi
+  # Re-raise the interrupt we swallowed (P3-2) now that the child is reaped and
+  # the temp file is gone: the caller's own INT disposition is back in place,
+  # so this is `cmd_burn`'s `_burn_exit_guard 130` in a real burn and a plain
+  # 130 exit anywhere else. `$$` is bash's own pid — never 0, never empty —
+  # and is asserted anyway, because this file's one rule about `kill` is that
+  # the target is proven before it is used.
+  if [ "${_BURN_LB_INT:-0}" = 1 ]; then
+    _BURN_LB_INT=0
+    case "$$" in
+      ''|*[!0-9]*) ;;
+      *) if [ "$$" -gt 1 ]; then kill -INT "$$" 2>/dev/null || true; fi ;;
+    esac
+  fi
+  [ "$timed_out" -eq 0 ] || return 124
+  return "$rc"
+}
+
+# Every git call the left-behind scan makes goes through this: `-c
+# core.fsmonitor=false` overrides ANY value the scanned repo's own
+# .git/config sets (command-line -c always wins over repo config), so a
+# `core.fsmonitor` pointed at an arbitrary executable can never run just
+# because burn happened to walk past that repo (P3-4/P1, round-1 review —
+# GIT_OPTIONAL_LOCKS alone only stops writes, not exec). `-c
+# core.hooksPath=/dev/null` is the same defense for every hook name.
+# P2-1 (round-2 review): every call now goes through `_burn_lb_bounded` too
+# — a hung `rev-parse`/`symbolic-ref`/`rev-list`/`status` (dead NFS mount,
+# `.git/HEAD` replaced by a FIFO) gets 5s like the file-list `find` always
+# did, instead of blocking this function — and therefore `burn` itself —
+# indefinitely.
+# P2-1 (round-3 review): `command git …` here defeated the bound it was
+# supposed to feed. `_burn_lb_bounded` records `$!` right after
+# backgrounding `"$@"`; on real bash 3.2.57 (macOS CI's own
+# `/usr/bin/env bash`, not the bash 5 this file was written and tested
+# against) `command <builtin-lookalike-name>` forks an intermediate subshell
+# to run the builtin machinery, so `$!` is THAT subshell, not git. Killing
+# `$!` kills the subshell; git is reparented to init and keeps running,
+# still holding `_burn_left_behind`'s own `$(...)` pipe open — measured:
+# `.git/HEAD` as a FIFO made a real `clikae burn` in a bash:3.2 container
+# hang past ten minutes instead of returning at the 5s bound. `$BURN_LB_GIT`
+# (resolved once, below, via the `command -v git` already needed to decide
+# whether git exists at all) is passed as `$1` instead: an absolute path is
+# never a builtin, so `_burn_lb_bounded` backgrounds git itself on every
+# bash this runs on. See P3-1 (round-4 review) on `BURN_LB_GIT`'s own
+# assignment below for why that resolution is `type -P`, not `command -v` —
+# `command -v` alone does NOT give the function/alias-shadowing immunity
+# this comment used to claim: it happily returns a shadowing function's own
+# bare name instead of a path.
+_burn_lb_git() { _burn_lb_bounded 5 "$BURN_LB_GIT" -c core.fsmonitor=false -c core.hooksPath=/dev/null "$@"; }
+
+# _burn_lb_meta <over> <roots> <markers> <repos> <disc-timeout> [kill-mode] [unavailable]
+#
+# The left-behind scan's own top-level `--json` keys, rendered once, here, so
+# `_burn_left_behind` (which has the counts) and `_burn_result` (which needs a
+# default for a successful burn, and a fallback for a capture that came back
+# garbled) cannot drift apart. It is a FRAGMENT — `"k":v,"k":v`, no braces —
+# spliced straight into `_burn_result`'s printf next to the fields it already
+# owns. Every argument is an integer this file computed; nothing user-supplied
+# reaches it, so no escaping is needed or attempted.
+# `$6` (optional) is how the scan's bounded calls killed what they bounded
+# (`pgroup` or `single-pid`, empty when no scan ran) and `$7` (optional) is the
+# reason the scan could not run at all — a short, fixed token this file chooses,
+# never anything from outside. Both are JSON `null` when empty.
+# `left_behind_unavailable` stays LAST: `_burn_result`'s shape check reads the
+# first key and the last one, so a capture truncated anywhere between them is
+# rejected rather than printed.
+_burn_lb_meta() {
+  local kill_mode=null unavailable=null
+  [ -z "${6:-}" ] || kill_mode="\"$6\""
+  [ -z "${7:-}" ] || unavailable="\"$7\""
+  printf '"left_behind_truncated":%s,"left_behind_truncation":{"repos_over_cap":%s,"roots_budget_skipped":%s,"markers_budget_skipped":%s,"repos_budget_skipped":%s,"roots_discovery_timeout":%s},"left_behind_kill_mode":%s,"left_behind_unavailable":%s' \
+    "$(( $1 + $2 + $3 + $4 + $5 ))" "$1" "$2" "$3" "$4" "$5" "$kill_mode" "$unavailable"
+}
+
+# Read-only salvage evidence. Bash dynamic scope supplies add_dirs/started_at.
+# .git may be a directory OR a worktree/submodule pointer file.
+#
+# P1 (round-1 review): this whole scan runs under the caller's `set -eo
+# pipefail` (bin/clikae:6). A single unguarded pipeline failure in here used
+# to kill the ENTIRE burn process mid-`_burn_result` — before the `--json`
+# printf ever ran — turning a corrupted `.git/index` (exactly the shape a
+# killed/interrupted run leaves behind, i.e. precisely what #84 exists to
+# report on) into exit code 128 and zero JSON output. Two independent layers
+# now stand between a git failure in here and burn's own exit code: (a)
+# every git call below is individually guarded (`|| dirty=0`, `|| ahead=-`,
+# `|| continue`) so `set -e` never sees an unguarded failing statement, and
+# (b) the caller invokes this whole function inside `$(...)` — a real
+# subshell — so even a failure guard (a) misses only kills that subshell;
+# `set -e` never reaches the actual burn process either way.
+# Belt-and-suspenders on purpose: (a) alone was the P1 bug itself (one `||`
+# was missing, and the next missing one would reopen it); (b) alone would
+# still corrupt/lose this function's own human "left behind:" lines (see the
+# stdout-contract note on `_burn_result`'s call site). Every path below ends
+# in `return 0` — this function's own exit status is never the signal;
+# `_burn_result`'s `|| left_behind='[]'` fallback exists for the SUBSHELL
+# dying unexpectedly, not for this function returning non-zero on purpose.
+_burn_left_behind() {
+  local root marker repo seen="" branch ahead dirty files count entry rp_rc
+  local -a repos=() roots=()
+  local GIT_OPTIONAL_LOCKS=0
+  export GIT_OPTIONAL_LOCKS
+  # P2-1 (round-3 review): resolved once here, not `local` — `_burn_lb_git`
+  # (defined outside this function, called only from inside it) reads this
+  # as a global. See `_burn_lb_git`'s own comment for why an absolute path
+  # replaces `command git`.
+  # P3-1 (round-4 review): `command -v git` finds an absolute path for a
+  # real executable, but when the CALLER has `export -f`'d a shell function
+  # named `git` (measured: a real burn called it 6 times), `command -v`
+  # returns the bare string "git" — not a path, and not the immunity from
+  # function/alias shadowing `command` is supposed to give here. `type -P`
+  # only ever resolves an executable file on `$PATH`, never a function or
+  # alias, on both bash 5 and bash 3.2.57 (verified in a real
+  # `bash:3.2.57` container: `command -v git` => `git`, `type -P git` =>
+  # `/usr/bin/git`), so it's what actually delivers the guarantee the
+  # comment on `_burn_lb_git` above claims.
+  # #112 item 5 (round-5 review, "passed" note 4): this used to be a silent
+  # `printf '[]'; return 0` — correct, and indistinguishable from "scanned
+  # everything, found nothing". Both the human stream and `--json` now say which
+  # one happened: a machine consumer reads `left_behind_unavailable`, and a
+  # person gets one line rather than an empty report they would reasonably
+  # believe. Not a warning: `git` missing is an ordinary state on a machine that
+  # burns non-git work, and burn's own outcome is unaffected.
+  if ! BURN_LB_GIT="$(type -P git)"; then
+    log_info "left-behind scan: not run — git is not on PATH."
+    printf '%s\t[]' "$(_burn_lb_meta 0 0 0 0 0 '' git-not-on-PATH)"
+    return 0
+  fi
+  # P2-1 (round-5 review): probe the process-group capability ONCE here, not
+  # per bounded call — every `_burn_lb_git` below runs inside its own `$(...)`
+  # subshell, so a lazily-probed global would be recomputed (two `ps` forks
+  # and a `sleep` each) four times per repo and thrown away every time.
+  _burn_lb_pgroup_probe
+  # P3-1 (round-6 review): same reasoning for the `ps` that `_burn_lb_kill`'s
+  # value guard needs — resolved once here so the per-repo subshells inherit it.
+  _burn_lb_self_pgid
+  # #112 item 6: which of the two kill shapes this scan got is a property of the
+  # run, not of any one row, so it travels with the scan's other top-level keys.
+  # `single-pid` is the honest admission that a bounded call's grandchildren can
+  # outlive the bound here — see `_burn_lb_kill`.
+  local lb_kill_mode=single-pid
+  [ "${_BURN_LB_PGROUP:-0}" != 1 ] || lb_kill_mode=pgroup
+  # P2-4 (round-1 review): a `--add-dir` that is itself a symlink to a
+  # directory FULL of repos (`--add-dir ~/Developer` where `~/Developer` is a
+  # symlink, or any `--add-dir "$TMPDIR/…"` on macOS, where $TMPDIR is one)
+  # silently scanned nothing — `find` doesn't follow a symlink given as its
+  # own start point without `-H`/`-L`. The file-list scan below already
+  # resolved every root with `cd "$root" && pwd -P` (mirroring this at the
+  # repo-discovery loop closes the actual gap the review found); resolving
+  # ONCE here, for both loops, also drops what used to be a redundant
+  # `$(cd "$root" && pwd -P)` subshell fork PER REPO in the file-scan loop
+  # below — the roots don't change per repo, so re-resolving them there was
+  # pure waste (part of the 200-repo/50k-file fixture's wall time).
+  for root in "$PWD" "${add_dirs[@]}"; do
+    [ -d "$root" ] || continue
+    root="$(cd "$root" && pwd -P)" || continue
+    roots+=("$root")
+  done
+  # P2-3 (round-2 review, macOS-only regression found watching real CI):
+  # this used to be a process substitution NESTED inside another process
+  # substitution (`while read … done < <(printf …; while read … done <
+  # <(find …))`) — bash 3.2, which is what `/usr/bin/env bash` actually
+  # resolves to on the macOS CI runner (confirmed: `$BASH_VERSION` traced
+  # as 3.2.57 there, not the bash 5 round-1's own review assumed), was
+  # OBSERVED to fail this construct silently on that runner: the outer
+  # process substitution's subshell never even started (traced: zero
+  # output, not even its own first statement, from inside), and the
+  # enclosing `$(_burn_left_behind …)` command substitution came back empty
+  # with rc=1 — every #84 test with any expected row read back
+  # `left_behind: []`. P3-4 (round-3 review): the RESULT is confirmed
+  # (reverting this fix reproduces the CI-shaped failure in a bash:3.2
+  # container; reapplying it fixes the same container) but the MECHANISM
+  # is not — a minimal single- and double-nested `< <(...)` loop in the
+  # same container ran fine, and 17 other process substitutions elsewhere
+  # in `lib/` are unaffected, so "process substitution is unsafe on bash
+  # 3.2" is broader than what was actually shown; treat this specific
+  # nesting shape as the confirmed trigger, not the general mechanism.
+  # A plain temp file
+  # (`mktemp`, POSIX, no bash-version-dependent process-substitution
+  # machinery at all) replaces BOTH nested substitutions: one `find`,
+  # written once, read once, with the SAME two-step logic (root itself
+  # first, unconditionally — the "cwd/root IS a git repo" case below
+  # doesn't come through `find` at all — then every discovered `.git`
+  # stripped to its parent dir) — just via a `case` on the read-back value
+  # instead of a second `printf`/`read` pipeline.
+  # P2-2 (round-3 review): the global scan budget below used to start its
+  # clock AFTER this whole discovery pass, and neither the `find` above nor
+  # the per-marker `rev-parse` it drives were bounded by it — only the
+  # per-call 5s bound applied. Measured: 200 repos with a slow `rev-parse`
+  # (1s each) took 221s wall to even START the budgeted per-repo loop; 8
+  # repos with a FIFO `.git/HEAD` (5s bound trips on every one) took 40s and
+  # produced ZERO rows, zero "and N more" — the whole scan silently ran to
+  # completion after a 4x-over-budget discovery, with nothing to show for
+  # it. `lb_scan_t0` now starts here, before the first `find`, so discovery
+  # spends the SAME clock the per-repo loop already respected.
+  # P3-4 (round-4 review, #112 item 2): one `lb_budget_skipped` counter used to
+  # take skips from three different loops — roots, the markers a root's `find`
+  # discovered, and the per-repo scan — and the JSON then added the display cap
+  # and the discovery timeouts on top. A consumer reading
+  # `left_behind_truncated: 4` could not tell whether four repositories were
+  # missing or one root that might have held forty. The three loops now keep
+  # their own counters and `--json` reports every bucket by name; the human
+  # "scan budget exhausted" sentence below is still their sum, because a person
+  # reading it has one decision to make (raise the budget) either way.
+  local lb_scan_budget=10 lb_scan_t0=$SECONDS lb_budget_hit=0
+  local lb_skip_roots=0 lb_skip_markers=0 lb_skip_repos=0
+  # P3-1 (round-5 review): a bounded call that HIT ITS OWN 5s ceiling and a
+  # candidate the 10s global budget never reached are two different facts, and
+  # round-4 reported both with one sentence ("scan budget exhausted").
+  # Measured: a discovery `find` that took 6s of a 10s budget — 4s still
+  # unspent — printed "and 1 more (scan budget exhausted)", which sends a
+  # reader to raise a budget that was never the problem. The root that hung is.
+  local lb_disc_timeout=0 lb_find_bound=5
+  local _lb_disc rc_disc
+  # P3-4 (round-5 review): the roots themselves are resolved FIRST, in their
+  # own pass, before any `find` runs. Measured on the pre-fix code: cwd = the
+  # payload repo plus one `--add-dir`, each root's discovery `find` burning
+  # the full 5s ceiling — root1's `find` spends 5s, root2's spends the other
+  # 5s, and the per-repo loop's budget check then throws away the payload repo
+  # that had ALREADY been discovered and was sitting in `repos[]`. Output:
+  # zero rows, `left_behind_truncated: 4`. Honest, bounded, and useless —
+  # #84's own headline row was the first thing dropped.
+  # A root needs no `find` at all, only one `rev-parse`, and `$PWD` plus every
+  # `--add-dir` are the directories the caller NAMED. Resolving them up front
+  # puts them at the head of `repos[]`; the per-repo loop below then exempts
+  # exactly that many entries from the soft budget (see `lb_root_repos`
+  # there), so what the scan already has in hand is reported and only the
+  # unknown remainder is truncated.
+  local lb_root_repos=0
+  for root in "${roots[@]}"; do
+    if [ "$lb_budget_hit" -eq 1 ] || [ $((SECONDS - lb_scan_t0)) -ge "$lb_scan_budget" ]; then
+      lb_budget_hit=1
+      lb_skip_roots=$((lb_skip_roots + 1))
+      continue
+    fi
+    rp_rc=0
+    repo="$(_burn_lb_git -C "$root" rev-parse --show-toplevel 2>/dev/null)" || rp_rc=$?
+    if [ "$rp_rc" -eq 124 ]; then
+      lb_disc_timeout=$((lb_disc_timeout + 1))
+      continue
+    fi
+    [ "$rp_rc" -eq 0 ] || continue
+    case "$seen" in *$'\n'"$repo"$'\n'*) continue ;; esac
+    seen="${seen}"$'\n'"${repo}"$'\n'
+    repos+=("$repo")
+    lb_root_repos=$((lb_root_repos + 1))
+  done
+  for root in "${roots[@]}"; do
+    if [ "$lb_budget_hit" -eq 1 ] || [ $((SECONDS - lb_scan_t0)) -ge "$lb_scan_budget" ]; then
+      lb_budget_hit=1
+      lb_skip_roots=$((lb_skip_roots + 1))
+      continue
+    fi
+    _lb_disc="$(mktemp "${TMPDIR:-/tmp}/clikae-lb-disc.XXXXXX" 2>/dev/null)" || continue
+    rc_disc=0
+    {
+      # `-maxdepth 3` (round-1) capped repo discovery 2 levels below
+      # $root, so a lane's commits in a repo nested 3+ deep (`a/b/L3`,
+      # `a/b/c/L4` — the exact shape `--add-dir <dir-of-repos>` produces)
+      # vanished silently: no row, no hint. `-name .git -prune -print0`
+      # alone (no maxdepth) is unbounded in depth but each repo is still
+      # visited exactly once: pruning `.git` stops find from ever
+      # descending INTO it (irrelevant, expensive), but leaves every
+      # sibling and subdirectory of the surrounding working tree open, so
+      # a repo nested inside another repo's working tree is still found —
+      # this is how nested repos get discovered at all, not a bug to fix.
+      # P2-2 (round-3 review): bounded like every other git/find call in
+      # this file (bare `find`, not `command find` — see P2-1) — a cold
+      # network mount under $root used to be able to hang discovery itself
+      # with no bound at all.
+      _burn_lb_bounded "$lb_find_bound" find "$root" \( -name node_modules -o -name .venv -o -name target \
+        -o -name dist -o -name build -o -name .cache \) -prune \
+        -o \( -name .git -print0 -prune \) 2>/dev/null
+    } > "$_lb_disc" 2>/dev/null || rc_disc=$?
+    # P2-1 (round-4 review): this used to set `lb_budget_hit=1` too, which
+    # forces every remaining root AND every marker already sitting in
+    # `$_lb_disc` (including `$root` itself, printed unconditionally above
+    # before `find` even runs) into the budget-skipped buckets — a `find` that's
+    # merely slow-but-finite (a big cold tree, not a hang) made the payload
+    # repo itself vanish from the report while `lb_scan_budget` still had
+    # seconds left. A bounded `find` timing out only means "this root has
+    # an unknown number of repos we didn't finish listing" — one honest
+    # "more", not a declaration that the whole scan's budget is spent. The
+    # real budget is still enforced by the `$SECONDS` check both above and
+    # in the marker loop below.
+    if [ "$rc_disc" -eq 124 ]; then
+      lb_disc_timeout=$((lb_disc_timeout + 1))
+    fi
+    while IFS= read -r -d '' marker; do
+      if [ "$lb_budget_hit" -eq 1 ] || [ $((SECONDS - lb_scan_t0)) -ge "$lb_scan_budget" ]; then
+        lb_budget_hit=1
+        lb_skip_markers=$((lb_skip_markers + 1))
+        continue
+      fi
+      # Every marker here comes from `-name .git -print0`; the root itself is
+      # no longer printed into this file (it was resolved in the pass above).
+      marker="${marker%/.git}"
+      rp_rc=0
+      repo="$(_burn_lb_git -C "$marker" rev-parse --show-toplevel 2>/dev/null)" || rp_rc=$?
+      if [ "$rp_rc" -eq 124 ]; then
+        # P2-2 (round-3 review): this is the FIFO-`.git/HEAD` shape itself —
+        # a repo whose discovery `rev-parse` hangs never becomes a `repos[]`
+        # entry, so it used to vanish with no trace anywhere in the output
+        # (not `left_behind[]`, not `left_behind_truncated`, not the human
+        # "and N more" line). Counting it into the same budget-skipped total
+        # the per-repo loop already reports is the "at least say a number"
+        # half of the round-2 fix's own promise ("a repo that trips it is
+        # force-included … worth a human's attention, not silence") —
+        # applied to discovery, not just the per-repo scan.
+        # P3-1 (round-5 review): counted as a TIMEOUT, not as budget
+        # exhaustion — this repo hung, it was not skipped for lack of time.
+        lb_disc_timeout=$((lb_disc_timeout + 1))
+        continue
+      fi
+      [ "$rp_rc" -eq 0 ] || continue
+      case "$seen" in *$'\n'"$repo"$'\n'*) continue ;; esac
+      seen="${seen}"$'\n'"${repo}"$'\n'
+      repos+=("$repo")
+    done < "$_lb_disc"
+    rm -f "$_lb_disc"
+  done
+  local entries="" hint="" scan
+  # P2-2/P2-5 (round-1 review): no cap meant "200 repos, 200 lines" for any
+  # failed run whose --add-dir root just happens to be big — one flat wall
+  # of noise for every operator, every time. `activity_ts` (the newest
+  # qualifying file's mtime, or $started_at for a repo that qualified on
+  # dirty/ahead alone with no post-start file) orders the list so a 25-cap
+  # drops the STALEST candidates first, not an arbitrary find-order tail.
+  # Same review, same finding: no wall-time budget either — a single repo
+  # under a huge, cold tree could make the file-list `find` itself run
+  # arbitrarily long. `_burn_lb_bounded 5 find …` (round-2: `timeout`/
+  # `gtimeout` don't ship on stock macOS — see the P2-1 comment above)
+  # bounds that per repo; a repo that trips it is force-included (we
+  # genuinely don't know what's in it, which is worth a human's attention,
+  # not silence) with "(scan timed out)" in place of a files list.
+  local -a lb_repo=() lb_branch=() lb_ahead=() lb_dirty=() lb_files=() lb_ts=() lb_timeout=() lb_gitto=()
+  _clikae_statv
+  local stat_flag='-c'
+  [ "$_CLIKAE_STAT_FMT" = '%Y %n' ] || stat_flag='-f'
+  local statline mname mline
+  # P2-1 (round-5 review): the file-list `find` writes HERE instead of into a
+  # `$(... | sort -rn)` command substitution. A command substitution does not
+  # return until every writer of its pipe has closed it, so one grandchild
+  # that outlives the bound (the whole point of the round-5 finding) hangs
+  # `burn` itself even after the bound has done its job. A regular file has
+  # no such reader to block: the bound returns, the file is read, and
+  # whatever the kill did or did not reach cannot hold the scan open.
+  # P3-4 (round-6 review): created per (repo, root) scan, NOT once for the whole
+  # loop. One shared file plus `>` to truncate it per root was one `mktemp` per
+  # scan instead of one per iteration — and a writer that outlived its bound
+  # (the survivor this whole round exists because of) kept an open fd on it.
+  # `>` resets the LENGTH, never a survivor's file OFFSET, so its next write
+  # landed past a sparse hole in the NEXT repo's file. Measured: repo B's own
+  # parser accepted `9999999999 /REPO-A-LEAKED/file9` and three more like it,
+  # and that forged mtime then won repo B's `activity_ts` and its place in the
+  # three-level ranking. Each scan now gets its own `mktemp`, and it is removed
+  # the moment `sort` has read it — a survivor is then writing into an unlinked
+  # inode nothing will ever read again.
+  local _lb_scan_file=""
+  # P2-1 (round-2 review), second layer: per-call 5s bounds any ONE hang,
+  # but nothing capped the SUM — `repos=6` that each trip the 5s bound
+  # measured 30s total, perfectly linear, and a real `--add-dir ~/Developer`
+  # with 200 repos in that shape is 1000s. `$SECONDS` (bash builtin, no
+  # fork) gives a zero-cost wall clock for a global budget on TOP of the
+  # per-call one: once 10s of real time has gone into this loop, every
+  # remaining candidate repo is skipped rather than attempted — reported
+  # honestly as "scan budget exhausted" (`lb_skip_repos` below), not
+  # silently dropped the way the pre-fix cap dropped its tail.
+  # P2-2 (round-3 review): `lb_scan_budget`/`lb_scan_t0`/`lb_budget_hit` and
+  # the three skip counters are declared once now, before discovery (above) —
+  # this loop shares that same clock and counter instead of starting a
+  # fresh 10s budget of its own on top of whatever discovery already spent.
+  # P3-4 (round-5 review): the first `lb_root_repos` entries are `$PWD` and
+  # the `--add-dir`s the caller named — already discovered, at zero `find`
+  # cost, before the budget could be spent (see the pass that fills them in
+  # above). Dropping one of those because discovery elsewhere ran long is
+  # dropping the answer to the question that was asked. They are exempt from
+  # the soft budget; everything else still respects it. The exemption is not
+  # unbounded: every git/find call inside the loop keeps its own 5s ceiling,
+  # and an absolute 3x ceiling stops even a pathological `--add-dir` list from
+  # turning "bounded scan" back into "runs as long as it likes".
+  local repo_i=0 lb_scan_hard_cap=$((lb_scan_budget * 3))
+  for repo in "${repos[@]}"; do
+    repo_i=$((repo_i + 1))
+    if [ "$repo_i" -le "$lb_root_repos" ]; then
+      if [ $((SECONDS - lb_scan_t0)) -ge "$lb_scan_hard_cap" ]; then
+        lb_skip_repos=$((lb_skip_repos + 1))
+        continue
+      fi
+    elif [ "$lb_budget_hit" -eq 1 ] || [ $((SECONDS - lb_scan_t0)) -ge "$lb_scan_budget" ]; then
+      lb_budget_hit=1
+      lb_skip_repos=$((lb_skip_repos + 1))
+      continue
+    fi
+    # P3-5 (round-4 review, #112 item 1): every per-repo git call below used to
+    # fall back to a DEFAULT when it hit its own 5s ceiling, and the most
+    # expensive one defaults to `dirty=0` — so a repo whose `git status` is
+    # wedged on a dead NFS mount was reported as `dirty 0`, byte-identical to a
+    # clean repo. The file-list `find` had said `(scan timed out)` since round-1;
+    # git had no such voice. `git_timeout` is that voice: the row is still
+    # printed (we cannot answer, which is exactly what a human needs to know),
+    # `dirty` becomes `null`/`?` rather than a fabricated zero, and the row is
+    # force-included below the way a `repo_timeout` row already is.
+    local git_timeout=0 b_rc=0 a_rc=0 d_rc=0 dirty_raw=''
+    branch="$(_burn_lb_git -C "$repo" symbolic-ref --quiet --short HEAD 2>/dev/null)" || b_rc=$?
+    [ "$b_rc" -ne 124 ] || git_timeout=1
+    # rc 1 here is the ordinary detached-HEAD answer, not a failure to answer —
+    # only 124 (the bound fired) means "unknown".
+    { [ "$b_rc" -eq 0 ] && [ -n "$branch" ]; } || branch=HEAD
+    ahead="$(_burn_lb_git -C "$repo" rev-list --count '@{u}..HEAD' 2>/dev/null)" || a_rc=$?
+    [ "$a_rc" -ne 124 ] || git_timeout=1
+    [[ "$ahead" =~ ^[0-9]+$ ]] || ahead=-
+    # P1-1: the one git call the round-1 review found with no guard at all —
+    # a bare assignment is NOT the condition of any if/&&/||, so `set -e`
+    # aborted right here, before `_burn_result`'s printf ever ran.
+    # P3-5: --ignore-submodules=all — without it, a submodule with its own
+    # uncommitted changes counts as "dirty" TWICE: once in its own row
+    # (correct) and again in the superproject's row (wrong — the
+    # superproject's own push never carries the submodule's changes, so
+    # attributing them to it overstates what pushing the superproject
+    # would actually save).
+    # P3-5 (round-3 review, documented not fixed): this is git's own count,
+    # not this function's — a NESTED repo's working-tree directory (already
+    # attributed to its own `repos[]` entry, not double-counted in `files`
+    # below, see P2-3's innermost-attribution fix) still shows up here as
+    # ONE untracked entry in ITS PARENT's `git status`, because from the
+    # parent's perspective an inner `.git` is just an untracked directory.
+    # `dirty` and `files` therefore use different scopes on purpose: `dirty`
+    # is "what `git status` on this repo says", `files` is "what changed
+    # inside this repo's own boundary". Reconciling them (e.g. `-uno` or
+    # walking status output to drop nested-repo paths) is unfixed; this repo
+    # note is the fix.
+    # Captured, not piped into `wc -l`: a pipeline's own rc is `wc`'s (0, always)
+    # unless the caller happens to have `pipefail` on, and this function must
+    # read git's OWN 124 whether it was sourced by a unit test or run under
+    # `bin/clikae`'s `set -eo pipefail`. `-` is this file's existing "unknown"
+    # sentinel (`ahead` has used it since round-1) and becomes JSON `null`.
+    dirty_raw="$(_burn_lb_git -C "$repo" status --porcelain --ignore-submodules=all 2>/dev/null)" || d_rc=$?
+    if [ "$d_rc" -eq 124 ]; then
+      git_timeout=1
+      dirty=-
+    elif [ -z "$dirty_raw" ]; then
+      dirty=0
+    else
+      # Command substitution already stripped the trailing newline, so one
+      # `printf '%s\n'` puts back exactly the line `wc` needs to count.
+      dirty="$(printf '%s\n' "$dirty_raw" | wc -l | tr -d ' ')" || dirty=0
+      [[ "$dirty" =~ ^[0-9]+$ ]] || dirty=0
+    fi
+    # P2-1/P2-2 (round-1 review): the old version forked _clikae_mtime (a
+    # `stat`, or two on macOS) PER FILE under an unbounded `find`, and never
+    # sorted — "ten files" meant "whichever ten readdir happened to visit
+    # first", the newest file often not among them at all (measured: 9 of 10
+    # wrong, the actual newest entirely absent). ONE `find -newer <sentinel>`
+    # (touched at run start — see cmd_burn) does the "since this run began"
+    # filter with zero forks when nothing qualifies (the common case: a
+    # failed run usually touched little); `-exec stat … {} +` batches the
+    # mtime read for whatever DOES qualify into O(1) forks, not O(files);
+    # `sort -rn` makes "newest ten" actually mean newest ten. Same platform
+    # probe every other `stat` caller in this repo already shares
+    # (_clikae_statv/_CLIKAE_STAT_FMT) — not a third one.
+    # P2-3/P3-5 (round-2 review): scanning $repo's tree used to walk STRAIGHT
+    # THROUGH any nested repo or submodule inside it — their files came back
+    # attributed to the outer repo's `files` list even though pushing the
+    # outer repo can never carry them. `-mindepth 1 … -type d -exec test -e
+    # {}/.git \; -prune` prunes at the first NESTED `.git` it meets ($repo's
+    # OWN root is excluded by `-mindepth 1`, so this never prunes $scan
+    # itself) — the inner repo still gets discovered and scanned as its own
+    # `repos[]` entry (the discovery walk above is unbounded now, P2-3), it
+    # just stops being double-counted here.
+    files=""; count=0; seen=""
+    local repo_ts=0 repo_timeout=0 scan_out rc_scan
+    for root in "${roots[@]}"; do
+      case "$root/" in
+        "$repo/"*) scan="$root" ;;
+        *) case "$repo/" in "$root/"*) scan="$repo" ;; *) continue ;; esac ;;
+      esac
+      # No temp file (a full or unwritable $TMPDIR) means no file list for
+      # this repo — the row itself still reports ahead/dirty, which is the
+      # signal #84 is actually about; `files` is corroborating evidence.
+      _lb_scan_file="$(mktemp "${TMPDIR:-/tmp}/clikae-lb-scan.XXXXXX" 2>/dev/null)" || _lb_scan_file=""
+      [ -n "$_lb_scan_file" ] || continue
+      rc_scan=0
+      _burn_lb_bounded 5 find "$scan" -mindepth 1 \
+        \( -name .git -o -name node_modules -o -name .venv -o -name target \
+           -o -name dist -o -name build -o -name .cache -o -name .next \
+           -o -name out -o -name coverage \) -prune \
+        -o -type d -exec test -e {}/.git \; -prune \
+        -o -type f -newer "${started_at_sentinel:-/dev/null}" \
+           -exec stat "$stat_flag" "$_CLIKAE_STAT_FMT" {} + \
+        > "$_lb_scan_file" 2>/dev/null || rc_scan=$?
+      if [ "$rc_scan" -eq 124 ]; then
+        rm -f "$_lb_scan_file" 2>/dev/null || true
+        _lb_scan_file=""
+        repo_timeout=1
+        continue
+      fi
+      # `sort` reads a regular file that is already complete and closed —
+      # nothing the bound killed can keep this command substitution open.
+      scan_out="$(sort -rn < "$_lb_scan_file" 2>/dev/null)" || scan_out=""
+      # Unlinked as soon as its contents are in hand: every path out of this
+      # iteration (including the two `break`s below) has already removed it,
+      # and the guard after the loop is the last resort, not the plan (P3-4).
+      rm -f "$_lb_scan_file" 2>/dev/null || true
+      _lb_scan_file=""
+      # P3-3 (round-2 review, documented not fixed): each batched stat
+      # record is newline-delimited (`sort -rn` needs lines), so a filename
+      # containing a literal newline byte splits across two `read`s here —
+      # the first half gets reported as a file path that doesn't exist, the
+      # second half is silently dropped. A NUL-delimited pipeline (stat
+      # --printf/-z, `sort -z`) would fix it but isn't proven portable to
+      # BSD stat/sort (no macOS box to verify against, and this is the exact
+      # kind of untested-on-macOS change this review round exists to catch)
+      # — left as a documented gap rather than an unverified cross-platform
+      # rewrite. Repo names with embedded newlines are unaffected (verified,
+      # round-1): only this per-file batch is exposed.
+      while IFS= read -r statline; do
+        [ -n "$statline" ] || continue
+        mline="${statline%% *}"; mname="${statline#* }"
+        [[ "$mline" =~ ^[0-9]+$ ]] || continue
+        [ "$mline" -le "${repo_ts:-0}" ] || repo_ts="$mline"
+        case "$seen" in *$'\n'"$mname"$'\n'*) continue ;; esac
+        seen="${seen}"$'\n'"${mname}"$'\n'
+        [ "$count" -eq 0 ] || files="$files,"
+        files="$files$(json_str "$mname")"
+        count=$((count + 1))
+        [ "$count" -lt 10 ] || break
+      done <<< "$scan_out"
+      [ "$count" -lt 10 ] || break
+    done
+    # `git_timeout` joins `repo_timeout` here: a repo the scan could not answer
+    # for is never dropped as "clean enough to ignore" — the whole point of
+    # saying so is that nobody knows yet.
+    if [ "$repo_timeout" -ne 1 ] && [ "$git_timeout" -ne 1 ] && { [ "$ahead" = - ] || [ "$ahead" = 0 ]; }; then
+      [ "$dirty" -gt 0 ] || [ "$count" -gt 0 ] || continue
+    fi
+    [ "$repo_ts" -gt 0 ] 2>/dev/null || repo_ts="${started_at:-0}"
+    lb_repo+=("$repo"); lb_branch+=("$branch"); lb_ahead+=("$ahead")
+    lb_dirty+=("$dirty"); lb_files+=("$files"); lb_ts+=("$repo_ts")
+    lb_timeout+=("$repo_timeout"); lb_gitto+=("$git_timeout")
+  done
+  [ -z "$_lb_scan_file" ] || rm -f "$_lb_scan_file" 2>/dev/null || true
+  local total=${#lb_repo[@]} shown=0 over=0
+  local -a order=()
+  if [ "$total" -gt 0 ]; then
+    # P2-3's own fix (this round): a process substitution here — even a
+    # single-level one, unlike discovery's nested pair — turned out to be
+    # ANOTHER spot this round's added complexity (the ahead/dirty flag
+    # computation below, absent from round-1's simpler single-key sort)
+    # was observed to trip on real macOS CI's bash 3.2: traced all the way
+    # through discovery and every per-repo git/find call with rc=0, then
+    # nothing — not even the caller's very next statement — ever ran
+    # again. Same caveat as discovery's own comment on this (P3-4, round-3
+    # review): the CI-shaped failure is confirmed, the exact trigger within
+    # "a process substitution at this spot" is not. Same fix as discovery:
+    # a `mktemp` file instead of `< <(...)`, no process-substitution
+    # machinery left in this function's ranking path either.
+    local i idx a_flag d_flag _lb_rank
+    _lb_rank="$(mktemp "${TMPDIR:-/tmp}/clikae-lb-rank.XXXXXX" 2>/dev/null)"
+    if [ -n "$_lb_rank" ]; then
+      for i in "${!lb_repo[@]}"; do
+        a_flag=0
+        [ "${lb_ahead[$i]}" = - ] || { [ "${lb_ahead[$i]}" -gt 0 ] 2>/dev/null && a_flag=1; }
+        d_flag=0
+        [ "${lb_dirty[$i]}" -gt 0 ] 2>/dev/null && d_flag=1
+        # P2-2 (round-2 review): the old key was `activity_ts` alone —
+        # `ahead>0` (unpushed commits, the actual thing #84's title is
+        # about) had ZERO weight, so a payload repo with no post-start file
+        # write could be pushed off a 25-cap by pure noise (measured: 29
+        # noise repos with a stray file each buried a real unpushed-commits
+        # repo entirely — not in the JSON, not in the human list, not even
+        # named in "and N more"). Three-level key now: ahead>0 first, then
+        # dirty>0, then newest-activity — noise never outranks real work.
+        printf '%s\t%s\t%s\t%s\n' "$a_flag" "$d_flag" "${lb_ts[$i]}" "$i"
+      done > "$_lb_rank"
+      sort -t "$(printf '\t')" -s -k1,1rn -k2,2rn -k3,3rn "$_lb_rank" | cut -f4 > "$_lb_rank.sorted"
+      while IFS= read -r idx; do order+=("$idx"); done < "$_lb_rank.sorted"
+      rm -f "$_lb_rank" "$_lb_rank.sorted"
+    fi
+  fi
+  for idx in "${order[@]:-}"; do
+    [ -n "$idx" ] || continue
+    repo="${lb_repo[$idx]}"; ahead="${lb_ahead[$idx]}"
+    local idx_ahead_gt0=0
+    [ "$ahead" != - ] && [ "$ahead" -gt 0 ] 2>/dev/null && idx_ahead_gt0=1
+    if [ "$shown" -ge 25 ]; then
+      over=$((over + 1))
+      # P2-2 (round-2 review): the push hint is the whole point of #84 —
+      # losing it for a repo that just didn't make the display cap would
+      # silently un-fix the bug #84 exists for. The cap bounds NOISE
+      # (display rows, JSON size); it was never meant to bound the one
+      # signal (an unpushed commit) that already sorts to the front.
+      if [ "$idx_ahead_gt0" -eq 1 ]; then
+        printf -v hint '  hint: git -C %q push' "$repo"
+        log_info "$hint"
+      fi
+      continue
+    fi
+    branch="${lb_branch[$idx]}"; dirty="${lb_dirty[$idx]}"; files="${lb_files[$idx]}"
+    # `dirty ?` plus `(git timed out)` is the human half of #112 item 1: the row
+    # says the scan could not answer instead of printing a `0` it made up.
+    local dirty_h="$dirty" git_note=""
+    [ "$dirty" != - ] || dirty_h='?'
+    [ "${lb_gitto[$idx]}" != 1 ] || git_note=" (git timed out)"
+    log_info "left behind: $repo $branch ahead $ahead dirty $dirty_h$git_note"
+    if [ "${lb_timeout[$idx]}" = 1 ]; then
+      log_info "  files: (scan timed out)"
+    elif [ -n "$files" ]; then
+      log_info "  files: [$files]"
+    fi
+    # P3-2 (round-1 review): a push hint used to print for only the FIRST
+    # ahead repo (`[ -z "$hint" ]` gated it), so three repos each one commit
+    # ahead got one copy-pasteable command out of three — silence for the
+    # other two, and not necessarily the most important one (find order,
+    # not relevance). One hint per ahead repo now, printed right under its
+    # own "left behind:"/"files:" block instead of batched at the end.
+    if [ "$idx_ahead_gt0" -eq 1 ]; then
+      printf -v hint '  hint: git -C %q push' "$repo"
+      log_info "$hint"
+    fi
+    # P3-3 (round-1 review): "ahead" used to be a JSON string "-" when there
+    # is no upstream to compare against, and a bare integer otherwise —
+    # multityped in a machine-readable field, which is exactly the field a
+    # dispatcher script is most likely to do `if ahead > 0` on. JSON's own
+    # "I don't know" is `null`, not a sentinel string; a consumer that reads
+    # a number now gets a number or null, never a string that happens to
+    # parse as neither.
+    # #112 item 1: `dirty` now follows the same rule as `ahead` directly above,
+    # for the same reason. `git_timeout` is always present (true/false) so a
+    # consumer can branch on it without a `.get`.
+    entry="$(printf '{"repo":%s,"branch":%s,"ahead":%s,"dirty":%s,"files":[%s],"git_timeout":%s}' \
+      "$(json_str "$repo")" "$(json_str "$branch")" \
+      "$(if [ "$ahead" = - ]; then printf 'null'; else printf '%s' "$ahead"; fi)" \
+      "$(if [ "$dirty" = - ]; then printf 'null'; else printf '%s' "$dirty"; fi)" "$files" \
+      "$(if [ "${lb_gitto[$idx]}" = 1 ]; then printf 'true'; else printf 'false'; fi)")"
+    entries="${entries}${entries:+,}${entry}"
+    shown=$((shown + 1))
+  done
+  if [ "$over" -gt 0 ]; then
+    # P3-4 (round-2 review): `${roots[*]}` only ever uses IFS's FIRST
+    # character as the join separator, so `IFS=', '` printed "a,b" not
+    # "a, b" — cosmetic only, but a plain loop says what it means instead
+    # of relying on a two-char IFS that silently gets truncated to one.
+    local roots_desc="" r
+    for r in "${roots[@]}"; do roots_desc="${roots_desc:+$roots_desc, }$r"; done
+    log_info "  … and $over more repositories under $roots_desc"
+  fi
+  # P2-1 (round-2 review): repos the global scan budget never got to are a
+  # DIFFERENT fact from "and N more repositories under …" above — those are
+  # confirmed left-behind candidates trimmed by the display cap; these are
+  # unknowns the budget ran out before even checking (same honesty as a
+  # per-repo scan timeout: say so, don't claim they're clean).
+  if [ "$lb_disc_timeout" -gt 0 ]; then
+    log_info "  … and $lb_disc_timeout more (discovery timed out after ${lb_find_bound}s)"
+  fi
+  local lb_skip_total=$((lb_skip_roots + lb_skip_markers + lb_skip_repos))
+  if [ "$lb_skip_total" -gt 0 ]; then
+    log_info "  … and $lb_skip_total more (scan budget exhausted after ${lb_scan_budget}s)"
+  fi
+  # P2-2 (round-2 review): `--json` used to carry no truncation signal at
+  # all — a machine consumer had no way to tell "25 rows, that's everything"
+  # from "25 rows, and an unknown number more" without also parsing the
+  # human `log_info` lines. `left_behind_truncated` folded EVERY reason a
+  # candidate might be missing from `left_behind[]` (cap overflow, budget
+  # exhaustion, a discovery call that hit its own ceiling) into one count.
+  # P3-4 (round-4 review, #112 item 2): that count mixed UNITS — one root
+  # skipped by the budget might have held forty repositories, one display-cap
+  # overflow is exactly one repository — so it is now reported bucket by
+  # bucket. `left_behind_truncated` stays, as their sum, for one release.
+  # `_burn_result` reads this whole fragment back off this function's own last
+  # line, same tab convention as the JSON array itself.
+  printf '%s\t[%s]' \
+    "$(_burn_lb_meta "$over" "$lb_skip_roots" "$lb_skip_markers" "$lb_skip_repos" \
+        "$lb_disc_timeout" "$lb_kill_mode")" \
+    "$entries"
+  return 0
+}
+
+# _burn_result <ok> <engine> <tank> <artifact> <reason> [reset-phrase]
+#
+# 🔴 AGENTS.md's first non-negotiable rule is "judge by the artifact/output,
+# never the exit code" — and until 2026-08-16 clikae made an agent read that
+# judgement out of PROSE. `burn` is the dispatch shape an agent uses most, and
+# the one whose outcome is least guessable: with rerouting, the tank that
+# actually did the work is often not the one you named, and the only record of
+# which was a sentence on stdout.
+#
+# The data was already there (the `summary:` line has tank, reroutes, elapsed
+# and artifact size). This just says it in a form nothing has to parse by eye.
+#
+# `artifact_bytes` is the point: rule 1 says judge by the artifact, so the
+# artifact's own measurement travels with the verdict rather than being a second
+# call the caller has to remember to make.
+_burn_result() {
+  local left_behind='[]' left_behind_meta
+  left_behind_meta="$(_burn_lb_meta 0 0 0 0 0)"
+  # P2-3 (round-1 review): pinned HERE, before the scan below ever runs —
+  # `_burn_left_behind` can itself take real wall-clock time (P2-2's 97.6s
+  # worst case, pre-fix), and `$SECONDS` keeps ticking through all of it. The
+  # old code read `$((SECONDS - t0))` fresh at printf time, AFTER the scan,
+  # so a slow scan silently became part of "how long did this burn take" —
+  # measured: elapsed_s: 97 here vs status.json's (unaffected, since it's
+  # written a statement earlier, before any scan) elapsed_s: 0 for the SAME
+  # run. Not `local`: the caller's own `summary:` log_info line (cmd_burn /
+  # _agy_burn, always the very next statement after this function returns)
+  # reads it back by the same dynamic-scoping convention this file already
+  # uses for run_dir/t0/tried/etc., so --json and the human summary agree
+  # with each other and with status.json's own (already correct) number.
+  burn_elapsed_s=$((SECONDS - ${t0:-SECONDS}))
+  # P1 (round-1 review): `_burn_left_behind` runs inside `$(...)` — a real
+  # subshell — so a failure it doesn't already guard against only kills
+  # that subshell; `|| left_behind='[]'` catches a non-zero exit (dead
+  # subshell, partial/garbled capture) and the trailing shape check catches
+  # a zero exit that still didn't produce a JSON array. Either way this
+  # function's own contract (never change burn's exit code or --json shape)
+  # holds. The function's stdout is "log_info lines, then the JSON array
+  # last" — json_str escapes every literal newline it's given, so the JSON
+  # itself can never contain one, and splitting on the LAST newline is
+  # unambiguous. The log lines are replayed here (uncaptured) so `--json`'s
+  # `exec 1>&2` swap and non-json's real stdout both still see them — they
+  # would otherwise vanish into this variable instead of ever being printed.
+  if [ "$1" = false ]; then
+    local left_raw
+    left_raw="$(_burn_left_behind 2>/dev/null)" || left_raw=''
+    case "$left_raw" in
+      *$'\n'*) left_behind="${left_raw##*$'\n'}"; printf '%s\n' "${left_raw%$'\n'*}" ;;
+      *)       left_behind="$left_raw" ;;
+    esac
+    # P2-2 (round-2 review): `_burn_left_behind`'s last line is
+    # "<meta-fragment>\t[<json array>]" — same tab-split convention as the
+    # newline-split above, so a garbled/short capture degrades to the same safe
+    # defaults (all-zero counts, '[]') the array already had. The fragment is
+    # checked for the shape it must have, not merely for being non-empty: half a
+    # line is worse than none, because it would be printed into the JSON.
+    local lb_meta_raw=""
+    case "$left_behind" in
+      *$'\t'*)
+        lb_meta_raw="${left_behind%%$'\t'*}"
+        left_behind="${left_behind#*$'\t'}"
+        ;;
+    esac
+    # First key and last key, both present: a capture truncated anywhere in
+    # between fails this and keeps the all-zero default.
+    case "$lb_meta_raw" in
+      '"left_behind_truncated":'[0-9]*'"left_behind_unavailable":'?*) left_behind_meta="$lb_meta_raw" ;;
+    esac
+    case "$left_behind" in \[*\]) ;; *) left_behind='[]' ;; esac
+  fi
+  [ "${as_json:-0}" -eq 1 ] || return 0
+  local ok="$1" eng="$2" tk="$3" art="$4" reason="$5" reset="${6:-}"
+  local bytes=null
+  if [ -n "${artifact_bytes_snapshot:-}" ]; then
+    bytes="$artifact_bytes_snapshot"
+  elif [ -n "$art" ] && [ -e "$art" ]; then
+    bytes="$(_burn_size "$art")"
+  fi
+  printf '{"ok":%s,"engine":%s,"tank":%s,"artifact":%s,"artifact_bytes":%s,"reason":%s,"reset":%s,"rerouted_from":[%s],"elapsed_s":%s,"run_id":%s,"left_behind":%s,%s}\n' \
+    "$ok" "$(json_or_null "$eng")" "$(json_or_null "$tk")" "$(json_or_null "$art")" \
+    "${bytes:-null}" "$(json_str "$reason")" "$(json_or_null "$reset")" \
+    "$(_burn_tried_json "${tried:-}")" "$burn_elapsed_s" \
+    "$(json_or_null "${run_id:-}")" "$left_behind" "$left_behind_meta" >&4
+}
+
+# `tried` accumulates "engine/tank" words as the reroute walks the reserve.
+_burn_tried_json() {
+  local w first=1 out=""
+  for w in $1; do
+    [ "$first" -eq 1 ] || out="$out,"
+    out="$out$(json_str "$w")"; first=0
+  done
+  printf '%s' "$out"
+}
+
+# _burn_status_write <state> <ok:true|false|null> <engine> <tank> <artifact>
+#                     <reason> [reset] [reset_at]
+#
+# #41: every burn writes ONE machine-readable status file, updated at every
+# transition — run start, each reroute hop, going dry, an infra retry, and the
+# terminal outcome — so a cockpit reading it from OUTSIDE this process never
+# has to grep a log for "ran dry" or "[ FAIL ]" (both false-positived on a
+# task PROMPT that merely contained those words — the incident that opened
+# this issue). It lives in the same private, swept run directory burn already
+# makes for the task-text copy (`$run_dir`, 0700, `_burn_sweep_old_logs`'s
+# retention), as `status.json` — one file per top-level `clikae burn`
+# invocation (keyed on `$burn_id`/`$$`), not one per reroute attempt, so a
+# caller can watch ONE path across a burn's whole reroute walk.
+#
+# Same field set as `--json`'s single result object (`{ok, engine, tank,
+# artifact, artifact_bytes, reason, reset, rerouted_from[], elapsed_s,
+# run_id}`), plus the fields only an outside-the-process reader needs and a
+# once-at-exit `--json` object cannot give it: `state`, `started_at`,
+# `updated_at`, `pid`, `log`, `reset_at`. Written UNCONDITIONALLY (never gated
+# on `--json`) — #41 is "every burn", not "every --json burn".
+#
+# `reset_at` (P1-2, 2026-09-09 round-1 review): the epoch second
+# `--wait-for-reset` computed the vendor's reset to land on, populated only
+# for the non-terminal `waiting-reset` state below — null everywhere else.
+#
+# `ok` is the terminal/non-terminal signal this file's OWN readers rely on:
+# every call site in this codebase passes `null` for a state that is still IN
+# PROGRESS (`running`, an `infra` retry-in-progress, `waiting-reset`) and an
+# explicit `true`/`false` only once the outcome is actually known (`done`,
+# a real `dry`, `fail`, or `infra` giving up) — see `_BURN_TERMINAL_WRITTEN`
+# just below, which leans on exactly that invariant so the EXIT/INT/TERM/HUP
+# traps (P1-1) know whether a terminal state was already published.
+#
+# Reads the caller's own locals for everything this signature doesn't carry —
+# `run_dir`, `burn_id`, `started_at`, `t0`, `tried`, `log_file`,
+# `artifact_bytes_snapshot` — exactly the convention `_burn_result` already
+# uses one function up; both are only ever called from inside `cmd_burn` or
+# `_agy_burn`, which is what makes bash's dynamic scoping the right tool here
+# rather than a footgun.
+_burn_status_write() {
+  local state="$1" ok="$2" eng="$3" tk="$4" art="$5" reason="$6" reset="${7:-}" reset_at="${8:-}"
+  [ -n "${run_dir:-}" ] || return 0   # called before setup (should not happen) — no-op, never fatal
+  local bytes="${artifact_bytes_snapshot:-}"
+  if [ -z "$bytes" ] && [ -n "$art" ] && [ -e "$art" ]; then bytes="$(_burn_size "$art")"; fi
+  case "$bytes" in ''|*[!0-9]*) bytes=null ;; esac
+  # reset_at is an epoch SECOND (a number, like started_at/updated_at/pid
+  # below), never a JSON string — json_or_null would quote it.
+  case "$reset_at" in ''|*[!0-9]*) reset_at=null ;; esac
+  local now; now="$(date +%s 2>/dev/null || echo 0)"
+  # R3-P3-2 (2026-09-09 round-3 review): `t0` (the reroute-loop clock) isn't
+  # set yet for the two refusals cmd_burn can write BEFORE it ever reaches
+  # that loop (the lock-timeout and busy refusals) — `${t0:-SECONDS}` made
+  # elapsed_s read a flat 0 on those no matter how long the wait actually
+  # was, silently contradicting the started_at/updated_at pair right next to
+  # it in the same object. Fall back to wall-clock epoch (started_at is set
+  # at function entry, well before either refusal) instead of `$SECONDS`
+  # itself when there's no `t0` yet.
+  local elapsed elapsed_base
+  if [ -n "${t0:-}" ]; then
+    elapsed=$(( SECONDS - t0 ))
+  else
+    elapsed_base="${started_at:-$now}"
+    elapsed=$(( now - elapsed_base ))
+  fi
+  local f="$run_dir/status.json"
+  mkdir -p "$run_dir" 2>/dev/null || true
+  {
+    printf '{"ok":%s,"engine":%s,"tank":%s,"artifact":%s,"artifact_bytes":%s,"reason":%s,"reset":%s,"rerouted_from":[%s],"elapsed_s":%s,"run_id":%s,"state":%s,"started_at":%s,"updated_at":%s,"pid":%s,"log":%s,"reset_at":%s}\n' \
+      "${ok:-null}" "$(json_or_null "$eng")" "$(json_or_null "$tk")" "$(json_or_null "$art")" \
+      "${bytes:-null}" "$(json_or_null "$reason")" "$(json_or_null "$reset")" \
+      "$(_burn_tried_json "${tried:-}")" "$elapsed" "$(json_or_null "${burn_id:-}")" \
+      "$(json_str "$state")" "${started_at:-null}" "$now" "$$" "$(json_or_null "${log_file:-}")" \
+      "${reset_at}"
+  } > "$f.tmp" 2>/dev/null && mv -f "$f.tmp" "$f" 2>/dev/null || true
+  # P1-1 (2026-09-09 round-1 review): `ok` is null for every state that is
+  # still IN PROGRESS and true/false only once a real terminal outcome is
+  # known (see the comment above) — so this is the one place that gets to
+  # say "a terminal state now exists on disk", and every trap/poller below
+  # trusts it instead of re-deriving it from `state` alone.
+  [ "${ok:-null}" = "null" ] || _BURN_TERMINAL_WRITTEN=1
+}
+
+# _BURN_TERMINAL_WRITTEN — 0 until this burn's status file has recorded a
+# real terminal outcome (see `_burn_status_write` above), then 1 for the rest
+# of the process's life. `clikae burn` is a fresh process per invocation (see
+# bin/clikae's dispatch: it sources this file and calls `cmd_burn` once), so
+# the file-load-time 0 below is the only initialization this ever needs.
+_BURN_TERMINAL_WRITTEN=0
+
+# _burn_exit_guard [exit-code] — the P1-1 (2026-09-09 round-1 review) safety
+# net: a burn that dies WITHOUT ever writing a terminal state (a `log_fail`
+# this file doesn't yet cover explicitly, a raw `exit` from a sourced helper,
+# or SIGINT/TERM/HUP/an ordinary process exit) used to leave `status.json`
+# saying `running` forever — `clikae wait` would then block on a dead burn
+# until its own `--timeout` (if any) expired, since nothing ever told it the
+# writer was gone. Installed as an EXIT/INT/TERM/HUP trap immediately after
+# the FIRST `running` write in `cmd_burn` (before that point no status file
+# exists yet, so there is nothing to rescue), and a no-op once
+# `_BURN_TERMINAL_WRITTEN` is already 1 — the common, healthy case, where
+# this fires anyway (every trap converges on this Bash process's one EXIT)
+# but has nothing to do. Bash's dynamic scoping means `_burn_status_write`
+# still resolves `run_dir`/`cur`/`status_engine`/etc. from whichever of
+# `cmd_burn` / `_agy_burn` is on the call stack when the trap fires — the
+# same convention `_burn_status_write` itself already documents.
+_burn_exit_guard() {
+  local ec="${1:-$?}"
+  [ "${_BURN_TERMINAL_WRITTEN:-0}" -eq 1 ] && return 0
+  _burn_status_write fail false "${status_engine:-${cli:-}}" "${cur:-${tank:-}}" "${artifact:-}" \
+    "burn exited without reaching a terminal state (exit $ec)" ""
+}
+
+# Installed right after the first `running` write (see the comment above).
+# Each SIGNAL trap writes the terminal state THEN exits with the signal's
+# conventional code (128+n), so a killed burn's own exit code still reads as
+# a kill, not a plain failure; the EXIT trap is the catch-all for every other
+# path (a `log_fail` `exit 1`, a normal `return`, anything not already
+# terminal) and is always the last one to run, no matter which of these
+# fires first.
+_burn_install_exit_trap() {
+  trap '_burn_exit_guard 129; exit 129' HUP
+  trap '_burn_exit_guard 130; exit 130' INT
+  trap '_burn_exit_guard 143; exit 143' TERM
+  trap '_burn_exit_guard "$?"' EXIT
+}
+
+# _burn_parse_duration now lives in lib/core/duration.sh (P1-4a, 2026-09-09
+# round-1 review) — `clikae wait --timeout` needs the exact same grammar and
+# has no other reason to source burn.sh's much larger dependency chain. See
+# that file for the function itself; sourced at the top of this file.
+
+# _burn_wait_for_reset <engine> <tank> <artifact> <reset-phrase> <window_s> ->
+# 0 once the tank's reset should have landed (the caller should re-fire the
+# SAME tank now); 1 if the reset was never within <window_s> to begin with,
+# or moved out far enough on re-check that it no longer is.
+#
+# P1-2 (2026-09-09 round-1 review): before this, `--wait-for-reset` wrote a
+# TERMINAL `dry` (ok:false) BEFORE deciding whether to wait — so a tank that
+# was about to sleep a few minutes and finish the SAME task told every
+# reader "this run is OVER, and it went dry" for the whole sleep, up to
+# `<dur>`. `#41`'s own `wait` reads exactly that as a terminal outcome and
+# returns instantly; `#40`'s `burn_tank_busy` reads `state != running` as
+# "free" and lets a SECOND burn (or the reroute walk) land on the same tank
+# mid-wait. Neither is what "waiting, not abandoning" is supposed to mean.
+#
+# The fix: while this function is waiting, the status file says the
+# NON-terminal `waiting-reset` (ok:null, `reset_at` the epoch this is aiming
+# for) — `burn_tank_busy` (lib/core/burn_status.sh) now holds a tank busy on
+# that state exactly like `running`. Only the CALLER decides what terminal
+# state to write once this returns: 0 → re-fire, whose real outcome (done or
+# a fresh dry) is what finally gets published; 1 → the caller writes the
+# terminal `dry` it always would have.
+#
+# On wake, the reset is RE-CHECKED rather than trusted blindly — an
+# interrupted sleep, a suspended/resumed machine, or a vendor reset phrase
+# that (being relative, "resets in 30m") resolves to something later when
+# re-anchored from a fresh `now`, could all mean the target has not actually
+# arrived yet. One bounded extra wait is given, capped at the ORIGINAL
+# `<window_s>` from when this was first called (never re-extended) — not an
+# unbounded retry loop: a reset that keeps moving past the window gives up
+# and returns 1 rather than sleeping forever.
+_burn_wait_for_reset() {
+  local eng="$1" tk="$2" art="$3" reset="$4" window_s="$5"
+  local now at remain deadline
+  now="$(date +%s 2>/dev/null || echo 0)"
+  at="$(limit_reset_epoch "$reset" "$now")" || return 1
+  remain=$(( at - now ))
+  [ "$remain" -le "$window_s" ] || return 1
+  [ "$remain" -lt 0 ] && remain=0
+  deadline=$(( now + window_s ))
+
+  log_info "$eng/$tk resets in ${remain}s, within --wait-for-reset ${window_s}s — waiting instead of moving on."
+  _burn_status_write waiting-reset null "$eng" "$tk" "$art" "waiting for reset at ${reset}" "$reset" "$at"
+  sleep "$remain"
+
+  now="$(date +%s 2>/dev/null || echo 0)"
+  if [ "$now" -lt "$at" ] && [ "$now" -lt "$deadline" ]; then
+    local at2 remain2
+    if at2="$(limit_reset_epoch "$reset" "$now")" && [ "$at2" -le "$deadline" ]; then
+      remain2=$(( at2 - now ))
+      [ "$remain2" -lt 0 ] && remain2=0
+      log_info "$eng/$tk hasn't reset yet — waiting the remaining ${remain2}s (still inside the original window)."
+      _burn_status_write waiting-reset null "$eng" "$tk" "$art" "waiting for reset at ${reset}" "$reset" "$at2"
+      sleep "$remain2"
+    else
+      return 1   # the reset no longer resolves inside the window — give up
+    fi
+  fi
+  return 0
+}
+
+# _burn_tank_lock_path <engine> <tank> -> the rendezvous path for this exact
+# engine/tank pair's lock — a SYMLINK, never a directory (R3-P1-1/R3-P1-2,
+# 2026-09-09 round-3 review; see _burn_tank_lock_acquire below for why).
+_burn_tank_lock_path() {
+  local safe
+  safe="$(printf '%s_%s' "$1" "$2" | tr -c 'A-Za-z0-9_' '_')"
+  printf '%s/.clikae/state/tank-busy-%s.lock\n' "$HOME" "$safe"
+}
+
+# _burn_reclaim_mutex_try <reclaim_link> -> 0 once THIS process holds the
+# mutex (its own `ln -s` succeeded); 1 otherwise.
+#
+# R3-P1-1/R3-P1-2 (2026-09-09 round-3 review): every REMOVAL of the tank
+# lock symlink — a stale reclaim tearing down a dead holder's link, or an
+# owner's own release — happens only while holding this SECOND, short-lived
+# mutex (`_burn_tank_lock_acquire`/`_burn_tank_lock_release` below).
+#
+# R4-P1-1/R4-P1-2/R4-P1-3 (2026-09-10 round-4 review): round 3's mutex was a
+# directory claimed by `mkdir`, with its own pid written in a SEPARATE
+# statement right after — the exact two-statement claim-then-identify race
+# the symlink lock above exists to abolish, ported one function up and left
+# unguarded. A process killed between the `mkdir` and the pid write left a
+# directory with no pid inside, which was then never reaped (a pid-less
+# mutex read `''` and unconditionally `return 1`ed before ever reaching the
+# stale rule) — permanently disabling the tank it guarded. And even a
+# mutex WITH a pid was reaped by a check-then-act on a directory this
+# process does not own: read the pid, decide it's dead, then unconditionally
+# `rm`/`rmdir` — with nothing stopping a THIRD process from having
+# `mkdir`'d it, live, in between.
+#
+# Both are fixed the same way the lock itself was: the mutex is now a
+# SYMLINK, `ln -s "<pid>:<started_at>" "$reclaim_link"` — one atomic
+# syscall, identity present from the instant the path exists, so there is
+# no pid-less window at any level to leave permanently unclaimable. Its own
+# `started_at` travels IN that payload, so the "≥30s" half of the stale
+# rule is `now - started_at` read straight out of it — no `stat` call
+# anywhere in this function any more (R4-P1-3: there is no `stat -f`/`stat
+# -c` order left to get wrong, because there is no `stat` left).
+#
+# Reaping a mutex that looks abandoned never trusts its own read enough to
+# act on it directly: it first `mv`s the symlink to a private, unique
+# graveyard name (`mv` — i.e. `rename(2)` — of a symlink is atomic, and
+# because that destination name has never existed before, it can never
+# nest the way `ln -s`/`mv` onto an existing directory can). Only ONE
+# racing reaper's `mv` can possibly win, because after the first `mv`
+# there is nothing left at `$reclaim_link` for a second `mv` to move — the
+# decision of WHO gets to act is made by the filesystem, not by comparing
+# reads taken at different times. The winner then `readlink`s its OWN
+# graveyard copy and checks what it actually caught: if it still names the
+# pid judged dead, the eviction was correct — remove the graveyard entry
+# and return (the caller's loop races `ln -s` fresh; reaping here never
+# claims the mutex for the caller, same as before). If it names anyone
+# else, this reaper's `mv` raced a live holder's fresh `ln -s` into the
+# exact same window between the unsynchronized read and the `mv` — the
+# eviction was WRONG, and the `mv` just vacated a path that live holder
+# legitimately occupied (the same vacate hazard R3-P1-1 found in the main
+# lock, one function up). Rather than leave that vacancy open for any
+# length of time — even a bounded wait is a window a THIRD process's `ln
+# -s` could land in, becoming a second live holder — it is put back
+# immediately by RE-CREATING it with `ln -s` (not by trying to `mv` the
+# graveyard copy back — measured: `mv -n` onto an existing SYMLINK
+# destination silently CLOBBERS it on the system `/bin/mv`, `-n` only
+# reliably no-clobbers a regular-file destination; `ln -s` is EEXIST-on-
+# conflict by definition of the syscall, identical on every vendor): either
+# an equivalent entry lands right back (the destination was still empty),
+# or the attempt fails because something claimed it again in the handful
+# of syscalls since, in which case nothing safe is left to do but log it.
+# Either way, only the `mv` winner ever removes or restores anything, and
+# only the one graveyard path it alone created.
+# _BURN_RECLAIM_MUTEX_OWNED — empty when this process holds no reclaim
+# mutex right now, set to the reclaim_link path for the exact window this
+# process holds one. R5-P2-3 (2026-09-10 round-5 review): a signal landing
+# inside that window and running _burn_tank_lock_release from a trap must
+# not try to re-acquire a mutex this SAME process already holds — its own
+# liveness check would see its own live pid and correctly refuse to evict
+# it, deadlocking the release against itself for the full retry budget
+# (and again for the EXIT trap the signal handler's own `exit` triggers).
+# Every place that wins _burn_reclaim_mutex_try sets this before acting and
+# clears it right after _burn_reclaim_mutex_release, so a trap firing
+# anywhere in between can see it and skip straight to acting under the
+# mutex already held instead of looping to acquire it a second time.
+_BURN_RECLAIM_MUTEX_OWNED=""
+
+# _BURN_LOCK_ACQUIRE_FOREIGN_MUTEX — set by `_burn_tank_lock_acquire` to the
+# reclaim-mutex path it refused on, immediately before it `return`s 2 (R9-
+# P1-2/R9-P2-3, 2026-09-11 round-9 review): a foreign object never self-
+# heals, so that refusal is terminal rather than an ordinary busy-mutex
+# backoff, and the caller (`cmd_burn`) reads this to write the specific
+# `foreign-mutex: <path>` reason into the status file and the terminal
+# message, instead of the generic busy-timeout text. Empty whenever the
+# most recent `_burn_tank_lock_acquire` call did not return 2 for this
+# reason — callers must not read it after any OTHER return value.
+_BURN_LOCK_ACQUIRE_FOREIGN_MUTEX=""
+
+# _burn_reclaim_mutex_is_foreign <reclaim_link> -> 0 if the path is occupied
+# by something this codebase never wrote and will never touch (a directory,
+# a symlink resolving to one, a plain file, a fifo, a socket — anything
+# `-e` sees through to), 1 for anything else (vacant, or a well-formed
+# `<pid>:<started_at>` symlink of ours, live or dead). Shared by
+# `_burn_reclaim_mutex_try`, `_burn_reclaim_mutex_available` and
+# `clean.sh`'s GC, so all three report the exact same "foreign-mutex"
+# verdict for the exact same path — see the KITT ruling above `try`'s own
+# refusal for why this is a single rule rather than three cases.
+#
+# R9-P2-1 (2026-09-11 round-9 review): the shipped `[ -e "$1" ] && { [ ! -L
+# "$1" ] || [ -d "$1" ]; }` was three conditions where one already does the
+# whole job, and the extra two let one shape through: a symlink resolving
+# to an EXISTING NON-DIRECTORY (a regular file, a symlink chain to one, or
+# a device node) made `-e` true, `[ ! -L ]` false AND `[ -d ]` false, so
+# `is_foreign` returned 1 (not foreign) and the malformed-payload branch
+# below evicted it — measured, on a regular file, a chained symlink, and
+# `/dev/null`: removed, not refused, exactly the object all three surfaces
+# (this comment, `try`'s refusal message, and docs/orchestration.md) say is
+# never touched. `-e` alone is sufficient because it DEREFERENCES: our own
+# claim's target is always DATA (`<pid>:<started_at>`), never a real path,
+# so `-e` on our own claim is always false regardless of liveness — that
+# one property is the whole rule. *Anything* the path resolves to is
+# foreign, because nothing this codebase ever writes resolves to anything.
+# This also removes the ENOENT race the three-condition form had (R9-P3-1):
+# if the object vanished between a first and a second `stat`, `[ -e ]` was
+# true and `[ ! -L ]` was true (ENOENT), misclassifying a now-VACANT path as
+# foreign — with a single `stat` there is no second call left to race.
+_burn_reclaim_mutex_is_foreign() {
+  [ -e "$1" ]
+}
+
+_burn_reclaim_mutex_try() {
+  local reclaim_link="$1" now_epoch target mpid mstarted evict_now age
+  local grave gtarget gpid
+
+  # KITT (2026-09-11, extreme-subtraction ruling on R8-P1-1 / R8-P1-2): this
+  # PR never shipped, so no released clikae ever created a directory-shaped
+  # reclaim mutex -- the legacy-directory reclaim branch that used to sit
+  # here (four straight rounds' worth of P1s against it: R8-P1-1's `ln -s`
+  # trusted-exit-code restore that nested silently into a foreign directory
+  # and destroyed the only copy of a live holder's claim, and R8-P1-2's bare
+  # `rm -f` with no re-test and no mutex around it) is DELETED, not patched
+  # a fifth time. What replaces it, and the sibling non-symlink branch, and
+  # the foreign-symlink-to-directory guard that used to sit further down, is
+  # ONE rule, applied before any removal is even considered: a mutex path
+  # this function did not itself write -- a directory, a symlink resolving
+  # to one, or a plain file -- is never touched. `-d` DEREFERENCES a symlink
+  # (R7-P2-2's own finding), so `[ -d "$reclaim_link" ]` alone already
+  # catches both a bare directory and a symlink-to-directory; `[ ! -L
+  # "$reclaim_link" ]` catches a plain foreign file. Nothing this function
+  # ever writes is anything but a symlink whose target is DATA
+  # (`<pid>:<started_at>`, never a real path), so this condition can only be
+  # foreign: refuse loudly and name the path. This function's own job stops
+  # at refusing once -- it never retries a refusal itself. R9-P1-2 (2026-
+  # 09-11 round-9 review): the OLD comment here said this "backs off exactly
+  # like any other busy mutex, the caller's own retry/timeout policy is
+  # unchanged" -- true of this function in isolation, false of what it
+  # licensed callers to assume, because a foreign object never self-heals
+  # the way an ordinary busy mutex does. `_burn_tank_lock_acquire` treats
+  # THIS specific refusal as terminal (see its own R9-P1-2 comment) rather
+  # than looping back with a backoff sleep; measured on the old
+  # loop-forever-with-no-sleep shape: 9.79s of CPU and 49,151 duplicate
+  # refusal lines in one 10s burn. `clikae clean`'s GC reports the same
+  # refusal under the same reason and moves on to the next tank without
+  # retrying this one either.
+  if _burn_reclaim_mutex_is_foreign "$reclaim_link"; then
+    printf 'clikae: reclaim mutex at %s is a foreign-mutex (a directory, a symlink to one, or a plain file) -- remove it by hand, then retry\n' "$reclaim_link" >&2
+    return 1
+  fi
+
+  now_epoch="$(date +%s 2>/dev/null || echo 0)"
+  if ln -s "$$:$now_epoch" "$reclaim_link" 2>/dev/null; then
+    # R9-P2-2 (2026-09-11 round-9 review): `ln -s`'s own exit code is NOT
+    # proof the claim landed AT $reclaim_link -- the same fact R8-P1-1 found
+    # for the RESTORE twelve lines below applies just as much to this
+    # CLAIM: if a foreign directory arrives in the window between the
+    # is_foreign check above and this `ln -s` (this function does not hold
+    # any mutex over ITSELF), `ln -s` follows the now-existing directory and
+    # nests our claim INSIDE it, still returning rc=0 -- measured 5/5 with a
+    # hook planted in that exact window. Verify by `readlink`, exactly like
+    # the restore already does: on a match we genuinely hold the mutex; on
+    # a mismatch we hold nothing at `$reclaim_link` at all, so the caller's
+    # normal retry sees the object that arrived and the next `is_foreign`
+    # call refuses it correctly instead of two processes believing they
+    # both hold this mutex.
+    if [ -L "$reclaim_link" ] && [ "$(readlink "$reclaim_link" 2>/dev/null)" = "$$:$now_epoch" ]; then
+      return 0
+    fi
+    # R10-P3-2 (2026-09-12 round-10 review): the readlink verify above only
+    # tells us the claim did NOT land at $reclaim_link -- it does not undo
+    # what `ln -s` already did. When the destination that arrived in the
+    # unguarded window between the `is_foreign` check above and this
+    # `ln -s` resolves to a DIRECTORY, `ln -s` nests our claim INSIDE it
+    # (named by our own payload -- it carries no slash) instead of failing,
+    # still returning rc=0 -- measured 5/5 with a hook. Every surface (this
+    # function's own header, its refusal message above, docs/
+    # orchestration.md) promises a foreign object is "never touched"/
+    # "never removed either"; leaving litter INSIDE one breaks that promise
+    # as much as removing it would. Clean up only the exact entry we just
+    # created (named by our own pid:epoch payload) -- never anything else
+    # the foreign directory might already contain.
+    if [ -d "$reclaim_link" ]; then
+      rm -f "$reclaim_link/$$:$now_epoch" 2>/dev/null
+    fi
+    return 1
+  fi
+
+  [ -L "$reclaim_link" ] || return 1   # vanished between the checks above and here — caller retries
+  target="$(readlink "$reclaim_link" 2>/dev/null || true)"
+  mpid="${target%%:*}"
+  mstarted="${target#*:}"
+  case "$mstarted" in ''|*[!0-9]*) mstarted=0 ;; esac
+
+  evict_now=0
+  case "$mpid" in
+    ''|*[!0-9]*)
+      # Empty, dangling, or malformed payload: a well-formed mutex link
+      # ALWAYS has a numeric pid from the instant it exists (it's written
+      # atomically by the `ln -s` above), so this shape is foreign or
+      # corrupt, never a young legitimate holder — evict regardless of age.
+      evict_now=1
+      ;;
+    *)
+      if kill -0 "$mpid" 2>/dev/null; then
+        # R5-P2-1 (2026-09-10 round-5 review): a bare `kill -0` only proves
+        # SOMETHING is alive at this pid, not that it's the SAME process
+        # this marker's `started_at` was recorded for — a pid recycled
+        # onto a dead holder's number would otherwise wedge this mutex,
+        # and the tank it guards, for the recycler's ENTIRE lifetime (a
+        # daemon or a long-lived tmux server: unbounded in practice). The
+        # tank lock itself is already guarded against exactly this
+        # (`_burn_pid_matches_marker`, further down); the mutex protecting
+        # its removal needs the same check, not a weaker one.
+        _burn_pid_matches_marker "$mpid" "$mstarted" && return 1   # alive AND matches -- do not evict
+        evict_now=1   # alive pid, but not the process that wrote this marker -- stale regardless of age
+      else
+        # R5-P2-2: clamp instead of trusting the sign. A `started_at`
+        # AHEAD of `now` (a backward clock step on the reader, or a
+        # forward one on the writer at claim time) must not make a dead
+        # holder's mutex permanently un-reapable until wall clock catches
+        # up to it -- treat a negative age the same as "long past due",
+        # not as "not due yet".
+        age=$((now_epoch - mstarted))
+        [ "$age" -lt 0 ] && age=30
+        [ "$age" -ge 30 ] && evict_now=1
+      fi
+      ;;
+  esac
+  [ "$evict_now" -eq 1 ] || return 1
+
+  # R10-P3-5 (2026-09-12 round-10 review): `$$.$RANDOM` alone is safe
+  # against two REAPERS colliding right now (no two processes share a
+  # pid), but not against a grave deliberately KEPT (the "could NOT
+  # restore" branch below, R10-P2-1's fix makes these sweepable, not
+  # instantly gone) colliding with a LATER process that recycles the same
+  # pid and happens to draw the same $RANDOM -- a `mv` onto that path would
+  # silently clobber the only surviving copy of a live claim. A wall-clock
+  # timestamp added to the same name shrinks that already-small window
+  # further without changing how any sweeper parses it (they all read only
+  # the first `.`-delimited field after `.stale.` as the pid).
+  grave="${reclaim_link}.stale.$$.$RANDOM.$(date +%s 2>/dev/null || echo 0)"
+  mv "$reclaim_link" "$grave" 2>/dev/null || return 1   # someone else already reaped or released it
+  gtarget="$(readlink "$grave" 2>/dev/null || true)"
+  gpid="${gtarget%%:*}"
+  if [ "$gpid" = "$mpid" ]; then
+    rm -f "$grave" 2>/dev/null   # exactly the abandoned mutex we judged dead — never claims it for the caller
+    return 1
+  fi
+  # We caught someone ELSE'S mutex: a live holder's fresh `ln -s` landed in
+  # this EXACT path in the window between our unsynchronized read (above)
+  # and our `mv` (just now) — our `mv` just vacated the path a live holder
+  # was legitimately occupying. That vacancy is itself a hazard structurally
+  # identical to R3-P1-1's original `mv`-vacate bug, just one function up:
+  # if left open, a THIRD process's `ln -s` can land in it and become a
+  # SECOND live holder of this mutex while the one we just evicted (still
+  # alive, still inside whatever it was doing) has no idea it happened.
+  #
+  # So the fix does NOT wait-then-discard (which leaves that vacancy open
+  # for as long as the wait, however short) — it puts an equivalent entry
+  # BACK immediately, by re-creating it with `ln -s "$gtarget" ...` rather
+  # than trying to `mv` the graveyard copy back. This is NOT the same
+  # thing: measured on this machine, `mv -n SRC DST` when DST is an
+  # EXISTING SYMLINK silently CLOBBERS it on the system `/bin/mv` (BSD) —
+  # `-n` reliably no-clobbers a regular-file destination but not a
+  # symlink-to-symlink `mv`, while GNU coreutils' `mv -n` gets this right;
+  # a fix that only works with one vendor's coreutils on `$PATH` is exactly
+  # the R4-P1-3 shape this same round already closed once. `ln -s`, by
+  # contrast, is EEXIST-on-conflict by definition of the syscall itself —
+  # confirmed identical on both `/bin/ln` and GNU coreutils' `ln`: it never
+  # overwrites, ever, on either vendor, because there is no `-n`-style
+  # switch to get inconsistently implemented in the first place. Re-
+  # creating (rather than moving) also means our graveyard copy is always
+  # `rm -f`-able afterward regardless of which branch we took — nothing
+  # downstream ever depends on the SAME inode surviving, only on the same
+  # payload existing at `$reclaim_link` again.
+  # R8-P1-1 (2026-09-11 round-8 review): `ln -s`'s own exit code is NOT
+  # proof the link landed -- EEXIST-atomic only against another SYMLINK, it
+  # silently nests INSIDE anything the destination resolves to (a directory,
+  # or a symlink to one) and still returns rc=0, measured identical on GNU
+  # coreutils' `ln` and BSD `/bin/ln`. Verifying by `readlink` instead of by
+  # exit code is what tells "restored" apart from "nested as junk inside
+  # whatever is occupying the path now" -- and on a mismatch the graveyard
+  # copy is KEPT, never `rm -f`'d, because it is the only surviving copy of
+  # a live holder's claim and `clean`'s graveyard sweep is its recovery
+  # path. `[ -L "$reclaim_link" ] &&` is load-bearing, not decoration:
+  # without it an empty `$gtarget` (a caught empty-target link) compares
+  # equal to `readlink`'s empty output on a path that does not exist at
+  # all, and a false "restored" comes straight back.
+  # R10-P3-4 (2026-09-12 round-10 review): the two messages below used to
+  # say "raced a live holder (pid %s)" -- true in the common case, but
+  # wrong in two real ones this function itself can catch: a caught
+  # empty-target claim ($gpid empty, printing an empty "(pid )"), and a
+  # pid that matches the age-evicted holder's own but with a different
+  # `started_at` (a recycled marker) -- which is a DIFFERENT identity from
+  # the one just evicted, not provably "live". Reporting the raw caught
+  # identity (never empty in the printed string) instead of a liveness
+  # claim this function did not itself re-verify is accurate in all three
+  # cases. (Comment placed here, not between the verify and the message
+  # below, so it stays out of the structural pin's fixed-offset window --
+  # see the KITT/R8-P1-1 test right below this function's own test.)
+  ln -s "$gtarget" "$reclaim_link" 2>/dev/null || true
+  if [ -L "$reclaim_link" ] && [ "$(readlink "$reclaim_link" 2>/dev/null)" = "$gtarget" ]; then
+    printf 'clikae: reclaim mutex reaper for %s raced a holder it did not judge stale (identity: %s) -- restored it\n' "$reclaim_link" "${gtarget:-<empty>}" >&2
+    rm -f "$grave" 2>/dev/null
+  else
+    printf 'clikae: reclaim mutex reaper for %s raced a holder it did not judge stale (identity: %s) -- could NOT restore (the mutex path is occupied) -- the claim is kept at %s\n' "$reclaim_link" "${gtarget:-<empty>}" "$grave" >&2
+  fi
+  return 1
+}
+
+# _burn_reclaim_mutex_release <reclaim_link> — the counterpart to a
+# successful _burn_reclaim_mutex_try. Always called by the same process
+# that just claimed it (every call site is `if _burn_reclaim_mutex_try
+# …; then … _burn_reclaim_mutex_release …; fi`), but re-verifies the link
+# still names THIS pid before removing it anyway — the same defence in
+# depth `_burn_tank_lock_release` applies to the lock itself: a reaper that
+# mistakenly `mv`-ed away a live holder's link (R4-P1-2's residual window,
+# between that reaper's `mv` and its own cleanup) could leave a THIRD
+# process's fresh claim sitting at this exact path by the time some other
+# code path calls release — trusting "I must be the one who's calling
+# this" without checking is exactly the assumption that bit the lock
+# itself before its own release was hardened this way.
+#
+# R5-P1-3 (2026-09-10 round-5 review): this mutex is NOT mathematically
+# exclusive, and that is written down here rather than implied away. The
+# window this comment names is real: a reaper that mistakenly evicted a
+# live holder and then lost the restore race (a THIRD claim landing first)
+# leaves that live holder still believing it holds the mutex while the
+# third claim also holds it — two processes briefly inside the SAME
+# removal critical section. Measured at 0 in 300 real `clikae burn` trials
+# and 0/50 on this function's own calling path; a synthetic, zero-backoff
+# hammer of the mutex in total isolation (a rhythm no real caller
+# produces) found it at up to ~24%. The re-verify above is what bounds the
+# cost when it happens: it never lets EITHER process delete a link that
+# isn't its own, so the worst case is one extra live holder for the span
+# of one critical section, caught downstream by the tank LOCK's own
+# owner-only release — two burns briefly on one tank (#40), never a
+# corrupted lock file and never data loss. See docs/orchestration.md's
+# "Round 5" note for the full numbers.
+_burn_reclaim_mutex_release() {
+  local target; target="$(readlink "$1" 2>/dev/null || true)"
+  [ "${target%%:*}" = "$$" ] && rm -f "$1" 2>/dev/null
+  return 0
+}
+
+# _burn_reclaim_mutex_available <reclaim_link> -> 0 if _burn_reclaim_mutex_try
+# would currently be ABLE to act on <reclaim_link> (it is vacant, or a dead
+# or recycled holder it would reap), 1 if a genuinely live holder occupies
+# it, OR it is a foreign object (a directory, a symlink to one, or a plain
+# file) that a real `try` would refuse rather than touch (KITT, 2026-09-11).
+#
+# R6-P2-1 (2026-09-10 round-6 review): `clikae clean --dry-run` used to
+# preview a tank lock's removal with NO knowledge of whether its reclaim
+# mutex was even claimable (the `.lock` loop), and with a bare `kill -0` for
+# the mutex's OWN liveness (the `.lock.reclaim` loop) — the exact "third,
+# weaker liveness rule for the same object" `_burn_pid_matches_marker`
+# replaced everywhere else. A dry run that over-promises a removal the real
+# run would refuse (busy) or under-promises one it would make (already
+# reaped) is worse than no preview.
+#
+# READ-ONLY BY DESIGN: makes the identical decision `_burn_reclaim_mutex_try`
+# makes, without ever moving, creating, or removing anything — not even the
+# transient claim-then-release a real `try`+`release` pair would leave no
+# permanent trace from either, but WOULD destroy a pre-existing dead entry
+# a dry run has no business touching. Mirrors `_burn_reclaim_mutex_try`'s
+# symlink marker-match liveness rule, and its single foreign-mutex refusal
+# rule, exactly; a change to either there must be mirrored here — see
+# tests/bats/clean.bats's R6-P2-1 parity tests, which exercise both
+# functions against the same fixtures and assert they agree.
+_burn_reclaim_mutex_available() {
+  local reclaim_link="$1" now_epoch target mpid mstarted age
+  # 🔴 `-e` DEREFERENCES: a well-formed mutex symlink's target is data
+  # (`<pid>:<started_at>`), never a real path, so `-e` on a live mutex link
+  # is ALWAYS false -- checking existence with `-e` alone here would treat
+  # every genuinely-held mutex as vacant. Same correction the review's own
+  # leak detector needed ("a dangling symlink is invisible to `-e` alone").
+  { [ -L "$reclaim_link" ] || [ -e "$reclaim_link" ]; } || return 0
+  # KITT (2026-09-11): mirrors _burn_reclaim_mutex_try's single foreign-
+  # mutex rule exactly -- a directory, a symlink resolving to one, or a
+  # plain foreign file is never claimable by a real `try`, so it is never
+  # "available" here either. `-d` DEREFERENCES a symlink (R7-P2-2), so this
+  # one condition covers all three shapes.
+  if _burn_reclaim_mutex_is_foreign "$reclaim_link"; then
+    return 1
+  fi
+  target="$(readlink "$reclaim_link" 2>/dev/null || true)"
+  mpid="${target%%:*}"
+  mstarted="${target#*:}"
+  case "$mstarted" in ''|*[!0-9]*) mstarted=0 ;; esac
+  case "$mpid" in
+    ''|*[!0-9]*) return 0 ;;
+    *)
+      if ! kill -0 "$mpid" 2>/dev/null; then
+        now_epoch="$(date +%s 2>/dev/null || echo 0)"
+        age=$((now_epoch - mstarted))
+        [ "$age" -lt 0 ] && age=30
+        [ "$age" -ge 30 ] && return 0
+        return 1
+      fi
+      _burn_pid_matches_marker "$mpid" "$mstarted" && return 1
+      return 0
+      ;;
+  esac
+}
+
+# _burn_tank_lock_reap_verified <lock> <judged_holder> <judged_hstarted> ->
+# reap <lock> IF, AND ONLY IF, an atomic `mv` still catches the exact
+# identity the caller already judged stale from an earlier unsynchronized
+# read; if it catches anything else, put it back. 0 if the lock was
+# genuinely reaped, 1 otherwise (nothing to reap, or a live claim was
+# safely restored).
+#
+# R9-P1-1 (2026-09-11 round-9 review): every OTHER remover in this file
+# already earns mutual exclusion by never trusting a decision made before
+# the removal — `_burn_reclaim_mutex_try` itself is the model: `mv` first
+# (atomic; catches whatever is THERE, not whatever was there when a
+# fork-ago read happened), then classify what was actually caught. The two
+# call sites of THIS helper (`_burn_tank_lock_acquire`'s re-verify-under-
+# the-mutex block, and `_clean_tank_lock_gc`'s twin) had that discipline
+# applied to the MUTEX that serialises their removals, never to the LOCK
+# the mutex protects: both used to `readlink`-decide-then-`rm -f "$lock"`
+# directly, and `_burn_pid_matches_marker` forks `ps` AND `date` in
+# between decide and remove. The reclaim mutex serialises REMOVERS, never
+# CLAIMANTS — a claim is a bare `ln -s` with no mutex around it at all
+# (see the claim below) — so a live burn's fresh claim landing in that
+# fork-sized window was deleted by a reaper that never re-read what it was
+# about to `rm`. Measured through real `clikae burn`/`clikae clean`
+# binaries: 6 genuine engine overlaps (two burns holding one tank lock at
+# once, the #40 symptom this entire mechanism exists to prevent), and
+# deterministically 5/5 at each site with a hook planted immediately
+# before the old bare `rm -f "$lock"`.
+#
+# The fix is the same `mv`-then-classify shape, parameterised by the
+# identity the caller already believes is stale (so this helper re-derives
+# nothing about liveness itself — that stays the caller's job, exactly
+# once, right before calling this): `mv` is atomic on one filesystem, so
+# whatever is at `$lock` the instant this runs is what lands in the
+# graveyard and nothing else can land there afterward. If the graveyard's
+# own payload still names the judged-stale identity, the eviction was
+# correct and the graveyard copy is discarded. If it names anyone else, a
+# live holder's fresh claim landed in the window between the caller's read
+# and this `mv` — put it back immediately (never leave the path vacant for
+# a THIRD contender to land in, the same vacate hazard R3-P1-1 found in the
+# main lock and R4-P1-2 found in the mutex), and verify the restore by
+# `readlink`, not by `ln -s`'s own exit code (R8-P1-1's own rule, applied
+# here to the lock rather than the mutex): on a mismatch the graveyard copy
+# is KEPT, never discarded, because it is the only surviving copy of a live
+# holder's claim.
+_burn_tank_lock_reap_verified() {
+  local lock="$1" judged_holder="$2" judged_hstarted="$3"
+  local grave gtarget gholder ghstarted
+  [ -L "$lock" ] || return 1
+  # R10-P3-5 (2026-09-12 round-10 review): same fix as the reclaim mutex's
+  # own grave naming above -- `$$.$RANDOM` alone only protects against two
+  # REAPERS colliding right now, not against a deliberately-kept grave (the
+  # "could NOT restore" branch below) colliding with a LATER pid-recycled
+  # process drawing the same $RANDOM. The added timestamp costs no sweeper
+  # anything: every sweeper reads only the first field after `.stale.`.
+  grave="${lock}.stale.$$.$RANDOM.$(date +%s 2>/dev/null || echo 0)"
+  mv "$lock" "$grave" 2>/dev/null || return 1   # someone else already reaped or released it
+  gtarget="$(readlink "$grave" 2>/dev/null || true)"
+  gholder="${gtarget%%:*}"
+  ghstarted="${gtarget#*:}"
+  if [ "$gholder" = "$judged_holder" ] && [ "$ghstarted" = "$judged_hstarted" ]; then
+    rm -f "$grave" 2>/dev/null   # exactly the identity we judged stale -- discard it
+    return 0
+  fi
+  # We caught someone ELSE'S claim: a live holder's fresh `ln -s` landed on
+  # this EXACT path in the window between the caller's unsynchronized read
+  # and this `mv`. Put an equivalent entry back immediately rather than
+  # leaving the vacancy open for any length of time.
+  ln -s "$gtarget" "$lock" 2>/dev/null || true
+  if [ -L "$lock" ] && [ "$(readlink "$lock" 2>/dev/null)" = "$gtarget" ]; then
+    # R10-P3-4 (2026-09-12 round-10 review): "raced a live claim (pid %s)"
+    # is wrong in two real cases this function itself can catch: a caught
+    # empty-target claim ($gholder empty, printing an empty "(pid )"), and
+    # a pid that matches the judged-stale holder's own but with a
+    # different `started_at` (a recycled marker) -- a DIFFERENT identity
+    # from the one just judged stale, not provably "live". Reporting the
+    # raw caught identity (never empty in the printed string) instead of a
+    # liveness claim this function did not re-verify is accurate in all
+    # three cases.
+    printf 'clikae: tank lock reaper for %s raced a claim it did not judge stale (identity: %s) -- restored it\n' "$lock" "${gtarget:-<empty>}" >&2
+    rm -f "$grave" 2>/dev/null
+  else
+    printf 'clikae: tank lock reaper for %s raced a claim it did not judge stale (identity: %s) -- could NOT restore (the lock path is occupied) -- the claim is kept at %s\n' "$lock" "${gtarget:-<empty>}" "$grave" >&2
+  fi
+  return 1
+}
+
+# _burn_tank_lock_acquire <engine> <tank> [timeout_s=10] -> 0 once THIS
+# process holds the per-tank lock, 1 on an ordinary timeout (ONLY: the
+# reclaim mutex stayed busy, or a live holder never released), 2 if the
+# reclaim mutex is a foreign object -- a TERMINAL refusal, never retried,
+# never counted against the timeout (R9-P1-2/R9-P2-3, see
+# `_BURN_LOCK_ACQUIRE_FOREIGN_MUTEX` above for the path).
+#
+# P2-4 (2026-09-09 round-1 review): the busy check (`burn_tank_busy`) and the
+# `running` write that makes a tank busy for anyone ELSE'S check are two
+# separate statements — between them sit nothing at all, but two `clikae
+# burn` processes started together both reach the check before either has
+# written `running`, and both pass. `ln -s` is atomic even without
+# flock/lockf (works on bash 3.2, NFS, anywhere symlink(2) works), so it
+# closes the SAME window `--ephemeral`'s slot_lock already closes for a
+# different resource (see cmd_burn's own soul/MCP prelaunch lock further
+# down) — held only across the check-and-write, never across the engine run
+# itself.
+#
+# R3-P1-1/R3-P1-2/R3-P2-1 (2026-09-09 round-3 review): round 2's `mv`-aside
+# reclaim broke mutual exclusion rather than fixing it — `mv` IS atomic, but
+# the thing it made atomic was the wrong thing. `mv "$lock" "$graveyard"`
+# VACATES the rendezvous path, and a vacated path is exactly what every
+# OTHER contender's plain `mkdir` is waiting for; measured, the `mv` winner
+# and the next `mkdir` winner were two different processes in 48% of trials
+# — worse than the naive two-statement reclaim it replaced. Restoring a
+# capture (`mv "$graveyard" "$lock"`) also silently NESTED instead of
+# failing whenever `$lock` had been recreated in the meantime, leaking a
+# directory a later reclaim couldn't see through. And the pid-less grace it
+# also carried was reachable from ordinary fork/subshell lag on a loaded
+# machine, not only a kill mid-`mkdir` — it could steal a perfectly live
+# holder's lock if that holder merely stalled between claiming the path and
+# writing its identity into it.
+#
+# The fix removes all three defects by construction:
+#
+#   1. The lock is a SYMLINK, never a directory. `ln -s "<pid>:<started_at>"
+#      "$lock"` is one atomic syscall (`symlink(2)`, EEXIST for the loser)
+#      that carries the holder's identity from the instant the path exists
+#      — there is no window where the path is claimed but pid-less, so the
+#      grace branch is gone entirely, not merely tightened.
+#   2. Nothing that REMOVES the link — a stale reclaim, or an owner's own
+#      release (see _burn_tank_lock_release below) — ever runs outside
+#      _burn_reclaim_mutex_try's mutex above. Because the link can only
+#      disappear while that mutex is held, and can only newly appear via
+#      some contender's own unsynchronized `ln -s`, a reclaimer's
+#      readlink→verify-dead→`rm`, done AFTER it holds the mutex, cannot
+#      delete a link a fresh holder claimed after the reclaimer's first,
+#      unsynchronized read — the re-read under the mutex is what's actually
+#      acted on.
+#   3. Acquisition itself (`ln -s`) never touches the mutex — only removal
+#      does — so the common, uncontended case costs exactly one syscall,
+#      same as the `mkdir` it replaces.
+#
+# R4-P2-1/R4-P2-2 (2026-09-10 round-4 review): two corners of the symlink
+# design itself still weren't guarded. `[ -e "$lock" ] && [ ! -L "$lock" ]`
+# (point 1's own leftover-directory guard, and the round-2 non-symlink
+# check it descends from) DEREFERENCES via `-e`, so a symlink whose target
+# resolves to an EXISTING DIRECTORY slips past it and reaches `ln -s`
+# below, which then nests INTO that directory instead of failing (see the
+# `-L "$lock" && -d "$lock"` branch further down) — the same
+# destination-is-a-directory hazard as before, just indirected through a
+# foreign symlink. And a durably empty-target link (`ln -s "" "$lock"`)
+# was read as "vanished, retry immediately", forever, at full CPU, because
+# nothing ever makes a genuinely empty target become non-empty — fixed by
+# falling through to the ordinary stale-holder path instead of `continue`ing
+# past it (an empty/malformed holder is already `stale=1` there).
+_burn_tank_lock_acquire() {
+  local eng="$1" tk="$2" timeout_s="${3:-10}" lock reclaim_dir start_s now_s
+  local target holder hstarted stale now_epoch
+  lock="$(_burn_tank_lock_path "$eng" "$tk")"
+  reclaim_dir="${lock}.reclaim"
+  mkdir -p "$(dirname "$lock")" 2>/dev/null || true
+  chmod 0700 "$(dirname "$lock")" 2>/dev/null || true
+  start_s=$SECONDS
+  while :; do
+    # Wall-clock ($SECONDS), checked at the TOP of every iteration —
+    # including the reclaim path below — so the timeout bounds the WHOLE
+    # loop, not just a "not stale, about to sleep" tail. A stuck reclaim
+    # mutex (see _burn_reclaim_mutex_try) still can't spin this forever: its
+    # own 30s stale rule reaps it long before most callers' timeouts.
+    now_s=$SECONDS
+    [ "$((now_s - start_s))" -lt "$timeout_s" ] || return 1
+    if [ -e "$lock" ] && [ ! -L "$lock" ]; then
+      # Some non-symlink entry occupies the path (e.g. a pre-round-3,
+      # directory-style lock left by an older clikae) — checked and cleared
+      # BEFORE ever attempting `ln -s` below, never after: `ln -s TARGET
+      # LINKNAME` where LINKNAME is an existing DIRECTORY does not fail,
+      # it creates the link INSIDE that directory (the same
+      # destination-is-a-directory nesting hazard R3-P1-2 found in `mv`) —
+      # so this path can never be allowed to reach the `ln -s` below while
+      # it might still be a directory. It can't carry an identity either
+      # way, so it is unconditionally reclaimable, under the same removal
+      # mutex as everything else.
+      if _burn_reclaim_mutex_try "$reclaim_dir"; then
+        _BURN_RECLAIM_MUTEX_OWNED="$reclaim_dir"
+        [ -e "$lock" ] && [ ! -L "$lock" ] && rm -rf "$lock" 2>/dev/null
+        _burn_reclaim_mutex_release "$reclaim_dir"
+        _BURN_RECLAIM_MUTEX_OWNED=""
+      elif _burn_reclaim_mutex_is_foreign "$reclaim_dir"; then
+        # R9-P1-2 (2026-09-11 round-9 review): a foreign object at the
+        # RECLAIM MUTEX path (as opposed to at the lock itself, the case
+        # this branch exists for) never self-heals -- `_burn_reclaim_mutex_
+        # try` refuses it on EVERY call, forever, so looping back to
+        # `continue` with no backoff spun this whole branch at up to ~89%
+        # of a core, printing the refusal `try` already logged once, until
+        # the caller's outer timeout -- measured 49,151 duplicate lines in
+        # one 10s burn. Refuse ONCE more, terminally: exit the acquisition
+        # loop immediately rather than retrying a condition that cannot
+        # change without a human removing the object by hand.
+        _BURN_LOCK_ACQUIRE_FOREIGN_MUTEX="$reclaim_dir"
+        return 2
+      else
+        sleep 1   # an ordinary busy mutex -- back off like every other branch does
+      fi
+      continue
+    fi
+    if [ -L "$lock" ] && [ -d "$lock" ]; then
+      # R4-P2-1 (2026-09-10 round-4 review): the check above uses `-e`,
+      # which DEREFERENCES — a symlink whose target resolves to an
+      # EXISTING DIRECTORY makes `-e` true and `-L` true at once, so the
+      # branch above (which requires `! -L`) never fires for it, and `ln -s
+      # TARGET "$lock"` below does not fail on such a path: it follows
+      # `$lock` to that directory and creates the link INSIDE it, same
+      # nesting hazard as the non-symlink case, just one level indirected
+      # through a foreign symlink. Nothing this function ever writes
+      # resolves to a real directory (`<pid>:<epoch>` never names a real
+      # path), so `-L "$lock" && -d "$lock"` can only be a foreign or
+      # corrupt link — unconditionally reclaimable, `rm -f` (not `-rf`:
+      # this removes the SYMLINK itself, never the directory it points at).
+      if _burn_reclaim_mutex_try "$reclaim_dir"; then
+        _BURN_RECLAIM_MUTEX_OWNED="$reclaim_dir"
+        [ -L "$lock" ] && [ -d "$lock" ] && rm -f "$lock" 2>/dev/null
+        _burn_reclaim_mutex_release "$reclaim_dir"
+        _BURN_RECLAIM_MUTEX_OWNED=""
+      elif _burn_reclaim_mutex_is_foreign "$reclaim_dir"; then
+        # R9-P1-2, the sibling site: same terminal refusal as the
+        # non-symlink branch above, same reason.
+        _BURN_LOCK_ACQUIRE_FOREIGN_MUTEX="$reclaim_dir"
+        return 2
+      else
+        sleep 1   # an ordinary busy mutex -- back off like every other branch does
+      fi
+      continue
+    fi
+    now_epoch="$(date +%s 2>/dev/null || echo 0)"
+    if ln -s "$$:$now_epoch" "$lock" 2>/dev/null; then
+      # R9-P2-2 sibling site (2026-09-11 round-9 review): the same
+      # check-then-act hazard the reclaim mutex's own claim has -- `ln -s`
+      # returns rc=0 without landing at `$lock` when `$lock` resolves to a
+      # directory that arrived in the window since the `-L "$lock" && -d
+      # "$lock"` check above. Verify by `readlink` before believing we hold
+      # the tank lock; on a mismatch, fall through to the same handling as
+      # an outright `ln -s` failure below (this loop's normal retry path).
+      if [ -L "$lock" ] && [ "$(readlink "$lock" 2>/dev/null)" = "$$:$now_epoch" ]; then
+        return 0
+      fi
+    fi
+    target="$(readlink "$lock" 2>/dev/null || true)"
+    if [ -z "$target" ] && [ ! -L "$lock" ]; then
+      # Genuinely vanished between our failed `ln -s` above and this
+      # `readlink` (someone else's release or reclaim finishing) — it may
+      # now be free; retry `ln -s` at the top immediately, no sleep.
+      continue
+    fi
+    # R4-P2-2 (2026-09-10 round-4 review): note this does NOT re-test
+    # `[ -z "$target" ]` alone — a link that is STILL THERE (`-L "$lock"`
+    # true above) but whose target reads empty, e.g. a durable `ln -s ""
+    # "$lock"`, occupies the path forever on its own: no future event ever
+    # makes `readlink` return non-empty, so the old code's blanket "empty
+    # means vanished, retry immediately" was an infinite hot spin — `ln -s`
+    # keeps failing EEXIST against the same dead weight, `continue` keeps
+    # firing with no sleep and no path to the reclaim logic below. Falling
+    # through here instead of `continue`ing routes it into the exact same
+    # stale-holder handling as any other unparseable payload (`holder=""`
+    # matches the `''|*[!0-9]*` case just below), which needs no separate
+    # sleep of its own: the reclaim mutex below already resolves this in
+    # one pass.
+    holder="${target%%:*}"
+    hstarted="${target#*:}"
+    stale=0
+    case "$holder" in
+      ''|*[!0-9]*) stale=1 ;;
+      *)
+        # Reuse the same liveness+identity test `burn_tank_busy` uses (P2-1,
+        # round-1): a bare `kill -0` only proves SOMETHING is alive at that
+        # pid, not that it's the SAME process the lock's own recorded
+        # started_at names — this lock has exactly that recycled-pid
+        # weakness too.
+        if kill -0 "$holder" 2>/dev/null; then
+          _burn_pid_matches_marker "$holder" "$hstarted" || stale=1
+        else
+          stale=1
+        fi
+        ;;
+    esac
+    if [ "$stale" -ne 1 ]; then
+      sleep 1
+      continue
+    fi
+    if _burn_reclaim_mutex_try "$reclaim_dir"; then
+      _BURN_RECLAIM_MUTEX_OWNED="$reclaim_dir"
+      # Re-verify under the mutex — required, not paranoia: the target may
+      # have changed since the unsynchronized read above (a live holder
+      # released, or the earlier reclaim finished, and a fresh contender's
+      # `ln -s` landed on this exact path in the meantime). Only remove
+      # what THIS read — taken while holding the one thing that can remove
+      # it — still judges stale.
+      #
+      # R4-P2-2: test `-L` here, not `-n "$target"` — an empty-target
+      # symlink (`-L` true, `readlink` empty) is still an OCCUPYING entry
+      # that must be removed if stale; `-n "$target"` would treat it the
+      # same as "already gone" and never remove it, permanently skipping
+      # the one removal that could ever clear it.
+      if [ -L "$lock" ]; then
+        target="$(readlink "$lock" 2>/dev/null || true)"
+        holder="${target%%:*}"
+        hstarted="${target#*:}"
+        stale=0
+        case "$holder" in
+          ''|*[!0-9]*) stale=1 ;;
+          *)
+            if kill -0 "$holder" 2>/dev/null; then
+              _burn_pid_matches_marker "$holder" "$hstarted" || stale=1
+            else
+              stale=1
+            fi
+            ;;
+        esac
+        # R9-P1-1 (2026-09-11 round-9 review): this used to `rm -f "$lock"`
+        # directly on `$stale -eq 1` -- a bare readlink-decide-then-rm on
+        # the path, not on the entry actually caught. The reclaim mutex
+        # held across this whole block serialises REMOVERS (only one
+        # process ever reaches this `rm`), but it does not and cannot
+        # serialise CLAIMANTS: a claim is the bare `ln -s` above, which
+        # takes no mutex at all. Between the `readlink` a few lines up and
+        # the `rm -f` this replaces, `_burn_pid_matches_marker` forks `ps`
+        # AND `date` -- milliseconds under load -- and a live burn's fresh
+        # claim landing in that fork-sized window was deleted while it was
+        # inside its own check-and-write, producing two engines on one
+        # tank. Measured through real binaries: 6 overlaps in 130 trials
+        # with `clikae clean` racing `clikae burn`; deterministically 5/5
+        # with a hook. `_burn_tank_lock_reap_verified` closes it with the
+        # same `mv`-then-classify discipline `_burn_reclaim_mutex_try`
+        # already uses on itself, applied here to the LOCK: it re-catches
+        # whatever is actually at `$lock` atomically and only discards it
+        # if it still names the exact identity judged stale right above.
+        #
+        # R10-P3-1 (2026-09-12 round-10 review): `_burn_tank_lock_reap_
+        # verified` returns 1 in three ordinary, non-error cases (someone
+        # else already removed/released it; it caught and restored a live
+        # claim -- this whole helper's reason for existing; a restore that
+        # itself failed and kept the grave), and as the LAST command of an
+        # `&&` list under this file's `set -eo pipefail`, a `1` here used
+        # to terminate this function immediately via errexit -- it only
+        # didn't, in practice, because `cmd_burn`'s own call site happens
+        # to wrap this whole function in `|| _lock_acquire_rc=$?`, and
+        # errexit's suppression propagates into the callee. That is a
+        # correctness argument, not a guard against a caller who calls
+        # this function bare: it made itself safe rather than depending on
+        # its one caller shielding it forever.
+        if [ "$stale" -eq 1 ]; then
+          _burn_tank_lock_reap_verified "$lock" "$holder" "$hstarted" || true
+        fi
+      fi
+      _burn_reclaim_mutex_release "$reclaim_dir"
+      _BURN_RECLAIM_MUTEX_OWNED=""
+    elif _burn_reclaim_mutex_is_foreign "$reclaim_dir"; then
+      # R9-P1-2/R9-P2-3: the third call site with the same permanent
+      # refusal -- terminal, not a busy-mutex backoff. Measured on this
+      # exact fixture (a dead-holder lock, foreign reclaim mutex): the old
+      # shape spun the sibling `sleep 1` branch below for the WHOLE
+      # timeout, ending in the generic "try again shortly" busy-timeout
+      # message for a condition that never times out on its own.
+      _BURN_LOCK_ACQUIRE_FOREIGN_MUTEX="$reclaim_dir"
+      return 2
+    else
+      # R5-P2-4 (2026-09-10 round-5 review; the other half of R4-P2-2): the
+      # mutex being unclaimable right now (someone else holds it, or it's
+      # not yet 30s stale) fell straight through to the `continue` below
+      # with no sleep at all, spinning at full CPU for the rest of the
+      # timeout — measured ~79% of a core per blocked burn, on every tank
+      # merely recovering from a signal. The "holder is live" branch four
+      # lines up already sleeps 1s between retries; this path costs
+      # nothing extra to match it.
+      sleep 1
+    fi
+    continue   # whether we reclaimed it, someone else already did, or a
+               # fresher check now says it's live — retry `ln -s` at the top
+  done
+}
+
+# _burn_tank_lock_release <engine> <tank> — safe to call unconditionally on
+# every exit path out of the locked section (a timed-out acquire that never
+# held the lock, a signal mid-check, the normal release after the write —
+# see the trap installed around the locked section in cmd_burn below).
+#
+# R3-P1-1 (2026-09-09 round-3 review): removal — like a stale reclaim — only
+# ever happens while holding the reclaim mutex (see _burn_reclaim_mutex_try
+# and _burn_tank_lock_acquire above), and only when the link, re-read AFTER
+# the mutex is held, still names THIS process — never on trust that "I must
+# be the one who called acquire". Without that second check, a caller that
+# raced the lock away (timed out while someone else holds it, or is
+# cleaning up after a signal whose acquire never actually succeeded) would
+# delete a lock a DIFFERENT, live process is legitimately holding.
+#
+# The retry here is bounded, not a bare loop, because this runs from exit
+# traps: real contention on the mutex is a momentary thing (its own hold
+# time is a readlink and an rm/rmdir), so a handful of one-second retries
+# covers it, and the mutex's own 30s stale-reap bounds how long a truly
+# wedged mutex could ever block a FUTURE caller. Giving up here just means
+# this particular release didn't run this time — it never means a lock this
+# process doesn't own gets deleted.
+#
+# R5-P2-3 (2026-09-10 round-5 review): a signal can land while THIS
+# process already holds the reclaim mutex from _burn_tank_lock_acquire's
+# own reclaim path (see _BURN_RECLAIM_MUTEX_OWNED above). Looping on
+# _burn_reclaim_mutex_try in that situation deadlocks against ourselves —
+# the mutex's own liveness check sees our own live pid, correctly judges
+# it not abandoned, and refuses to evict it, for the full retry budget —
+# and the EXIT trap this function's caller's own `exit` then triggers runs
+# this same function a second time and pays the same cost again (measured:
+# 18-19s to exit, mutex leaked). Checking ownership first and acting
+# directly under the mutex already held, instead of trying to reacquire
+# it, closes both.
+_burn_tank_lock_release() {
+  local lock reclaim_dir target holder tries=0
+  lock="$(_burn_tank_lock_path "$1" "$2")"
+  reclaim_dir="${lock}.reclaim"
+  if [ -n "$_BURN_RECLAIM_MUTEX_OWNED" ] && [ "$_BURN_RECLAIM_MUTEX_OWNED" = "$reclaim_dir" ]; then
+    target="$(readlink "$lock" 2>/dev/null || true)"
+    holder="${target%%:*}"
+    [ "$holder" = "$$" ] && rm -f "$lock" 2>/dev/null
+    _burn_reclaim_mutex_release "$reclaim_dir"
+    _BURN_RECLAIM_MUTEX_OWNED=""
+    return 0
+  fi
+  while ! _burn_reclaim_mutex_try "$reclaim_dir"; do
+    tries=$((tries + 1))
+    [ "$tries" -lt 10 ] || return 0
+    sleep 1
+  done
+  _BURN_RECLAIM_MUTEX_OWNED="$reclaim_dir"
+  target="$(readlink "$lock" 2>/dev/null || true)"
+  holder="${target%%:*}"
+  [ "$holder" = "$$" ] && rm -f "$lock" 2>/dev/null
+  _burn_reclaim_mutex_release "$reclaim_dir"
+  _BURN_RECLAIM_MUTEX_OWNED=""
+  return 0
+}
+
+# Preserve combined output while retaining stderr alone for launch diagnostics.
+_burn_capture_stderr() {
+  local capture_rc=0
+  # fd 3 saves stdout before the pipe connects only stderr to tee.
+  { "$@" 2>&1 1>&3; } | tee "$stderr_file" >&2
+  capture_rc=${PIPESTATUS[0]}
+  return "$capture_rc"
+} 3>&1
+
+# _burn_check_codex_git_cwd — refuse to compose a codex argv whose cwd isn't a
+# git work tree. Reads $cli/$prompt_set/$codex_skip_git_check/$add_dirs from
+# the caller (cmd_burn's locals — same pattern _burn_result etc. already use).
+#
+# #66 round-1 P1-1: this used to be inlined once, at cmd_burn's entry, and
+# only ever ran against the engine NAMED ON THE COMMAND LINE. A dry tank's
+# cross-engine reroute (~2525 below) overwrites that same $cli variable and
+# recomposes the argv for the new engine — so a reroute INTO codex from
+# another engine skipped this check entirely and let codex itself reject the
+# non-git cwd a run and a tank later, after the earlier engine's state
+# (log dir, status.json, lock) had already been created. Called again at the
+# reroute site, right before the new engine's argv is composed, so landing on
+# codex is checked exactly where landing on codex first was.
+_burn_check_codex_git_cwd() {
+  [ "$cli" = codex ] || return 0
+  [ "$prompt_set" -eq 1 ] || return 0
+  [ "$codex_skip_git_check" -eq 0 ] || return 0
+  local dir="${add_dirs[0]}"
+  # #66 round-1 P3-2: `git -C <missing dir> rev-parse` also prints "not
+  # inside a git work tree" (its own stderr, discarded below) for a cwd that
+  # doesn't exist at all — name the actual cause instead of the wrong one.
+  [ -d "$dir" ] || log_fail "codex cwd '$dir' does not exist."
+  if [ "$(git -C "$dir" rev-parse --is-inside-work-tree 2>/dev/null)" != true ]; then
+    log_fail "codex cwd '$dir' is not inside a git work tree; put the repository first in --add-dir, or pass --codex-skip-git-check."
+  fi
+}
+
+# _burn_sanitize_reason <raw-line> — make an engine's own stderr safe to carry
+# as a JSON string value.
+#
+# #66 round-1 P2-1: json_str (lib/core/json.sh) only escapes the seven C
+# control chars JSON gives dedicated shorthand for (\t \n \r \b \f " \) — any
+# OTHER byte in U+0000-U+001F, most commonly a bare ESC (0x1B) from an ANSI
+# color code, passed straight through into the `--json` output verbatim.
+# RFC 8259 requires every one of those to be escaped; a raw one makes the
+# whole object invalid JSON for a strict parser, which is worse than the
+# prose burn --json exists to replace (a strict parser can't even start
+# reading it). Strip ANSI CSI sequences outright (the common, recoverable
+# case: color codes an engine prints whether or not stdout is a tty), then
+# turn every remaining control byte into a space — trading "illegal JSON"
+# for "ugly reason text", never the other way round.
+#
+# P3-3 (2026-09-12 round-2 review): this used to also `tr -s ' '` the
+# result, squeezing every run of spaces down to one — including runs the
+# engine's own message legitimately printed, which had nothing to do with
+# a replaced control byte. Only the control-byte substitution needs to
+# stay safe for JSON; a real "two spaces" in the stderr line is not this
+# function's problem to fix.
+_burn_sanitize_reason() {
+  local s="$1"
+  s="$(printf '%s' "$s" | sed -E $'s/\x1b\\[[0-9;]*[a-zA-Z]//g')"
+  s="$(printf '%s' "$s" | LC_ALL=C tr '\000-\037' ' ')"
+  printf '%s' "$s"
+}
+
+# _burn_truncate_utf8 <str> <max-bytes> — cut <str> to at most <max-bytes>
+# bytes without splitting a multibyte UTF-8 character.
+#
+# #66 round-1 P2-2: the original `${stderr_first:0:200}` truncates by
+# CHARACTER count only when the shell's own locale is UTF-8-aware. Under
+# C/POSIX — bash 3.2's default when LANG/LC_ALL/LC_CTYPE are unset, a real
+# state for an unattended/containerized caller, which is exactly who invokes
+# `clikae burn --json` — it degrades to raw BYTES, so a multibyte character
+# sitting across the 200-byte boundary gets sliced in half, writing invalid
+# UTF-8 into the JSON output. `local LC_ALL=C` forces byte semantics
+# EXPLICITLY, in THIS function only, regardless of the caller's environment,
+# so the cut point is deterministic; then back off any lead byte at the tail
+# whose continuation bytes didn't make it into the cut.
+_burn_truncate_utf8() {
+  local LC_ALL=C
+  local s="$1" max="$2" len
+  len=${#s}
+  [ "$len" -le "$max" ] && { printf '%s' "$s"; return; }
+  local cut="${s:0:max}"
+  local clen=${#cut} k pos c ord cont_needed=-1
+  local look=4; [ "$clen" -lt "$look" ] && look=$clen
+  for ((k = 1; k <= look; k++)); do
+    pos=$((clen - k))
+    c="${cut:pos:1}"
+    ord="$(printf '%d' "'$c")"
+    [ "$ord" -lt 0 ] && ord=$((ord + 256))
+    if [ "$ord" -ge 240 ]; then cont_needed=3; break
+    elif [ "$ord" -ge 224 ]; then cont_needed=2; break
+    elif [ "$ord" -ge 192 ]; then cont_needed=1; break
+    elif [ "$ord" -ge 128 ]; then continue
+    else cont_needed=-1; break
+    fi
+  done
+  if [ "$cont_needed" -ge 0 ] && [ $((k - 1)) -lt "$cont_needed" ]; then
+    cut="${cut:0:pos}"
+  fi
+  printf '%s' "$cut"
+}
+
 cmd_burn() {
-  local cli="" tank="" artifact="" to="" timeout_s="" reroute=1 allow_active=0 fresh=0
-  local prompt="" prompt_file="" prompt_set=0
+  local cli="" tank="" artifact="" to="" timeout_s="" reroute=1 allow_active=0 fresh=0 as_json=0
+  local prompt="" prompt_file="" prompt_set=0 codex_skip_git_check=0
+  local burn_permission=acceptEdits permission_set=0
+  local infra_retries=2 infra_delay=5 infra_attempt=0 retry_delay=5
+  local wait_for_reset_raw="" wait_for_reset_s="" force_cockpit=0
+  # #74 round-2 P1-1 (round-3 P1-1: raw mode): the cwd the engine actually
+  # runs in, not the cwd of THIS shell. Defaults to $PWD here (agy — the only
+  # caller that ever reads this default value directly, before any reset
+  # below — has no cwd-override flag at all, so $PWD IS its launch cwd).
+  # --prompt/--prompt-file mode resets it to add_dirs[0] at each
+  # _burn_compose call below (that argv IS what tells codex's `-C` where to
+  # run, adapter_burn_flags). Raw '-- <cmd...>' mode is NOT exempt from
+  # overriding the engine's cwd — the user's own argv can carry codex's `-C`
+  # (burn --help's own raw example, burn.sh:118, is exactly that) — so that
+  # path re-derives it from cmd[@] via adapter_cwd_from_args instead of
+  # trusting this default; empty when the adapter defines no such hook or the
+  # flag isn't present, so the multi-candidate tie-break below matches
+  # nothing rather than misattributing a concurrent session (never hide what
+  # is not proven).
+  local _burn_launch_cwd="$PWD"
   local -a cmd=() add_dirs=()
   while [ $# -gt 0 ]; do
     case "$1" in
@@ -255,11 +3689,24 @@ cmd_burn() {
       --artifact)   shift; [ $# -gt 0 ] || log_fail "--artifact needs a path"; artifact="$1"; shift ;;
       --to)         shift; [ $# -gt 0 ] || log_fail "--to needs a target"; to="$1"; shift ;;
       --timeout)    shift; [ $# -gt 0 ] || log_fail "--timeout needs seconds"; timeout_s="$1"; shift ;;
+      --permission)
+        shift
+        case "${1:-}" in
+          acceptEdits|auto|bypassPermissions|plan|default) burn_permission="$1"; permission_set=1; shift ;;
+          *) log_fail "--permission must be acceptEdits or auto, bypassPermissions, plan, default" ;;
+        esac
+        ;;
       --prompt)     shift; [ $# -gt 0 ] || log_fail "--prompt needs a string"; prompt="$1"; prompt_set=1; shift ;;
       --prompt-file) shift; [ $# -gt 0 ] || log_fail "--prompt-file needs a path"; prompt_file="$1"; shift ;;
       --add-dir)    shift; [ $# -gt 0 ] || log_fail "--add-dir needs a path"; add_dirs+=("$1"); shift ;;
+      --infra-retries) shift; [ $# -gt 0 ] || log_fail "--infra-retries needs a count"; infra_retries="$1"; shift ;;
+      --infra-delay) shift; [ $# -gt 0 ] || log_fail "--infra-delay needs seconds"; infra_delay="$1"; shift ;;
+      --wait-for-reset) shift; [ $# -gt 0 ] || log_fail "--wait-for-reset needs a duration (e.g. 30m)"; wait_for_reset_raw="$1"; shift ;;
+      --codex-skip-git-check) codex_skip_git_check=1; shift ;;
+      --json)       as_json=1; shift ;;
       --no-reroute) reroute=0; shift ;;
       --allow-active) allow_active=1; shift ;;
+      --force-cockpit) force_cockpit=1; shift ;;
       --fresh)      fresh=1; shift ;;
       --)           shift; cmd=("$@"); break ;;
       -*)           log_fail "Unknown flag: $1  (try: clikae burn --help)" ;;
@@ -270,9 +3717,32 @@ cmd_burn() {
     esac
   done
 
+  if [ -n "$wait_for_reset_raw" ]; then
+    wait_for_reset_s="$(_burn_parse_duration "$wait_for_reset_raw")" \
+      || log_fail "--wait-for-reset: not a duration: $wait_for_reset_raw  (use e.g. 30m, 2h, 90s, or a bare integer of seconds)"
+  fi
+
+  case "$infra_retries" in ''|*[!0-9]*) log_fail "--infra-retries must be a nonnegative integer" ;; esac
+  case "$infra_delay" in ''|*[!0-9]*) log_fail "--infra-delay must be a nonnegative integer" ;; esac
+  # Bounds also keep the exponential delay within portable shell arithmetic.
+  [ "${#infra_retries}" -le 2 ] && [ "$infra_retries" -le 10 ] || log_fail "--infra-retries must be between 0 and 10"
+  [ "${#infra_delay}" -le 5 ] && [ "$infra_delay" -le 86400 ] || log_fail "--infra-delay must be between 0 and 86400"
+  infra_retries=$((10#$infra_retries)); infra_delay=$((10#$infra_delay))
+  retry_delay="$infra_delay"
+
   [ -n "$cli" ]      || log_fail "Missing <engine>. Usage: clikae burn <engine> <tank> --artifact <path> (--prompt-file <f> | -- <cmd...>)"
   [ -n "$tank" ]     || log_fail "Missing <tank>."
   [ -n "$artifact" ] || log_fail "Missing --artifact <path> — burn verifies completion by the artifact, never the exit code."
+
+  # --json: ONE object on stdout, every word of progress on stderr. log_done and
+  # log_info write to stdout, so without this the result would arrive mixed into
+  # the prose it exists to replace. fd 4 is the real stdout, held for the result.
+  if [ "$as_json" -eq 1 ]; then
+    exec 4>&1
+    exec 1>&2
+  else
+    exec 4>/dev/null
+  fi
 
   # Convenience surface (--prompt / --prompt-file): clikae fills each engine's
   # headless-write flags from its adapter, so the task is just "a prompt + the
@@ -290,17 +3760,249 @@ cmd_burn() {
   else
     [ "${#cmd[@]}" -ge 1 ] || log_fail "Give a task: --prompt-file <f> / --prompt <str>, or the explicit -- <cmd...> form."
   fi
+  # P3-2 (2026-09-12 round-1 review): this only needs prompt_set, which is
+  # settled right above — no reason to wait for the lock/state-file section
+  # further down. Same discipline as --permission's own value validation: a
+  # warning that's already true doesn't need to wait for state to exist.
+  if [ "$prompt_set" -eq 0 ] && [ "$permission_set" -eq 1 ]; then
+    log_warn "--permission does not modify raw engine argv; set the engine permission flag after --."
+  fi
+  # P3-6 (2026-09-12 round-1 review): the opposite gap — prompt mode composes
+  # --permission-mode itself, and #24's escape hatch (extra argv after --,
+  # appended verbatim after the generated flags) can duplicate or override it
+  # silently. Warn without touching argv: -- stays a power-user escape hatch,
+  # unchanged (docs/orchestration.md already says extra args still follow the
+  # generated flags).
+  if [ "$prompt_set" -eq 1 ]; then
+    local _burn_dupe_permission_flag=0 _burn_post_arg
+    for _burn_post_arg in "${cmd[@]}"; do
+      case "$_burn_post_arg" in
+        --permission-mode|--dangerously-skip-permissions) _burn_dupe_permission_flag=1; break ;;
+      esac
+    done
+    if [ "$_burn_dupe_permission_flag" -eq 1 ]; then
+      log_warn "raw argv after -- includes --permission-mode or --dangerously-skip-permissions; clikae's own --permission-mode is composed first and the two may collide."
+    fi
+  fi
+  # #66 round-1 P3-1: the flag is parsed unconditionally but only ever does
+  # anything for a codex run composed from --prompt/--prompt-file (raw argv
+  # owns its own cwd/git-check policy, documented in --help). Silently
+  # swallowing it elsewhere reads as "I turned on a protection" when nothing
+  # happened — say so instead of staying quiet.
+  if [ "$codex_skip_git_check" -eq 1 ] && { [ "$cli" != codex ] || [ "$prompt_set" -ne 1 ]; }; then
+    log_warn "--codex-skip-git-check has no effect here: it only applies to a codex run started with --prompt/--prompt-file."
+  fi
+  # Validate the cwd we compose, before carry notices, logs, status or locks.
+  # Raw argv owns its own cwd and git-check policy.
+  _burn_check_codex_git_cwd
   validate_name cli "$cli"
   validate_name profile "$tank"
   # Fall-through armed (the default) means a dry tank re-fires this task on the
   # next account — the cross-account carry case the one-time note is for.
   [ "$reroute" -eq 1 ] && carry_notice_once
+  # P2-4: sweep prompt-copy dirs from past runs before adding this run's own.
+  _burn_sweep_old_logs
+  # Secure the parent before saving the task: validation below can exit before
+  # the engine loop gets a chance to set log-directory permissions.
+  mkdir -p "$HOME/.clikae/logs"
+  chmod 0700 "$HOME/.clikae/logs"
+  # Keep a private, stable copy even when the input file is later consumed.
+  local run_dir="$HOME/.clikae/logs/burn-$$" saved_prompt task_preview
+  mkdir -p "$run_dir"
+  chmod 0700 "$run_dir"
+  saved_prompt="$run_dir/prompt.txt"
+  if [ "$prompt_set" -eq 1 ]; then
+    (umask 077; printf '%s' "$prompt" > "$saved_prompt")
+    task_preview="${prompt:0:120}"
+  else
+    # Raw argv has no portable prompt position; retain it as one argument per
+    # line rather than guessing an engine-specific option grammar.
+    saved_prompt="$run_dir/command.txt"
+    (umask 077; printf '%s\n' "${cmd[@]}" > "$saved_prompt")
+    task_preview="${cmd[*]}"; task_preview="${task_preview:0:120}"
+  fi
+  task_preview="${task_preview//$'\n'/ }"; task_preview="${task_preview//$'\r'/ }"
+  log_info "task: $saved_prompt"
+  log_info "preview: $task_preview"
+
+  # #41: one status file per top-level `clikae burn` invocation, keyed on this
+  # process's own pid — stable across the whole reroute walk below, unlike the
+  # per-ATTEMPT `run_id` further down (which changes on every reroute/retry).
+  # It lives in $run_dir, right beside the task-text copy: same private
+  # directory (0700), same retention sweep (_burn_sweep_old_logs already ran
+  # above), one thing to find.
+  local burn_id="burn-$$" started_at
+  started_at="$(date +%s 2>/dev/null || echo 0)"
+  # P2-1/P2-2 (round-1 review): a `find -newer` sentinel, touched right here
+  # at run start, replaces comparing every scanned file's mtime against
+  # `$started_at` with `date`/`stat` per file (which was the O(files) fork
+  # cost — see _burn_left_behind's own comment). `$run_dir` already exists
+  # (0700, private, swept) by this point, so the sentinel lives there.
+  local started_at_sentinel="$run_dir/.burn-started"
+  : > "$started_at_sentinel" 2>/dev/null || true
+
+  # #40: agy is always reported as "agy" (never its "antigravity" alias) in
+  # both _burn_result and _agy_burn's own log lines — match that here so a
+  # tank looks identical whichever path (busy-check, status file, --json)
+  # names it, and a reroute picker on a different engine can never collide
+  # with an agy row that used a different spelling of the same engine.
+  local status_engine="$cli"
+  [ "$status_engine" = antigravity ] && status_engine=agy
+
+  # #63 round-5 P2-1: the named target, before any lock, --fresh deletion or
+  # engine launch. The status file is written first so `clikae wait burn-<pid>`
+  # reads a terminal refusal instead of stalling on a burn that never started.
+  if ! _burn_cockpit_gate "$status_engine" "$tank" "$force_cockpit"; then
+    _burn_status_write fail false "$status_engine" "$tank" "$artifact" \
+      "cockpit: $status_engine/$tank is the recorded cockpit (--force-cockpit to override)" ""
+    log_fail "$_BURN_COCKPIT_REFUSAL"
+  fi
+
+  # #40: refuse to START a burn on a tank that already has one running —
+  # detected from #41's own status files (a `state: running` row whose pid is
+  # still alive), never from tmux session names: two burns on one tank
+  # collide on the tmux session name before either gets far enough to prove
+  # anything FROM tmux, which is the bug report this closes. --allow-active
+  # already means "let this burn use a tank that's otherwise in active use"
+  # for the interactive-session guard elsewhere in this file; a running burn
+  # is the headless shape of the same thing, so the same flag opts out of both
+  # rather than adding a second flag for one more way to say "I know".
+  # P2-4 (2026-09-09 round-1 review): hold a per-tank lock across the
+  # check-and-write below — without it, two `clikae burn` processes started
+  # together both reach the check before either has written `running`, and
+  # both pass (see _burn_tank_lock_acquire's comment). Never held past this
+  # block: the engine run itself, and everything else in this function, is
+  # outside the lock.
+  #
+  # P2-1 (2026-09-09 round-2 review): every exit out of this section — the
+  # lock-timeout refusal, the busy refusal, a signal landing mid-check — has
+  # to release the lock; explicit releases on each branch alone miss a
+  # signal arriving BETWEEN them (there is no trap covering this window yet:
+  # `_burn_install_exit_trap` below is only reached once the lock is already
+  # gone). A trap scoped to exactly this section closes that gap; cleared
+  # again once the section's own explicit release has run, so it never
+  # outlives the few statements it exists for.
+  #
+  # R3-P3-1 (2026-09-09 round-3 review): a signal landing IN this window used
+  # to release the lock and exit without ever writing a status file — the
+  # very gap this same commit closes for its two sibling branches (the
+  # lock-timeout and busy refusals just below). `_burn_exit_guard` is
+  # already exactly that safety net (installed one section later, for the
+  # locked-out-window-after-this-one) — it no-ops once a terminal state is
+  # already on disk, so reusing it here rather than duplicating its "write a
+  # generic fail" logic is free: `run_dir`/`burn_id`/`started_at` are all
+  # already set by this point in cmd_burn, and status_engine/tank fall back
+  # correctly via the same dynamic-scoping convention it already documents.
+  if [ "$allow_active" != "1" ]; then
+    trap '_burn_tank_lock_release "$status_engine" "$tank"; _burn_exit_guard 129; exit 129' HUP
+    trap '_burn_tank_lock_release "$status_engine" "$tank"; _burn_exit_guard 130; exit 130' INT
+    trap '_burn_tank_lock_release "$status_engine" "$tank"; _burn_exit_guard 143; exit 143' TERM
+    trap '_burn_tank_lock_release "$status_engine" "$tank"; _burn_exit_guard "$?"' EXIT
+    # 🔴 `cmd || rc=$?`, never a bare `cmd; rc=$?` — this whole file runs
+    # under bin/clikae's `set -eo pipefail`. A bare failing statement here
+    # is NOT the condition of any if/while/&&/||, so `set -e` aborts this
+    # function's execution AT THAT STATEMENT, before `_lock_acquire_rc=$?`
+    # or either `if` below ever runs — verified: it does not merely skip to
+    # the wrong branch, it exits immediately into the EXIT trap, which
+    # calls `_burn_tank_lock_release` (itself then retrying against the
+    # same foreign mutex for its own ~10-try backoff) and then
+    # `_burn_exit_guard`'s generic "burn exited without reaching a terminal
+    # state" fallback — neither the `foreign-mutex:` nor the `busy:` reason
+    # below is ever written. `cmd || rc=$?` keeps the whole statement's own
+    # exit status at 0 (the assignment succeeds) so `set -e` never fires,
+    # while still capturing the real code.
+    local _lock_acquire_rc=0
+    _burn_tank_lock_acquire "$status_engine" "$tank" || _lock_acquire_rc=$?
+    if [ "$_lock_acquire_rc" -eq 2 ]; then
+      # R9-P1-2/R9-P2-3 (2026-09-11 round-9 review): a foreign object at the
+      # reclaim mutex never self-heals, so `_burn_tank_lock_acquire` returns
+      # this terminally rather than after the ordinary timeout — and until
+      # this round the status file and the terminal message both collapsed
+      # it into the generic busy-timeout case below, which asserts a false
+      # cause ("mid self-heal … try again shortly") for the one condition
+      # of the three that never self-heals (the same false-assertion shape
+      # R6-P2-4 rewrote this same message to remove, for the SIGKILL case).
+      trap - HUP INT TERM EXIT
+      _burn_status_write fail false "$status_engine" "$tank" "$artifact" \
+        "foreign-mutex: $_BURN_LOCK_ACQUIRE_FOREIGN_MUTEX" ""
+      log_fail "clikae: reclaim mutex at $_BURN_LOCK_ACQUIRE_FOREIGN_MUTEX is a foreign-mutex (a directory, a symlink to one, or a plain file) -- remove it by hand, then retry."
+    fi
+    if [ "$_lock_acquire_rc" -ne 0 ]; then
+      trap - HUP INT TERM EXIT
+      # P3-1 (2026-09-09 round-2 review): see the busy-refusal write below —
+      # the same "documented composition sees a stall, not a fail" gap.
+      _burn_status_write fail false "$status_engine" "$tank" "$artifact" \
+        "busy: timed out waiting for the busy-tank lock on $status_engine/$tank" ""
+      # R6-P2-4 (2026-09-10 round-6 review): this refusal ALSO fires for a
+      # SIGKILLed burn's lock — mutual exclusion was never broken, but the
+      # old, single-cause message ("another clikae burn is mid-check")
+      # asserted something false: there is no other burn, it died, and the
+      # tank self-heals once the mutex's own 30s stale rule reaches it (a
+      # ~30s total denial, measured — see docs/orchestration.md). The
+      # timeout gives no way to tell the two apart from here, so the
+      # message now names both rather than asserting the wrong one.
+      log_fail "Timed out waiting for the busy-tank lock on $status_engine/$tank — either another clikae burn is genuinely mid-check on it right now, or the previous holder died and the tank is mid self-heal (up to ~30s after a kill); try again shortly."
+    fi
+    if burn_tank_busy "$status_engine" "$tank" "$$"; then
+      _burn_tank_lock_release "$status_engine" "$tank"
+      trap - HUP INT TERM EXIT
+      # P3-1 (2026-09-09 round-2 review): a refusal this early has never
+      # reached the first `running` write, so the documented `clikae burn …
+      # & clikae wait "burn-$!"` composition finds no status file at all and
+      # reads a 9-second-old refusal as "hasn't started yet" — stalling for
+      # the whole resolve window before giving up. `fail` is always
+      # terminal (it can never make this tank look busy to anyone else), so
+      # writing it before the refusal costs nothing.
+      _burn_status_write fail false "$status_engine" "$tank" "$artifact" \
+        "busy: $status_engine/$tank already has a running burn on it (#40)" ""
+      log_fail "$status_engine/$tank already has a running burn on it (#40) — clikae wait <its run id> to block on it, or --allow-active to run anyway (they will collide on the same tmux session)."
+    fi
+    _burn_status_write running null "$status_engine" "$tank" "$artifact" "" ""
+    _burn_tank_lock_release "$status_engine" "$tank"
+    trap - HUP INT TERM EXIT
+  else
+    _burn_status_write running null "$status_engine" "$tank" "$artifact" "" ""
+  fi
+  # P1-1 (2026-09-09 round-1 review): from here on, a status file exists that
+  # claims this burn is `running` — install the safety net that keeps that
+  # promise honest no matter how this process ends (see `_burn_exit_guard`'s
+  # own comment above `_burn_status_write`).
+  _burn_install_exit_trap
+
+  # Prelaunch-lock housekeeping (state/locks/, see _burn_prelaunch_lock_gc's
+  # own header): the directory it lives in, and the sweep that reclaims what
+  # accumulates there, are set up ONCE here — deliberately BEFORE `t0`/
+  # `art_pre` below start the window `elapsed_s` is measured against. This is
+  # disk hygiene unrelated to any one burn, engine-agnostic (it runs ahead of
+  # the `agy` early-return too), and cheap either way; it just has no business
+  # inflating "how long did this burn take" any more than argument parsing
+  # does.
+  local _prelock_dir="$HOME/.clikae/state/locks"
+  mkdir -p "$_prelock_dir" 2>/dev/null || true
+  chmod 0700 "$_prelock_dir" 2>/dev/null || true
+  _burn_prelaunch_lock_gc 0
+
   case "$cli" in
     agy|antigravity)
-      _agy_enabled || log_fail "agy multi-account isn't set up yet. Create a tank first:  clikae init agy $tank"
+      if ! _agy_enabled; then
+        _burn_status_write fail false "$status_engine" "$tank" "$artifact" "agy multi-account isn't set up yet" ""
+        log_fail "agy multi-account isn't set up yet. Create a tank first:  clikae init agy $tank"
+      fi
       [ "$prompt_set" -eq 1 ] || log_fail "agy burn only supports the --prompt / --prompt-file form (agy has no adapter to fill in a raw '-- <cmd...>')."
       [ -z "$to" ] || log_fail "--to isn't supported for agy — it walks its own tanks (clikae init agy <name> to add more)."
-      _agy_burn "$tank" "$prompt" "$artifact" "$timeout_s" "$fresh" "$reroute" "${add_dirs[@]}"
+      # For agy, whatever followed `--` is EXTRA AGY FLAGS, not a raw command:
+      # there is no adapter to compose, so `--prompt` still carries the task and
+      # these ride alongside it. They used to be parsed and then silently dropped.
+      # P3-1/P3-4 (2026-09-12 round-1 review): fire for an EXPLICIT acceptEdits
+      # too, not just auto — agy has no permission mapping at all, so either
+      # value is equally unmet; name it via $status_engine (already normalized
+      # to "agy" above, #40) rather than a third hardcoded spelling of the same
+      # engine.
+      if [ "$permission_set" -eq 1 ]; then
+        log_warn "$status_engine has no equivalent for --permission $burn_permission; keeping its existing burn flags."
+      fi
+      _agy_burn "$tank" "$prompt" "$artifact" "$timeout_s" "$fresh" "$reroute" "$wait_for_reset_s" "$allow_active" "$_burn_launch_cwd" \
+                "${#cmd[@]}" ${cmd[@]+"${cmd[@]}"} ${add_dirs[@]+"${add_dirs[@]}"}
       return $?
       ;;
   esac
@@ -309,14 +4011,33 @@ cmd_burn() {
   local -a post_cmd=("${cmd[@]}")
   load_adapter "$cli"
   local binary; binary="$(adapter_meta_cli_binary)"
-  command -v "$binary" >/dev/null 2>&1 || log_fail "'$binary' is not on PATH."
+  if ! command -v "$binary" >/dev/null 2>&1; then
+    _burn_status_write fail false "$cli" "$tank" "$artifact" "'$binary' is not on PATH" ""
+    log_fail "'$binary' is not on PATH."
+  fi
+  local dir; dir="$(profile_dir "$cli" "$tank")"   # dynamic scope for adapter_burn_flags
   local envvar; envvar="$(adapter_meta_env_var 2>/dev/null || true)"   # for the in-use guard
   if [ "$prompt_set" -eq 1 ]; then
-    declare -F adapter_burn_flags >/dev/null \
-      || log_fail "$cli has no headless-write recipe (adapter defines no adapter_burn_flags). Use the explicit '-- <cmd...>' form."
+    if ! declare -F adapter_burn_flags >/dev/null; then
+      _burn_status_write fail false "$cli" "$tank" "$artifact" "$cli has no headless-write recipe (no adapter_burn_flags)" ""
+      log_fail "$cli has no headless-write recipe (adapter defines no adapter_burn_flags). Use the explicit '-- <cmd...>' form."
+    fi
+    _burn_launch_cwd="${add_dirs[0]}"
     _burn_compose "$prompt" "${#post_cmd[@]}" "${post_cmd[@]}" -- "${add_dirs[@]}"
     cmd=("${BURN_ARGV[@]}")
+  else
+    # #74 round-3 P1-1: raw '-- <cmd...>' mode — the user's own argv owns the
+    # engine's cwd (codex's `-C`/`--cd`; burn --help's raw example, burn.sh:118,
+    # uses exactly that). Ask the adapter to read it back out of cmd[@]; empty
+    # when the adapter has no such hook or the flag isn't there, so the
+    # multi-candidate tie-break below finds nothing to match rather than
+    # falling back to $PWD and re-catching a concurrent human session.
+    _burn_launch_cwd=""
+    if declare -F adapter_cwd_from_args >/dev/null 2>&1; then
+      _burn_launch_cwd="$(adapter_cwd_from_args "${cmd[@]}" 2>/dev/null || true)"
+    fi
   fi
+  _burn_claude_headless_guards
 
   # #2 (tugtile dogfood): snapshot the artifact so a STALE file from a prior run
   # isn't mistaken for success. --fresh clears it; otherwise warn + judge by mtime.
@@ -331,10 +4052,89 @@ cmd_burn() {
   local t0=$SECONDS
 
   local cur="$tank" tried="" dried_accts="" reset out rc
+  # The named tank is the launch target, always (P1-2/P1-3/P1-4, round-1 review).
+  # There used to be a headroom swap here that picked a DIFFERENT tank than the
+  # one the caller named — before the first attempt, outside `$tried`, and
+  # blind to `--to`. Headroom preference now lives in exactly one place:
+  # _burn_next_same_engine's candidate ordering below, which only runs once
+  # `$cur` itself has gone dry (or --to names an explicit next hop, which
+  # always wins outright over any ordering).
+  local earliest_reset="" earliest_epoch=""   # #61: earliest parseable reset across every dry hop
   while :; do
     validate_name profile "$cur"
-    local dir; dir="$(ensure_profile --require "$cli" "$cur")"
-    log_info "burn $cli/$cur → $binary ${cmd[*]}"
+    local dir
+    if ! dir="$(ensure_profile --require "$cli" "$cur")"; then
+      # ensure_profile --require already printed its own error (log_err, from
+      # inside the command-substitution subshell) — no need to repeat it here.
+      # P1-1: this is one of the "four early log_fail paths" the round-1
+      # review named; the generic EXIT trap installed above would also catch
+      # it (ensure_profile's own `exit 1` only ends its subshell, but the
+      # failed assignment then trips `set -e` in THIS shell), but writing
+      # `fail` explicitly here gives a caller a reason worth reading instead
+      # of the trap's generic "exited without a terminal state".
+      _burn_status_write fail false "$cli" "$cur" "$artifact" "profile not found: $cli/$cur" ""
+      return 1
+    fi
+
+    # soul_prelaunch's contract is "called from every non-ephemeral engine-launch
+    # path, AFTER the adapter is loaded", and burn is one — it had no notion of
+    # ephemeral at all, so it could not even be the exempt case. Without this, a
+    # burn in a directory that has never hosted an interactive session ran with
+    # an unlinked memory slot: a memory-less run nobody asked for, when AGENTS.md
+    # says the only way to ask for one is --ephemeral. The fleet's MCP servers
+    # were missing from headless runs for the same reason.
+    #
+    # Inside the loop, not above it: burn reroutes to the next tank when one runs
+    # dry (and re-loads the adapter for a cross-engine hop at the bottom), so the
+    # tank that actually runs is the one that needs its slot linked. Both are
+    # no-ops for solo tanks and for slots already linked, so the reroute path
+    # pays nothing to be correct.
+    #
+    # 🔴 2026-09-06: two burns on the SAME tank + SAME $PWD race this preflight
+    # unlocked — soul_prelaunch's memory symlink and fleet_mcp_prelaunch's
+    # .claude.json mv are both keyed on ($cli/$cur, $PWD), the exact bug class
+    # switch.sh's --ephemeral path already fixed for itself (the 2026-07-19
+    # incident, see _switch_run_ephemeral's slot_lock above). Serialize on the
+    # same key here too — a BLOCKING lock, held only across these two calls,
+    # never across the engine run itself: unlike --ephemeral's "one run per
+    # slot" hard limit, a second burn here should queue behind the first's
+    # symlink/.claude.json settling, not be refused outright.
+    # Lives under its own `locks/` subdir, not `state/` directly — this file
+    # is never unlinked after release (see the 🔴 2026-09-06 note above —
+    # deleting it out from under a concurrent burn that may already have it
+    # open is the classic lock-file race), so every distinct (tank, $PWD)
+    # leaves one behind forever. Keeping them out of `state/` proper stops
+    # them from mixing with the real state files that directory otherwise
+    # holds. `_prelock_dir` itself (and the GC that reclaims what lands in
+    # it, _burn_prelaunch_lock_gc) is set up once, OUTSIDE this loop and
+    # outside the elapsed_s timing window — see there for why.
+    local _prelock
+    _prelock="$_prelock_dir/${CLIKAE_SESS_PREFIX}prelaunch-$(printf '%s' "$cli/$cur:$PWD" | cksum | cut -d' ' -f1).lock"
+    local _prelocked=0
+    if command -v flock >/dev/null 2>&1; then
+      exec 7>"$_prelock"
+      flock 7
+      _prelocked=1
+    elif command -v lockf >/dev/null 2>&1; then
+      # `lockf FD` (no command, no -n/-t) blocks indefinitely on the fd itself —
+      # macOS has no `flock(1)`, only `lockf(1)`, and the fd form implies -k
+      # (man lockf(1)), so this is the direct equivalent of `flock 7` above.
+      exec 7>"$_prelock"
+      lockf 7
+      _prelocked=1
+    else
+      log_warn "no flock/lockf on this system — running soul/MCP prelaunch unlocked (safe unless another burn targets the same tank+dir right now)."
+    fi
+    soul_prelaunch "$cli" "$cur" "$dir"        # member tank → fan this dir into its Soul
+    fleet_mcp_prelaunch "$cli" "$cur" "$dir"   # non-solo tank → fan in the shared MCP list
+    fleet_hooks_prelaunch "$cli" "$cur" "$dir" # …and the shared hooks (#141)
+    # 🔴 `if`, not `[ … ] && exec …`: under bin/clikae's `set -eo pipefail`, a
+    # `&&` whose LEFT side is false (the no-flock/no-lockf fallback, _prelocked=0)
+    # makes the whole statement exit 1 — which set -e treats as this function
+    # failing, aborting the burn on the very system the fallback exists for.
+    if [ "$_prelocked" -eq 1 ]; then exec 7>&-; fi   # release before the (possibly long) engine run
+
+    log_info "burn $cli/$cur → $binary (task: $saved_prompt)"
 
     # Run headless with the tank's env, stdin CLOSED (the burn-writeup hang lesson:
     # a headless codex can't interrupt its own child if stdin is open), capturing
@@ -347,40 +4147,647 @@ cmd_burn() {
         perl)             runner=(perl -e 'alarm shift; exec @ARGV or exit 127' "$timeout_s") ;;
       esac
     fi
+    local run_id="${cli}-${cur}-burn-$$"
+    [ "$infra_attempt" -eq 0 ] || run_id="${run_id}-retry${infra_attempt}"
+    local log_file="$HOME/.clikae/logs/${run_id}.log"
+    local stderr_file="$run_dir/${run_id}.stderr" attempt_started=$SECONDS
+    local state_file="$HOME/.clikae/state/${run_id}_exit"
+    local evidence_file="$HOME/.clikae/state/${run_id}_artifact"
+    local artifact_fresh=0 artifact_bytes_snapshot=null
+    rm -f "$evidence_file"
+
+    # #41 — this attempt is now the one actually running (first attempt, a
+    # reroute hop, or an infra retry all land here); `log` now points at THIS
+    # attempt's own capture log, and `rerouted_from` (via `$tried`) already
+    # reflects every tank tried before this one.
+    _burn_status_write running null "$cli" "$cur" "$artifact" "" ""
+    # Lock under $HOME/.clikae/state (0700, created just below), NOT world-writable
+    # /tmp: a predictable name there let another local user plant it — as a symlink
+    # (truncation) or a plain file the clean GC reads as dead, killing your session
+    # and deleting your state files. Private dir closes it (see clean.sh).
+    local lock_file="$HOME/.clikae/state/${CLIKAE_SESS_PREFIX}ephem-$run_id.lock"
+    
+    mkdir -p "$HOME/.clikae/logs" "$HOME/.clikae/state"
+    chmod 0700 "$HOME/.clikae/logs" "$HOME/.clikae/state"
+
+    local launch_sid="" _launch_has_identity=0
+    local -a _attempt_cmd=("${cmd[@]}")
+    # #74 round-1 P1-3: switch.sh:222-228's own gate, mirrored here. burn's
+    # own extra args (anything the caller put after --, e.g. `-- -p … --resume
+    # <sid>`, or a hand-typed `-- --session-id <uuid>`) can ALREADY carry
+    # resume/session identity. Appending --session-id unconditionally (the
+    # previous shape) fought claude's own rule — "--session-id can only be
+    # used with --continue or --resume if --fork-session is also specified"
+    # (verified live, claude 2.1.267) — and broke every one of those launches
+    # (rc=1, no artifact, no run at all). adapter_sid_from_args is the one
+    # place switch.sh already trusts for this answer; ask it here too instead
+    # of re-deriving it. A caller-supplied sid also becomes THE sid burn
+    # records (P1-2's "or the one the user passed" case) — it is exactly as
+    # proven as a minted one, since it is what the engine was actually told.
+    if declare -F adapter_sid_from_args >/dev/null 2>&1; then
+      if launch_sid="$(adapter_sid_from_args "${cmd[@]}" 2>/dev/null)"; then
+        _launch_has_identity=1
+      fi
+    fi
+    if [ "$_launch_has_identity" -eq 0 ] && declare -F adapter_new_session_args >/dev/null 2>&1; then
+      launch_sid="$(uuidgen 2>/dev/null || true)"
+      if [ -z "$launch_sid" ] && command -v python3 >/dev/null 2>&1; then
+        launch_sid="$(python3 -c 'import uuid; print(uuid.uuid4())' 2>/dev/null || true)"
+      fi
+      launch_sid="$(printf '%s' "$launch_sid" | LC_ALL=C tr 'A-Z' 'a-z')"
+      if [ -n "$launch_sid" ]; then
+        local _nsline
+        while IFS= read -r _nsline; do
+          [ -n "$_nsline" ] && _attempt_cmd+=("$_nsline")
+        done <<_NS_EOF
+$(adapter_new_session_args "$launch_sid" 2>/dev/null || true)
+_NS_EOF
+      fi
+    fi
+    # #74 round-2 P2-3: a caller-supplied --resume/--session-id names a sid
+    # whose transcript ALREADY EXISTS before this run even starts — "the
+    # transcript exists" (below) is a tautology for it, true whether or not
+    # the engine ran at all. Snapshot (mtime,size) of THAT specific file now,
+    # before launch, so a refusal that never touched it (engine_rc != 0, file
+    # untouched) can be told apart from an engine that read AND rewrote it.
+    local _burn_resume_pre_stamp=""
+    if [ -n "$launch_sid" ] && declare -F adapter_find_session >/dev/null 2>&1; then
+      local _burn_resume_pre_file
+      _burn_resume_pre_file="$(adapter_find_session "$dir" "$launch_sid" 2>/dev/null || true)"
+      if [ -n "$_burn_resume_pre_file" ]; then
+        _burn_resume_pre_stamp="$(_clikae_mtime "$_burn_resume_pre_file") $(_burn_size "$_burn_resume_pre_file")"
+      fi
+    fi
+    # #74 round-1 P1-2: a BEFORE snapshot of every transcript this profile
+    # already has, so codex's post-run attribution (below) can tell "the file
+    # THIS run created" from "the file a human's concurrent session created" —
+    # see antigravity's twin a few hundred lines up for the full rationale.
+    # Every session adapter defines adapter_all_transcripts now (claude's and
+    # grok's were added so `clikae resume` could enumerate the store through
+    # the adapters instead of a hand-written glob list). The claude path still
+    # never USES the diff: claude is told $launch_sid before the engine runs,
+    # so the proven-sid branch below answers first and the diff is reached only
+    # when no transcript for that sid ever appeared.
+    local -a _snap_pre=()
+    if declare -F adapter_all_transcripts >/dev/null 2>&1; then
+      while IFS= read -r _snap_line; do
+        [ -n "$_snap_line" ] && _snap_pre+=("$_snap_line")
+      done < <(adapter_all_transcripts "$dir" 2>/dev/null || true)
+    fi
+    art_pre="$(_clikae_mtime "$artifact")"
     rc=0
-    out="$(
-      while IFS= read -r kv; do [ -n "$kv" ] && export "${kv%%=*}"="${kv#*=}"; done <<KV
+    if command -v tmux >/dev/null 2>&1; then
+      local wrapper_script="$HOME/.clikae/state/${run_id}.sh"
+
+      # THE ENVIRONMENT TRAVELS IN THIS FILE, NOT ON THE COMMAND LINE.
+      #
+      # A burn inherits the caller's whole environment on purpose — an unattended
+      # engine run needs the API keys, proxy settings and PATH the human had. The
+      # old shape handed all of it to `tmux new-session` as `-e KEY=VAL` pairs, and
+      # those pairs stay in the tmux process's argv. When the burn is what CREATES
+      # the server (the common case for an unattended run on a fresh machine) that
+      # argv becomes the SERVER's argv and lives as long as the server does —
+      # readable by every process on the machine. Measured 2026-08-15: a server
+      # born days earlier still listed each `-e` pair it was created with in `ps`.
+      #
+      # The wrapper is mode 0600 and already exists for the coroner trap, so the
+      # environment goes there instead. Create it empty and lock it down BEFORE
+      # writing, so there is no window where it is world-readable with secrets in.
+      : > "$wrapper_script"
+      chmod 0600 "$wrapper_script"
+      {
+        printf '{\n'
+        local key
+        for key in $(compgen -e); do
+          case "$key" in
+            TMUX*) continue ;;   # never inherit: it makes tmux refuse to nest
+            # Only well-formed identifiers; anything else cannot be re-exported.
+            [!A-Za-z_]*) continue ;;
+            *[!A-Za-z0-9_]*) continue ;;
+          esac
+          printf 'export %s=%q\n' "$key" "${!key}"
+        done
+        # Readonly builtins in the child would fail loudly and dirty the pane;
+        # restoring an environment is best-effort by nature.
+        printf '} 2>/dev/null\n'
+      } >> "$wrapper_script"
+
+      # P2-3 (clikae#97 review round 1). The restore above puts the CALLER's
+      # PATH back verbatim — for an unattended `clikae burn` (cron, CI, a
+      # plain shell that never ran through tmux_spawn_session, which is
+      # burn's actual home turf) that PATH has no guard on it at all. Because
+      # this restore runs FIRST in the wrapper, it clobbers whatever
+      # tmux_spawn_session (below) put on the session's own PATH before the
+      # engine this wrapper goes on to exec ever sees it. Re-prepend AFTER
+      # the restore, idempotently, so the engine's PATH always has the guard
+      # first regardless of what the caller's own PATH looked like.
+      {
+        printf 'case "$PATH" in\n'
+        printf '  %q:*) : ;;\n' "$CLIKAE_LIB/shims"
+        printf '  *) PATH=%q":$PATH"; export PATH ;;\n' "$CLIKAE_LIB/shims"
+        printf 'esac\n'
+      } >> "$wrapper_script"
+
+      {
+        declare -f _clikae_mtime _burn_size _burn_snapshot _burn_capture_stderr
+        printf 'stderr_file=%q\n' "$stderr_file"
+        printf 'artifact=%q\nart_pre=%q\nevidence_file=%q\n' "$artifact" "$art_pre" "$evidence_file"
+      } >> "$wrapper_script"
+      cat <<EOF >> "$wrapper_script"
+while IFS= read -r kv; do [ -n "\$kv" ] && export "\${kv%%=*}"="\${kv#*=}"; done <<'KV'
 $(adapter_export_env "$dir")
 KV
-      "${runner[@]}" "$binary" "${cmd[@]}" </dev/null 2>&1
-    )" || rc=$?
+exec 9> "$lock_file"
+if command -v flock >/dev/null 2>&1; then flock -n 9; else lockf -t 0 9; fi
+trap 'echo 129 > "$state_file"; exit 129' HUP
+trap 'echo 130 > "$state_file"; exit 130' INT
+trap 'echo 143 > "$state_file"; exit 143' TERM
+trap 'echo \$? > "$state_file"; exit' EXIT
+# pipefail so the EXIT trap's \$? is the ENGINE's exit, not tee's (which is always
+# 0). Without it the "real task failure (rc=…)" line always printed rc=0 — the
+# outcome was still judged by the artifact, but the diagnostic rc was a lie.
+set -o pipefail
+( engine_rc=0
+  _burn_capture_stderr $(printf "%q " "${runner[@]}" "$binary" "${_attempt_cmd[@]}") </dev/null || engine_rc=\$?
+  _burn_snapshot "\$artifact" "\$art_pre" "\$evidence_file"
+  exit "\$engine_rc"
+) 2>&1 | tee "$log_file"
+EOF
+      chmod 0700 "$wrapper_script"
+
+      # One constructor for every path (lib/core/tmux.sh). This site used a bare
+      # `tmux new-session`, so a server it created carried none of clikae's global
+      # options — a burn on a fresh machine got tmux's 2000-line default scrollback
+      # instead of 50000, and the next `switch` silently repaired it, which is why
+      # it went unnoticed. tests/bats/tmux-spawn.bats pins it.
+      if tmux_spawn_session \
+           --env "CLIKAE_RUN_ID=$run_id" --env "HOME=$HOME" \
+           --env "CLIKAE_HOME=$CLIKAE_HOME" \
+           --session "${CLIKAE_SESS_PREFIX}$run_id" -- "bash \"$wrapper_script\""; then
+        # Wait for completion via state file polling (Coroner trap)
+        local poll_int=1
+        while [ ! -f "$state_file" ]; do
+          sleep $poll_int
+          [ "$poll_int" -lt 5 ] && poll_int=$((poll_int + 1))
+          if ! tmux has-session -t "=${CLIKAE_SESS_PREFIX}$run_id" 2>/dev/null && [ ! -f "$state_file" ]; then
+            # Session vanished without writing state
+            echo 255 > "$state_file"
+            break
+          fi
+        done
+        rc=$(cat "$state_file" 2>/dev/null || echo 1)
+        out="$(cat "$log_file" 2>/dev/null || true)"
+        rm -f "$wrapper_script" "$state_file"
+      else
+        rm -f "$wrapper_script" "$state_file"
+        log_warn "tmux failed to start; falling back to direct execution"
+        out="$(
+          while IFS= read -r kv; do [ -n "$kv" ] && export "${kv%%=*}"="${kv#*=}"; done <<KV
+$(adapter_export_env "$dir")
+KV
+          engine_rc=0
+          _burn_capture_stderr "${runner[@]}" "$binary" "${_attempt_cmd[@]}" </dev/null 2>&1 || engine_rc=$?
+          _burn_snapshot "$artifact" "$art_pre" "$evidence_file"
+          exit "$engine_rc"
+        )" || rc=$?
+        # Neither direct-execution fallback pipes through `tee "$log_file"`
+        # the way the tmux wrapper script above does, so `$log_file` was
+        # never actually created here even though `_burn_status_write`'s
+        # "log" field always names it -- a status reader followed a path
+        # that only existed when tmux happened to be on PATH. Write the
+        # captured output there too, so the contract holds regardless of
+        # which path ran.
+        printf '%s\n' "$out" > "$log_file" 2>/dev/null || true
+      fi
+    else
+      out="$(
+        while IFS= read -r kv; do [ -n "$kv" ] && export "${kv%%=*}"="${kv#*=}"; done <<KV
+$(adapter_export_env "$dir")
+KV
+        engine_rc=0
+        _burn_capture_stderr "${runner[@]}" "$binary" "${_attempt_cmd[@]}" </dev/null 2>&1 || engine_rc=$?
+        _burn_snapshot "$artifact" "$art_pre" "$evidence_file"
+        exit "$engine_rc"
+      )" || rc=$?
+      # Same gap as the "tmux failed to start" fallback above: no tmux at
+      # all means no `tee "$log_file"` ever ran.
+      printf '%s\n' "$out" > "$log_file" 2>/dev/null || true
+    fi
+    
+    if [ -f "$evidence_file" ]; then
+      read -r artifact_fresh artifact_bytes_snapshot < "$evidence_file"
+    fi
+    rm -f "$state_file" "$evidence_file"
+
+    # #74 round-1 P1-2/P2-3: "proven", not "most recent". claude already KNOWS
+    # its sid (launch_sid, told to the engine via --session-id before it ever
+    # ran) — only record it if a transcript for that exact id actually exists,
+    # so a run the engine refused to start (P1-3's clash, or any other
+    # failure) never writes a ghost line. codex has no equivalent flag, so it
+    # falls back to the before/after snapshot diff (see the codex/antigravity
+    # adapter_all_transcripts hooks): candidates = transcripts that exist now
+    # and didn't before launch. Exactly one -> proven. Zero -> nothing to
+    # record. More than one -> only trust it if the recorded cwd narrows it
+    # back to exactly one; otherwise this run's own session can't be told
+    # apart from a human's concurrent one, and "never hide what is not
+    # proven" outranks "always record something".
+    local sid_to_record="$launch_sid" _burn_resume_gate_rejected=0
+    if [ -n "$sid_to_record" ] && declare -F adapter_find_session >/dev/null 2>&1; then
+      # #74 round-2 P2-2: "proven" means a transcript path came back, not
+      # that the exit code was 0 — codex/grok's adapter_find_session both
+      # return 0 on a miss (empty stdout, no matching transcript on disk).
+      local _burn_found_transcript
+      _burn_found_transcript="$(adapter_find_session "$dir" "$sid_to_record" 2>/dev/null || true)"
+      [ -n "$_burn_found_transcript" ] || sid_to_record=""
+      # #74 round-2 P2-3 / round-3 P3-1,P3-2: for a --resume of an EXISTING sid
+      # (_burn_resume_pre_stamp set above), "the transcript exists" is true
+      # before the engine even ran — record it only when ALL THREE hold:
+      #   1. the engine itself exited 0 — round-2's own "rc==0 OR stamp
+      #      changed" was an OR, so a FAILED engine whose target transcript
+      #      merely changed anyway (a concurrent human still typing into the
+      #      SAME sid) still got recorded and hidden (R3 review P3-2, probe
+      #      r3out/49-probeD.log). rc==0 is now required outright, not an
+      #      alternative to the stamp check.
+      #   2. the transcript's byte size actually GREW across the run — a bare
+      #      (mtime,size)-changed check can't tell "the engine wrote to it"
+      #      from "someone else wrote to it" (P3-2's actual finding: it's a
+      #      "someone wrote" detector, not an "engine ran" detector); grew is
+      #      the one direction a resumed transcript's own append-only log
+      #      moves in.
+      #   3. no OTHER live process still has that transcript open — a human's
+      #      own concurrent `codex resume <sid>` / `claude --resume <sid>` on
+      #      the SAME sid holds the file open for the whole time burn's
+      #      attempt runs, so it can grow and rc can still land 0 purely from
+      #      burn's side while none of the growth is burn's. Checked with
+      #      fuser (preferred) or lsof; neither on PATH just skips this one
+      #      check and says so — rc==0 + grew still has to hold either way.
+      # A minted sid has no pre-stamp (nothing existed to snapshot), so none
+      # of this fires for that path — "found" is already proof there.
+      if [ -n "$sid_to_record" ] && [ -n "$_burn_resume_pre_stamp" ]; then
+        local _burn_resume_post_stamp _burn_resume_pre_size _burn_resume_post_size
+        local _burn_resume_grew=0 _burn_resume_open_elsewhere=0
+        _burn_resume_post_stamp="$(_clikae_mtime "$_burn_found_transcript") $(_burn_size "$_burn_found_transcript")"
+        _burn_resume_pre_size="${_burn_resume_pre_stamp#* }"
+        _burn_resume_post_size="${_burn_resume_post_stamp#* }"
+        case "$_burn_resume_pre_size" in ''|*[!0-9]*) _burn_resume_pre_size=0 ;; esac
+        case "$_burn_resume_post_size" in ''|*[!0-9]*) _burn_resume_post_size=0 ;; esac
+        [ "$_burn_resume_post_size" -gt "$_burn_resume_pre_size" ] && _burn_resume_grew=1
+        if command -v fuser >/dev/null 2>&1; then
+          fuser "$_burn_found_transcript" >/dev/null 2>&1 && _burn_resume_open_elsewhere=1
+        elif command -v lsof >/dev/null 2>&1; then
+          [ -n "$(lsof -- "$_burn_found_transcript" 2>/dev/null)" ] && _burn_resume_open_elsewhere=1
+        else
+          log_warn "burn: neither fuser nor lsof is on PATH — skipping the concurrent-open check for $_burn_found_transcript."
+        fi
+        if [ "$rc" -ne 0 ] || [ "$_burn_resume_grew" -ne 1 ] || [ "$_burn_resume_open_elsewhere" -eq 1 ]; then
+          sid_to_record=""
+          # R4 review P3-3: the triple gate's "no" is a verdict, not a mere
+          # "try the next heuristic" — falling through to the before/after
+          # snapshot diff below let its unconditional single-candidate
+          # branch record the very session the gate just rejected. The
+          # gate ran ONLY because this was a --resume of an EXISTING sid
+          # (_burn_resume_pre_stamp, above), so its rejection is final.
+          _burn_resume_gate_rejected=1
+        fi
+      fi
+    fi
+    if [ -z "$sid_to_record" ] && [ "${_burn_resume_gate_rejected:-0}" -ne 1 ] \
+       && declare -F adapter_all_transcripts >/dev/null 2>&1; then
+      local -a _snap_post=() _snap_new=()
+      while IFS= read -r _snap_line; do
+        [ -n "$_snap_line" ] && _snap_post+=("$_snap_line")
+      done < <(adapter_all_transcripts "$dir" 2>/dev/null || true)
+      local _snap_pf _snap_bf _snap_is_new
+      for _snap_pf in "${_snap_post[@]}"; do
+        _snap_is_new=1
+        for _snap_bf in "${_snap_pre[@]}"; do
+          [ "$_snap_pf" = "$_snap_bf" ] && { _snap_is_new=0; break; }
+        done
+        [ "$_snap_is_new" -eq 1 ] && _snap_new+=("$_snap_pf")
+      done
+      case "${#_snap_new[@]}" in
+        0) : ;;
+        1)
+          if declare -F adapter_sid_canonical >/dev/null 2>&1; then
+            sid_to_record="$(adapter_sid_canonical "${_snap_new[0]}" 2>/dev/null || true)"
+          fi
+          ;;
+        *)
+          # #74 round-2 P1-1: compare against the cwd the ENGINE was launched
+          # in (_burn_launch_cwd — codex's own -C), not this shell's $PWD.
+          # codex always runs with -C add_dirs[0], which defaults to
+          # dirname("$artifact") — the moment that differs from $PWD (any
+          # --add-dir, or an artifact outside the caller's cwd), burn's OWN
+          # session stopped matching here and a concurrent human session in
+          # $PWD became the sole "match" instead, getting recorded and hidden.
+          local -a _snap_cwd_match=()
+          local _snap_cf _snap_ccwd
+          # R4 review P2-1: empty == empty is not a match. An empty
+          # _burn_launch_cwd (raw mode, no -C found) means "unknown", not
+          # "matches a candidate whose own cwd also failed to read" — both
+          # sides must actually have a value, or the gate below correctly
+          # finds zero matches instead of one bogus one.
+          for _snap_cf in "${_snap_new[@]}"; do
+            _snap_ccwd="$(adapter_session_cwd "$_snap_cf" 2>/dev/null || true)"
+            [ -n "$_burn_launch_cwd" ] && [ -n "$_snap_ccwd" ] \
+              && [ "${_snap_ccwd%/}" = "${_burn_launch_cwd%/}" ] && _snap_cwd_match+=("$_snap_cf")
+          done
+          if [ "${#_snap_cwd_match[@]}" -eq 1 ] && declare -F adapter_sid_canonical >/dev/null 2>&1; then
+            sid_to_record="$(adapter_sid_canonical "${_snap_cwd_match[0]}" 2>/dev/null || true)"
+          else
+            log_warn "burn: could not attribute session (${#_snap_new[@]} candidates)"
+          fi
+          ;;
+      esac
+    fi
+    if [ -n "$sid_to_record" ]; then
+      local sidecar_file="$CLIKAE_HOME/state/burn-sessions/$cli/$cur"
+      mkdir -p "$(dirname "$sidecar_file")" 2>/dev/null || true
+      printf '%s\t%s\t%s\n' "$sid_to_record" "$run_id" "$(date +%s)" >> "$sidecar_file"
+    fi
+
+    # P2-1 (2026-09-08 review): the snapshot above is taken the instant the
+    # engine's own process exits, inside the same subshell — precise, but
+    # narrower than main's pre-#42 behaviour, which re-stat'd the artifact
+    # AFTER the parent finished polling the state file for completion. A
+    # background child that keeps writing a few hundred ms past the engine's
+    # own exit (A/B-measured against a main-branch clone, same stub, same
+    # params) landed inside that older window and no longer does — an
+    # undocumented narrowing. Restore it as a SECOND look, taken here before
+    # anything is classified: if the snapshot wasn't fresh, check the mtime
+    # once more right now. This can only ADD a success, never revoke one — a
+    # fresh=1 snapshot already means a consumer deleting the artifact right
+    # after DONE can't undo it (#42's guarantee still speaks first).
+    if [ "$artifact_fresh" -ne 1 ] && [ -e "$artifact" ] && [ "$(_clikae_mtime "$artifact")" != "$art_pre" ]; then
+      artifact_fresh=1
+      artifact_bytes_snapshot="$(_burn_size "$artifact")"
+    fi
+
+    # P2-1(a) (round-2 review): this tank just finished a run — the board's
+    # cache for it is either absent or as stale as its last `clikae usage`
+    # (nothing else ever wrote it; see lib/core/usage.sh's header). One vendor
+    # call, here, off the launch path (the launch itself still pays zero — see
+    # P1-2..P1-4 above) and AFTER the artifact check so it can never delay
+    # judging this run's own outcome. Best-effort: a failed refresh overwrites
+    # this tank's cache with source:"unknown" (usage_read's actual contract —
+    # see lib/core/usage.sh; a stale-but-readable board dot for it disappears
+    # rather than surviving untouched) but never affects $rc/$out. (r3 P3-5,
+    # confirmed still live in round-4: this is a bare
+    # AND-list under bin/clikae's `set -e` — usage_read's own exit status
+    # would end the whole burn if it were ever non-zero here; `|| true`
+    # makes "best-effort" structural instead of relying on usage_read
+    # happening to always end in a printf today.)
+    declare -F usage_read >/dev/null && usage_read "$cli" "$cur" 1 >/dev/null 2>&1 || true
+
+    # P1-2 (2026-09-08 review): de-identify the engine's OWN echo of the task
+    # BEFORE classifying — not just at display time. _burn_output_tail already
+    # redacted the prompt from the DIAGNOSTIC tail, but only after the verdict
+    # was already decided; codex and other engines can echo the user's own
+    # instructions back on stdout (#43's stub models this: `printf '%s\n'
+    # "${@: -1}"`), so a task that merely TALKS ABOUT a limit or a tool-host
+    # outage was misread as one. Same redaction _burn_output_tail uses (P1-1,
+    # 2026-09-08 round-2 review: now covers the raw `-- <argv>` form too, not
+    # only --prompt/--prompt-file — see _burn_redact), run earlier so it
+    # protects the classifiers too, not only the display. Computed here,
+    # before the artifact check below, so BOTH branches can classify the
+    # SAME reply.
+    #
+    # P2-1 (2026-09-08 round-4 review): this used to call _burn_redact, which
+    # truncates to the last 64 KiB before redacting — bounding not just the
+    # substitution (fine) but the CLASSIFIERS' entire view of the reply (not
+    # fine: a signal past that tail was invisible to both dry and infra
+    # detection). Use the untruncated variant here; only the display tail
+    # still bounds itself. See _burn_redact_full's comment.
+    #
+    # #81 round-1 fix review: $out ALREADY carries stderr merged in — both
+    # capture paths above run the engine with `2>&1` (the direct path here,
+    # and the tmux wrapper script's own redirection into $log_file), and
+    # _burn_capture_stderr (further up this file) tees fd 2 to $stderr_file
+    # while still restoring it to fd 2 for that same merge. So codex's
+    # stderr-only "ERROR: You've hit your usage limit …" line was already
+    # reaching this classifier before #81 — a second `cat "$stderr_file"`
+    # appended here was dead weight (A/B-tested: removing it changes
+    # nothing) that re-slurped the whole stream unbounded and re-ran
+    # _burn_redact_full on it. #81's actual cause was limit.sh:130's anchor
+    # not accepting codex's "ERROR:" transport prefix — fixed there.
+    # P3-1 (round-3 fix review, this PR): `|| true` — a non-zero rc here
+    # (the redaction tool itself failing to run) must not abort the burn
+    # under `set -e`; this call site doesn't need to tell that apart from
+    # "redacted to nothing", it only needs SOME text to classify against.
+    local out_for_class; out_for_class="$(_burn_redact_full "$out")" || true
+
+    # P1-1 (2026-09-08 review): artifact evidence must OUTRANK phrase-matching.
+    # A burn that FINISHED — the artifact is fresh — was being discarded as dry
+    # whenever the engine's OWN reply happened to contain a limit phrase (e.g. a
+    # task about writing a quota runbook), which then re-fired the SAME task on
+    # a second account. Judge success before scanning any prose for a limit or
+    # an infra signature, so a completed task can never be rerouted to redo
+    # work that is already done.
+    if [ "$artifact_fresh" -eq 1 ]; then
+      # P2-2 (2026-09-08 round-2 review): the artifact wins the OUTCOME — that
+      # guarantee above is unchanged — but a limit event that IS happening in
+      # this SAME reply is real account state, not noise the artifact should
+      # silently overwrite. Before this, the success branch unconditionally
+      # cleared the dry marker, so a run that finished with a few partial
+      # bytes on a tank the engine had JUST reported as out of fuel turned the
+      # board's red dot green (and dropped the vendor's reset phrase from
+      # JSON) while the account was still genuinely dry. Check the same
+      # signal the dry branch below would, and if it fires, leave any
+      # existing marker alone instead of clearing it, and surface the reset
+      # phrase.
+      #
+      # P2-2 (2026-09-08 round-3 review): that round-2 fix called
+      # dry_store_mark here — but limit_codex_output_dry (unlike claude's
+      # branch, never anchored on a direct vendor report) matches "hit your
+      # (usage|session) limit" bare, ANYWHERE in the reply. A codex task that
+      # merely TALKS ABOUT the limit while it succeeds ("Done. The runbook
+      # now explains what to do once you hit your usage limit.") matched it
+      # too, and limit_engine_detectable is false for codex — the ONLY
+      # engine that uses dry_store at all — so a SUCCESSFUL burn silently
+      # wrote a dry marker on a healthy tank (round-3 PROBE B), with --json
+      # showing ok:true and reset:null: nothing said it happened.
+      # dry_store.sh's own header promises "a successful run clears it
+      # explicitly" — writing one here breaks that promise on the one path
+      # it matters most (the tank that just proved it has fuel by finishing
+      # the task). A fresh artifact must never WRITE a new marker; if the
+      # SAME reply also shows a live signal, at most leave an existing
+      # marker as-is (never clear a tank that may still be genuinely dry).
+      # The reset phrase, when there is one, already reaches the caller via
+      # `_burn_result`'s "reset" field below — unchanged by this.
+      #
+      # P1-1 (round-2 fix review, this PR): this branch's own guard above was
+      # sound — a limit line found ANYWHERE in the reply already skips
+      # dry_store_clear — but limit_codex_output_dry fed it was windowed to
+      # the last 20 lines (limit.sh), and THIS is the one call site where the
+      # vendor's limit line is most likely to sit far from the end (the run
+      # kept going and finished the artifact afterward): a real limit line
+      # >20 lines from the tail read as "no limit here" and cleared a marker
+      # that should have survived. Fixed at the source (limit.sh now scans
+      # the whole reply); the extra `rc == 0` below is this call site's own
+      # belt: a fresh artifact with a NON-ZERO engine exit and no limit line
+      # is not the "real success" this clear exists for either — leave any
+      # existing marker alone in that case too, same as the limit-line arm.
+      local live_reset=""
+      if live_reset="$(limit_output_dry "$cli" "$out_for_class")"; then
+        log_warn "$cli/$cur produced a fresh artifact but its reply also shows a limit${live_reset:+  — }${live_reset} — not marking it dry (any existing marker is left as-is)."
+      elif [ "$rc" -eq 0 ]; then
+        dry_store_clear "$cli" "$cur"   # a real success recovered this tank
+        # codex's hard-limit text above is the only DRY signal; a HEALTHY
+        # codex run still has something worth showing — its own 5h/weekly
+        # usage, which codex persists (headless `codex exec` included,
+        # confirmed on this machine's own rollouts) as a `rate_limits`
+        # reading regardless of whether anything ran dry. Proactive, not a
+        # limit event — this is why `burn --json` used to print
+        # `"reset": null` on a run that never hit anything at all (see
+        # docs/DESIGN-board-fuel-dots.md). claude/agy are untouched: they
+        # have no such vendor-reported reading to relay.
+        if [ "$cli" = codex ]; then
+          local _cx_status
+          if _cx_status="$(limit_codex_status "$(profile_dir codex "$cur")" \
+                              "$(date +%s 2>/dev/null || echo 0)" 2>/dev/null)"; then
+            IFS=$'\037' read -r _ _ live_reset <<< "$_cx_status"
+          fi
+        fi
+      fi
+      log_done "Done on $cli/$cur — artifact present at engine exit: $artifact"
+      _burn_status_write "done" true "$cli" "$cur" "$artifact" "artifact produced" "$live_reset"
+      _burn_result true "$cli" "$cur" "$artifact" "artifact produced" "$live_reset"
+      log_info "summary: tank=$cli/$cur  reroutes=$(printf '%s' "$tried" | wc -w | tr -d ' ')  elapsed=${burn_elapsed_s:-$((SECONDS - t0))}s  artifact=${artifact_bytes_snapshot}B"
+      return 0
+    fi
 
     # Judge by limit-string + artifact, never the exit code.
-    if reset="$(limit_output_dry "$cli" "$out")"; then
+    if reset="$(limit_output_dry "$cli" "$out_for_class")"; then
       log_warn "$cli/$cur ran dry${reset:+  — }${reset}"
+
+      # P1-2 (2026-09-09 round-1 review): the terminal `dry` write used to
+      # land HERE, unconditionally, before ever checking --wait-for-reset —
+      # so a tank about to sleep a few minutes and finish the SAME task told
+      # every #41/#40 reader (`wait`, `burn_tank_busy`) "this run is OVER,
+      # and it went dry" for the entire sleep. Decide first; only the
+      # branches that really abandon this tank write a terminal `dry`.
+      # Deliberately BEFORE the dry_store_mark / dried_accts bookkeeping
+      # below and the reroute decision further down: a tank that only WAITED
+      # never gets counted as tried, marked dry on disk, or excluded as a
+      # same-account sibling — from the rest of this loop's point of view,
+      # nothing happened yet.
+      if [ -n "$wait_for_reset_s" ] && [ -n "$reset" ] \
+         && _burn_wait_for_reset "$cli" "$cur" "$artifact" "$reset" "$wait_for_reset_s"; then
+        log_info "$cli/$cur should be reset now — re-firing on the same tank."
+        infra_attempt=0; retry_delay="$infra_delay"
+        continue
+      fi
+
+      _burn_status_write dry false "$cli" "$cur" "$artifact" "tank ran dry" "$reset"
+
       # Persist what we just caught LIVE so the passive board (clikae home) can
       # light this tank red + show the reset phrase — codex's limit lives only in
-      # this stdout and would otherwise vanish. Only for engines whose dry state is
+      # captured output and would otherwise vanish. Only for engines whose dry state is
       # NOT already scannable from disk (claude=transcript, agy=log self-clear);
       # writing a store marker for those would mask their real recovery.
       limit_engine_detectable "$cli" || dry_store_mark "$cli" "$cur" "$reset"
       # Remember this dried tank's account so the reserve skips its same-quota siblings (P1).
       local _acct; _acct="$(_limit_tank_account "$cli" "$cur" 2>/dev/null || true)"
       [ -n "$_acct" ] && dried_accts="${dried_accts}${_acct}"$'\n'
-    elif [ -e "$artifact" ] && [ "$(_clikae_mtime "$artifact")" != "$art_pre" ]; then
-      dry_store_clear "$cli" "$cur"   # a real success recovered this tank
-      log_ok "Done on $cli/$cur — artifact present: $artifact"
-      log_info "summary: tank=$cli/$cur  reroutes=$(printf '%s' "$tried" | wc -w | tr -d ' ')  elapsed=$((SECONDS - t0))s  artifact=$(_burn_size "$artifact")B"
-      return 0
+      # #61: track the EARLIEST parseable reset across the whole walk, not
+      # just this hop's — an earlier hop's window may reopen before this
+      # one's, and that's the number a caller waiting on "no-tank-available"
+      # actually wants.
+      local _rst_epoch; _rst_epoch="$(_burn_dry_epoch "$reset" || true)"
+      if [ -n "$_rst_epoch" ] && { [ -z "$earliest_epoch" ] || [ "$_rst_epoch" -lt "$earliest_epoch" ]; }; then
+        earliest_epoch="$_rst_epoch"; earliest_reset="$reset"
+      fi
+    elif _burn_output_infra "$out_for_class"; then
+      if [ "$infra_attempt" -lt "$infra_retries" ]; then
+        infra_attempt=$((infra_attempt + 1))
+        log_warn "$cli/$cur infrastructure failure — retry $infra_attempt/$infra_retries on the same tank in ${retry_delay}s."
+        _burn_status_write infra null "$cli" "$cur" "$artifact" "infra retry $infra_attempt/$infra_retries" ""
+        sleep "$retry_delay"
+        retry_delay=$((retry_delay * 2))
+        continue
+      fi
+      log_err "$cli/$cur infrastructure failure after $infra_attempt retries."
+      _burn_status_write infra false "$cli" "$cur" "$artifact" "infra" ""
+      _burn_result false "$cli" "$cur" "$artifact" "infra"
+      _burn_output_tail "$out"
+      return 1
     else
       log_err "$cli/$cur produced no fresh artifact and shows no limit — a real task failure (rc=$rc), not a dry tank."
-      printf '%s\n' "$out" | tail -n 5 | sed 's/^/    /'
-      log_info "summary: tank=$cli/$cur  reroutes=$(printf '%s' "$tried" | wc -w | tr -d ' ')  elapsed=$((SECONDS - t0))s  artifact=none"
+      local failure_reason="no fresh artifact and no limit" stderr_first=""
+      if [ "$((SECONDS - attempt_started))" -le 5 ] && [ -s "$stderr_file" ]; then
+        # P3-2 (#81 round-1 fix review): this used to go straight from the
+        # RAW stderr line to _burn_sanitize_reason (which only escapes
+        # control bytes for valid JSON, never redacts) — an engine that
+        # echoes the task's own prompt back on stderr (codex does, on
+        # several failure shapes) put the operator's prompt text verbatim
+        # into `reason` in both `--json` and status.json. out_for_class
+        # above already redacts the SAME stderr through _burn_redact_full
+        # for classification; give `reason` the same treatment before it
+        # is sanitized for JSON and truncated.
+        #
+        # P2-2 (round-2 fix review, this PR): that fix used _burn_redact_full's
+        # DEFAULT replacement — an empty string — and only ever looked at
+        # stderr's FIRST line. When that first line IS, in its entirety, the
+        # thing being redacted (codex echoing the whole prompt back as its
+        # own first stderr line is one of the "several failure shapes" the
+        # comment above already names), redacting it to "" and stopping left
+        # `reason` an empty string — not the missing-leak the redaction
+        # promised, but a genuinely uninformative field (and, on the #99
+        # shape — a >128 KiB prompt that makes _burn_redact_full's own perl
+        # invocation fail closed and hand back "" regardless of content —
+        # every attempt looks "entirely redacted" even though the real
+        # stderr never leaked at all, worked, or was even touched). Redact
+        # with the SAME "[prompt: …]" placeholder burn.sh:385 already uses
+        # for the human-facing tail (never a bare "", which is
+        # indistinguishable from "nothing was here"), then walk the
+        # redacted lines — not just the first — and keep the first one that
+        # ISN'T entirely that placeholder (or blank): the prompt-echo line
+        # is skipped, a real diagnostic on the next line is kept. If every
+        # line is placeholder or blank (a stderr that is ONLY the prompt,
+        # or the #99 shape above), say so in plain words — `reason` must
+        # never be "" or null.
+        local _reason_placeholder="" _reason_redacted _reason_candidate _redact_rc=0
+        [ -n "${saved_prompt:-}" ] && _reason_placeholder="[prompt: $saved_prompt]"
+        _reason_redacted="$(_burn_redact_full "$(head -c "$_BURN_REDACT_TAIL_BYTES" "$stderr_file")" "$_reason_placeholder")" || _redact_rc=$?
+        # P3-1 (round-3 fix review, this PR): a non-zero _redact_rc means the
+        # redaction tool itself failed to run (perl exec E2BIG, #99 shape) —
+        # nothing was redacted, so say THAT, not "output redacted" (which
+        # implies redaction happened and just found nothing worth keeping).
+        if [ "$_redact_rc" -ne 0 ]; then
+          failure_reason="engine exited rc=$rc, output could not be redacted"
+        else
+        while IFS= read -r _reason_candidate; do
+          _reason_candidate="$(printf '%s' "$_reason_candidate" | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')"
+          [ -n "$_reason_candidate" ] || continue
+          [ -n "$_reason_placeholder" ] && [ "$_reason_candidate" = "$_reason_placeholder" ] && continue
+          stderr_first="$_reason_candidate"
+          break
+        done <<< "$_reason_redacted"
+        if [ -n "$stderr_first" ]; then
+          stderr_first="$(_burn_sanitize_reason "$stderr_first")"
+          failure_reason="$(_burn_truncate_utf8 "$stderr_first" 200)"
+        else
+          failure_reason="engine exited rc=$rc, output redacted"
+        fi
+        fi
+      fi
+      _burn_status_write fail false "$cli" "$cur" "$artifact" "$failure_reason" ""
+      _burn_result false "$cli" "$cur" "$artifact" "$failure_reason"
+      _burn_output_tail "$out"
+      log_info "summary: tank=$cli/$cur  reroutes=$(printf '%s' "$tried" | wc -w | tr -d ' ')  elapsed=${burn_elapsed_s:-$((SECONDS - t0))}s  artifact=none"
       return 1
     fi
 
     # Dry → fall through to the next tank in the reserve.
-    [ "$reroute" -eq 1 ] || { log_info "Dry, and --no-reroute is set. Stopping."; return 1; }
+    [ "$reroute" -eq 1 ] || {
+      log_info "Dry, and --no-reroute is set. Stopping."
+      _burn_status_write dry false "$cli" "$cur" "$artifact" "tank ran dry and --no-reroute is set" "${reset:-}"
+      _burn_result false "$cli" "$cur" "$artifact" "tank ran dry and --no-reroute is set" "${reset:-}"
+      # #61 round-1 P2-5: see _agy_burn's identical comment above this one's
+      # twin — rc now matches the `state: dry` this just wrote (both dry
+      # shapes are $CLIKAE_BURN_RC_NO_TANK; only a real task failure is 1).
+      exit "$CLIKAE_BURN_RC_NO_TANK"
+    }
     tried="$tried $cli/$cur"
     local nxt=""
     if [ -n "$to" ]; then
@@ -388,7 +4795,22 @@ KV
     else
       nxt="$(_burn_next_same_engine "$cli" "$tried" "$dried_accts" "$envvar" "$allow_active")"
     fi
-    [ -n "$nxt" ] || log_fail "All reachable tanks are dry (or in interactive use / share a dry account) — nothing left after$tried. Add a tank, wait for a reset, or --allow-active / --to <tank>."
+    if [ -z "$nxt" ]; then
+      # The reserve is exhausted. #61: a distinct reason ("no-tank-available")
+      # and exit code from a real task failure — this is the outcome an agent
+      # most needs to tell apart from "the task itself is broken". #61 round-2
+      # P3: the order below is deliberate. log_err writes the human-readable
+      # line to stderr first — it does NOT exit — then the machine-readable
+      # status file and result are written, and only THEN does the explicit
+      # `exit` at the end actually leave this rc; a caller reading either
+      # stream sees the full picture regardless of which one it reads first.
+      # reset is the EARLIEST parseable reset seen across the whole walk
+      # (null if none of the dry hops parsed), not just this last hop's.
+      log_err "All reachable tanks are dry (or in interactive use / share a dry account) — nothing left after$tried. Add a tank, wait for a reset, or --allow-active / --to <tank>."
+      _burn_status_write dry false "$cli" "$cur" "$artifact" "no-tank-available" "$earliest_reset"
+      _burn_result false "$cli" "$cur" "$artifact" "no-tank-available" "$earliest_reset"
+      exit "$CLIKAE_BURN_RC_NO_TANK"
+    fi
 
     # Resolve the next hop. A bare name = a tank of the same engine; engine/tank =
     # possibly cross-engine (the same command then runs under that engine — warned).
@@ -397,6 +4819,13 @@ KV
       */*) nx_cli="${nxt%%/*}"; nx_tank="${nxt#*/}" ;;
       *)   nx_cli="$cli";       nx_tank="$nxt" ;;
     esac
+    # Resolve the destination before composing: each tank owns its sandbox (#129).
+    dir="$(profile_dir "$nx_cli" "$nx_tank")"
+    if [ "$nx_cli" = "$cli" ] && [ "$prompt_set" -eq 1 ]; then
+      _burn_compose "$prompt" "${#post_cmd[@]}" "${post_cmd[@]}" -- "${add_dirs[@]}"
+      cmd=("${BURN_ARGV[@]}")
+      _burn_claude_headless_guards
+    fi
     if [ "$nx_cli" != "$cli" ]; then
       cli="$nx_cli"; load_adapter "$cli"; binary="$(adapter_meta_cli_binary)"
       envvar="$(adapter_meta_env_var 2>/dev/null || true)"   # in-use guard tracks the new engine's var
@@ -407,14 +4836,38 @@ KV
         # prompt is engine-agnostic). Without a recipe for the new engine, stop.
         declare -F adapter_burn_flags >/dev/null \
           || log_fail "Cross-engine reroute → $nx_cli, which has no headless-write recipe (no adapter_burn_flags)."
+        # #66 round-1 P1-1: re-check here, now that $cli IS $nx_cli — a
+        # reroute landing on codex composes a fresh -C argv from $add_dirs[0]
+        # exactly like the entry check did, so it needs the same refusal.
+        _burn_check_codex_git_cwd
+        _burn_launch_cwd="${add_dirs[0]}"
         _burn_compose "$prompt" "${#post_cmd[@]}" "${post_cmd[@]}" -- "${add_dirs[@]}"
         cmd=("${BURN_ARGV[@]}")
+        _burn_claude_headless_guards
         log_warn "Cross-engine reroute → $nx_cli: re-running the same prompt under $nx_cli's headless flags."
       else
+        # #74 round-3 P1-1: raw mode keeps the same argv verbatim, but it now
+        # runs under a DIFFERENT engine's adapter — re-derive rather than
+        # keep whatever the previous engine's adapter_cwd_from_args read (or
+        # didn't), same rule as the entry-point derivation above.
+        _burn_launch_cwd=""
+        if declare -F adapter_cwd_from_args >/dev/null 2>&1; then
+          _burn_launch_cwd="$(adapter_cwd_from_args "${cmd[@]}" 2>/dev/null || true)"
+        fi
         log_warn "Cross-engine reroute → $nx_cli: the SAME command runs under $nx_cli (only sound if it's engine-agnostic)."
       fi
     fi
+    # #63 round-5 P2-1: every hop — an explicit --to included — asks the same
+    # gate the named target did. An explicit hop onto the cockpit is refused,
+    # not skipped: the caller named it.
+    if ! _burn_cockpit_gate "$cli" "$nx_tank" "$force_cockpit"; then
+      _burn_status_write fail false "$cli" "$nx_tank" "$artifact" \
+        "cockpit: $cli/$nx_tank is the recorded cockpit (--force-cockpit to override)" ""
+      _burn_result false "$cli" "$nx_tank" "$artifact" "refused: $cli/$nx_tank is the recorded cockpit"
+      log_fail "$_BURN_COCKPIT_REFUSAL"
+    fi
     cur="$nx_tank"
+    infra_attempt=0; retry_delay="$infra_delay"
     log_info "Rerouting (dry) → $cli/$cur"
   done
 }

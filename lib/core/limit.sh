@@ -58,11 +58,41 @@ limit_line_is_real() {
 }
 
 # limit_codex_reset <text> -> echo codex's verbatim reset phrase ("try again at
-# <date> <time>") if the text carries one, else nothing. Never computes a
-# countdown — relays the vendor's own words (same spirit as the other detectors).
-# Drives a "dry-until" window so watch/auto don't re-pick a tank before it recovers.
+# <date> <time>", "resets …", or "reset at …") if the text carries one, else
+# nothing. Never computes a countdown — relays the vendor's own words (same
+# spirit as the other detectors). Drives a "dry-until" window so watch/auto
+# don't re-pick a tank before it recovers.
+#
+# P2-1 (2026-09-08 round-4 review): every classifier here used to read
+# `printf '%s' "$text" | grep …` — a PIPE from a forked producer to a forked
+# grep. That is fine for a short line, but once P2-1's fix stopped truncating
+# the haystack before classification, a genuine large capture with the match
+# near its START let grep exit (`-q`/`-o … | head -n 1`) long before the
+# producer had written it all; on this machine that reliably HUNG the whole
+# burn (SIGPIPE from the closed pipe never unblocked the producer in this
+# nested tmux-wrapper/retry-loop context — reproduced with a 100 KiB capture,
+# confirmed by backgrounding the same call and `wait`-ing on it, which did
+# not hang). A here-string writes the WHOLE haystack to a real fd (bash's own
+# temp file, not a bounded kernel pipe) before grep ever execs, so there is no
+# concurrent producer left to block. Every classifier below reads its
+# haystack the same way now — this one included, since it is handed
+# codex's full reply by limit_codex_output_dry.
+#
+# P1-1 (2026-09-08 round-5 review): this only ever recognized "try again
+# at …" — but the repo's OWN 175-row real-reset-phrase corpus
+# (tests/fixtures/limit-reset-phrases.tsv) is entirely "resets …" / "reset
+# at …" grammar (0 rows contain "try again at"), so every one of those 175
+# real phrases, prefixed with codex's own confirmed sentence, failed to
+# yield a reset and limit_codex_output_dry's second gate (below) then
+# discarded the whole event as not-dry. That silently closed reroute, the
+# board's ONLY red dot for codex (dry_store is codex-only —
+# limit_engine_detectable is false for it), and — worse — on the
+# fresh-artifact path (burn.sh) let a genuine EXISTING dry marker be
+# cleared, because "not dry" there means "safe to clear". Recognize the
+# same three grammars claude's branch (limit_output_dry) already does:
+# nothing here says codex's own vendor text is restricted to one of them.
 limit_codex_reset() {
-  printf '%s\n' "$1" | grep -oaiE "try again at [^.\"]+" | head -n 1 \
+  grep -oaiE 'resets [^"]+|try again at [^."]+|reset at [^."]+' <<< "$1" | head -n 1 \
     | sed -E 's/[[:space:]]+$//' || true
 }
 
@@ -72,9 +102,216 @@ limit_codex_reset() {
 # and writes no artifact (burn-confirmed 2026-06-03), so the exit code is useless —
 # the output string is the signal. Pair with an artifact check at the call site
 # (a dropped job = limit string seen AND/OR the expected artifact missing).
+#
+# P2-2 (2026-09-08 round-4 review): unlike claude's branch, this matched a bare
+# "hit your (usage|session) limit" ANYWHERE in the reply, so prose merely
+# talking about the limit while a task genuinely failed for an unrelated
+# reason ("See docs/runbook.md for what to do once you hit your usage
+# limit.") was misread as a real codex limit event — three tanks burned
+# rerouting a task that was never dry. codex's own real sentence is "You've
+# hit your usage limit. … try again at <date> <time>." (limit_line_is_real's
+# codex comment, burn-confirmed) — anchor on the SAME direct-report prefix as
+# claude's branch (tolerant of the same line-start noise and short adverb
+# gap), AND require the reply to actually yield a reset phrase: a genuine
+# codex event always carries "try again at …", prose about the limit rarely
+# does, so the two checks close different escapes than either alone.
+#
+# P2-1 (2026-09-08 round-5 review): the "12 bytes of leading NON-ALPHABETIC
+# noise" allowance (same class as claude's branch below) was wide enough to
+# admit markdown quoting/list syntax — `>`, `#`, a leading digit + `.` — none
+# of which are letters either. A real reply built around drafting a runbook
+# ("The runbook I was drafting says: > You have reached your weekly
+# limit.") let the blockquote marker stand in for transport noise. Narrowed
+# to the noise a caller's OWN transport actually adds (whitespace and stray
+# symbols), never markdown syntax a model's prose legitimately uses — see
+# the claude branch below for the shared rationale.
+#
+# P2-2 (#81 round-1 fix review): the anchor above matches ANY line in the
+# WHOLE reply, so a task with no artifact that happens to QUOTE codex's own
+# real sentence verbatim somewhere in the middle of its output (a runbook
+# task summarizing this very issue, for instance) read as dry, even though
+# the run kept going and printed ordinary output for a long time afterward
+# — real vendor limit errors terminate the run, so the genuine line is
+# never followed by pages of normal output. Only count the anchor when it
+# falls in the TAIL of the reply (the last 20 lines) — the caller only
+# reaches this function once the artifact check has already failed, so "no
+# artifact" is a given here; this adds the position half of that guard.
+#
+# _limit_codex_anchor_line <anchor-regex> <text> -> echo the ONE line (or
+# TWO-line join) that satisfies <anchor-regex>; empty + return 1 if none
+# does.
+#
+# P2-3 (#81 round-1 fix review): limit_codex_output_dry used to hand the
+# WHOLE reply to limit_codex_reset, which takes grep's first "resets …" /
+# "try again at …" / "reset at …" match ANYWHERE in the buffer — so an
+# unrelated sentence earlier in stdout (a task's own prose, e.g. "the
+# schedule resets Monday morning, so try again at 9:00 PM if unsure.")
+# became the marker instead of the genuine vendor phrase that anchored
+# this as dry in the first place, and that decoy text rarely parses as an
+# epoch (#75's "reset already passed" logic then never fires — the tank
+# stays red until the marker's own TTL). Isolate the specific line the
+# anchor matched and hand THAT to limit_codex_reset, never the buffer.
+#
+# A genuine vendor sentence can also be WRAPPED across two physical lines
+# by the terminal/pty ("… try again at Sep 13th, 2026 2:13\nAM.") — grep
+# matches per line, so the anchor (short, and first on the line) still
+# fires on line one alone, but a reset extracted from that one line loses
+# "AM." and fails to parse as an epoch. If the matched line doesn't already
+# end in terminal punctuation, glue the next line onto it before handing
+# it to limit_codex_reset — the common case (an unwrapped, already-
+# terminated line) never touches its neighbour.
+# P1-1 (round-2 fix review, this PR): removing the `tail -n 20` window
+# upstream (limit_codex_output_dry) means this now walks the reply's FULL
+# line count, not a bounded 20 — and the original loop forked one `grep`
+# PER LINE, twice (the direct check, and again for the backward-join
+# fallback). Measured: a 20,000-line capture with the anchor on its very
+# last line — an everyday build-log-style task that happens to run dry —
+# took ~60s to classify (a P1-3 timing guard, round-5, that already exists
+# for a different shape caught it immediately). One `grep -n` over the
+# WHOLE buffer finds every candidate line in a single fork; the rare
+# fallback (the anchor phrase itself split across a line boundary) joins
+# every adjacent pair in one `awk` pass and greps that ONCE too.
+# P1-1 (round-3 fix review, this PR): the fix above still built a `lines[]`
+# bash array with `while read -r line; do lines+=("${line%$'\r'}"); done`
+# to strip a trailing CR per line — bash's `${var%pat}` is NOT O(1); on a
+# long single line (an 8 MB unbroken capture, e.g. a raw argv echo with no
+# newlines) it walks backward byte-by-byte re-deciding the multibyte
+# boundary at every candidate cut point, making the whole loop O(n^2) on
+# that line's length. Measured: 8 MB went from 3s (main) to 2107s on this
+# host, 2266s on CI's own dedicated ubuntu runner — CPU-bound the entire
+# time, not host contention (three refs in the same load window, only this
+# one is quadratic; see REVIEW-stderr81-r3.md P1-1). There is also no need
+# for a per-line array at all: strip every `\r` from the WHOLE buffer with
+# ONE `tr -d '\r'` up front (a single fork, linear), then read the one
+# matched line straight back out of that already-clean buffer with
+# `sed -n "${n}p"` — no bash array, no per-line loop, and (P3-3) the CR
+# strip now happens BEFORE the anchor `grep`, so a line with a leading
+# `\r` (pty residue) is matched too, not just cleaned up after the fact.
+_limit_codex_anchor_line() {
+  local re="$1" buf="$2"
+  [ -n "$buf" ] || return 1
+  buf="$(tr -d '\r' <<< "$buf")"
+
+  local hit n joined next
+  # P1-1 (round-2 fix review, this PR): case-sensitive (no `grep -i`) — the
+  # caller's anchor spells out every case variant it wants to accept (see
+  # limit_codex_output_dry); folding case here would silently widen
+  # whatever regex a future caller passes in too.
+  hit="$(grep -naE "$re" <<< "$buf" | head -n 1)" || true
+  if [ -n "$hit" ]; then
+    n="${hit%%:*}"
+    joined="$(sed -n "${n}p" <<< "$buf")"
+    case "$joined" in
+      *[.\!?]) : ;;
+      *)
+        # P3-1 (round-2 fix review, this PR): gluing the next line on
+        # whenever the matched line lacked terminal punctuation was meant
+        # for a vendor sentence the terminal wrapped mid-RESET-PHRASE
+        # ("…2:13\nAM."), but it fired just as readily when the matched
+        # line simply had no trailing period for its own reasons and the
+        # NEXT line was unrelated prose that happened to carry its OWN
+        # "resets …"/"try again at …" text — donating THAT decoy's reset
+        # to the genuine anchor instead of just a wrapped continuation.
+        # Only glue when the next line does not already stand on its
+        # own — neither as another anchor match nor as something that
+        # itself parses as a reset phrase (a decoy must not donate its
+        # reset; a genuine wrapped continuation like "AM." is neither).
+        # P1-1 (round-3 fix review, this PR): two `sed -n` reads — the
+        # matched line above and this one successor — never the whole
+        # file; no bash array survives to build a pair from.
+        next="$(sed -n "$((n + 1))p" <<< "$buf")"
+        if [ -n "$next" ] && ! grep -qaE "$re" <<< "$next" && [ -z "$(limit_codex_reset "$next")" ]; then
+          joined="$joined $next"
+        fi
+        ;;
+    esac
+    printf '%s' "$joined"
+    return 0
+  fi
+
+  # No single line matches — the anchor phrase may itself be split across a
+  # line boundary. Join every adjacent pair with ONE `awk` pass (awk walks
+  # the lines internally — no bash loop, no bash array, no second copy of
+  # the buffer sitting in a `pairs[]` array — P3-2) and grep the joined
+  # stream once.
+  local paired
+  paired="$(awk 'NR > 1 { print prev " " $0 } { prev = $0 }' <<< "$buf")"
+  [ -n "$paired" ] || return 1
+  hit="$(grep -naE "$re" <<< "$paired" | head -n 1)" || true
+  [ -n "$hit" ] || return 1
+  n="${hit%%:*}"
+  printf '%s' "$(sed -n "${n}p" <<< "$paired")"
+  return 0
+}
+# P3-4 (#81 round-1 fix review): "ERROR:" was the only letter-bearing prefix
+# the anchor accepted — a special case for codex's CURRENT transport wording,
+# not a description of "transport noise" as a class. Real captures commonly
+# carry an ISO-ish timestamp and/or a single bracketed tag ahead of that
+# ("2026-09-13T02:13:00Z ERROR: …", "[codex] ERROR: …") and both were being
+# rejected outright, right back to #81's original symptom for anyone whose
+# transport adds either.
+#
+# P1-1 (round-2 fix review, this PR): the round-5 fix above ("accept one
+# optional ISO timestamp token") was written as "anything non-space
+# containing a literal T" — under `grep -i` that reads as "any token with a
+# t OR T anywhere in its middle", not "an ISO-8601 stamp". `agent:`,
+# `context:`, `stderr:`, `output:`, `note:` and even bare `attempt` all
+# satisfy "a non-space run with a t sandwiched inside", so a task that
+# merely echoed codex's own sentence back while genuinely failing for an
+# unrelated reason (prefixed with any of those words) came out dry — wider
+# than the 12-byte noise class it replaced, and never exercised by a test
+# with more than two lines of input. There is also a companion bug this
+# review's own P1-1 finding: the whole-reply scan below used to be handed
+# only a `tail -n 20` window (removed — see below), so this anchor was two
+# bugs deep, not one.
+#
+# Rewritten as the three prefixes a real transport actually composes, each
+# spelled out exactly, in the order a transport would emit them — an ISO-8601
+# stamp, then one bracketed tag, then codex's own "ERROR: " — every one
+# optional, and nothing else: no generic noise class, no markdown, no free
+# prose ahead of them ("warn: ERROR: …" is still rejected — "warn: " is none
+# of the three). Matched case-SENSITIVELY (no `grep -i` reaching this
+# anchor) so a literal "T"/"ERROR: " can never be satisfied by a lowercase
+# "t"/"error: " standing in for it the way the old `-i` pass let happen —
+# the vendor sentence itself keeps the same coverage as before ("You've"/
+# "you've"/"You have"/"you have", curly apostrophe included), just spelled
+# out instead of leaning on case-folding. POSIX ERE only: no `\S`/`\s` (GNU/
+# PCRE extensions this repo's macOS CI grep does not define) — plain digit
+# and character classes do the same job without them.
+#
+# P1-1 (round-2 fix review, this PR) — the TAIL WINDOW itself: the round-1
+# fix (#81 fix review) limited the anchor to the reply's LAST 20 lines,
+# reasoning that "the caller only reaches this function once the artifact
+# check has already failed, so 'no artifact' is a given here" (limit.sh's
+# old comment on this function). That premise holds for exactly ONE of this
+# function's three real callers — burn.sh's no-artifact branch — and not
+# for the other two: burn.sh's ARTIFACT-PRODUCED branch (the run kept going
+# and finished the task, so the vendor's limit line is often nowhere near
+# the tail) and conduct.sh's per-leg capture (which has no concept of an
+# artifact at all). On both of those, a genuine limit line beyond line 20
+# read as "no limit here" — on the artifact path that silently cleared a
+# real dry marker (round-2 P2-2's own guarantee, undone); on conduct it
+# reported a dried-out leg as CAPTURED. The false-dry guard the window
+# bought by POSITION is now bought by PRECISION instead (the anchor above):
+# scan the WHOLE captured reply, every line, and lean on the anchor being
+# narrow rather than on the line being near the end.
+# P2-1 (round-3 fix review, this PR): `^` was followed directly by the three
+# named prefixes below with no whitespace allowance at all — origin/main's
+# noise class (`[^A-Za-z0-9>#"'.-]{0,12}`) accepted leading spaces and tabs,
+# and real transports routinely indent a wrapped/quoted error block, so this
+# was a coverage regression vs main for anyone whose transport does that
+# (#81's own original symptom, recurring in a new shape). Leading space/tab
+# is not markdown or free prose — it is transport noise itself — so restore
+# tolerance for it specifically (POSIX `[[:space:]]`, bounded so a whole
+# indented paragraph still cannot masquerade as a one-line transport
+# prefix), ahead of the three named prefixes, same as before.
 limit_codex_output_dry() {
-  printf '%s' "$1" | grep -qaiE "hit your (usage|session) limit" || return 1
-  limit_codex_reset "$1"
+  local out="$1" reset matched
+  local anchor="^[[:space:]]{0,8}([0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9:.]+(Z|[+-][0-9]{2}:?[0-9]{2}) )?(\[[A-Za-z0-9_.:-]+\] )?(ERROR: )?([Yy]ou've|[Yy]ou’ve|[Yy]ou have)( [a-z]+){0,2} hit your (usage|session) limit"
+  matched="$(_limit_codex_anchor_line "$anchor" "$out")" || return 1
+  reset="$(limit_codex_reset "$matched")"
+  [ -n "$reset" ] || return 1
+  printf '%s' "$reset"
   return 0
 }
 
@@ -95,15 +332,98 @@ limit_codex_output_dry() {
 limit_output_dry() {
   local cli="$1" out="$2"
   if [ -n "${CLIKAE_LIMIT_PATTERN:-}" ]; then
-    printf '%s' "$out" | grep -qaiE "$CLIKAE_LIMIT_PATTERN" && return 0
+    grep -qaiE "$CLIKAE_LIMIT_PATTERN" <<< "$out" && return 0
     # No override match → fall through to the built-in per-engine matchers, so the
     # pattern only ADDS coverage, never masks a hit the built-in would have caught.
   fi
   case "$cli" in
     codex)  limit_codex_output_dry "$out" ;;
     claude)
-      printf '%s' "$out" | grep -qaiE "hit your (session|usage) limit" || return 1
-      printf '%s' "$out" | grep -oaiE "resets [^\"]+|try again at [^.\"]+" | head -n 1 || true
+      # P2-2 (2026-09-08 review): "weekly[ -]limit (reached|exceeded)" was
+      # bare — every OTHER alternative here anchors on a verb naming the
+      # human ("hit your …"), but this one fired on ordinary prose that
+      # merely discusses a weekly limit ("the weekly limit reached its cap
+      # in July"). Anchored to the START OF A LINE instead: a genuine vendor
+      # sentence IS the line (or leads it), while prose ABOUT the limit is
+      # never the first thing on its line. grep matches `^`/`$` per line, not
+      # per buffer, so this holds even when $out has other lines around it.
+      #
+      # P2-1 (2026-09-08 round-2 review): the SAME fix's own next commit
+      # (a3365a9) re-added a bare "reached your … limit" alongside it —
+      # unlike "hit your …", "reached your …" turns out to read naturally in
+      # third-person documentation prose that also addresses the reader as
+      # "you" ("The runbook covers what happens when you have reached your
+      # weekly limit…", "Each seat has reached your weekly limit of five
+      # reviews", round-2 PROBE D — all three FALSE-DRY). A line anchor alone
+      # doesn't defend this shape either: prose can land the phrase at a
+      # fresh line by pure word-wrap coincidence. What every genuine vendor
+      # sentence in the corpus actually shares, that none of the false
+      # positives do, is the direct report "You've " / "You have " leading
+      # straight into the verb — so both verbs now require that prefix
+      # (adjacent, not just present in the buffer: a wrapped "you have\n"
+      # followed by "reached" on the next line does NOT satisfy it, since `.`
+      # never matches the newline between them).
+      #
+      # P1-1 (2026-09-08 round-3 review): that "adjacent" requirement was
+      # stricter than it looked — it demanded "you've"/"you have" sit
+      # IMMEDIATELY before the verb, with nothing between. A real vendor
+      # sentence with a curly apostrophe ("You’ve hit …") or a one-word
+      # adverb ("You have already hit …", "You've just hit …") no longer
+      # matched at ALL — narrower than main, which never required this
+      # prefix in the first place. That is the worse failure: a genuinely
+      # dry tank now reads as a hard task failure (no reroute, no dry
+      # marker, no reset), exactly what `burn --help` warns "a dry tank
+      # would be misread as a real task failure" means. Tolerate the ASCII
+      # and curly apostrophe, and up to two words between the direct report
+      # and its verb.
+      #
+      # P2-3 (2026-09-08 round-3 review): the prefix requirement above was
+      # never anchored to the start of a line, so it still matched its OWN
+      # documented counterexample — CHANGELOG.md's "the runbook covers what
+      # happens when you have reached your weekly limit…" — sitting mid-
+      # sentence after "I could not write the file. " walked the entire
+      # reserve on a real task failure (round-3 PROBE O). "You've "/"You
+      # have " leading straight into the verb is only a genuine vendor
+      # report when it also LEADS its line — third-person prose that quotes
+      # the reader's own words ("…when you have reached…") never does,
+      # while a real vendor sentence is the line (or leads it), same
+      # reasoning as the `^weekly[ -]limit` alternative just below.
+      #
+      # P1-1 (2026-09-08 round-4 review): "leads its line" was read as
+      # "IS the first byte of the line" — a genuine vendor sentence can
+      # still be prefixed by non-alphabetic transport noise a caller didn't
+      # write (indentation, a tab, a leading "⚠ "), and the bare `^` anchor
+      # made those invisible too, narrower than main yet again for the same
+      # reason r3 already called out once. Tolerate up to 12 bytes of
+      # LEADING NON-ALPHABETIC noise before the direct report — prose never
+      # qualifies (it leads with more than 12 alphabetic bytes, e.g. "I could
+      # not write the file. "), so the r2/r3 false-positive corpus stays
+      # closed. A prefix carrying its own letters ("Error: ", "codex: ") is
+      # not recovered by this — that needs a real vendor-output corpus to
+      # bound safely, not another regex guess (see REPORT-clikae47-fix4.md).
+      #
+      # P2-1 (2026-09-08 round-5 review): "non-alphabetic" turned out to
+      # include markdown syntax a model's own prose legitimately produces —
+      # a blockquote marker (`>`) or a numbered-list digit + `.` — which is
+      # exactly what "prose never qualifies" assumed couldn't happen. A real
+      # task failure whose reply was drafting a runbook ("The runbook I was
+      # drafting says: > You have reached your weekly limit.", or "1. You
+      # have reached your weekly limit — explain this to the user.") walked
+      # the entire reserve on both round-5 PROBEs. `main` never matched
+      # either shape at all ("reached your weekly limit" isn't one of its
+      # alternatives), so this was a regression this PR introduced, not a
+      # pre-existing gap. The noise class is now the transport whitespace
+      # and stray symbols a caller's OWN wrapper might prepend — never `>`,
+      # `#`, a quote character, a digit, `.`, or `-`, all of which are
+      # markdown or list syntax a model writes on purpose. The two-space/
+      # tab/`⚠ ` cases the round-4 fix closed stay closed; the r2/r3 bare-
+      # prose corpus stays closed too (none of those start with a letter).
+      grep -qaiE "^[^A-Za-z0-9>#\"'.-]{0,12}(you've|you’ve|you have)( [a-z]+){0,2} (hit|reached) your (session|usage|weekly)[ -]limit|^weekly[ -]limit (reached|exceeded)" <<< "$out" || return 1
+      # P2-3 (2026-09-08 review): "resets "/"try again at " missed a real
+      # shape from the review's corpus — "Your limit will reset at 5am …"
+      # (singular "reset at", no trailing s) — which silently produced
+      # reset:null even though the vendor's own words were right there.
+      grep -oaiE "resets [^\"]+|try again at [^.\"]+|reset at [^.\"]+" <<< "$out" | head -n 1 || true
       return 0 ;;
     *) return 1 ;;
   esac
@@ -125,14 +445,86 @@ limit_output_dry() {
 # clears the badge automatically.
 #
 # Only claude transcripts are scanned here. Confirmed reasons the others aren't:
-#   • codex — a real limit is an exec-stdout-only event, NEVER written to the
+#   · codex — a real limit is an exec-stdout-only event, NEVER written to the
 #     rollout transcript (burn-verified 2026-06-01; see limit_line_is_real). There
 #     is nothing in a transcript to scan, so codex is correctly absent.
-#   • agy   — records its limit in a log file, not a transcript. That path is
+#   · agy   — records its limit in a log file, not a transcript. That path is
 #     handled separately by limit_log_dry (below), used for log-only targets.
 # Any other cli returns "not dry" rather than guess.
+# _limit_codex_dry <dir> -> 0 (dry) + echo the vendor's verbatim reset phrase, 1 otherwise.
+#
+# For a long time this project recorded that codex's usage limit was
+# "exec-stdout-only — never written to a file clikae can scan", so a codex tank
+# could only ever show ○ ("can't tell") and `clikae auto` stayed claude-only.
+# That turned out to be false: the INTERACTIVE TUI writes the limit into its own
+# rollout transcript, as a structured field, and has for a while —
+#
+#   {"type":"event_msg","payload":{"type":"task_complete","error":{
+#      "message":"You've hit your usage limit. … try again at Aug 23rd, 2026 8:26 PM.",
+#      "codex_error_info":"usage_limit_exceeded"}}}
+#
+# (confirmed against a real rollout whose session_meta says originator=codex-tui,
+# i.e. not a headless run). We match `codex_error_info`, the machine-readable
+# marker — NOT the English sentence, which is the vendor's copy and will drift.
+#
+# Self-clearing like claude's: an agent_message NEWER than the newest limit means
+# the account recovered. Codex limits can run for weeks (the reset above is a
+# month out), so the scan window is far wider than claude's 5h rolling one — but
+# still bounded, because a tank nobody has touched in a week showing ○ is the
+# honest answer, not a lie.
+_limit_codex_dry() {
+  local dir="$1"
+  local sess_root="$dir/sessions"
+  [ -d "$sess_root" ] || return 1
+
+  local out maxL maxS reset files updated
+  if [ "${_CLIKAE_BOARD:-0}" = 1 ]; then
+    # board_read's own board_generation call keeps this fresh as of THIS
+    # render (see board_stale, lib/core/board_state.sh) — no separate age
+    # gate here; an arbitrary "snapshot published within the last N seconds"
+    # window was never a proxy for "the underlying data is still accurate",
+    # and freezing a dry verdict mid-window is exactly the bug that caused
+    # (2026-09-12 round-1 fix review, P1-3).
+    updated="$(board_read codex "$dir" updated)"
+    case "$updated" in ''|*[!0-9]*) return 1 ;; esac
+    out="$(board_read codex "$dir" codex-dry)"
+  else
+    files="$(find "$sess_root" -name 'rollout-*.jsonl' -mmin -10080 2>/dev/null)"
+    [ -n "$files" ] || return 1
+    out="$(_limit_codex_readings "$files")"
+  fi
+  IFS=$'\037' read -r maxL maxS reset <<EOF
+$out
+EOF
+  [ -n "$maxL" ] || return 1
+
+  if [ -n "$maxS" ]; then
+    local newer
+    newer="$(printf '%s\n%s\n' "$maxL" "$maxS" | sort | tail -n 1)"
+    # rc=2, not 1: this is POSITIVE evidence of recovery (a real turn after the
+    # limit), not merely "nothing found here". _limit_tank_dry_raw tells the two
+    # apart (R1-P1-2) — rc=1 still falls to dry_store for codex (a headless run
+    # may have hit a limit this transcript never saw). rc=2 echoes maxS (the
+    # recovery's own timestamp) when asked, so the caller can weigh it against
+    # a persisted marker's OWN timestamp (R2-P1-3): this transcript recovering
+    # days ago must not outrank a headless marker burn wrote moments ago — only
+    # a recovery NEWER than the marker is grounds to clear it.
+    if [ "$newer" = "$maxS" ] && [ "$maxS" != "$maxL" ]; then
+      [ "${_LIMIT_WITH_STAMP:-0}" = 1 ] && printf '%s' "$maxS"
+      return 2
+    fi
+  fi
+
+  printf '%s' "$reset"
+  [ "${_LIMIT_WITH_STAMP:-0}" = 1 ] && printf '\037%s' "$maxL"
+  return 0
+}
+
 limit_profile_dry() {
   local cli="$1" dir="$2"
+  # codex keeps its own shape of transcript in its own place; claude's scan below
+  # would find nothing there. See _limit_codex_dry for why this is possible at all.
+  [ "$cli" = "codex" ] && { _limit_codex_dry "$dir"; return $?; }
   [ "$cli" = "claude" ] || return 1
   local proj_root="$dir/projects"
   [ -d "$proj_root" ] || return 1
@@ -140,8 +532,11 @@ limit_profile_dry() {
   # Only sessions touched in the last ~5h (the rolling session window): a limit
   # older than that has reset, and scanning stale transcripts just costs time.
   local files
-  files="$(find "$proj_root" -name '*.jsonl' -mmin -300 2>/dev/null)"
-  [ -n "$files" ] || return 1
+  files=""
+  if [ "${_CLIKAE_BOARD:-0}" != 1 ]; then
+    files="$(find "$proj_root" -name '*.jsonl' -mmin -300 2>/dev/null)"
+    [ -n "$files" ] || return 1
+  fi
 
   # Find, in ONE awk pass over the bounded tails, three things at once:
   #   maxL  — newest GENUINE-limit timestamp (synthetic + isApiErrorMessage)
@@ -155,29 +550,16 @@ limit_profile_dry() {
   # pretty-printed JSONL can't silently break detection. Reads only the TAIL of
   # each (100+ MB) transcript — the newest limit/success are the most-recent lines.
   local out maxL maxS reset
-  out="$(printf '%s\n' "$files" | while IFS= read -r f; do
-      [ -n "$f" ] && transcript_tail "$f"
-    done | awk '
-      function ts(s,   t) {
-        if (match(s, /"timestamp": *"[^"]*"/)) {
-          t = substr(s, RSTART, RLENGTH); sub(/.*"timestamp": *"/, "", t); sub(/".*/, "", t)
-          return t
-        }
-        return ""
-      }
-      /"model": *"<synthetic>"/ && /"isApiErrorMessage": *true/ {
-        t = ts($0)
-        if (t != "" && (maxL == "" || t > maxL)) {
-          maxL = t; reset = ""
-          if (match($0, /[Rr]esets [^"]*/)) reset = substr($0, RSTART, RLENGTH)
-        }
-        next
-      }
-      /"type": *"assistant"/ && $0 !~ /"model": *"<synthetic>"/ {
-        t = ts($0); if (t != "" && (maxS == "" || t > maxS)) maxS = t
-      }
-      END { printf "%s\037%s\037%s\n", maxL, maxS, reset }
-    ')"
+  if [ "${_CLIKAE_BOARD:-0}" = 1 ]; then
+    # See _limit_codex_dry's twin comment: board_read is kept fresh per-render
+    # by board_generation itself now, so no separate age gate belongs here.
+    local updated
+    updated="$(board_read claude "$dir" updated)"
+    case "$updated" in ''|*[!0-9]*) return 1 ;; esac
+    out="$(board_read claude "$dir" claude-usage)"
+  else
+    out="$(_limit_claude_readings "$files")"
+  fi
   # \037 (Unit Separator), NOT a tab: tab is IFS-whitespace, so `read` would
   # COLLAPSE the empty maxS field between two tabs and shift reset into maxS
   # (the exact footgun status.sh's delimiter comment warns about).
@@ -188,40 +570,134 @@ EOF
 
   # Dry only if nothing succeeded AFTER the newest limit (self-clearing). ISO
   # stamps sort lexicographically, so a later success sorting last cleared it.
+  #
+  # rc=2, not 1, and for the same reason codex's branch above returns it: this
+  # is POSITIVE evidence of recovery — a real turn (or the vendor's own
+  # auto-continuation) after the newest limit — whereas rc=1 also covers "this
+  # scan found nothing at all", which is what an untouched tank outside the 5h
+  # window looks like. `clikae wake` depends on the difference: it must skip the
+  # nudge on 2 and still send it on 1. Nothing else reads it — _limit_tank_dry_raw
+  # returns for claude before its rc=2 branch, and every other caller tests
+  # `rc != 0`.
   if [ -n "$maxS" ]; then
     local newer
     newer="$(printf '%s\n%s\n' "$maxL" "$maxS" | sort | tail -n 1)"
-    [ "$newer" = "$maxS" ] && [ "$maxS" != "$maxL" ] && return 1
+    if [ "$newer" = "$maxS" ] && [ "$maxS" != "$maxL" ]; then
+      [ "${_LIMIT_WITH_STAMP:-0}" = 1 ] && printf '%s' "$maxS"
+      return 2
+    fi
   fi
 
   # Dry: echo the vendor's own reset phrase (captured above from the newest limit
   # line), verbatim — never parsed into a countdown.
   printf '%s' "$reset"
+  [ "${_LIMIT_WITH_STAMP:-0}" = 1 ] && printf '\037%s' "$maxL"
   return 0
 }
 
-# _limit_tank_dry_self <engine> <tank> -> 0 (dry) + echo the verbatim reset phrase
+# _limit_iso_epoch <stamp> <fallback> -> epoch seconds for a transcript's
+# ISO-8601 timestamp (e.g. "2026-08-23T20:26:00.000Z") or a bare epoch already;
+# <fallback> is returned for anything else (an unparseable stamp, or a shape
+# neither GNU nor BSD `date` understands). Shared by the store-observation
+# anchor (_limit_tank_dry_self) and the transcript-recovery-vs-marker compare
+# (R2-P1-3) so both read a codex/claude transcript timestamp the same way.
+_limit_iso_epoch() {
+  local stamp="$1" fallback="$2"
+  case "$stamp" in
+    *T*)
+      stamp="${stamp%%.*}"; stamp="${stamp%Z}"
+      date -u -d "${stamp}Z" +%s 2>/dev/null ||
+        date -u -j -f '%Y-%m-%dT%H:%M:%S' "$stamp" +%s 2>/dev/null ||
+        printf '%s' "$fallback" ;;
+    ''|*[!0-9]*) printf '%s' "$fallback" ;;
+    *) printf '%s' "$stamp" ;;
+  esac
+}
+
+# _limit_tank_dry_raw <engine> <tank> -> 0 + phrase and optional observation stamp
 # if THIS tank's own signal says it's out of fuel; 1 otherwise. Two sources:
-#   • claude  — limit_profile_dry scans the tank's transcripts (account-level
+#   · claude  — limit_profile_dry scans the tank's transcripts (account-level
 #     WITHIN this config dir: all its recent sessions).
-#   • any engine — a persisted dry marker (dry_store), written by the live catcher
+#   · any engine — a persisted dry marker (dry_store), written by the live catcher
 #     (burn / supervise) for engines whose limit never lands in a scannable file.
 # Self-only: factored out so limit_tank_dry's account contagion can't recurse.
-_limit_tank_dry_self() {
-  local engine="$1" tank="$2" dir reset
+_limit_tank_dry_raw() {
+  local engine="$1" tank="$2" dir reset pd_rc
   dir="$(profile_dir "$engine" "$tank")"
-  if [ "$engine" = "claude" ]; then
-    # claude's dry state is its transcript ONLY (scannable + self-clearing on the
-    # next successful turn). We NEVER consult dry_store for claude, so a stale 6h
-    # marker can't mask a real recovery — the store is strictly for engines whose
-    # limit isn't persisted to a transcript (codex).
-    reset="$(limit_profile_dry "$engine" "$dir" 2>/dev/null)" || return 1
-    printf '%s' "$reset"; return 0
+  # A transcript signal is always preferred: it self-clears the moment the account
+  # succeeds again, so it can never claim a tank is dry after it has recovered.
+  # claude and codex both persist their limit (codex's was long believed
+  # exec-stdout-only — see _limit_codex_dry for the evidence that it isn't).
+  if [ "$engine" = "claude" ] || [ "$engine" = "codex" ]; then
+    reset="$(limit_profile_dry "$engine" "$dir" 2>/dev/null)"; pd_rc=$?
+    if [ "$pd_rc" -eq 0 ]; then
+      printf '%s' "$reset"; return 0
+    fi
+    # claude stops here on purpose: NEVER consult dry_store for it, or a stale 6h
+    # marker masks a real recovery. codex falls through — a headless `codex exec`
+    # can hit the limit in a shape the rollout doesn't carry, and burn persists
+    # that; the store has its own TTL.
+    [ "$engine" = "claude" ] && return 1
+    # rc=2 is POSITIVE evidence the account recovered (a real turn after the
+    # limit), not just "this scanner found nothing". R1-P1-2: falling through
+    # to the store here let a real recovery sit next to an unrelated stale
+    # marker (e.g. from an earlier headless run) and the marker would never
+    # clear — the interactive transcript's own success IS the successful turn
+    # dry_store_clear exists for, so use it instead of only relying on burn's
+    # exec-stdout path or the TTL below.
+    #
+    # R2-P1-3: but only when that recovery is NEWER than the marker's own
+    # timestamp. A headless `codex exec` limit never reaches the transcript
+    # (see burn.sh's dry_store_mark call) — "transcript shows a recovery" and
+    # "the marker says dry again" are independent facts, and a recovery from
+    # days ago must not erase a marker burn wrote moments ago. Unconditionally
+    # trusting rc=2 let exactly that happen: the marker's own TTL / the 7-day
+    # CLIKAE_DRY_MAX_RETAIN cap is what should govern instead, so fall through
+    # to the store branch below rather than clearing.
+    if [ "$pd_rc" -eq 2 ]; then
+      local _mk _recovery_epoch
+      _mk="$(dry_store_epoch "$engine" "$tank" 2>/dev/null || echo 0)"
+      if [ -z "$_mk" ] || [ "$_mk" = 0 ]; then
+        dry_store_clear "$engine" "$tank"
+        return 1
+      fi
+      _recovery_epoch="$(_limit_iso_epoch "$reset" 0)"
+      if [ "$_recovery_epoch" -gt "$_mk" ]; then
+        dry_store_clear "$engine" "$tank"
+        return 1
+      fi
+      # else: the marker outdates the observed recovery — fall through, its
+      # own TTL / CLIKAE_DRY_MAX_RETAIN cap governs like any other marker.
+    fi
   fi
-  if reset="$(dry_store_read "$engine" "$tank" 2>/dev/null)"; then
-    printf '%s' "$reset"; return 0
+  if reset="$(dry_store_read "$engine" "$tank" --retain-stale 2>/dev/null)"; then
+    printf '%s\037%s' "$reset" "$(dry_store_epoch "$engine" "$tank")"; return 0
   fi
   return 1
+}
+
+# Classify retained evidence once, for both the batch board and burn selector.
+# Keep the observation timestamp: undated phrases mean the next reset AFTER
+# that observation, not after each redraw (which would roll them forward forever).
+# A successful transcript turn still removes the evidence in the raw scanner.
+LIMIT_RESET_UNVERIFIED='reset passed · unverified'
+_limit_tank_dry_self() {
+  local raw reset stamp now at anchor
+  local _LIMIT_WITH_STAMP=1
+  raw="$(_limit_tank_dry_raw "$1" "$2")" || return 1
+  reset="${raw%%$'\037'*}"; stamp="${raw#*$'\037'}"
+  now="$(date +%s)"; anchor="$now"
+  [ "$stamp" != "$raw" ] && anchor="$(_limit_iso_epoch "$stamp" "$now")"
+  if at="$(limit_reset_epoch "$reset" "$anchor")" && [ "$at" -lt "$now" ]; then
+    printf '%s' "$LIMIT_RESET_UNVERIFIED"
+  else
+    # Preserve the store's existing TTL for evidence whose reset did not expire.
+    case "$stamp" in
+      ''|*[!0-9]*) ;;
+      *) dry_store_read "$1" "$2" >/dev/null || return 1 ;;
+    esac
+    printf '%s' "$reset"
+  fi
 }
 
 # _limit_tank_account <engine> <tank> -> this tank's account label (e.g. the
@@ -248,7 +724,7 @@ _limit_tank_account() {
 #      (empty label) — we never guess a shared quota we can't see.
 limit_tank_dry() {
   local engine="$1" tank="$2" reset acct sib_e sib_t _p sib_acct
-  if reset="$(_limit_tank_dry_self "$engine" "$tank")"; then
+  if reset="$(_limit_tank_dry_self "$engine" "$tank")" && [ "$reset" != "$LIMIT_RESET_UNVERIFIED" ]; then
     printf '%s' "$reset"; return 0
   fi
   acct="$(_limit_tank_account "$engine" "$tank")"
@@ -259,7 +735,7 @@ limit_tank_dry() {
     [ "$sib_t" = "$tank" ] && continue
     sib_acct="$(_limit_tank_account "$sib_e" "$sib_t")"
     [ -n "$sib_acct" ] && [ "$sib_acct" = "$acct" ] || continue
-    if reset="$(_limit_tank_dry_self "$sib_e" "$sib_t")"; then
+    if reset="$(_limit_tank_dry_self "$sib_e" "$sib_t")" && [ "$reset" != "$LIMIT_RESET_UNVERIFIED" ]; then
       printf '%s' "$reset"; return 0
     fi
   done <<EOF
@@ -271,13 +747,15 @@ EOF
 # limit_dry_set — the BATCH form of limit_tank_dry for the whole board. Reads a
 # profile list (engine<TAB>tank<TAB>path per line) on stdin and emits one row
 #   engine␟tank␟reset
-# per tank that is out of fuel. Same verdict as calling limit_tank_dry on each
+# per tank that is out of fuel (--include-unverified also emits reset cautions).
+# Same verdict as calling limit_tank_dry on each
 # tank, but it computes each tank's OWN signal (_limit_tank_dry_self) EXACTLY ONCE
 # and then resolves account contagion from that cache — so a board with several
 # same-account tanks (e.g. claude C+MFC) doesn't re-scan the same transcripts N
 # times (the board's last hot spot; dogfood 2026-06-29). Indexed arrays only (no
 # associative arrays — bash 3.2).
 limit_dry_set() {
+  local include_unverified="${1:-}"
   local -a _e=() _t=() _a=() _sd=() _sr=()   # engine, tank, account, self-dry(0/1), self-reset
   local cli profile path sreset
   # Pass 1 — each tank's OWN signal + account, computed ONCE.
@@ -297,19 +775,22 @@ limit_dry_set() {
   # (contagion). A sibling hit counts even when its reset phrase is empty.
   local i j n="${#_e[@]}" hit reset
   for ((i = 0; i < n; i++)); do
-    if [ "${_sd[i]}" = "1" ]; then
+    if [ "${_sd[i]}" = "1" ] && [ "${_sr[i]}" != "$LIMIT_RESET_UNVERIFIED" ]; then
       printf '%s\037%s\037%s\n' "${_e[i]}" "${_t[i]}" "${_sr[i]}"
       continue
     fi
-    [ -n "${_a[i]}" ] || continue   # unknown account → never guess a shared quota
-    hit=0; reset=""
-    for ((j = 0; j < n; j++)); do
-      [ "$j" -ne "$i" ] || continue
-      [ "${_sd[j]}" = "1" ] || continue
-      [ "${_e[j]}" = "${_e[i]}" ] || continue
-      [ "${_a[j]}" = "${_a[i]}" ] || continue
-      hit=1; reset="${_sr[j]}"; break
-    done
+    hit="${_sd[i]}"; reset="${_sr[i]}"
+    if [ -n "${_a[i]}" ]; then   # unknown account -> never guess a shared quota
+      for ((j = 0; j < n; j++)); do
+        [ "$j" -ne "$i" ] || continue
+        [ "${_sd[j]}" = "1" ] || continue
+        [ "${_e[j]}" = "${_e[i]}" ] || continue
+        [ "${_a[j]}" = "${_a[i]}" ] || continue
+        hit=1; reset="${_sr[j]}"
+        [ "$reset" = "$LIMIT_RESET_UNVERIFIED" ] || break
+      done
+    fi
+    if [ "$reset" = "$LIMIT_RESET_UNVERIFIED" ] && [ "$include_unverified" != --include-unverified ]; then continue; fi
     [ "$hit" = "1" ] && printf '%s\037%s\037%s\n' "${_e[i]}" "${_t[i]}" "$reset"
   done
   return 0
@@ -328,10 +809,30 @@ limit_dry_set() {
 # per-run file each invocation — so its content IS the latest run's state. A
 # marker present = the most recent run hit the limit; it self-clears when the next
 # run rotates in a clean log (no timezone math, same spirit as limit_profile_dry).
+# RESOURCE_EXHAUSTED alone is NOT a quota verdict. Three variants were pulled out
+# of real logs on 2026-08-11, and only two of them mean the tank is spent:
+#   E … stream_handler: RESOURCE_EXHAUSTED (429): Individual quota reached. …
+#   E … stream_handler: RESOURCE_EXHAUSTED (429): You have exhausted your capacity
+#                                                 on this model. …
+#   W … Cache(userInfo): Singleflight refresh failed: RESOURCE_EXHAUSTED (429):
+#       Resource has been exhausted (e.g. check quota).      <- a cache refresh
+# The third is a warning from an unrelated background fetch; matching the bare
+# token turned it into "this tank ran dry" and sent burn off to reroute. Match the
+# vendor's quota sentences instead of the error class.
+LIMIT_AGY_DRY_RE='Individual quota reached|exhausted your capacity on this model'
+
 limit_log_dry() {
+  if declare -F reading_cache_run >/dev/null; then
+    reading_cache_run agy-usage "$1" _limit_log_dry_uncached "$@"
+  else
+    _limit_log_dry_uncached "$@"
+  fi
+}
+
+_limit_log_dry_uncached() {
   local logf="$1"
   [ -n "$logf" ] && [ -e "$logf" ] || return 1
-  grep -qaE 'RESOURCE_EXHAUSTED|Individual quota reached' "$logf" 2>/dev/null || return 1
+  grep -qaE "$LIMIT_AGY_DRY_RE" "$logf" 2>/dev/null || return 1
   # Echo the vendor's own reset phrase verbatim (never a computed countdown); the
   # LAST occurrence is this run's most recent limit line. Guard the no-match so it
   # never aborts the caller under `set -eo pipefail`.
@@ -367,4 +868,1160 @@ limit_weekly_marker() {
   printf '%s\n' "$1" \
     | grep -oiE "[0-9]+% of your (weekly|week)[a-z ]*limit" 2>/dev/null \
     | head -n 1 || true
+}
+
+# ---------------------------------------------------------------------------
+# Turning the vendor's reset phrase into an instant.
+#
+# Everywhere above, a reset phrase is RELAYED verbatim and never parsed — the
+# honest thing to show a human. This section is for the one caller that needs a
+# number instead of a sentence: waking a limited tank up when the limit lifts.
+# It stays separate, and it stays a pure function, so the display path cannot
+# start depending on a computation that might be wrong.
+#
+# Two grammars, and that is all there is — measured against 262 genuine limit
+# events across five accounts on 2026-08-12, of which 262 carried a phrase:
+#     resets 3:50am (Asia/Tokyo)          undated: the NEXT such time
+#     resets Jul 27 at 5am (Asia/Tokyo)   dated, with no year
+# 🔴 The grammar does NOT follow the limit type: a weekly limit was seen in both
+# forms, so branching on "session vs weekly" would be wrong.
+#
+# `now` is a PARAMETER, never read from the clock in here. The thing this feeds
+# fires once every several hours, so a version that consults the real clock is a
+# version nobody can test — and an untested waiter is worse than none.
+
+# _limit_date_kind -> gnu | bsd  (cached; `date -d` is GNU-only)
+_LIMIT_DATE_KIND=""
+_limit_date_kind() {
+  if [ -z "$_LIMIT_DATE_KIND" ]; then
+    if date -d @0 +%s >/dev/null 2>&1; then _LIMIT_DATE_KIND=gnu; else _LIMIT_DATE_KIND=bsd; fi
+  fi
+  printf '%s' "$_LIMIT_DATE_KIND"
+}
+
+# _limit_local <tz> <epoch> <fmt> -> that instant rendered in that zone
+_limit_local() {
+  if [ "$(_limit_date_kind)" = gnu ]; then TZ="$1" date -d "@$2" "+$3" 2>/dev/null
+  else TZ="$1" date -r "$2" "+$3" 2>/dev/null; fi
+}
+
+# _limit_at <tz> <YYYY-MM-DD> <HH:MM> -> epoch, or nothing if that date is not real.
+#
+# The platforms disagree here and only one of them says so: GNU `date -d` rejects
+# 2027-02-29, while BSD `date -j -f` SILENTLY normalises it to 2027-03-01 and
+# exits 0 (probed 2026-08-12). Year inference below tries candidate years, so on
+# macOS a bad candidate would quietly become a real — and wrong — answer. We read
+# the date back out and require it to be the date we asked for; that check costs
+# one fork and makes both platforms behave the same way.
+#
+# Seconds are spelled out for the same family of reason: BSD `date -j -f` fills
+# any field the format does not mention from the CURRENT time, so a '%H:%M'
+# format yields a different epoch every second it is called. Pinning ':00' makes
+# the function deterministic — which is the whole point of taking `now` as an
+# argument in the first place.
+_limit_at() {
+  local tz="$1" d="$2" hm="$3" ep hh
+  if ep="$(_limit_at_exact "$tz" "$d" "$hm")"; then printf '%s' "$ep"; return 0; fi
+  # The wall-clock time does not exist on that date in that zone — the hour a
+  # spring-forward deletes. There is no right answer, only a consistent one, and
+  # the platforms disagree about it on their own: BSD hands back the same instant
+  # an hour later, GNU refuses. Both are made to agree by asking for that hour
+  # explicitly. (An hour is the size of every DST jump in the tz database.)
+  hh="${hm%%:*}"
+  [ "$((10#$hh))" -lt 23 ] || return 1
+  hm="$(printf '%02d:%s' "$(( 10#$hh + 1 ))" "${hm##*:}")"
+  _limit_at_exact "$tz" "$d" "$hm"
+}
+
+# _limit_at_exact — resolve, then require the calendar to read back EXACTLY what
+# was asked for. Both halves of that read-back earn their keep:
+#   the date  — BSD turns 2027-02-29 into 2027-03-01 and exits 0 where GNU
+#               refuses, so year inference could pick an impossible date and
+#               look confident about it.
+#   the time  — a wall-clock time inside a DST gap comes back as a DIFFERENT
+#               time, which is the only portable way to notice it happened.
+#
+# ⚠️ The TIME half cannot be verified on macOS: BSD's own answer for a gap time is
+# already the instant the fall-forward would produce, so deleting this check
+# leaves the suite green here and only goes red on Linux. CI is the ruler for
+# that one — do not read a local green as coverage of it.
+_limit_at_exact() {
+  local tz="$1" d="$2" hm="$3" ep back
+  if [ "$(_limit_date_kind)" = gnu ]; then ep="$(TZ="$tz" date -d "$d $hm:00" +%s 2>/dev/null)"
+  else ep="$(TZ="$tz" date -j -f '%Y-%m-%d %H:%M:%S' "$d $hm:00" +%s 2>/dev/null)"; fi
+  [ -n "$ep" ] || return 1
+  back="$(_limit_local "$tz" "$ep" '%Y-%m-%d %H:%M')"
+  [ "$back" = "$d $hm" ] || return 1
+  printf '%s' "$ep"
+}
+
+# _limit_shift_day <tz> <YYYY-MM-DD> <+n> -> YYYY-MM-DD
+_limit_shift_day() {
+  if [ "$(_limit_date_kind)" = gnu ]; then TZ="$1" date -d "$2 + $3 day" '+%Y-%m-%d' 2>/dev/null
+  else TZ="$1" date -j -v"+${3}d" -f '%Y-%m-%d' "$2" '+%Y-%m-%d' 2>/dev/null; fi
+}
+
+# _limit_month_num <Jan..Dec> -> 01..12 (empty if not a month)
+_limit_month_num() {
+  case "$(printf '%s' "$1" | tr '[:upper:]' '[:lower:]')" in
+    jan) printf '01' ;; feb) printf '02' ;; mar) printf '03' ;; apr) printf '04' ;;
+    may) printf '05' ;; jun) printf '06' ;; jul) printf '07' ;; aug) printf '08' ;;
+    sep) printf '09' ;; oct) printf '10' ;; nov) printf '11' ;; dec) printf '12' ;;
+  esac
+}
+
+# LIMIT_RESET_PAST_GRACE — how far BEHIND the reference instant a parsed
+# wall-clock reset may sit and still mean "that already happened", instead of
+# being read as tomorrow's.
+#
+# 🔴 THE BUG THIS EXISTS FOR. An undated phrase names a time of day, not a date,
+# so "resets 8:20pm" read at 21:00 used to resolve to 8:20pm TOMORROW — the only
+# reading available without a rule like this one. For the board that is merely
+# ugly; for `clikae wake` it was the difference between a nudge and a 23-hour
+# sleep. A watcher that first notices a limit AFTER its stated reset (it polls
+# once a minute, and the machine may have been asleep) handed the waiter an
+# instant a day out, and the session sat there. Measured: a phrase 40 minutes
+# past resolved 1400 minutes into the future.
+#
+# 🔴 STRICTLY in the past: a tie is NOT covered. A phrase is written at the
+# instant the limit fires, so "resets 3:50am" arriving AT 3:50am cannot mean
+# "already open" — it names the next occurrence. That was already the rule and
+# it is still pinned by tests/bats/limit-reset.bats ("now EXACTLY on the stated
+# minute rolls forward"), which is what caught this grace swallowing it. The tie
+# is the dangerous input here for the ordinary reason: the observation-anchored
+# callers (_limit_tank_dry_self passes the limit's own timestamp) sit exactly on
+# it, while the grace is aimed at the now-anchored ones.
+#
+# 6h, and the number is derived rather than picked. A limit any caller here can
+# be holding is at most ~5h old by construction: limit_profile_dry only scans
+# transcripts touched in the last 300 minutes, and the vendor's own session
+# window is 5h, so a stated reset further behind the reference than that cannot
+# belong to the limit in hand — it is a genuine tomorrow phrase being read on
+# the wrong side of midnight. The extra hour is slack for clock skew and for the
+# gap between a transcript's mtime and the instant the phrase itself names.
+LIMIT_RESET_PAST_GRACE=21600
+
+# limit_reset_epoch <phrase> <now_epoch> -> 0 + echo the epoch of the reset, or
+# 1 and NOTHING when the phrase carries no reset this function understands.
+#
+# Failing loudly matters: a caller that gets a silent 0 would schedule a wake-up
+# for 1970 and fire immediately. There is no fallback guess here on purpose — an
+# unparsed phrase means "don't schedule anything", which is the safe answer.
+#
+# 🔴 A RESET THAT HAS ALREADY PASSED IS ANSWERED WITH THE PAST INSTANT, and this
+# function stays a pure parser: it reports when the vendor said the reset was,
+# never what anybody should do about it. Callers already handle a past answer —
+# wake_sit's target becomes reset+buffer, which is behind them, so it goes
+# straight to its recovered?/live?/settle/type path, and _burn_wait_for_reset
+# floors a negative remainder at zero.
+#
+# The first draft of this returned <now_epoch> instead, to keep
+# _limit_tank_dry_self's `at < now` test from downgrading the tank to "reset
+# passed · unverified". That was wrong twice over and a test caught it: for
+# claude the anchor is the LIMIT'S OWN timestamp (limit_profile_dry hands the
+# stamp back), so `at` is behind `now` whatever this returns, and the one probe
+# that seemed to show otherwise had simply run inside the same second. The
+# downgrade is also the correct reading — a reset that has passed with no
+# successful turn since is exactly "unverified". What needed fixing was the
+# WATCHER, which now acts on that verdict rather than only on "still dry"; see
+# wake_watch in lib/core/wake.sh.
+limit_reset_epoch() {
+  local phrase="$1" now="$2"
+  [ -n "$phrase" ] && [ -n "$now" ] || return 1
+
+  # The zone is written in the phrase and is authoritative. Reading $TZ instead
+  # would agree with it on the maintainer's machine and disagree on a traveller's.
+  # Extracted once up top because BOTH grammars below (codex's and claude's)
+  # need it: a zone suffix, when present, wins over any fallback.
+  local tz
+  tz="$(printf '%s' "$phrase" | sed -nE 's/.*\(([A-Za-z_]+\/[A-Za-z_+-]+|UTC|GMT)\).*/\1/p')"
+
+  # Codex's two known reset shapes (undated "H:MM AM/PM" and dated "Mon Dst,
+  # YYYY H:MM AM/PM"; see limit_codex_reset). Neither is confirmed to ever carry
+  # a zone suffix — codex has so far only been observed rendering in the
+  # machine's OWN local timezone — but if the phrase names one anyway, R1-P1-1
+  # says that MUST win for the same reason it wins below: agreeing with the
+  # phrase on the maintainer's machine and disagreeing on a traveller's is
+  # exactly the bug a zone suffix exists to prevent. Only fall back to the
+  # observer's ambient zone when the phrase names none.
+  local codex_zone="${tz:-${TZ:-/etc/localtime}}"
+  local codex_dated_re='[Tt]ry again at ([A-Z][a-z][a-z]) ([0-9]{1,2})(st|nd|rd|th)?,? ([0-9]{4})[,]? ([0-9]{1,2}):([0-9]{2})[[:space:]]*([APap][Mm])'
+  local codex_plain_re='[Tt]ry again at ([0-9]{1,2}):([0-9]{2})[[:space:]]*([APap][Mm])'
+  if [[ "$phrase" =~ $codex_dated_re ]]; then
+    local cmon="${BASH_REMATCH[1]}" cday="${BASH_REMATCH[2]}" cyr="${BASH_REMATCH[4]}" \
+          ch="${BASH_REMATCH[5]}" cm="${BASH_REMATCH[6]}" meridian="${BASH_REMATCH[7]}"
+    local mnum; mnum="$(_limit_month_num "$cmon")"
+    [ -n "$mnum" ] && [ "$ch" -ge 1 ] && [ "$ch" -le 12 ] && [ "$((10#$cm))" -lt 60 ] || return 1
+    ch=$((10#$ch % 12))
+    case "$meridian" in PM|pm) ch=$((ch + 12)) ;; esac
+    local d0 ct candidate
+    d0="$(printf '%04d-%s-%02d' "$((10#$cyr))" "$mnum" "$((10#$cday))")"
+    ct="$(printf '%02d:%02d' "$ch" "$((10#$cm))")"
+    candidate="$(_limit_at "$codex_zone" "$d0" "$ct")" || return 1
+    printf '%s' "$candidate"; return 0
+  fi
+  if [[ "$phrase" =~ $codex_plain_re ]]; then
+    local ch="${BASH_REMATCH[1]}" cm="${BASH_REMATCH[2]}" meridian="${BASH_REMATCH[3]}" cd ct candidate
+    [ "$ch" -ge 1 ] && [ "$ch" -le 12 ] && [ "$((10#$cm))" -lt 60 ] || return 1
+    ch=$((10#$ch % 12))
+    case "$meridian" in PM|pm) ch=$((ch + 12)) ;; esac
+    ct="$(printf '%02d:%02d' "$ch" "$((10#$cm))")"
+    cd="$(_limit_local "$codex_zone" "$now" '%Y-%m-%d')" || return 1
+    candidate="$(_limit_at "$codex_zone" "$cd" "$ct")" || return 1
+    if [ "$candidate" -le "$now" ]; then
+      # Recently past = already happened (see LIMIT_RESET_PAST_GRACE). Codex is
+      # anchored on the limit's OWN timestamp by _limit_tank_dry_self, so "the
+      # reference instant" here is usually the moment of the limit, not today —
+      # and answering with it keeps a days-old codex outage reading as passed
+      # rather than as something due again this evening.
+      if [ "$(( now - candidate ))" -gt 0 ] && \
+         [ "$(( now - candidate ))" -le "$LIMIT_RESET_PAST_GRACE" ]; then
+        printf '%s' "$candidate"; return 0
+      fi
+      cd="$(_limit_shift_day "$codex_zone" "$cd" 1)" || return 1
+      candidate="$(_limit_at "$codex_zone" "$cd" "$ct")" || return 1
+    fi
+    printf '%s' "$candidate"; return 0
+  fi
+
+  [ -n "$tz" ] || return 1
+
+  local re_dated='[Rr]esets[[:space:]]+([A-Z][a-z][a-z])[[:space:]]+([0-9]{1,2})[[:space:]]+at[[:space:]]+([0-9]{1,2})(:([0-9]{2}))?(am|pm|AM|PM)'
+  local re_plain='[Rr]esets[[:space:]]+([0-9]{1,2})(:([0-9]{2}))?(am|pm|AM|PM)'
+
+  local mon="" day="" hr="" min="" mer=""
+  if [[ "$phrase" =~ $re_dated ]]; then
+    mon="${BASH_REMATCH[1]}"; day="${BASH_REMATCH[2]}"
+    hr="${BASH_REMATCH[3]}";  min="${BASH_REMATCH[5]}"; mer="${BASH_REMATCH[6]}"
+  elif [[ "$phrase" =~ $re_plain ]]; then
+    hr="${BASH_REMATCH[1]}";  min="${BASH_REMATCH[3]}"; mer="${BASH_REMATCH[4]}"
+  else
+    return 1
+  fi
+  [ -n "$hr" ] || return 1
+  [ -n "$min" ] || min="00"
+
+  # 12-hour -> 24-hour. 12am is 00, 12pm is 12; the modulo does both.
+  local h24=$(( 10#$hr % 12 ))
+  case "$mer" in pm|PM) h24=$(( h24 + 12 )) ;; esac
+  [ "$h24" -ge 0 ] && [ "$h24" -le 23 ] || return 1
+  local hm; hm="$(printf '%02d:%02d' "$h24" "$((10#$min))")"
+
+  local today cand
+  today="$(_limit_local "$tz" "$now" '%Y-%m-%d')"
+  [ -n "$today" ] || return 1
+
+  if [ -n "$mon" ]; then
+    # Dated, no year. Try this year, then next, then last, and take the first
+    # candidate that is not already well in the past — the same rule a human
+    # applies reading "Jul 27" on a December screen.
+    local mnum yr y d0
+    mnum="$(_limit_month_num "$mon")"; [ -n "$mnum" ] || return 1
+    yr="$(_limit_local "$tz" "$now" '%Y')"
+    for y in "$yr" "$((yr + 1))" "$((yr - 1))"; do
+      d0="$(printf '%04d-%s-%02d' "$y" "$mnum" "$((10#$day))")"
+      cand="$(_limit_at "$tz" "$d0" "$hm")" || continue
+      [ "$cand" -ge "$((now - 86400))" ] && { printf '%s' "$cand"; return 0; }
+    done
+    return 1
+  fi
+
+  # Undated: TODAY's occurrence of that wall-clock time if it is still ahead or
+  # only just behind us, otherwise tomorrow's. Adding 86400 for "tomorrow" would
+  # be wrong across a DST boundary, so we ask the calendar for tomorrow's date
+  # and resolve the wall-clock time on THAT day instead.
+  cand="$(_limit_at "$tz" "$today" "$hm")" || return 1
+  if [ "$cand" -le "$now" ]; then
+    # Within the grace, this is the reset we are holding and it has passed. Only
+    # a phrase further behind than any live limit could be is tomorrow's — see
+    # LIMIT_RESET_PAST_GRACE for why the boundary is where it is.
+    if [ "$(( now - cand ))" -gt 0 ] && \
+       [ "$(( now - cand ))" -le "$LIMIT_RESET_PAST_GRACE" ]; then
+      printf '%s' "$cand"
+      return 0
+    fi
+    local tmr
+    tmr="$(_limit_shift_day "$tz" "$today" 1)" || return 1
+    [ -n "$tmr" ] || return 1
+    cand="$(_limit_at "$tz" "$tmr" "$hm")" || return 1
+  fi
+  printf '%s' "$cand"
+  return 0
+}
+
+# limit_reset_phrase <line> -> the vendor's "resets …" phrase carried by a
+# transcript line, or nothing. The counterpart to limit_reset_epoch: that one
+# turns a phrase into an instant, this one finds the phrase in the wild. Split
+# so the parser can be tested on phrases without a transcript in sight.
+limit_reset_phrase() {
+  printf '%s' "$1" | grep -oaiE '[Rr]esets [^"\\]*' | head -n 1 \
+    | sed -E 's/[[:space:]]+$//' || true
+}
+
+# ---------------------------------------------------------------------------
+# codex's OWN proactive usage status — the 5h/weekly windows it renders
+# itself (its `/status` panel shows e.g. "5h limit:  [████] 100% left
+# (resets 05:14)" and "Weekly limit: [████] 95% left (resets 22:12 on 15
+# Sep)"). Unlike everything above (which only ever fires once a tank has
+# ALREADY run dry), this is a proactive reading: codex reports the SAME two
+# numbers (% left, reset time) whether the tank is healthy or not, and
+# clikae had no light for it at all — `clikae burn codex … --json` always
+# printed `"reset": null` on a run that never hit a hard limit, even though
+# codex knew perfectly well when the window resets.
+#
+# Source: codex's own `rate_limits` object, persisted into the rollout
+# transcript (see docs/DESIGN-board-fuel-dots.md). Every codex session —
+# headless `codex exec` included, confirmed on this machine's own rollouts
+# (originator "codex_exec") — persists a `token_count` event whose
+# `rate_limits.primary`/`.secondary` carry a `used_percent` and an ABSOLUTE
+# `resets_at` epoch, both already resolved by the SERVER (no local-time
+# guessing at all — clikae only relays them). `limit_codex_status` /
+# `limit_codex_status_cached` are the two entry points; see the header above
+# each for which callers want which.
+#
+# (Round-1 review, 2026-09-12: an earlier revision of this file also shipped
+# a text-shape parser for the RENDERED status line, for a captured line where
+# the structured source doesn't reach. It had no real caller anywhere in
+# lib/bin/scripts — only its own tests exercised it — so it was deleted
+# rather than kept as permanently-untested dead code. If a real caller shows
+# up (a burn-log scraper, a `$CLIKAE_LIMIT_PATTERN`-style paste path), it can
+# be rebuilt against this same contract.)
+#
+# 🔴 Do NOT assume primary=5h / secondary=weekly BY POSITION. A real
+# free-tier sample on this machine (2026-09-10) showed `limit_id:"codex"`
+# with a `window_minutes:43200` (30 days) rider living in `primary` and
+# `secondary` always null — nothing like the 5h/weekly split the ticket's
+# `/status` example came from (a different plan tier). Position is not the
+# contract; `window_minutes` is — each side is labelled by ITS OWN window
+# length (_limit_codex_window_label), never by which JSON key it arrived in.
+#
+# 🔴 TIME VALIDITY (P1-1, 2026-09-12 round-1 review). `resets_at` is an
+# ABSOLUTE epoch the server computed at the moment it wrote that event — it
+# does not update itself afterwards. Once `now` passes it, the window has
+# REFILLED server-side and the `used_percent` sitting next to it is a stale
+# reading of a quota that no longer exists. A tank that burned to 100% at
+# 08:00 and reset at 12:00 must NOT still show red/"0% left" at 16:00 just
+# because that is the newest `token_count` event on disk — it must show
+# green/"100% left", the honest current state. _limit_codex_window_expired
+# is the single place that decides "is this side's number still current",
+# with a 60s tolerance for ordinary clock skew between this machine and the
+# server (the same tolerance _limit_codex_render_reset's own short/dated
+# split already used, now factored into one function both call).
+#
+# Percent LEFT is the canonical unit here (matching the vendor's own "N%
+# left" wording); `used_percent` is converted once, at the boundary
+# (_limit_codex_left).
+
+# _limit_codex_local — the SAME date arithmetic as _limit_local above, but
+# never force a TZ override. claude's phrases always carry an explicit zone
+# to resolve against; codex's status/rate_limits carry none, because codex
+# always renders/resolves in the machine's own local wall-clock — this reads
+# that ambient zone (whatever $TZ/the system already resolves to) instead of
+# one named in the text. Kept as a separate function, not a `tz=""` branch
+# bolted onto the claude one, so the claude path stays byte-for-byte what it
+# was — nothing here can regress it by accident.
+_limit_codex_local() {
+  local ep="$1" fmt="$2"
+  if [ "$(_limit_date_kind)" = gnu ]; then date -d "@$ep" "+$fmt" 2>/dev/null
+  else date -r "$ep" "+$fmt" 2>/dev/null; fi
+}
+
+# _limit_month_abbr <01..12> -> Jan..Dec (the reverse of _limit_month_num).
+_limit_month_abbr() {
+  case "$1" in
+    01) printf 'Jan' ;; 02) printf 'Feb' ;; 03) printf 'Mar' ;; 04) printf 'Apr' ;;
+    05) printf 'May' ;; 06) printf 'Jun' ;; 07) printf 'Jul' ;; 08) printf 'Aug' ;;
+    09) printf 'Sep' ;; 10) printf 'Oct' ;; 11) printf 'Nov' ;; 12) printf 'Dec' ;;
+  esac
+}
+
+# _limit_codex_window_expired <resets_at_epoch> <now> -> 0 if that window's
+# own reset instant is already more than 60s behind `now` (P1-1: the window
+# has REFILLED server-side and its `used_percent` no longer applies), 1
+# otherwise (still ahead of `now`, within the 60s clock-skew tolerance, or
+# not a number clikae can judge at all — never guess expiry on bad input).
+# The 60s tolerance matches ordinary clock skew between this machine and
+# codex's server, not a display choice — see the P1-1 note above.
+_limit_codex_window_expired() {
+  local ep="$1" now="$2"
+  case "$ep" in ''|*[!0-9]*) return 1 ;; esac
+  case "$now" in ''|*[!0-9]*) return 1 ;; esac
+  [ "$((ep - now))" -lt -60 ]
+}
+
+# _limit_codex_render_reset <resets_at_epoch> <now> -> codex's own phrase
+# grammar rendered FROM an absolute epoch — local time, short form ("resets
+# HH:MM") when the reset lands within the next ~20h (the shape codex's own
+# 5h-window line always takes, since that window can never be more than 5h
+# out), dated form otherwise (the shape its weekly/longer windows take once
+# the reset is more than a day away).
+#
+# P1-1: an `ep` more than 60s behind `now` is EXPIRED (_limit_codex_window_expired)
+# and this returns 1 + nothing for it, full stop — it is never handed to the
+# dated branch below. Before this fix, a past `ep` fell through the old
+# short-form window check into the dated `else` and was rendered as if it
+# were a future date ("resets 14:20 on 10 Sep" printed at 16:40 on 10 Sep,
+# two hours after that exact instant already passed) — the vendor never
+# renders a reset that has already happened, so clikae must not either.
+#
+# P3-3 (2026-09-12 round-1 review, decided not to change): the dated form
+# has no year, matching codex's OWN grammar exactly — codex's `/status`
+# never shows one either. That is only unambiguous because `ep` here is
+# always `resets_at` from a live `rate_limits` reading, which is bounded by
+# that window's own length — the longest observed in practice is a 30-day
+# window (see the 🔴 free-tier note above), so `ep` is never more than a
+# few weeks past `now` and "D Mon" alone always reads as the next such date.
+# A synthetic epoch far beyond that (a test fixture landing in the year
+# 2100, say) would print a year-less date that LOOKS like next month rather
+# than 74 years out — but no real `resets_at` can ever be that far away, so
+# this is a property of test fixtures, not a reachable production bug.
+_limit_codex_render_reset() {
+  local ep="$1" now="$2" hm mon day
+  [ -n "$ep" ] && [ -n "$now" ] || return 1
+  case "$ep" in ''|*[!0-9]*) return 1 ;; esac
+  _limit_codex_window_expired "$ep" "$now" && return 1
+  hm="$(_limit_codex_local "$ep" '%H:%M')"
+  [ -n "$hm" ] || return 1
+  if [ $(( ep - now )) -lt 72000 ]; then
+    printf 'resets %s' "$hm"
+    return 0
+  fi
+  mon="$(_limit_codex_local "$ep" '%m')"
+  day="$(_limit_codex_local "$ep" '%d')"
+  [ -n "$mon" ] && [ -n "$day" ] || return 1
+  printf 'resets %s on %d %s' "$hm" "$((10#$day))" "$(_limit_month_abbr "$mon")"
+}
+
+# _limit_codex_left <used_percent> -> percent LEFT (100 - used), or 1 +
+# nothing when <used_percent> is empty/not a number. The one place a
+# structured-source used_percent (e.g. "99.0") is converted to the same
+# "% left" unit the vendor's own text uses everywhere else here.
+#
+# P3-1 (2026-09-12 round-1 review): a bare truncation of the decimal part
+# (`${1%%.*}`) rounds towards ZERO USED — i.e. optimistic on the thing that
+# decides red/yellow/green. "99.5" truncated to "99" reads 1% left (yellow),
+# never red, until the vendor's own number hits exactly "100.0". When the
+# reading decides whether a tank looks safe to burn, the conservative
+# direction is to round USED up (ceiling) — any non-zero fractional part
+# bumps used to the next whole percent, so "99.5" reads 0% left (red) same
+# as "100.0" does, and only a used_percent that is a clean whole number (or
+# whose fraction is all zeros, "40.00") keeps its own truncated value.
+_limit_codex_left() {
+  local raw="$1" ip dp u
+  case "$raw" in ''|*[!0-9.]*) return 1 ;; esac
+  case "$raw" in
+    *.*)
+      ip="${raw%%.*}"; dp="${raw#*.}"
+      case "$ip" in ''|*[!0-9]*) return 1 ;; esac
+      case "$dp" in *[!0-9]*) return 1 ;; esac
+      case "$dp" in *[!0]*) u=$((10#$ip + 1)) ;; *) u=$((10#$ip)) ;; esac
+      ;;
+    *)
+      case "$raw" in ''|*[!0-9]*) return 1 ;; esac
+      u=$((10#$raw)) ;;
+  esac
+  [ "$u" -le 100 ] || u=100
+  printf '%d' "$((100 - u))"
+}
+
+# _limit_codex_pct_light <pct_left> -> red|yellow|green, or 1 + nothing when
+# <pct_left> is empty/not a number — an unknown reading is never a guessed
+# colour. Thresholds: 0% left is red (the same "can't burn now" meaning as
+# every other red dot on the board); under 15% left is yellow (a caution,
+# same spirit as claude's weekly-warn BETA); anything else is green.
+_limit_codex_pct_light() {
+  local left="$1"
+  case "$left" in ''|*[!0-9]*) return 1 ;; esac
+  if   [ "$left" -le 0 ];  then printf 'red'
+  elif [ "$left" -lt 15 ]; then printf 'yellow'
+  else printf 'green'; fi
+}
+
+# limit_codex_status_light <primary_used_percent> <secondary_used_percent>
+# -> red|yellow|green, or 1 + nothing when BOTH are empty. "Light = the
+# tighter one": whichever window is CLOSER to being exhausted decides the
+# colour — a tank at "5h: 90% left, weekly: 2% left" must show red, because
+# the weekly window is the one about to actually stop you.
+limit_codex_status_light() {
+  local pu="$1" su="$2" l worst="" got=0
+  if l="$(_limit_codex_left "$pu" 2>/dev/null)"; then
+    got=1; { [ -z "$worst" ] || [ "$l" -lt "$worst" ]; } && worst="$l"
+  fi
+  if l="$(_limit_codex_left "$su" 2>/dev/null)"; then
+    got=1; { [ -z "$worst" ] || [ "$l" -lt "$worst" ]; } && worst="$l"
+  fi
+  [ "$got" -eq 1 ] || return 1
+  _limit_codex_pct_light "$worst"
+}
+
+# _limit_codex_window_label <window_minutes> -> "5h" | "weekly" | "<N>d" |
+# "usage" (empty/unrecognised window). Labels by the window's OWN length,
+# never by which JSON key (primary/secondary) it arrived in — see the
+# 🔴 note at the top of this section for why position is not trustworthy.
+#
+# P3-2 (2026-09-12 round-1 review): the old upper bound for "weekly" was
+# 20160 minutes (14 DAYS), not codex's actual 7-day/10080-minute weekly
+# window — so a genuine 8..14-day window would have been mislabelled
+# "weekly" too. Tightened to the real boundary; anything longer falls
+# through to the "<N>d" form instead of a wrong, more specific-sounding name.
+_limit_codex_window_label() {
+  local win="$1"
+  case "$win" in ''|*[!0-9]*) printf 'usage'; return ;; esac
+  if   [ "$win" -le 360 ];   then printf '5h'
+  elif [ "$win" -le 10080 ]; then printf 'weekly'
+  else printf '%dd' "$((win / 1440))"; fi
+}
+
+# _limit_codex_rate_limits <config_dir> -> "<p_used>\037<p_window_min>\037
+# <p_resets_at>\037<s_used>\037<s_window_min>\037<s_resets_at>\037<event_ts>",
+# from the NEWEST `token_count` event (by its own timestamp) across this
+# tank's rollouts that carries a non-null primary or secondary — or 1 +
+# nothing if none ever did. Every field but the last is the VENDOR's own
+# number (percent and an ABSOLUTE epoch the server computed), never
+# something clikae derives — same "relay, don't guess" rule as every other
+# reset in this file. <event_ts> (P2-4, round-1 review) is that winning
+# event's OWN timestamp — when codex itself wrote this reading, not when
+# clikae happened to read it — so a caller (adapter_usage) can cache it
+# honestly instead of stamping a week-old rollout "just now".
+#
+# P1-2 (2026-09-12 round-1 review): this used to read `transcript_tail`'s
+# fixed 512 KiB window — fine for a small rollout, but a codex session
+# commonly exceeds 1 MB, and the moment >512 KiB of tool output lands AFTER
+# the last `token_count` event, that event falls entirely outside the tail
+# and a strictly OLDER (possibly already-expired) event from another file
+# silently wins the `maxT` comparison instead — a false reading with no
+# error anywhere. `transcript_tail_scan` (lib/core/profile_store.sh) grows
+# the tail window until it actually contains a `token_count` line (or has
+# read the whole file), so the newest one is never dropped just because
+# something large was appended after it.
+# _limit_codex_rate_limits_from_files <file>... -> "<pu>\037<pw>\037<pr>\037
+# <su>\037<sw>\037<sr>\037<ts>" from the NEWEST `token_count` event (by its
+# own timestamp) across the GIVEN files that carries a non-null primary or
+# secondary, or 1 + nothing if none ever did. The shared scan+awk core: both
+# `_limit_codex_rate_limits` (every rollout in the store, uncached — one call
+# per burn) and `_limit_codex_rate_limits_1file` (a SINGLE rollout, cached
+# per file — see P2-2 below) build on this; only the file LIST differs. `ts`
+# (the winning event's own timestamp) rides along as a 7th field so a caller
+# combining several already-scanned files (the per-file cache) can pick the
+# newest across them without re-parsing anything.
+_limit_codex_rate_limits_from_files() {
+  local out
+  out="$(for f in "$@"; do
+      [ -n "$f" ] && transcript_tail_scan "$f" '"type": *"token_count"'
+    done | awk '
+      function ts(s,   t) {
+        if (match(s, /"timestamp": *"[^"]*"/)) {
+          t = substr(s, RSTART, RLENGTH); sub(/.*"timestamp": *"/, "", t); sub(/".*/, "", t)
+          return t
+        }
+        return ""
+      }
+      function side(s, key,   re) {
+        re = "\"" key "\": *\\{[^}]*\\}"
+        if (match(s, re)) return substr(s, RSTART, RLENGTH)
+        return ""
+      }
+      function field(obj, name,   re, v) {
+        re = "\"" name "\": *[0-9.]+"
+        if (match(obj, re)) {
+          v = substr(obj, RSTART, RLENGTH)
+          sub(/^"[a-zA-Z_]+": */, "", v)
+          return v
+        }
+        return ""
+      }
+      /"type": *"token_count"/ && /"rate_limits"/ {
+        if (!match($0, /"rate_limits": *\{/)) next
+        rl = substr($0, RSTART)
+        p = side(rl, "primary"); s = side(rl, "secondary")
+        if (p == "" && s == "") next
+        t = ts($0)
+        if (t != "" && (maxT == "" || t > maxT)) {
+          maxT = t
+          pu = field(p, "used_percent"); pw = field(p, "window_minutes"); pr = field(p, "resets_at")
+          su = field(s, "used_percent"); sw = field(s, "window_minutes"); sr = field(s, "resets_at")
+        }
+      }
+      END { printf "%s\037%s\037%s\037%s\037%s\037%s\037%s\n", pu, pw, pr, su, sw, sr, maxT }
+    ')"
+  local pu pw pr su sw sr ts
+  IFS=$'\037' read -r pu pw pr su sw sr ts <<EOF
+$out
+EOF
+  [ -n "$pu" ] || [ -n "$su" ] || return 1
+  printf '%s\037%s\037%s\037%s\037%s\037%s\037%s' "$pu" "$pw" "$pr" "$su" "$sw" "$sr" "$ts"
+}
+
+_limit_codex_rate_limits() {
+  local dir="$1"
+  local sess_root="$dir/sessions"
+  [ -d "$sess_root" ] || return 1
+
+  local files
+  files="$(find "$sess_root" -name 'rollout-*.jsonl' -mmin -10080 2>/dev/null)"
+  [ -n "$files" ] || return 1
+  local -a filearr=()
+  while IFS= read -r f; do [ -n "$f" ] && filearr+=("$f"); done <<EOF
+$files
+EOF
+
+  local out pu pw pr su sw sr ts
+  out="$(_limit_codex_rate_limits_from_files "${filearr[@]}")" || return 1
+  IFS=$'\037' read -r pu pw pr su sw sr ts <<EOF
+$out
+EOF
+  printf '%s\037%s\037%s\037%s\037%s\037%s\037%s' "$pu" "$pw" "$pr" "$su" "$sw" "$sr" "$ts"
+}
+
+# limit_codex_status_note <p_used> <p_window_min> <p_resets_at> <s_used>
+# <s_window_min> <s_resets_at> <now_epoch> -> a human line exposing BOTH
+# windows, e.g. "5h 12% left (resets 05:14) · weekly 5% left (resets 22:12
+# on 15 Sep)" — only the sides that have data appear. The percentage IS the
+# vendor's own (never computed); the reset phrase is rendered from the
+# vendor's own absolute epoch (_limit_codex_render_reset).
+limit_codex_status_note() {
+  local pu="$1" pw="$2" pr="$3" su="$4" sw="$5" sr="$6" now="$7"
+  local note="" label left phrase
+  if [ -n "$pu" ]; then
+    label="$(_limit_codex_window_label "$pw")"
+    left="$(_limit_codex_left "$pu" 2>/dev/null || true)"
+    phrase="$(_limit_codex_render_reset "$pr" "$now" 2>/dev/null || true)"
+    note="${label} ${left:-?}% left${phrase:+ (${phrase})}"
+  fi
+  if [ -n "$su" ]; then
+    label="$(_limit_codex_window_label "$sw")"
+    left="$(_limit_codex_left "$su" 2>/dev/null || true)"
+    phrase="$(_limit_codex_render_reset "$sr" "$now" 2>/dev/null || true)"
+    [ -n "$note" ] && note="$note · "
+    note="${note}${label} ${left:-?}% left${phrase:+ (${phrase})}"
+  fi
+  printf '%s' "$note"
+}
+
+# _limit_codex_status_render <p_used> <p_window_min> <p_resets_at> <s_used>
+# <s_window_min> <s_resets_at> <now_epoch> -> "<light>\037<note>\037
+# <reset phrase>", or 1 + nothing when both sides are empty. The PURE part of
+# limit_codex_status/limit_codex_status_cached: turns already-fetched raw
+# vendor fields into the light/note/reset triple. No file I/O, so it is cheap
+# to call on every redraw even when the raw fields came from a cache that
+# this call did not itself refresh — which matters because P1-1's
+# window-expiry check depends on `now`, not on when the fields were fetched.
+#
+# P1-1 (2026-09-12 round-1 review): before comparing anything, drop a side
+# whose OWN resets_at has already passed (_limit_codex_window_expired) —
+# that window has REFILLED server-side, so its used_percent is stale and
+# must never drive the light or be shown as "N% left (resets …)". Treated as
+# fully refilled (0 used / 100% left, no reset text), not discarded outright,
+# so "the other window is still exhausted" still wins the light correctly,
+# and "both windows expired" correctly reads green/100%/no-reset rather than
+# an honest-sounding but wrong red held over from hours ago.
+_limit_codex_status_render() {
+  local pu="$1" pw="$2" pr="$3" su="$4" sw="$5" sr="$6" now="$7"
+  local light note reset pl sl other
+  # P3 (2026-09-12 round-2 review): a side can carry a `resets_at` with NO
+  # `used_percent` at all (codex sent a reset instant but no reading for that
+  # window yet) — the OLD guard here was `[ -n "$pr" ]` alone, so an expired
+  # `resets_at` on a side clikae never actually had a percentage for still
+  # got "refilled" to a FABRICATED 0-used/100%-left reading. Every field in
+  # this file is supposed to be the vendor's own number (see
+  # _limit_codex_rate_limits' header) — a side that never reported a
+  # used_percent must stay absent, not be invented. Require `pu`/`su`
+  # themselves to already be non-empty before refilling them.
+  if [ -n "$pu" ] && [ -n "$pr" ] && _limit_codex_window_expired "$pr" "$now"; then pu="0"; pr=""; fi
+  if [ -n "$su" ] && [ -n "$sr" ] && _limit_codex_window_expired "$sr" "$now"; then su="0"; sr=""; fi
+  light="$(limit_codex_status_light "$pu" "$su")" || return 1
+  note="$(limit_codex_status_note "$pu" "$pw" "$pr" "$su" "$sw" "$sr" "$now")"
+  pl="$(_limit_codex_left "$pu" 2>/dev/null || printf 101)"
+  sl="$(_limit_codex_left "$su" 2>/dev/null || printf 101)"
+  if [ -n "$su" ] && [ "$sl" -le "$pl" ]; then
+    reset="$(_limit_codex_render_reset "$sr" "$now" 2>/dev/null || true)"; other="$pr"
+  else
+    reset="$(_limit_codex_render_reset "$pr" "$now" 2>/dev/null || true)"; other="$sr"
+  fi
+  # P3-4: the TIGHTER side may have no reset of its own (just refilled above,
+  # or simply missing on disk) while the OTHER side still has a real one —
+  # fall back to it rather than reporting an empty reset when one exists.
+  [ -n "$reset" ] || reset="$(_limit_codex_render_reset "$other" "$now" 2>/dev/null || true)"
+  printf '%s\037%s\037%s' "$light" "$note" "$reset"
+}
+
+# limit_codex_status <config_dir> <now_epoch> -> "<light>\037<note>\037
+# <reset phrase>", or 1 + nothing when this tank has never reported usage —
+# the same honest "no reading" as limit_engine_detectable's ○, never a
+# guessed green. <reset phrase> is the TIGHTER window's own rendered reset
+# (the single value burn --json's "reset" field and the board's fuel-dot
+# note fall back on); the full picture (both windows) is in <note>. Scans
+# the rollout store fresh every call — burn.sh's only caller runs this once
+# per burn, not per redraw, so the cost is a non-issue there. The redraw path
+# (home.sh) calls limit_codex_status_cached instead — see its header.
+limit_codex_status() {
+  local dir="$1" now="$2" fields pu pw pr su sw sr ts
+  fields="$(_limit_codex_rate_limits "$dir" 2>/dev/null)" || return 1
+  # P2-4 (round-1 review): _limit_codex_rate_limits now returns a 7th field
+  # (the winning event's own timestamp, for adapter_usage's cached_at) — name
+  # it here too (unused) so plain `read`'s "extra fields glom onto the last
+  # variable" rule doesn't silently append it onto $sr.
+  IFS=$'\037' read -r pu pw pr su sw sr ts <<EOF
+$fields
+EOF
+  _limit_codex_status_render "$pu" "$pw" "$pr" "$su" "$sw" "$sr" "$now"
+}
+
+# _limit_codex_cache_mtime <config_dir> -> a short string identifying the
+# CURRENT state of this tank's rollout store: the count of files in the
+# 7-day scan window, the newest one's mtime, and the store's TOTAL byte size
+# — cheap (one `find`, one `stat` via sessions_by_mtime, one `wc -c` over the
+# already-known file list; no file CONTENT read), unlike
+# _limit_codex_rate_limits' tail+awk scan. The count guards the case where a
+# brand new rollout happens to share its predecessor's mtime second (same
+# burn, same wall-clock second) — an added file must still bust the cache
+# even if "newest mtime" alone did not change.
+#
+# P1-1 (2026-09-12 round-2 review): mtime alone (even with the file-count
+# guard above) is SECOND-resolution, and codex appends to the SAME rollout
+# file rather than opening a new one per event — file count never changes on
+# an append. So a second `token_count` write landing in the same wall-clock
+# second as the read that populated the cache was INVISIBLE to the old key:
+# `stat`'s mtime read back identical, the cache looked "still valid", and the
+# board kept serving the stale reading — reproduced 3/3 against a real
+# `bin/clikae` board (persistent false green on a tank already at 0% left,
+# never self-corrected). A byte-count is added to the key because an append
+# ALWAYS changes the store's total size, even when it lands in the same
+# second as the previous read — the one thing that is guaranteed to move
+# every time content that could change the reading actually changes.
+_limit_codex_cache_mtime() {
+  local dir="$1" sess_root
+  sess_root="$dir/sessions"
+  [ -d "$sess_root" ] || { printf 'none'; return 0; }
+  local -a files=()
+  while IFS= read -r f; do [ -n "$f" ] && files+=("$f"); done <<EOF
+$(find "$sess_root" -name 'rollout-*.jsonl' -mmin -10080 2>/dev/null)
+EOF
+  [ "${#files[@]}" -gt 0 ] || { printf 'none'; return 0; }
+  local newest total
+  newest="$(sessions_by_mtime "${files[@]}" 2>/dev/null | head -n 1 | awk '{print $1}')"
+  total="$(wc -c "${files[@]}" 2>/dev/null | awk 'END{print $1+0}')"
+  printf '%d:%s:%s' "${#files[@]}" "$newest" "$total"
+}
+
+# _limit_codex_file_state <file> -> "<mtime>:<size>", a cheap per-FILE
+# identity string (one `stat`, one `wc -c`) — the invalidation key for that
+# file's own cache entry (_limit_codex_rate_limits_1file_cached below). Same
+# size-plus-mtime reasoning as _limit_codex_cache_mtime's header: mtime alone
+# is second-resolution and blind to a same-second append; size always moves
+# when the file's content actually changes.
+_limit_codex_file_state() {
+  local f="$1" mt sz
+  mt="$(file_mtime "$f" 2>/dev/null)"; [ -n "$mt" ] || mt=0
+  sz="$(wc -c < "$f" 2>/dev/null || echo 0)"
+  sz="${sz//[[:space:]]/}"
+  case "$sz" in ''|*[!0-9]*) sz=0 ;; esac
+  printf '%s:%s' "$mt" "$sz"
+}
+
+# _limit_codex_rate_limits_1file <file> -> same 7-field output as
+# _limit_codex_rate_limits_from_files, scoped to ONE rollout file.
+_limit_codex_rate_limits_1file() {
+  _limit_codex_rate_limits_from_files "$1"
+}
+
+# _limit_codex_rate_limits_1file_cached <file> <cache_dir> [precomputed_key]
+# -> same output as _limit_codex_rate_limits_1file, memoized per FILE under
+# <cache_dir> (one small file per rollout, named by the rollout's own
+# basename — rollout filenames are already unique per session), invalidated
+# by that file's own mtime:size identity. A file with no rate_limits event
+# caches a "none" marker too, so a tank that never reports usage doesn't
+# re-scan every one of its rollouts on every redraw either (see P2-2 below).
+# <precomputed_key> lets a caller iterating MANY files pass in a key it
+# already batch-computed (files_mtime_size, one stat for every file — see
+# _limit_codex_rate_limits_cached) instead of paying this function's own
+# _limit_codex_file_state fork PER file; omitted, it computes its own (this
+# function stays independently correct/callable on its own).
+#
+# P2-2 (2026-09-12 round-2 review): the round-1 cache was keyed on the WHOLE
+# store (_limit_codex_cache_mtime) — correct for an IDLE tank, but the moment
+# any one rollout changes (a burn in progress, appending every few seconds)
+# the aggregate key changes too, and round-1's cache-miss path re-scanned
+# EVERY file in the store again, which — combined with P2-1's SIGPIPE bug —
+# measured MORE expensive per redraw than the pre-cache code (2.83s vs the
+# old 1.68s on a 120-rollout store). Caching per file means a redraw during
+# activity only ever re-scans the ONE rollout that actually changed; every
+# other file's cache entry is still valid and costs (batched) one stat plus
+# one small read, matching this codebase's own "fork-free" cache philosophy
+# (docs/DESIGN-board-fuel-dots.md's Cache section).
+_limit_codex_rate_limits_1file_cached() {
+  local f="$1" cache_dir="$2" key="${3:-}" cache_f cached_key cached_fields tmp
+  [ -n "$key" ] || key="$(_limit_codex_file_state "$f")"
+  key="$f:$key"
+  cache_f="$cache_dir/${f##*/}"
+  if [ -f "$cache_f" ]; then
+    { IFS= read -r cached_key; IFS= read -r cached_fields; } < "$cache_f" 2>/dev/null
+    if [ "$cached_key" = "$key" ]; then
+      [ "$cached_fields" = "none" ] && return 1
+      [ -n "$cached_fields" ] && { printf '%s' "$cached_fields"; return 0; }
+    fi
+  fi
+  mkdir -p "$cache_dir" 2>/dev/null
+  tmp="$(mktemp "$cache_f.XXXXXX" 2>/dev/null)" || tmp=""
+  local fields
+  if fields="$(_limit_codex_rate_limits_1file "$f" 2>/dev/null)"; then
+    if [ -n "$tmp" ]; then
+      { printf '%s\n' "$key"; printf '%s\n' "$fields"; } > "$tmp" 2>/dev/null \
+        && mv -f "$tmp" "$cache_f" 2>/dev/null || rm -f "$tmp" 2>/dev/null
+    fi
+    printf '%s' "$fields"
+    return 0
+  fi
+  if [ -n "$tmp" ]; then
+    { printf '%s\n' "$key"; printf 'none\n'; } > "$tmp" 2>/dev/null \
+      && mv -f "$tmp" "$cache_f" 2>/dev/null || rm -f "$tmp" 2>/dev/null
+  fi
+  return 1
+}
+
+# _limit_codex_rate_limits_cached <config_dir> <cache_file> -> same 6-field
+# output as _limit_codex_rate_limits, memoized. Two layers:
+#   1. a whole-store fast path (<cache_file> itself, keyed by
+#      _limit_codex_cache_mtime) — an IDLE tank costs one `find` + one `stat`
+#      + one `wc -c` and nothing else, same shape as round-1's cache.
+#   2. on a whole-store miss, a PER-FILE fast path
+#      (_limit_codex_rate_limits_1file_cached, keyed per rollout) — an
+#      ACTIVE tank only re-scans the file(s) that actually changed, not
+#      every rollout in the store (P2-2).
+#
+# P2-1 (2026-09-12 round-1 review): _home_fuel_dotv's own header promises the
+# redraw path is "fork-free" for a value that "cannot change between two
+# keypresses" — but the codex branch called limit_codex_status straight
+# through to _limit_codex_rate_limits' tail+awk scan of EVERY rollout file in
+# the 7-day window, on every single redraw. Measured on a synthetic
+# 120-rollout (~62 MB) store: ~1.5s per call, vs ~0.002s for the weekly
+# cache's plain `read < file` (see docs/DESIGN-board-fuel-dots.md's Cache
+# section and REPORT-codex-light-fix1.md for the exact before/after numbers).
+# Deliberately caches only the raw vendor fields, never light/note/reset —
+# those depend on `now` (P1-1), so the caller always recomputes them fresh
+# even on a cache hit.
+_limit_codex_rate_limits_cached() {
+  local dir="$1" cache="$2" key cached_key cached_fields
+  key="$(_limit_codex_cache_mtime "$dir")"
+  if [ "$key" != "none" ] && [ -f "$cache" ]; then
+    { IFS= read -r cached_key; IFS= read -r cached_fields; } < "$cache" 2>/dev/null
+    if [ "$cached_key" = "$key" ]; then
+      [ "$cached_fields" = "none" ] && return 1
+      [ -n "$cached_fields" ] && { printf '%s' "$cached_fields"; return 0; }
+    fi
+  fi
+
+  local sess_root="$dir/sessions"
+  [ -d "$sess_root" ] || return 1
+  local -a files=()
+  while IFS= read -r f; do [ -n "$f" ] && files+=("$f"); done <<EOF
+$(find "$sess_root" -name 'rollout-*.jsonl' -mmin -10080 2>/dev/null)
+EOF
+  [ "${#files[@]}" -gt 0 ] || return 1
+
+  local files_cache_dir="${cache}.d"
+  # Batch every file's own mtime:size in ONE `stat` call (files_mtime_size,
+  # profile_store.sh) instead of forking `stat`+`wc` per file inside the loop
+  # below — 120 rollouts would otherwise cost ~240 forks just to find out
+  # WHICH files changed, before ever reading one. Positional: index i here
+  # lines up with files[i].
+  local -a mtimes=() sizes=()
+  while IFS=' ' read -r _mt _sz; do
+    mtimes+=("${_mt:-0}"); sizes+=("${_sz:-0}")
+  done < <(files_mtime_size "${files[@]}")
+
+  local f pf maxT="" pu pw pr su sw sr _pu _pw _pr _su _sw _sr _ts i=0
+  for f in "${files[@]}"; do
+    pf="$(_limit_codex_rate_limits_1file_cached "$f" "$files_cache_dir" "${mtimes[i]:-0}:${sizes[i]:-0}" 2>/dev/null)"
+    i=$((i + 1))
+    [ -n "$pf" ] || continue
+    IFS=$'\037' read -r _pu _pw _pr _su _sw _sr _ts <<EOF
+$pf
+EOF
+    if [ -n "$_ts" ] && { [ -z "$maxT" ] || [[ "$_ts" > "$maxT" ]]; }; then
+      maxT="$_ts"; pu="$_pu"; pw="$_pw"; pr="$_pr"; su="$_su"; sw="$_sw"; sr="$_sr"
+    fi
+  done
+
+  mkdir -p "$(dirname "$cache")" 2>/dev/null
+  local tmp
+  tmp="$(mktemp "$cache.XXXXXX" 2>/dev/null)" || tmp=""
+  if [ -n "$pu" ] || [ -n "$su" ]; then
+    local fields; fields="$(printf '%s\037%s\037%s\037%s\037%s\037%s' "$pu" "$pw" "$pr" "$su" "$sw" "$sr")"
+    if [ -n "$tmp" ]; then
+      { printf '%s\n' "$key"; printf '%s\n' "$fields"; } > "$tmp" 2>/dev/null \
+        && mv -f "$tmp" "$cache" 2>/dev/null || rm -f "$tmp" 2>/dev/null
+    fi
+    printf '%s' "$fields"
+    return 0
+  fi
+  if [ -n "$tmp" ]; then
+    { printf '%s\n' "$key"; printf 'none\n'; } > "$tmp" 2>/dev/null \
+      && mv -f "$tmp" "$cache" 2>/dev/null || rm -f "$tmp" 2>/dev/null
+  fi
+  return 1
+}
+
+# limit_codex_status_cached <config_dir> <now_epoch> <cache_file> -> same
+# contract as limit_codex_status, but sourced via
+# _limit_codex_rate_limits_cached so a redraw that has seen no new codex
+# activity since the last call never re-scans rollout content. This is what
+# _home_fuel_dotv/_home_codex_status_readv call — see P2-1 above.
+limit_codex_status_cached() {
+  local dir="$1" now="$2" cache="$3" fields pu pw pr su sw sr
+  if [ "${_CLIKAE_BOARD:-0}" = 1 ]; then
+    fields="$(board_read codex "$dir" codex-usage)"
+    [ -n "$fields" ] || return 1
+  else
+    fields="$(_limit_codex_rate_limits_cached "$dir" "$cache" 2>/dev/null)" || return 1
+  fi
+  IFS=$'\037' read -r pu pw pr su sw sr <<EOF
+$fields
+EOF
+  _limit_codex_status_render "$pu" "$pw" "$pr" "$su" "$sw" "$sr" "$now"
+}
+
+# ONE spelling of how a rate-limit reading is EXTRACTED from transcript lines,
+# shared by the per-file parsers below and by the batched scan the board's cold
+# build runs (_limit_batched_readings).
+#
+# 2026-09-14 round-8 fix review P1-1/P2-1 — why the batched form had to exist:
+# the board's cold build used to bound its rate-limit scan by a COUNT (the
+# newest CLIKAE_HOME_RECENT_MAX files per project directory) while the thing
+# that count approximates — the rolling window — is a TIME. Different
+# dimensions, so no count can ever be "provably >= the window": a limit sitting
+# in a session that went quiet behind eleven newer neighbours was invisible,
+# the fuel dot read FULL on a tank that was dry, and `_limit_tank_dry_raw`
+# (above) deliberately does not fall back to dry_store for claude — so `burn`
+# dispatched into it. The bound is the window now (every transcript whose mtime
+# is inside it, however many share a directory), which means the candidate set
+# can be large, which means the scan has to stop costing a `tail` + an `awk`
+# FORK PER FILE. Hence one batched read, and hence this shared source: two
+# spellings of one matching rule is exactly how this file's twin (board_state's
+# fingerprint) drifted, and a drift here is a fuel dot that lies.
+#
+#   scan(line)  folds one transcript line into maxL / maxS / rphrase
+#   lreset()    starts a fresh file's state
+#   reading()   renders them as the "<maxL>\037<maxS>\037<reset>" value every
+#               caller of this pair already stores, caches and compares
+#
+# `engine` selects the rules. They differ only in which STRUCTURAL markers name
+# a limit and a successful turn (codex's machine-readable `codex_error_info`,
+# claude's synthetic + isApiErrorMessage pair) — never the vendor's English
+# copy, which is theirs to change. See limit_profile_dry / _limit_codex_dry.
+_LIMIT_READING_AWK='
+function lreset() { maxL = ""; maxS = ""; rphrase = "" }
+function ts(s,   t) {
+  if (match(s, /"timestamp": *"[^"]*"/)) {
+    t = substr(s, RSTART, RLENGTH); sub(/.*"timestamp": *"/, "", t); sub(/".*/, "", t)
+    return t
+  }
+  return ""
+}
+function scan(s,   t) {
+  if (engine == "codex") {
+    if (s ~ /"codex_error_info": *"usage_limit_exceeded"/) {
+      t = ts(s)
+      if (t != "" && (maxL == "" || t > maxL)) {
+        maxL = t; rphrase = ""
+        if (match(s, /try again at [^".]*/)) rphrase = substr(s, RSTART, RLENGTH)
+      }
+      return
+    }
+    if (s ~ /"type": *"agent_message"/) {
+      t = ts(s); if (t != "" && (maxS == "" || t > maxS)) maxS = t
+    }
+    return
+  }
+  if (s ~ /"model": *"<synthetic>"/ && s ~ /"isApiErrorMessage": *true/) {
+    t = ts(s)
+    if (t != "" && (maxL == "" || t > maxL)) {
+      maxL = t; rphrase = ""
+      if (match(s, /[Rr]esets [^"]*/)) rphrase = substr(s, RSTART, RLENGTH)
+    }
+    return
+  }
+  # THE VENDOR CONTINUING BY ITSELF IS A RECOVERY, and it is not an assistant
+  # turn. Claude Code now writes a user-role line of its own the moment a limit
+  # lifts mid-task — isMeta, promptSource "system", and the structural marker
+  # below — and then carries on. Nothing else in this transcript says so: the
+  # assistant turn that follows may be minutes away (a long tool call first),
+  # and until it lands the account reads DRY although it is already working.
+  # That is the reading `clikae wake` consults immediately before it types, so
+  # missing it is a second "go" typed into a conversation that already resumed.
+  # Two separate `~` tests rather than one regex containing a brace: in an awk
+  # ERE a brace opens an interval, and the awk family macOS ships disagrees with
+  # gawk about an unescaped one.
+  #
+  # Structural, like everything else here, and for the same reason the limit
+  # branch above is: someone PASTING this marker into a prompt must not clear
+  # their own tank. JSONL escapes the quotes inside a message body, so a pasted
+  # copy reads \"origin\" and matches neither test — the keys below can only
+  # appear unescaped as keys of the record itself.
+  if (s ~ /"origin"/ && s ~ /"kind": *"auto-continuation"/) {
+    t = ts(s); if (t != "" && (maxS == "" || t > maxS)) maxS = t
+    return
+  }
+  if (s ~ /"type": *"assistant"/ && s !~ /"model": *"<synthetic>"/) {
+    t = ts(s); if (t != "" && (maxS == "" || t > maxS)) maxS = t
+  }
+}
+function reading(   U) { U = sprintf("%c", 31); return maxL U maxS U rphrase }
+'
+
+# Raw timestamp/reset readings preserve the original bounded-tail parser.
+_limit_claude_reading() {
+  transcript_tail "$1" | awk -v engine=claude "$_LIMIT_READING_AWK"'
+    { scan($0) }
+    END { print reading() }
+  '
+}
+
+_limit_claude_readings() {
+  _limit_readings claude-usage _limit_claude_reading "$1"
+}
+
+_limit_readings() {
+  local kind="$1" parser="$2" reading_files="$3" f
+  while IFS= read -r f; do
+    [ -n "$f" ] || continue
+    if declare -F reading_cache_run >/dev/null; then
+      reading_cache_run "$kind" "$f" "$parser" "$f"
+    else
+      "$parser" "$f"
+    fi
+    printf '\n'
+  done <<< "$reading_files" | awk -F '\037' '
+    $1 > l { l=$1; r=$3 }
+    $2 > s { s=$2 }
+    END { printf "%s\037%s\037%s\n", l, s, r }
+  '
+}
+
+_limit_codex_reading() {
+  transcript_tail "$1" | awk -v engine=codex "$_LIMIT_READING_AWK"'
+    { scan($0) }
+    END { print reading() }
+  '
+}
+
+_limit_codex_readings() {
+  _limit_readings codex-dry _limit_codex_reading "$1"
+}
+
+# _limit_batched_readings <engine> <list-file> -> one
+# "<path>\037<maxL>\037<maxS>\037<reset>" line per path in <list-file> that
+# yielded anything, from ONE `tail` per `xargs` batch instead of one `tail`
+# plus one `awk` PER FILE. This is what makes a window-bounded scan affordable
+# (see _LIMIT_READING_AWK's header for why the bound had to become the window).
+#
+# It is a SPEED path, never a narrower answer: the per-file bound is
+# transcript_tail's own $CLIKAE_TX_TAIL_BYTES, so this reads exactly the bytes
+# the per-file parser would have read, and folds them with exactly the same
+# rules. tests/bats/home-bounded.bats compares the two over a fixture, the way
+# `_board_cold_sidscope`'s own receipt already compares its batched read
+# against `_board_engine_sidscope`.
+#
+# `/dev/null` FIRST, and `xargs` repeats the initial arguments in EVERY batch:
+# `tail` prints its `==> name <==` banners only when it has more than one file
+# and a batch can end up holding exactly one, so a fixed empty first file is
+# what makes the output shape unconditional (same device, same reason, as
+# _board_cold_sidscope_read's `head -c 512 /dev/null`). `tail` also writes a
+# newline before every banner but the first, so a transcript whose last byte is
+# not a newline cannot run into the next banner.
+#
+# 2026-09-15 round-9 review P2-1 — why a banner is RECONCILED against the
+# scan list instead of pattern matched, and why a batch whose framing did not
+# come out as expected is ANSWERED PER FILE: `tail`'s framing is in-band, and
+# the band it shares is the file CONTENT. This used to accept any physical
+# line matching `^==> … <==$` as "the next file starts here", so one such line
+# inside a transcript (a torn or partial write, anything third-party writing
+# into the tank tree) ended that file's section early — the limit sitting
+# after the line was attributed to a path that was never in the scan list, and
+# the tank drew FULL when it was dry. That is round-8 P1-1's exact failure
+# walking back in through another door, and it made this function disagree
+# with `_limit_claude_reading` on the very fixture the paragraph above
+# promises they agree on.
+#
+# The fix keeps the promise instead of narrowing it, in two layers:
+#
+#   1. STRUCTURAL banner detection. The list is read first (`NR == FNR`), so
+#      the scan knows both WHICH paths are expected and in WHICH ORDER `tail`
+#      was handed them. A banner is accepted only when it names exactly the
+#      next unconsumed path (`pth[next_i]`) — i.e. only where this batch's own
+#      framing can put one. Everything else, `/dev/null`'s own banners
+#      included, is content and goes to scan() like any other line.
+#      The comparison is `bsame` (byte equality), never awk's `==`: on Apple's
+#      awk `==` is answered by `strcoll()`, and macOS' UTF-8 collation gives
+#      most CJK no weight — the same trap `02d8f89` had to fix in
+#      board_state.sh's grouping awk, and paths are exactly where it would
+#      bite. (No `LC_ALL=C` here: `length`/`index` do not consult LC_COLLATE
+#      anyway, and the rest of this awk must keep matching byte-for-byte what
+#      the per-file parser does in the caller's locale.)
+#
+#   2. A FRAMING CHECK, because layer 1 alone can only refuse, not repair —
+#      refusing the wrong line still leaves the batch mis-framed from there
+#      on. So the batch is only TRUSTED when it framed exactly as predicted,
+#      and three independent signals have to agree:
+#        - awk saw no banner-shaped line it did not accept (`/dev/null`'s own
+#          banners, the fixed first argument of every batch, excepted) — a
+#          fabricated one that happens to name the very next path is invisible
+#          to a row count, because it consumes that path's real banner later
+#          and the totals still balance. awk reports this as `exit 3`;
+#        - the pipeline exited 0 — `tail` exits 1 on a file it cannot open and
+#          `xargs` turns that into 123, which is also exactly the case where
+#          `tail` prints no banner at all for that file;
+#        - one row came back per listed path (every readable file gets a
+#          banner and therefore a row, an empty transcript included).
+#      Otherwise the answer comes from the per-file parser for the whole list:
+#      slower, and only in that case, but never narrower. A valid transcript
+#      cannot contain a banner-shaped physical line at all (JSONL escapes its
+#      newlines, and a `tail -c` cut lands mid-record, whose tail ends in `}`),
+#      so this bail-out costs a normal tank nothing.
+#      (The capture is `|| :` rather than bare because that 123 used to abort
+#      the whole refresh under bin/clikae's `set -eo pipefail`.)
+_limit_batched_readings() {
+  local engine="$1" list="$2" bytes="${CLIKAE_TX_TAIL_BYTES:-524288}"
+  [ -s "$list" ] || return 0
+  local out want got f rc=0 parser="_limit_${engine}_reading"
+  out="$(tr '\n' '\0' < "$list" \
+    | xargs -0 tail -c "$bytes" /dev/null 2>/dev/null \
+    | awk -v engine="$engine" "$_LIMIT_READING_AWK"'
+      function bsame(a, b) {
+        if (length(a) != length(b)) return 0
+        if (length(a) == 0) return 1
+        return index(a, b) == 1
+      }
+      function emit() {
+        if (path == "") return
+        print path U reading()
+        path = ""
+      }
+      BEGIN { U = sprintf("%c", 31); path = ""; n = 0; next_i = 1; suspect = 0; lreset() }
+      NR == FNR { if ($0 != "") { n++; pth[n] = $0 } ; next }
+      /^==> .* <==$/ {
+        cand = substr($0, 5, length($0) - 8)
+        if (next_i <= n && bsame(cand, pth[next_i])) {
+          emit()
+          path = pth[next_i]
+          next_i++
+          lreset()
+          next
+        }
+        if (!bsame(cand, "/dev/null")) suspect = 1
+      }
+      { scan($0) }
+      END { emit(); if (suspect) exit 3 }
+    ' "$list" -)" || rc=$?
+  want="$(grep -c . "$list" 2>/dev/null)" || want=0
+  got=0
+  [ -z "$out" ] || got="$(printf '%s\n' "$out" | grep -c .)" || got=0
+  if { [ "$rc" = 0 ] && [ "$want" = "$got" ]; } || ! declare -F "$parser" >/dev/null 2>&1; then
+    [ -z "$out" ] || printf '%s\n' "$out"
+    return 0
+  fi
+  while IFS= read -r f; do
+    [ -n "$f" ] || continue
+    printf '%s\037%s\n' "$f" "$("$parser" "$f")"
+  done < "$list"
 }

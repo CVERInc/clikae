@@ -8,6 +8,12 @@ load '../helpers'
 
 _src() {
   export CLIKAE_LIB="$CLIKAE_TEST_ROOT/lib"
+  # helpers.bash exports CLIKAE_NO_UPDATE_CHECK=1 so that no test can reach the
+  # network while rendering a board. THIS file is the one that tests the feature
+  # itself, so it opts back in — the checks below still make no network call
+  # (they seed the cache and never let the TTL expire), they just need the
+  # feature's own kill switch off to observe it.
+  unset CLIKAE_NO_UPDATE_CHECK
   # shellcheck source=/dev/null
   . "$CLIKAE_TEST_ROOT/lib/core/update_check.sh"
 }

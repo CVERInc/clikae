@@ -3,22 +3,25 @@
 This file lists the EXACT commands a human runs to publish a clikae release
 through the `CVERInc/clikae` Homebrew tap. Nothing here is run automatically.
 
-## Current state (v0.6.0)
+## Where the two formulas live
 
-- Tag `v0.6.0` exists on GitHub (commit `8761936`) and locally.
-- Real tarball sha256 (verified by read-only download):
-  `661b3cd84ab0ca470f36aa15614fa32abc6152d19f5b547ceafe580eafa890d0`
-- Both formulas already carry that `url` + `sha256`:
-  - in-repo template: `homebrew/clikae.rb`
-  - tap formula:      `~/Developer/homebrew-clikae/Formula/clikae.rb`
-- The tap working copy's `main` is already at `e9a7eff "clikae 0.6.0"` and
-  equals `origin/main` — i.e. the tap was already pushed for v0.6.0.
+- in-repo template: `homebrew/clikae.rb` (reference; not what users install)
+- tap formula:      `~/Developer/homebrew-clikae/Formula/clikae.rb` (**this is
+  the one users get**)
 
-So for v0.6.0 there is nothing left to push. The commands below are (a) the
-verification a human should still run, and (b) the full recipe for the NEXT
-release.
+There used to be a "Current state (vX)" block here pinning the shipped version,
+tag, and sha256. It was removed on 2026-08-02 rather than updated: it sat
+outside the release ritual, so it was ten releases stale, and its claim that
+"the tap working copy equals origin/main" was actively wrong — the working copy
+was a release behind, and editing on top of it would have shipped a downgrade.
+A fact that no step in the recipe refreshes will always rot; ask git instead.
 
-## Verify the v0.6.0 tap end-to-end (human, read-only-ish)
+🔴 **Always `git fetch` the tap working copy before editing the formula.** Your
+`~/Developer/homebrew-clikae` can be behind `origin/main` (brew's own clone
+under `$(brew --repository)/Library/Taps/` updates independently, so the two
+disagree silently). Editing a stale copy publishes a version rollback.
+
+## Verify the published tap end-to-end (human, read-only-ish)
 
 ```sh
 # 1. Tap the published formula (read-only network):
@@ -31,7 +34,15 @@ brew style  CVERInc/clikae/clikae
 # 3. Build-and-test install (writes into your local Cellar only):
 brew install --build-from-source CVERInc/clikae/clikae
 brew test CVERInc/clikae/clikae
-clikae version   # should print 0.6.0
+clikae version   # must match the tag you just published
+
+# 4. Verify templates/ actually shipped — NOT just bin/ and lib/. A tap
+#    formula that drops "templates" from `libexec.install` (seen for real:
+#    the tap once installed only "bin", "lib") builds and passes `brew test`
+#    clean, and the only symptom is every user's `clikae doctor` printing
+#    "permissions template missing (installation incomplete)" — this line
+#    catches it here instead.
+ls "$(brew --prefix clikae)/libexec/templates/permissions/claude.json"
 ```
 
 ## Cutting the NEXT release (e.g. v0.6.1)
@@ -42,8 +53,9 @@ ones — do them deliberately.
 ```sh
 # --- in ~/Developer/clikae ---
 # 0. Bump the version string and commit it FIRST (tarball VERSION must match tag):
-#    edit bin/clikae -> CLIKAE_VERSION="0.6.1"
-git add bin/clikae && git commit -m "release: clikae 0.6.1"
+#    edit bin/clikae   -> CLIKAE_VERSION="0.6.1"
+#    edit CHANGELOG.md -> new "## [0.6.1] — YYYY-MM-DD" section above the last one
+git add bin/clikae CHANGELOG.md && git commit -m "release: clikae 0.6.1"
 
 # 1. Tag the clean commit and PUSH the tag + branch (creates the GitHub source tarball):
 git tag v0.6.1
@@ -60,12 +72,39 @@ curl -sL https://github.com/CVERInc/clikae/archive/refs/tags/v0.6.1.tar.gz | sha
 git add homebrew/clikae.rb && git commit -m "homebrew: bump formula to v0.6.1"
 
 # --- in ~/Developer/homebrew-clikae ---
+git fetch origin && git merge --ff-only origin/main   # 🔴 NEVER skip: a stale
+                                         # working copy ships a version rollback
 brew style  Formula/clikae.rb            # must be clean
 git add Formula/clikae.rb && git commit -m "clikae 0.6.1"
 git push origin main                     # PUSH (publishes to the tap)
 
 # 4. Verify the published tap (see "Verify ... end-to-end" block above, with v0.6.1).
+
+# --- back in ~/Developer/clikae ---
+# 5. Publish the GitHub Release (minor versions; see below for when to skip).
+gh release create v0.6.1 --title "clikae v0.6.1 — <the headline>" --notes-file <notes.md>
+gh release view v0.6.1                     # confirm it is marked Latest
+curl -sS https://github.com/CVERInc/clikae/releases/tag/v0.6.1 | grep -c "<a phrase from the notes>"
 ```
+
+## The GitHub Release (step 5)
+
+This step lived only in the published releases, not in this file — so v0.17.0
+shipped without one until someone noticed. The convention, read off the twenty
+releases that already exist rather than invented here:
+
+- **Minor versions get a release; patch versions don't.** v0.16.1 has none and
+  that was deliberate; v0.16.0, v0.15.x, v0.13.0 … all do.
+- **Title**: `clikae vX.Y.Z — <the one thing this release is>`, lowercase after
+  the dash, no marketing. It is the line a stranger reads in the release list.
+- **Body**: what a user will now be able to do, then what would have been wrong
+  if assumed, with the receipts (numbers, not adjectives). `git log vPREV..vNEW`
+  is the raw material; the CHANGELOG entry is a starting draft, not the notes —
+  the CHANGELOG is per-change, the release notes are per-story.
+- **Read an existing one before writing a new one** (`gh release view v0.16.0`).
+  The convention lives in those, not in this paragraph.
+- Verify from the **public** view (`curl` the tag page and grep a phrase), not
+  from `gh`'s success message.
 
 ## Notes / gotchas
 

@@ -1,7 +1,8 @@
 # Devlog
 
-A narrative history of clikae, from the first commit through a deliberate park and
-the v0.6 that earned its way out of it.
+A narrative history of clikae, from the first commit through a deliberate park, the
+v0.6 that earned its way out of it, and the stretch after — where a tank stopped
+being a fuel tank and the front page finally said so.
 For the precise, per-release record see [CHANGELOG.md](../CHANGELOG.md) — this is
 the story around it: the itch, the wrong turns, and the lessons that made each
 version what it is. Dates are the real tag dates (JST); claims map to the
@@ -272,6 +273,271 @@ clikae as for a person, which is the honest reframe v0.6 settled on: clikae is a
 tool for an LLM to command other LLMs, and the human mostly sets strategy and holds
 the red-line buttons.
 
+### v0.6.1 / v0.6.2 — 2026-06-20 · making sure the muscle doesn't misfire
+
+Six weeks of dogfooding shook out a collection of quiet correctness bugs with no new
+command surface behind them: a `conduct --leg` slug with path characters could write
+outside its out-dir, `_app_shell_squote` produced broken shell for any value with an
+apostrophe, `proc`'s interactive-vs-background heuristic was confused by the env
+block, and `state-version`'s migration-failure message was a garbled
+double-substitution. Two new *test layers* matter more than any single fix: a compat
+test that fails when the bash adapter set drifts from the PowerShell table, and a
+test that asserts `conduct --help` still discloses its read-only, non-judging limits
+— honesty pinned by CI rather than by whoever edits the help text next. v0.6.2 then
+swept thirteen Chinese and Japanese phrases out of code comments and one leaked
+Chinese string out of the English relay card: comments are English-only, and the
+i18n dictionary is the one place another language lives.
+
+### v0.7.0 — 2026-06-24 · agy stops being re-learned every time
+
+`conduct` could fan to claude and codex; this release let it fan a read-only leg to
+Antigravity as well, so cheap breadth work rides agy's quota instead of the main
+budget. Because agy is adapter-less — one global Keychain login, unswitchable
+per-shell and unrunnable in parallel — the leg is special-cased to the *currently
+active* tank and reports `NOTACTIVE` when a leg names another one, rather than
+silently burning the wrong account. The more valuable half was documentation. The
+recipe for driving agy headless — `-p` not `-i`, prompt via file, write to a file
+because stdout buffers, a fenced task with a long `--print-timeout`, dry shows in
+`cli.log` not stdout — had been re-derived, and re-burned, by session after session.
+It went into `clikae agy --help` and a canonical `docs/agy-dispatch.md`. Knowledge
+that has to be rediscovered is knowledge the tool failed to carry.
+
+### v0.7.1 — 2026-06-26 · reaching backward
+
+Every verb so far carried your *current* session forward. But giving each tank its
+own config dir means a transcript lives under that tank, so a bare
+`claude --resume <id>` in a fresh shell fails with "No conversation found" — the
+engine looked in its default home and the session is in a tank. That made resuming a
+known session clikae's job by construction, and it had no verb for it. `clikae
+resume` scans every tank, finds the owner, cd's to the directory the session was
+recorded in, and resumes it under that tank's config. You never need to know which
+tank.
+
+### v0.8.0 / v0.8.1 — 2026-06-30 · the picker, and the board gets fast
+
+With no id, `resume` now opens a TUI across every tank — claude, codex and
+antigravity — newest first, with live filtering and paging, so you pick a session by
+*title* instead of copy-pasting a UUID; `[R]` opens it from the board. `resume
+cleanup` arrived alongside to reclaim disk from old session data. The bigger change
+was speed: the home board went from ~8 seconds to well under one on a multi-GB tank,
+by reading only the head/tail slices of (sometimes 100+ MB) transcripts it actually
+needs and scanning each tank's fuel state once instead of re-scanning same-account
+siblings. v0.8.1 then fixed the update notice going quiet — one slow network call
+used to stamp a 24-hour throttle *and* write back a stale version, so a single blip
+could hide a real release indefinitely. A failed check now keeps the last-known
+version and retries within the hour.
+
+### v0.9.0 — 2026-06-30 · a tank turns out to hold more than fuel
+
+The release that quietly changed what clikae *is*, again. `clikae memory
+share|isolate|status` points a tank's long-term memory at one vendor-neutral
+markdown store — a **Soul** — so several of your own tanks, across engines, read and
+write a single brain. claude fans its memory dir in with a symlink; codex and agy,
+whose memory is opaque, get a fenced pointer note in the rules file each already
+reads on start, so cross-engine sharing needs no translator and cannot drift: it is
+literally the same file. Sharing is opt-in, per-tank, never auto-crossed, seeded by
+copy, and reversible.
+
+Two companions shipped with it. `clikae solo` marks a tank standalone — out of
+burn/watch rotation and `to`/relay, and `memory share` refuses it — which is how you
+wall off a bot persona that lives on *your own* account, where the cross-account
+guard can't see it. And the board became an interactive cockpit: `s` toggles solo,
+`m` opens the memory dial, alongside open / relay / resume / incognito / new /
+rename / delete / reorder / filter. Its visual language was locked at the same time —
+three sections where a *section* is the badge, aligned CJK-safe columns, no emoji, no
+"current shell" marker (with many tanks open it is noise).
+
+The honest beat of this release was a removal. The per-tank Keychain stash/restore
+that carried agy's Google login was ripped out in favour of logging out and letting
+agy prompt a fresh sign-in — because the carry had never been tested against a real
+Keychain, and a restore that silently no-op'd would land you on the wrong account
+burning the wrong quota. Shipping a switch that *might* lie about which account you
+are on is worse than making you click through a sign-in.
+
+### v0.9.1 / v0.9.2 — 2026-06-30/07-01 · isolation that isolated too much
+
+`CLAUDE_CONFIG_DIR` isolation was meant for identity state — auth token, transcript
+history, keychain slot. But Claude Code also reads personal skills and slash commands
+from that directory, so a freshly created tank silently couldn't see anything under
+`~/.claude/skills` or `~/.claude/commands`. The user never asked for their *tools* to
+be separated, only their accounts. `init` and every switch now symlink both in,
+share-by-default, unless the tank already has a real entry of its own — and tanks
+created before the fix self-heal on next use. (v0.9.1 also fixed a help overlay that
+aligned by byte count, so rows whose keys hold `↑ ↓ ⏎` sat crooked.)
+
+### v0.10.0 — 2026-07-05 · the carry comes back, verified this time
+
+The agy Keychain carry returns — but every restore is now checked against the stash
+*before* agy launches and refuses to proceed if it doesn't match, which is the actual
+fix for the trust bug that got the old carry removed. A new integration test drives
+the real `security` binary against a disposable scratch keychain, never the login
+item. With interactive OAuth out of the switch path, `clikae burn agy <tank>` works:
+burn can hop agy to the next tank on dry, sequentially — agy still can't run two
+tanks in parallel, which is structural, not a gap. Windows via WSL also became a
+documented first-class path, since clikae is plain bash and already ran there; saying
+so beat leaving Windows users to guess.
+
+### v0.11.0 / v0.11.1 — 2026-07-05/06 · a brain that can't fragment
+
+The consent unit for a Soul was always the *tank* — that's what the members file and
+the cross-account guard key on. But claude's per-project memory layout meant one
+`memory share` only linked the directory it ran in, so sessions started anywhere else
+quietly accumulated isolated side-memory: a tank that reported "shared" while growing
+a second brain. Membership became the single source of truth and the per-directory
+symlinks became mere projections of it, re-linked on every launch path. A member tank
+can no longer fragment.
+
+v0.11.1 then gave `solo` its second job. `tank_is_solo` had always been meant to run
+two logics — fleet tanks work together, a solo tank stays deliberately out — but only
+memory and skills read it. `clikae mcp share` promotes an MCP server into one
+canonical per-engine store that every non-solo tank merges in, at share time and at
+every launch. Additive only: a tank's own entry for the same name is never
+overwritten.
+
+### v0.12.0 — 2026-07-11 · the audit, and a reviewer that hadn't read its own code
+
+A deliberate no-new-features release: four independent review lenses — performance,
+dead code, correctness/portability, structure — over the whole tree, then the
+verified findings applied. It found a bug that had shipped since v0.7.1: on a
+single-engine store, one absent directory left an unmatched glob, `stat` exited
+non-zero, and `set -eo pipefail` killed `clikae resume` with *no output at all*. It
+was caught by pointing an incognito (`--ephemeral`) reviewer at this release's own
+diff — a reader with no memory of why the code looked reasonable.
+
+The structural change was one keyboard decoder for every picker. The board, its
+sub-menus and the resume picker each carried their own inline ESC state machine —
+the layer that had regressed in dogfood more than once — and they had drifted apart.
+Consolidating them gave the board PgUp/PgDn/Home/End, a dedicated `/dev/tty` fd
+instead of bare stdin, and application-mode arrow decoding, all covered by decoder
+unit tests and a real-pty end-to-end driver, `tests/tools/pty-smoke.py`. Alongside
+it: ~220 lines of dead code removed, `next_tank`'s O(n²) scan collapsed, and a
+measured pass on a real 2300-session store.
+
+### v0.13.0 — 2026-07-11 · the repositioning
+
+The front page finally told the story `docs/VISION.md` had always pointed at. Your AI
+work has two halves: the model half is rented — engine, capability, quota, and the
+vendors are at war, which is good for you — and the other half is *yours*: who you
+are, what you know, where you left off, what should leave no trace. clikae is the
+thin local layer that keeps your half portable. Multi-account quota rotation stepped
+down from the headline to an advanced chapter.
+
+It came with a bill attached. `docs/terms-and-your-accounts.md` states where the
+vendors' terms actually draw the line, with the policy language quoted and dated:
+different accounts for different purposes is explicitly fine; carrying the same task
+past a usage limit is the gray zone. A one-time note appears before your first
+cross-account carry and then never again. A tool that lives in that zone owes its
+users the map, not the discovery-by-enforcement-email. Like v0.12.0, the diff was
+gated by an incognito red-team pass, which killed two claims that overshot shipped
+behaviour.
+
+### v0.13.1 / v0.14.0 — 2026-07-11/12 · disk hygiene, and nine languages
+
+`clikae to` and cross-tank resume *copy* a transcript into the target tank and never
+clean the source; on a real store that was 686 MB of redundant copies, 26% of all
+session data. Cleanup groups every session's copies across all tanks, keeps the
+**largest** (mtime lies — the newest copy is not always the byte-superset), and
+offers a copy for deletion only when a byte-level check proves it redundant. In
+v0.14.0 the flow came out from under `resume` — disk hygiene was never a resume
+concern, and a capability buried in another command's subtree is nearly
+undiscoverable — and became `clikae clean`, with three labeled sections and defaults
+chosen so the space hogs are *visible* with zero flags but never deleted without an
+explicit opt-in.
+
+The same release took clikae to nine languages. Each was transcreated against that
+language's own Apple macOS system strings rather than machine-translated from
+English, and translated *by grade*: the sentences you must understand in order to
+consent — deleting sessions, spending a tank's last fuel — are fully localized, while
+what you type or copy stays technical. A completeness test now extracts both the key
+list and the locale list from the code itself, so a partial translation cannot merge
+silently. The six new tables were reviewed cold by a model from a different family,
+which caught a real inversion — a German line promising the disk space you *have*
+rather than the space you'd *reclaim* — and also produced a pile of confident
+nonsense that did not survive checking. They ship as an honest LLM-grade baseline,
+labelled as such.
+
+### v0.14.1 — 2026-07-12 · the day it deleted something that mattered
+
+The worst entry in this log. `clean`'s live-process guard only ever covered the
+stale-copy dedupe path; the main scan loop that classifies sessions as "Untouched for
+30+ days" or "Big but recent" never consulted it. So a session with a process still
+attached — `claude --resume <sid>` open in another terminal — could surface
+*unchecked* under "Big but recent", one keypress from deletion. It was checked, and
+deleted: 612 MB, six days old, on the maintainer's own machine, the day v0.14.0
+shipped. Claude Code appends per-event and holds no open handle, so there was no
+inode for `lsof` to rescue, and `clean` used `rm`, which never reaches the Trash.
+Unrecoverable.
+
+Two fixes shipped together: one shared guard called from *every* candidate class, so
+a live session is never offered in any section, full stop; and `clean` now moves
+candidates to `~/.Trash` instead of `rm`ing them, collision-safe, with every string
+that used to promise space was "freed" reworded across all nine locales. If the Trash
+is unusable a row falls back to a direct delete and **says so on that row**, rather
+than lying about where the data went.
+
+There was a second cause underneath, and it is the one worth remembering. The live
+session wasn't *recognised* before it got checked, because a session's own `/rename`
+was invisible everywhere: the adapter derived titles from Claude's machine-generated
+`aiTitle` only and never read `/rename`'s `customTitle`, so eleven deliberately
+renamed sessions on that machine showed none of their real names. The name a human
+chose is the strongest signal that a thing matters — and the deletion list was
+showing the machine's guess instead.
+
+### v0.14.2 — 2026-07-13 · the tests couldn't see the bug
+
+Rows and prose disagreed about how wide the terminal is. The board, `resume` and
+`clean` measured and cut titles by *characters* while their budgets were expressed in
+*columns*, so a CJK title — two columns per glyph — rendered at roughly twice its
+budget and hard-wrapped back to column 0. Latin-only fixtures cannot tell the two
+apart, which is exactly why the suite stayed green while real rows ran off the edge.
+Width is now measured by display columns throughout, the fixtures carry CJK titles,
+and `clean` sacrifices columns by importance — age, then size, then the title, never
+below a readable floor, and never the safety label. Audited across nine locales at
+60, 80 and 100 columns against a real store.
+
+### v0.14.3 — 2026-07-13 · isolate is not incognito
+
+`memory isolate` → `memory share` turned out to be a memory-*losing* round trip.
+`share` fanned back into only the project-directory slots that still existed, and
+`isolate` had just removed every one of them — so a directory whose memory was a pure
+symlink came back as nothing, and the re-share silently skipped it. Membership lives
+in the group's members file, so `memory status` went on reporting `shared` while the
+memory was gone from disk: the instrument agreed with the wrong answer.
+
+It was found the hard way. An agent ran `isolate` on a live tank in order to spawn a
+cold reader, and the maintainer's running session lost its long-term memory
+mid-flight — the per-directory symlink is re-projected at launch, and a session
+already running never gets a relaunch. `share` now fans into every project directory,
+creating the slot when it isn't there. And the rule went into `AGENTS.md`, where an
+agent will actually hit it: a memory-less session is `--ephemeral`, never `memory
+isolate`. *Ephemeral changes this once; isolate changes from now on.*
+
+### v0.14.4 — 2026-07-21 · two title paths, silently drifted
+
+`adapter_title_for_file` — behind the resume picker, the board's continue list, and
+`clean`'s deletion list — scanned only the first 100 lines of a transcript. But a
+`/rename` lands wherever it was typed, so a session renamed deep in a long
+conversation kept listing its old name, while the board's own extractor, which reads
+the tail, showed the new one. Two paths deriving the same fact from the same file had
+drifted — the failure the "one place owns this format" note exists to prevent, and
+the same code path behind the near-miss where a renamed live session almost landed on
+the deletion list. Found on a 60 MB session renamed at transcript line 13845. The
+extractor now scans the bounded tail slice first (`tail -c` seeks from the end, so
+the cost is the slice, not the file) and its precedence mirrors the board's.
+
+### v0.14.5 — 2026-07-21 · the trap that didn't catch a closed window
+
+An `--ephemeral` run points the tank's memory dir at a throwaway, stashes the real
+memory aside, and restores it from a `trap … EXIT`. The trap caught `EXIT` and `INT`
+— but not `HUP` or `TERM`. Close the terminal window and the process takes a
+`SIGHUP`, whose default action terminates it *without* running the EXIT trap: a
+dangling symlink to a deleted temp, the real memory marooned in a stash, and the slot
+reading as empty. Worse, the ephemeral path self-healed only on the *next* ephemeral
+launch, so an ordinary session never recovered it and the tank stayed broken until
+fixed by hand. Two guards shipped: the trap now takes `HUP`/`TERM` as well, and the
+universal memory-prelaunch hook heals a dangling ephemeral link on *any* launch —
+which also recovers what no trap can catch, `SIGKILL` and power loss.
+
 ## The park held — then its own clause fired
 
 The strategy hasn't changed: clikae is a portfolio piece, an on-ramp, and a tip jar
@@ -284,6 +550,46 @@ expensive orchestrator onto cheap context — got sharp enough, and handed-over
 enough, to earn the version it was promised.
 
 Its narrower edge stays sharp: no proxy, no daemon, no telemetry — every line
-auditable. The bones were good and ready; the itch finally arrived. clikae is,
-again, complete for this stage — now with a brain it can lend to whoever's
-conducting.
+auditable. The bones were good and ready; the itch finally arrived — and clikae was,
+for about two weeks, complete for that stage.
+
+## What the tank turned out to be
+
+Then v0.9 found the thing that had been sitting in the store the whole time. A tank
+was described, from v0.1 onward, as a place to keep an account's *config*. It is
+not. It holds the engine's long-term memory, its session history, the record of who
+you were being while you used it. Fuel was only ever the most visible thing in there.
+
+Everything after v0.9 is that realisation being paid for. The Soul layer exists
+because memory is the part worth carrying across engines, and quota isn't. `solo`
+exists because once a tank holds an identity, some identities must never be
+commingled. v0.9.2 exists because isolating *identity* had quietly isolated the
+user's *tools* as well, which they never asked for. v0.11.0 exists because a brain
+that can silently fragment isn't a brain. And v0.13.0 exists because the front page
+was still selling the fuel gauge while the product had become something else — the
+half of your work the vendors don't own.
+
+The v0.14 line is the other half of the bill: what it costs to hold things that
+matter. `clean` deleted a live 612 MB session because its guard covered one code
+path and not the others. It was allowed to happen because a session's `/rename` — a
+human deliberately naming the thing they care about — was invisible to every list
+that offered it for deletion. `memory isolate` cost a running session its memory
+mid-flight while `memory status` kept reporting *shared*. A closed terminal window
+stranded a tank's real memory behind a `SIGHUP` the exit trap never saw. None of
+these were exotic. Every one was a case where the tool held something irreplaceable
+and its own instruments agreed with the wrong answer.
+
+Three habits came out of that stretch and are worth more than any feature in it.
+Judge a headless run by its artifact, never its exit code — the oldest rule here,
+which keeps reappearing in new clothes. Point a reader with no memory of your
+reasoning at your own diff; v0.12.0's oldest bug and v0.14.0's German inversion were
+both caught that way, and both were invisible to everyone who already knew why the
+code looked fine. And distrust a green suite: Latin-only fixtures could not see a CJK
+title running off the edge, and no bats test can watch a terminal. A gate that cannot
+observe a failure mode is not evidence about it.
+
+The strategy is unchanged. Portfolio piece, on-ramp, tip jar; no proxy, no daemon, no
+telemetry; every line auditable. What changed is what it is a tip jar *for* — not a
+way to keep burning past a limit, but the small, boring, local layer that makes sure
+the half of the work that is actually yours survives whichever engine you were
+renting that week.

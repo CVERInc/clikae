@@ -1,0 +1,81 @@
+#!/usr/bin/env bats
+# tests/bats/install-layout.bats — proves the shipped install layouts actually
+# carry templates/ where lib/commands/settings.sh looks for them, and that a
+# layout missing templates/ (the real Homebrew tap's `libexec.install "bin",
+# "lib"`, drifted from this repo's own formula/install.sh) degrades instead
+# of breaking `init`. See CVERInc/clikae#85 round-1 review, P1-1.
+
+load '../helpers'
+
+@test "a bin+lib-only prefix (the drifted tap layout) still lets init finish" {
+  local prefix="$BATS_TEST_TMPDIR/tap-no-templates"
+  mkdir -p "$prefix"
+  cp -R "$CLIKAE_TEST_ROOT/bin" "$CLIKAE_TEST_ROOT/lib" "$prefix/"
+  run "$prefix/bin/clikae" init claude worktap
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"Created tank: claude/worktap"* ]] || false
+  [[ "$output" == *"No permissions template for engine: claude; skipping"* ]] || false
+  [ -d "$CLIKAE_HOME/profiles/claude/worktap" ]
+  [ ! -e "$CLIKAE_HOME/profiles/claude/worktap/settings.json" ]
+}
+
+@test "install.sh's own layout (bin+lib+templates) applies the permissions template" {
+  local prefix="$BATS_TEST_TMPDIR/full-install"
+  PREFIX="$prefix" "$CLIKAE_TEST_ROOT/install.sh" >/dev/null 2>&1
+  [ -f "$prefix/share/clikae/templates/permissions/claude.json" ]
+  run "$prefix/share/clikae/bin/clikae" init claude workfull
+  [ "$status" -eq 0 ]
+  [ -f "$CLIKAE_HOME/profiles/claude/workfull/settings.json" ]
+  run env CLIKAE_HOME="$CLIKAE_HOME" "$prefix/share/clikae/bin/clikae" settings apply claude workfull --check
+  [ "$status" -eq 0 ]
+}
+
+@test "install.sh leaves the tmux guard shim executable (install.sh:59, CVERInc/clikae#97 review round 1 P3)" {
+  # `cp -R`'s handling of the executable bit is not guaranteed across
+  # platforms — install.sh has its own explicit `chmod +x` for exactly this
+  # file, and until now nothing pinned it: an unreadable-as-executable shim
+  # fails OPEN (tmux_usable's `command -v tmux` would skip straight past it)
+  # rather than failing loud.
+  local prefix="$BATS_TEST_TMPDIR/shim-exec-install"
+  PREFIX="$prefix" "$CLIKAE_TEST_ROOT/install.sh" >/dev/null 2>&1
+  local shim="$prefix/share/clikae/lib/shims/tmux"
+  [ -f "$shim" ] || { echo "shim not installed at $shim"; false; }
+  [ -x "$shim" ] || { echo "shim installed but not executable: $shim"; false; }
+}
+
+@test "the in-repo Homebrew formula copy still installs templates/ next to bin and lib" {
+  run grep -E '^\s*libexec\.install "bin", "lib", "templates"' "$CLIKAE_TEST_ROOT/homebrew/clikae.rb"
+  [ "$status" -eq 0 ]
+  run grep -E '^\s*depends_on "jq"' "$CLIKAE_TEST_ROOT/homebrew/clikae.rb"
+  [ "$status" -eq 0 ]
+}
+
+# --- doctor's install-layout check (P4, 2026-09-22) ---------------------------
+# `clikae doctor` is what actually catches a packaging regression on a real
+# user's machine, before this suite exists to catch it on ours: it looks for
+# templates/permissions/claude.json next to lib/ and, when it's not there,
+# says so instead of staying quiet. These two pin that it fires on the
+# drifted layout and stays silent on the correct one — the regression this
+# guards against is a tap formula's `libexec.install` losing "templates"
+# again (seen for real: CVERInc/homebrew-clikae once installed only "bin",
+# "lib") while the in-repo formula test above keeps passing, because that
+# test only reads the FILE in THIS repo, not what actually gets installed.
+
+@test "doctor's install-layout check fails (warns) on a tree without templates/" {
+  local prefix="$BATS_TEST_TMPDIR/layout-no-templates"
+  mkdir -p "$prefix"
+  cp -R "$CLIKAE_TEST_ROOT/bin" "$CLIKAE_TEST_ROOT/lib" "$prefix/"
+  run "$prefix/bin/clikae" doctor
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"permissions template missing"* ]] || { echo "$output"; false; }
+  [[ "$output" == *"$prefix/templates/permissions/claude.json"* ]] || { echo "$output"; false; }
+}
+
+@test "doctor's install-layout check passes (silent) on a tree with templates/" {
+  local prefix="$BATS_TEST_TMPDIR/layout-with-templates"
+  mkdir -p "$prefix"
+  cp -R "$CLIKAE_TEST_ROOT/bin" "$CLIKAE_TEST_ROOT/lib" "$CLIKAE_TEST_ROOT/templates" "$prefix/"
+  run "$prefix/bin/clikae" doctor
+  [ "$status" -eq 0 ]
+  [[ "$output" != *"permissions template missing"* ]] || { echo "$output"; false; }
+}

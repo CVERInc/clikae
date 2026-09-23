@@ -16,6 +16,52 @@ load '../helpers'
   [[ "$output" == *"client-only"* ]] || false
 }
 
+@test "board's solo toggle leaves/rejoins the group like the CLI (no 'solo but still sharing')" {
+  # The board's `s` key delegates to `clikae solo`, so toggling solo on a SHARED
+  # tank must also leave the Soul group — not just flip the marker, which produced
+  # the impossible "solo BUT STILL SHARING" state. Then toggling back rejoins it.
+  source "$CLIKAE_TEST_ROOT/lib/core/log.sh"
+  source "$CLIKAE_TEST_ROOT/lib/core/profile_store.sh"
+  source "$CLIKAE_TEST_ROOT/lib/core/soul.sh"
+  source "$CLIKAE_TEST_ROOT/lib/commands/home.sh"
+  clikae init claude work
+  clikae memory share brain claude work
+  [ -n "$(soul_group_for_tank claude work)" ]        # shared to start
+  _home_toggle_solo claude work                      # → solo
+  [ -f "$CLIKAE_HOME/profiles/claude/work/clikae-meta/solo" ]
+  [ -z "$(soul_group_for_tank claude work)" ]        # left the group, not left dangling
+  _home_toggle_solo claude work                      # → un-solo
+  [ ! -f "$CLIKAE_HOME/profiles/claude/work/clikae-meta/solo" ]
+  [ -n "$(soul_group_for_tank claude work)" ]        # rejoined the machine default group
+}
+
+@test "solo --off rejoins the group it left, even with no machine default set" {
+  # 🔴 The round trip that cost a real tank its brain (2026-08-19). `solo` leaves
+  # the shared group; `--off` used to decide where to rejoin by reading the
+  # MACHINE DEFAULT, which is written only by the first `memory share` ever run
+  # and is empty on plenty of installs. With it empty, `--off` rejoined nothing:
+  # the marker came off, the board said "in the fleet", and the memory slot
+  # stayed the empty directory the isolate left behind. `soul-default` is
+  # deliberately blanked here to reproduce exactly that machine.
+  source "$CLIKAE_TEST_ROOT/lib/core/log.sh"
+  source "$CLIKAE_TEST_ROOT/lib/core/profile_store.sh"
+  source "$CLIKAE_TEST_ROOT/lib/core/soul.sh"
+  clikae init claude work
+  clikae memory share brain claude work
+  : > "$CLIKAE_HOME/soul-default"        # the machine default is EMPTY
+  [ "$(soul_group_for_tank claude work)" = "brain" ]
+
+  clikae solo claude work
+  [ -z "$(soul_group_for_tank claude work)" ]                 # left the group
+  [ "$(cat "$CLIKAE_HOME/profiles/claude/work/clikae-meta/soul-left")" = "brain" ]
+
+  run clikae solo claude work --off
+  [ "$status" -eq 0 ]
+  [ "$(soul_group_for_tank claude work)" = "brain" ]          # …and got back in
+  # The breadcrumb is consumed, so a later solo/--off can't rejoin a stale group.
+  [ ! -f "$CLIKAE_HOME/profiles/claude/work/clikae-meta/soul-left" ]
+}
+
 @test "solo --off: returns a tank to the fleet" {
   clikae init claude work
   clikae solo claude work
@@ -65,4 +111,40 @@ load '../helpers'
   clikae solo codex work
   run tank_is_solo codex work
   [ "$status" -eq 0 ]                                   # now solo
+}
+
+@test "solo --off: rejoining the group does not hang on a real terminal (R2-P1-1)" {
+  # Same self-invoke pattern as init.sh (see init.bats' matching test): `--off`
+  # rejoins the tank's group via `"$CLIKAE_BIN" memory share … >/dev/null
+  # 2>&1`, which silences the CHILD's stdout+stderr but not its stdin. With a
+  # discoverable legacy memory directory in place, that nested `memory share`
+  # used to block on a `read` from the real terminal forever — the prompt it
+  # was waiting on had just been discarded. A real pty is required to
+  # reproduce this; bats' `run` closes stdin, which hides it.
+  clikae init claude a
+  clikae memory share me claude a
+  clikae solo claude a "testing"
+  mkdir -p "$HOME/.claude/projects/legacy/memory"
+  printf '[x](x.md)\n' > "$HOME/.claude/projects/legacy/memory/MEMORY.md"
+  printf 'legacy fact\n' > "$HOME/.claude/projects/legacy/memory/x.md"
+
+  local out="$BATS_TEST_TMPDIR/solo-off.out"
+  _pty_run "$CLIKAE_BIN" solo claude a --off > "$out" 2>&1 &
+  local runner=$!
+
+  local finished=0
+  for _ in $(seq 1 40); do
+    kill -0 "$runner" 2>/dev/null || { finished=1; break; }
+    sleep 0.5
+  done
+  if [ "$finished" -eq 1 ]; then
+    wait "$runner" 2>/dev/null || true
+  else
+    kill "$runner" 2>/dev/null || true
+  fi
+  [ "$finished" -eq 1 ] || { echo "solo --off hung waiting on a prompt nobody could see (R2-P1-1)"; false; }
+
+  local out_content; out_content="$(cat "$out")"
+  [[ "$out_content" == *"rejoined the fleet"* ]] || false
+  [[ "$out_content" == *"rejoined the shared memory group"* || "$out_content" == *"couldn't rejoin the memory group"* ]] || false
 }

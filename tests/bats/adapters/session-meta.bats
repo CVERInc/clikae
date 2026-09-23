@@ -173,6 +173,34 @@ seed_session_titled() {
   [ "${#lines[@]}" -eq 2 ]
 }
 
+# Regression for the shape that used to apply the limit via a trailing
+# `| head -n "$limit"` AFTER the subagent-sidechain filter: more resumable
+# candidates than the limit, with agent-* transcripts interleaved so the
+# filter has to skip rows before the cut. Once `head` had its fill and exited,
+# the filter loop's next `printf` wrote into a closed pipe; a bash builtin's
+# write() then returns EPIPE as an ordinary error instead of the process being
+# killed by the signal ONLY when SIGPIPE is not at its default disposition —
+# which is exactly the GitHub Actions runner's process environment (both
+# ubuntu-latest and macos-latest leave SIGPIPE ignored for spawned steps),
+# and why the CI failure this regresses never showed up on a plain local
+# shell. `trap '' PIPE` reproduces that disposition here so the old shape
+# fails deterministically instead of only racing on a real CI runner.
+@test "list_sessions applies the limit inside the loop (no SIGPIPE with agent-* interleaved)" {
+  _setup_session_meta
+  trap '' PIPE
+  local i
+  for i in $(seq 1 12); do
+    seed_session "res-$i-0000-0000-0000-000000000000" "row $i"
+  done
+  for i in $(seq 1 6); do
+    seed_session "agent-$i-0000-0000-0000-000000000000" "subagent row $i"
+  done
+  run adapter_list_sessions "$PROFILE" 2
+  [ "$status" -eq 0 ]
+  [ "${#lines[@]}" -eq 2 ]
+  [[ "$output" != *"Broken pipe"* ]] || false
+}
+
 @test "list_sessions keeps CJK titles intact" {
   _setup_session_meta
   seed_session cjk11111-0000-0000-0000-000000000000 "接力這場對話到另一個帳號"

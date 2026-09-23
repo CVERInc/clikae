@@ -17,7 +17,44 @@
 # "the original, pre-versioning layout" = v1, handled without any write.
 
 # Bump ONLY when a state format changes, and add a `_state_migrate_<n>` (n→n+1) below.
-CLIKAE_STATE_VERSION=1
+CLIKAE_STATE_VERSION=2
+
+
+# _state_migrate_1 (v1 -> v2) — rename every tmux session off the `ck-` prefix.
+#
+# 🔴 WHY A MACHINE-WIDE SWEEP AND NOT ONLY rename-on-encounter. tmux_sessv renames
+# a legacy session when something launches into that tank — which never happens
+# for a tank you are not using today. Such a session stays under the old name,
+# and once the dual-read paths are gone it is ALIVE BUT INVISIBLE: absent from
+# the board, and `clikae <tank>` would start a second one beside it. Per-id
+# renaming cannot reach it; a per-machine sweep can, and it only has to run once.
+#
+# The waiter inside a renamed session exits cleanly by itself (its command holds
+# the old name), and switch re-attaches one on the next launch — see tmux_sessv.
+#
+# Never fails the runner: a rename that cannot happen is left alone rather than
+# leaving the whole schema un-bumped over one session.
+_state_migrate_1() {
+  command -v tmux >/dev/null 2>&1 || return 0
+  [ -n "${CLIKAE_SESS_PREFIX:-}" ] && [ -n "${CLIKAE_SESS_PREFIX_LEGACY:-}" ] || return 0
+  local name new n=0 old_names
+  old_names="$(tmux list-sessions -F '#{session_name}' 2>/dev/null \
+    | grep "^${CLIKAE_SESS_PREFIX_LEGACY}" || true)"
+  [ -n "$old_names" ] || return 0
+  while IFS= read -r name; do
+    [ -n "$name" ] || continue
+    new="${CLIKAE_SESS_PREFIX}${name#"$CLIKAE_SESS_PREFIX_LEGACY"}"
+    # Something already holds the new name: leave the old one rather than losing
+    # one of the two. tmux_sessv will prefer the new one and this stays visible
+    # until its own session ends.
+    tmux has-session -t "=$new" 2>/dev/null && continue
+    tmux rename-session -t "=$name" "$new" 2>/dev/null && n=$((n + 1))
+  done <<EOF
+$old_names
+EOF
+  [ "$n" -gt 0 ] && log_dim "clikae: renamed $n tmux session(s) off the old name."
+  return 0
+}
 
 _state_version_file() { printf '%s/version' "$CLIKAE_HOME"; }
 

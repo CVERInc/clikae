@@ -10,6 +10,15 @@ adapter_meta_description() { echo "Anthropic Claude Code CLI (credentials + sett
 # Optional: how to install the binary, shown when a switch finds it missing.
 adapter_install_hint() { echo "npm install -g @anthropic-ai/claude-code"; }
 
+# Optional hook (#60 round-1 review): declares this adapter maps `clikae
+# burn`'s --permission onto its own headless permission flag, and which modes
+# it accepts. burn.sh checks for this function's PRESENCE, not its cli_binary
+# name — an adapter that doesn't define it gets a truthful degradation line
+# instead of silently keeping a fixed mode under the name of a mode it never
+# actually ran (see grok, which has no --permission mapping despite shipping
+# its own --permission-mode).
+adapter_meta_permission_modes() { echo "acceptEdits auto"; }
+
 # Per-tank CLAUDE_CONFIG_DIR isolation is meant for IDENTITY state (auth token,
 # transcript history, keychain slot) — it was never meant to also isolate
 # ASSETS the user hand-authors once and expects everywhere (personal skills,
@@ -45,6 +54,24 @@ adapter_init() {
   _claude_link_shared_asset "$profile_dir" "commands"
 }
 
+# Optional hook: paths, relative to a tank dir, that CLAUDE ITSELF writes
+# there — never anything clikae writes. #61 round-2 P1-1: no longer a
+# precondition for adoption (the one-time sweep in profile_store.sh is
+# inclusive) — `doctor` uses this only as a read-only hint explaining why a
+# stray directory looks like it used to be a claude tank.
+#
+# #61 round-2 P2-3 (corrected): `settings.json` used to be listed here too,
+# but that file is what `clikae settings apply`/`init`'s permissions
+# template WRITE — never something claude itself creates — so naming an
+# empty directory on the command line (`clikae settings apply claude
+# zzempty`) seeded exactly the fingerprint this hook is supposed to require
+# the ENGINE to have produced, and the next walk adopted it as a permanent
+# tank. `.claude.json` alone is real: claude writes it the moment it logs
+# in, whether or not a tank was ever touched by `settings apply`.
+adapter_tank_fingerprint() {
+  printf '.claude.json\n'
+}
+
 # Optional hook: path to this tank's config file that holds `mcpServers` (used
 # by `clikae mcp` / fleet_mcp_prelaunch, lib/core/fleet_mcp.sh, to fan the
 # fleet-wide MCP list into every non-solo tank). Claude Code keeps user-scope
@@ -53,6 +80,23 @@ adapter_init() {
 adapter_mcp_config_file() {
   local profile_dir="$1"
   printf '%s/.claude.json\n' "$profile_dir"
+}
+
+# Optional hook: path to this tank's config file that holds `hooks` (used by
+# `clikae hooks` / fleet_hooks_prelaunch, lib/core/fleet_hooks.sh, to fan the
+# fleet-wide hook list into every non-solo tank). Claude Code keeps hooks in
+# settings.json, beside the permissions clikae's own template writes — so
+# unlike .claude.json this file exists from the moment a tank does, and a
+# brand-new tank gets its hooks without waiting for a first launch.
+#
+# 🔴 The writer is _settings_snapshot/_settings_write_file (lib/commands/
+# settings.sh), which derives the path from the tank directory: an engine
+# whose hooks live under a DIFFERENT name must not implement this hook until
+# it has a writer of its own. fleet_hooks_prelaunch refuses the mismatch
+# rather than editing a file it was never told about.
+adapter_hooks_config_file() {
+  local profile_dir="$1"
+  printf '%s/settings.json\n' "$profile_dir"
 }
 
 # Print KEY=VALUE pairs (one per line) to export when activating this profile.
@@ -80,7 +124,30 @@ adapter_run() {
 # hand-assemble (the 2026-06-06 tugtile burn-writeup friction #1).
 adapter_burn_flags() {
   local prompt="$1"; shift
-  printf -- '-p\0%s\0--dangerously-skip-permissions\0' "$prompt"
+  # 🔴 acceptEdits, not --dangerously-skip-permissions. burn's contract is
+  # "write to --add-dir", and the two grants differ in blast radius, not in
+  # capability. Measured 2026-08-16, same task both ways:
+  #
+  #   inside  --add-dir   acceptEdits ✅ writes    skip-permissions ✅ writes
+  #   OUTSIDE --add-dir   acceptEdits ✅ blocked   skip-permissions 🔴 writes
+  #
+  # So the old recipe handed an unattended run the whole disk while the docs
+  # said "this directory". codex's has always been scoped (-s workspace-write);
+  # the same documented promise was bounded on one engine and not the other.
+  #
+  # Honest cost: a task that reaches OUTSIDE its roots now fails where it used to
+  # succeed. That is the boundary doing its job — and burn judges by artifact, so
+  # it reports "no artifact" rather than a silent wrong success. Real burns are
+  # unaffected: the same bash-and-write task finished in 20s against 15s.
+  #
+  # --permission (#60) picks the mode within that same boundary: acceptEdits
+  # approves file edits but still stops on shell commands print mode can't
+  # answer; auto lets Claude's classifier approve those too. Neither bypasses
+  # the --add-dir boundary above — that is still only --dangerously-skip-permissions.
+  # burn_permission is a cmd_burn local, inherited here via bash dynamic
+  # scoping through _burn_compose; direct callers of this hook keep the
+  # historical acceptEdits default.
+  printf -- '-p\0%s\0--permission-mode\0%s\0' "$prompt" "${burn_permission:-acceptEdits}"
   local d; for d in "$@"; do printf -- '--add-dir\0%s\0' "$d"; done
 }
 
@@ -90,7 +157,51 @@ adapter_burn_flags() {
 adapter_audit_flags() {
   local prompt="$1"; shift
   printf -- '-p\0%s\0' "$prompt"
+  # A leg is one arm of a fan-out, not a session anybody resumes, and its output
+  # is already collected into --out-dir — so it leaves no transcript, the same as
+  # a headless `--ephemeral` run. Claude Code only honours this with --print,
+  # which this recipe always passes.
+  printf -- '--no-session-persistence\0'
+  # 🔴 READ-ONLY has to be ENFORCED, not merely not-granted. Withholding
+  # --dangerously-skip-permissions is not a boundary: a tank whose own settings
+  # carry permissions.defaultMode "auto" approves writes without asking, and a
+  # leg told to create a file created it (measured 2026-08-16, in this repo —
+  # a conduct leg edited two tracked files while conduct's help says READ-ONLY).
+  # codex's recipe has always passed -s read-only; this one enforced nothing.
+  printf -- '--permission-mode\0plan\0'
   local d; for d in "$@"; do printf -- '--add-dir\0%s\0' "$d"; done
+}
+
+# Optional hook: the per-run flags that make `--ephemeral` actually incognito.
+# <headless> is 1 when the caller is running a print-mode job, 0 for interactive.
+#
+# Why flags and not surgery: clikae's ephemeral used to isolate ONE channel, the
+# long-term memory, while the session still saw the user's personal skills, the
+# fleet's MCP servers, and wrote its transcript into the tank. The tempting fix —
+# temporarily repointing the tank's skills symlink — is the `memory isolate`
+# mistake again: it mutates a tank that another session may be live on. These are
+# per-RUN flags, so a concurrent session on the same tank is untouched.
+#
+# 🔴 NOT --bare, however much it looks like the answer. It also disables keychain
+# reads and restricts auth to ANTHROPIC_API_KEY, so it cannot log in on a
+# subscription tank at all — the one flag named for this job is the one that
+# breaks it.
+adapter_ephemeral_flags() {
+  local headless="${1:-0}"
+  # "Disable all skills" (its own help text) — the user's hand-authored skills
+  # and slash commands are exactly the beliefs a cold reader must not inherit.
+  printf -- '--disable-slash-commands\0'
+  # Only MCP servers named by --mcp-config, and we name none — so the fleet's
+  # shared connectors (fleet_mcp_prelaunch merges them at every launch) are out.
+  # That withdraws capability as well as context: an incognito reviewer should
+  # not be able to reach the user's sites.
+  printf -- '--strict-mcp-config\0'
+  # Sessions are not written to disk and cannot be resumed. Claude Code only
+  # honours this with --print, so an interactive ephemeral run still leaves a
+  # transcript in the tank. That limit is stated to the user rather than papered
+  # over: incognito means "it does not know you", not "it never happened".
+  [ "$headless" = "1" ] && printf -- '--no-session-persistence\0'
+  return 0
 }
 
 # Optional hook: start a fresh session under this profile, seeded with an initial
@@ -113,6 +224,94 @@ adapter_resume_args() {
   printf -- '--resume\n%s\n' "$sid"
 }
 
+# Optional hook: given the engine argv clikae is about to run (the SAME argv
+# adapter_resume_args above builds, or one a human typed by hand), print the
+# session id it names — the inverse of adapter_resume_args — and return 0.
+#
+# 🔴 Returns 0 (printing NOTHING) for every OTHER shape that already carries
+# resume/continue semantics with no id to read back: a bare `--resume` /
+# `-r` (the resume picker — no id known yet), `-c` / `--continue` (resumes
+# whichever session claude itself judges most recent — clikae cannot know
+# which), or `--fork-session` used alongside one of the above. Only a
+# GENUINELY fresh launch — none of this — returns 1.
+#
+# Why the tri-state matters: switch.sh's identity block only calls
+# adapter_new_session_args (which appends `--session-id <uuid>`) when this
+# returns 1. claude's own rule is "`--session-id` can only be used with
+# `--continue` or `--resume` if `--fork-session` is also specified" (verified
+# live, claude 2.1.267) — so appending it unconditionally, as the previous
+# round did, made every one of `-- --continue` / `-- -c` / `-- -r <sid>` /
+# `-- --resume` refuse to start at all (R2-P1-2). A caller that only checked
+# "is _launch_sid empty" could not tell "fresh launch" apart from "resume
+# shape, id not spelled out here" — both printed nothing — so the hook itself
+# has to say which case it is, via its exit status, not just its output.
+#
+# Recognises every argv shape claude actually accepts (`--help`, 2.1.267):
+# `--resume [sid]` / `-r [sid]` / `--resume=<sid>`, `-c` / `--continue`,
+# `--fork-session`, and the user's OWN `--session-id <uuid>` / `--session-id=
+# <uuid>` (so a hand-typed `-- --session-id <uuid>` is recognised as already
+# having identity and is never handed a SECOND one).
+adapter_sid_from_args() {
+  local prev="" a hit=0 sid=""
+  for a in "$@"; do
+    if [ "$prev" = "--resume" ] || [ "$prev" = "-r" ] || [ "$prev" = "--session-id" ]; then
+      case "$a" in
+        -*) : ;;                            # next token is itself a flag: no value given
+        *)  sid="$a"; hit=1; prev="$a"; continue ;;
+      esac
+    fi
+    case "$a" in
+      --resume=*)     sid="${a#--resume=}"; hit=1 ;;
+      --session-id=*) sid="${a#--session-id=}"; hit=1 ;;
+      --resume|-r|--session-id|-c|--continue|--fork-session) hit=1 ;;
+    esac
+    prev="$a"
+  done
+  [ "$hit" -eq 1 ] || return 1
+  printf '%s' "$sid"
+  return 0
+}
+
+# Optional hook: the cwd claude's OWN argv carries — see codex.sh's twin for
+# why `clikae burn`'s raw '-- <cmd...>' mode needs this (#74 round-3 P1-1).
+# claude has no cwd-override flag at all (`claude --help`, 2.1.267): it always
+# runs in the process's actual OS cwd, which for a raw burn IS $PWD already —
+# defined (not left absent) so the "does this engine have such a flag" answer
+# is explicit rather than implied by a missing function.
+adapter_cwd_from_args() {
+  return 1
+}
+
+# Optional hook: the CLI flags to START A FRESH SESSION with a caller-chosen id,
+# one per line (same one-line-per-argv-item contract as adapter_resume_args).
+# Claude Code accepts a v4 UUID up front (`claude --help`: "--session-id <uuid>
+# Use a specific session ID for the session"), so — unlike a resume, which only
+# knows its id because it is reopening a PAST conversation — clikae can hand a
+# brand-new conversation an id before the engine ever runs. Defining this hook
+# is what lets switch.sh give a bare "start fresh" launch exact identity too,
+# instead of the tank-scoped guess the board falls back to when no id was ever
+# recorded (see _home_live_rows, lib/commands/home.sh). codex/antigravity leave
+# this hook undefined — they expose no equivalent flag today — and a launch on
+# either still degrades to that same honest guess (DESIGN-tmux.md Rule 2).
+adapter_new_session_args() {
+  local uuid="$1"
+  [ -n "$uuid" ] || return 1
+  printf -- '--session-id\n%s\n' "$uuid"
+}
+
+# Optional hook: the canonical session id for a transcript PATH — the single
+# derivation BOTH `clikae burn`'s sidecar writer and `clikae resume`'s picker
+# must agree on, or a burn session can be written under one id and looked up
+# under another and never actually get hidden (#74 round-1 P1-1 — codex's two
+# derivations disagreed this way; claude's never has, since its transcript
+# filename already IS the sid, but the hook exists here too so a caller never
+# has to special-case which engine keeps that invariant for free).
+adapter_sid_canonical() {
+  local f="$1" sid
+  sid="${f##*/}"
+  printf '%s' "${sid%.jsonl}"
+}
+
 # Optional hook: a one-line RECAP of a session — "where you left off + next step".
 # Claude Code writes these into the transcript as
 #   {"type":"system","subtype":"away_summary","content":"…"}
@@ -125,6 +324,15 @@ adapter_session_recap() {
   [ -n "$sid" ] || return 0
   f="$dir/projects/$(_claude_project_slug "$PWD")/$sid.jsonl"
   [ -f "$f" ] || return 0
+  if declare -F reading_cache_run >/dev/null; then
+    reading_cache_run claude-recap "$f" _claude_recap_uncached "$f"
+  else
+    _claude_recap_uncached "$f"
+  fi
+}
+
+_claude_recap_uncached() {
+  local f="$1"
   transcript_tail "$f" | grep '"subtype":"away_summary"' | tail -n 1 \
     | grep -oE '"content":"([^"\\]|\\.)*"' | head -n 1 \
     | sed -E 's/^"content":"//; s/"$//' \
@@ -162,6 +370,65 @@ _claude_project_slug() {
 adapter_memory_dir() {
   local dir="$1"
   printf '%s\n' "$dir/projects/$(_claude_project_slug "$PWD")/memory"
+}
+
+# Optional hook (#33): the transcript SHAPE belongs to the adapter, not to
+# handoff.sh. Prints one line per TEXT BLOCK of <role> ("user"/"assistant")
+# — an assistant message with two text parts becomes two lines, not one
+# (round-1 review P3-1: docs/adding-an-adapter.md used to say "one line per
+# message" for every engine; codex/grok really are one-line-per-message, this
+# one isn't, and the doc now says so) — text only, unescaped, newest last —
+# used by `clikae handoff`'s digest (lib/core/handoff.sh, _handoff_extract).
+# This is the SAME grep pipeline handoff.sh ran inline before #33, moved here
+# verbatim — proven byte-identical before/after against a FROZEN pre-#33
+# golden fixture (tests/fixtures/handoff-claude-golden.txt,
+# tests/bats/handoff.bats's "byte-identical" test), so this shape can't
+# change without breaking that receipt — the DOC was fixed to match this
+# code, not the other way round. It is also the shape
+# _handoff_default_extract (handoff.sh) falls back to for any adapter that
+# doesn't define this hook, so third-party adapters keep working.
+adapter_handoff_extract() {
+  local t="$1" role="$2"
+  case "$role" in
+    user)
+      # `"role":"user","content":"` anchors on role immediately followed by a
+      # *string* content — a person's typed turn. Tool results carry an array
+      # content (`"content":[`) and a "toolUseResult" field; system/slash
+      # wrappers are tagged (<command-name>, <local-command-caveat>) or
+      # flagged "isMeta"; sub-agent turns are "isSidechain" — all dropped so
+      # this shows real prompts, not file dumps / command output / sub-agent
+      # chatter that also lives under role:user. Still best-effort (it
+      # truncates a prompt at a literal `"}`).
+      # 🔴 `|| true` (round-1 review P3-3, extended to this branch too — see
+      # its comment on the assistant case below for why): a transcript with
+      # no matching lines makes the LAST stage of this pipe (the trailing
+      # `grep -av`) exit 1 on truly empty input, which aborts the caller
+      # under `set -eo pipefail` — verified by doing (empty transcript, this
+      # branch, no `|| true`: the shell dies mid-command, nothing after it
+      # runs). codex/grok's hooks already guard the equivalent tail this way.
+      grep -a '"role":"user","content":"' "$t" 2>/dev/null \
+        | grep -av '"toolUseResult"' \
+        | grep -av '"isMeta":true' \
+        | grep -av '"isSidechain":true' \
+        | sed 's/.*"role":"user","content":"//; s/"}.*//' \
+        | sed 's/\\n/ /g; s/\\t/ /g; s/\\"/"/g; s/\\\\/\\/g' \
+        | grep -av '^[[:space:]]*<command-' \
+        | grep -av '^[[:space:]]*<local-command' \
+        | grep -av '^[[:space:]]*$' || true
+      ;;
+    assistant)
+      # 🔴 `|| true` (round-1 review P3-3): same reason as the user branch
+      # above — the trailing `grep -av` is the last stage of this pipe, and
+      # exits 1 on a transcript with no assistant text at all, which aborts
+      # the caller under `set -eo pipefail` with nothing to show for it.
+      # codex.sh / grok.sh's twin of this function already end this way.
+      grep -a '"role":"assistant"' "$t" 2>/dev/null \
+        | grep -aoE '"text":"([^"\\]|\\.)*"' \
+        | sed 's/^"text":"//; s/"$//' \
+        | sed 's/\\n/ /g; s/\\t/ /g; s/\\"/"/g; s/\\\\/\\/g' \
+        | grep -av '^[[:space:]]*$' || true
+      ;;
+  esac
 }
 
 # Optional hook: print the path to the *current directory's* most recent
@@ -278,15 +545,24 @@ adapter_session_meta() {
 # [limit] (default 10). Powers relay's "pick another session" chooser. Returns
 # non-zero when there are none.
 adapter_list_sessions() {
-  local dir="$1" limit="${2:-10}" proj f any=0
+  local dir="$1" limit="${2:-10}" proj f any=0 emitted=0
   proj="$dir/projects/$(_claude_project_slug "$PWD")"
   [ -d "$proj" ] || return 1
+  # Same question as the board's list — "which conversation do you want?" — so
+  # the same answer about subagent transcripts (adapter_transcript_is_resumable).
+  # The limit is enforced HERE, inside the loop, not by piping a filtered
+  # stream into `head -n "$limit"` afterward: once `head` has its fill and
+  # exits, the next write on the other end of that pipe gets SIGPIPE, and a
+  # bash builtin (this loop's `printf`, one call down in _claude_meta_for_file)
+  # reports that as a literal "printf: write error: Broken pipe" line on
+  # stderr instead of dying silently the way an external command would — see
+  # tests/bats/adapters/session-meta.bats "list_sessions honours a limit".
   while IFS= read -r f; do
     [ -n "$f" ] || continue
-    _claude_meta_for_file "$f" && any=1
-  done <<EOF
-$(ls -t "$proj"/*.jsonl 2>/dev/null | head -n "$limit")
-EOF
+    [ "$emitted" -lt "$limit" ] || break
+    adapter_transcript_is_resumable "$f" || continue
+    _claude_meta_for_file "$f" && { any=1; emitted=$((emitted + 1)); }
+  done < <(ls -t "$proj"/*.jsonl 2>/dev/null)
   [ "$any" -eq 1 ] || return 1
 }
 
@@ -317,13 +593,16 @@ adapter_session_title() {
 # lost everything past `Fix the `). Self-contained: it sources no core lib (the
 # adapter unit tests exercise it standalone), so the only fork is one `tail -c`.
 adapter_title_for_file() {
+  if declare -F reading_cache_run >/dev/null; then
+    reading_cache_run claude-title "$1" _claude_title_uncached "$@"
+  else
+    _claude_title_uncached "$@"
+  fi
+}
+
+_claude_title_uncached() {
   local f="$1"
   [ -n "$f" ] && [ -f "$f" ] || return 0
-
-  local re_custom='"customTitle"[[:space:]]*:[[:space:]]*"(([^"\]|\\.)*)"'
-  local re_title='"aiTitle"[[:space:]]*:[[:space:]]*"(([^"\]|\\.)*)"'
-  local re_text='"text"[[:space:]]*:[[:space:]]*"(([^"\]|\\.)*)"'
-  local re_content='"content"[[:space:]]*:[[:space:]]*"(([^"\]|\\.)*)"'
 
   # TAIL-FIRST (bounded): a /rename can land ANYWHERE in the transcript — deep in
   # a long session, far past the head window below. Claude re-emits the
@@ -335,14 +614,29 @@ adapter_title_for_file() {
   # `clikae resume`/home/clean for any session renamed after its first 100 lines
   # — the two views silently drifted from the board (2026-07-21 incident: a
   # session renamed "voxel@cvertex" at transcript line 13845 listed as "cvertex").
-  local tail_custom="" tail_ai="" line
-  while IFS= read -r line; do
-    if [[ "$line" == *'"customTitle"'* ]] && [[ $line =~ $re_custom ]]; then
-      tail_custom="${BASH_REMATCH[1]}"
-    elif [[ "$line" == *'"aiTitle"'* ]] && [[ $line =~ $re_title ]]; then
-      tail_ai="${BASH_REMATCH[1]}"
-    fi
-  done < <(tail -c "${CLIKAE_TX_TAIL_BYTES:-524288}" "$f" 2>/dev/null)
+  # 🔴 ONE grep over the slice, not a bash loop over every line in it. This used
+  # to `while read` the whole 512 KiB tail and run two `[[ =~ ]]` per line — in
+  # bash 3.2, against lines that can each be megabytes (an inlined tool result).
+  # Measured on the maintainer's largest real transcript (370 MB): 262.7 ms for
+  # ONE title, and the board asks for several before it can draw. The grep form
+  # is exactly what the sibling extractor _claude_meta_for_file (90 lines above,
+  # same file, same precedence rules) has always used; this one simply never
+  # adopted it. `tail -n 1` keeps the LAST match, which is the semantics the
+  # loop had. Every grep guarded: a no-match must not abort under pipefail.
+  # ONE pass for BOTH keys. This used to hold the 512 KiB slice in a variable and
+  # push the whole thing back through a pipe twice, once per key — bash reads the
+  # slice out of a subshell, stores it, then writes half a megabyte out again for
+  # each grep. Matching both keys in a single scan leaves only the handful of
+  # matched fragments to sort out, and grep -o preserves file order, so "the last
+  # customTitle" is still the last line that starts with that key.
+  local tail_custom="" tail_ai="" _hits
+  _hits="$(tail -c "${CLIKAE_TX_TAIL_BYTES:-524288}" "$f" 2>/dev/null \
+    | LC_ALL=C grep -oE '"(customTitle|aiTitle)"[[:space:]]*:[[:space:]]*"([^"\\]|\\.)*"' \
+        2>/dev/null || true)"
+  tail_custom="$(printf '%s\n' "$_hits" | LC_ALL=C grep '^"customTitle"' 2>/dev/null \
+    | tail -n 1 | sed -E 's/^"customTitle"[[:space:]]*:[[:space:]]*"//; s/"$//' || true)"
+  tail_ai="$(printf '%s\n' "$_hits" | LC_ALL=C grep '^"aiTitle"' 2>/dev/null \
+    | tail -n 1 | sed -E 's/^"aiTitle"[[:space:]]*:[[:space:]]*"//; s/"$//' || true)"
 
   # HEAD window (bounded): an EARLY customTitle, else the latest aiTitle, else the
   # opening user message. A USER-set title (/rename →
@@ -350,23 +644,40 @@ adapter_title_for_file() {
   # aiTitle — see the twin comment on _claude_meta_for_file above for why
   # (2026-07-11 incident). Scan the full bounded window (no early break) so a
   # rename that lands AFTER an earlier ai-title within these 100 lines still wins.
-  local line_in idx_in=0 max_lines_in=100 custom_in="" ai_in="" user_msg_in=""
-  while IFS= read -r line_in; do
-    idx_in=$((idx_in + 1))
-    [ "$idx_in" -gt "$max_lines_in" ] && break
-    if [[ "$line_in" == *'"customTitle"'* ]] && [[ $line_in =~ $re_custom ]]; then
-      custom_in="${BASH_REMATCH[1]}"
-    elif [[ "$line_in" == *'"aiTitle"'* ]] && [[ $line_in =~ $re_title ]]; then
-      ai_in="${BASH_REMATCH[1]}"
-    fi
-    if [ -z "$user_msg_in" ] && [[ "$line_in" == *'"role":"user"'* ]]; then
-      if [[ $line_in =~ $re_text ]]; then
-        user_msg_in="${BASH_REMATCH[1]}"
-      elif [[ $line_in =~ $re_content ]]; then
-        user_msg_in="${BASH_REMATCH[1]}"
-      fi
-    fi
-  done < "$f" 2>/dev/null
+  # 🔴 grep here too, and this half is a HANG not a slowdown. bash's `[[ =~ ]]`
+  # runs the nested-star `(([^"\]|\\.)*)` with an exponential backtracker:
+  # measured on a real transcript line of 229,385 bytes, one match attempt did
+  # not finish in 30 SECONDS — and neither did the same regex against just the
+  # first 4 KB of that line, so trimming the input does not rescue it. The same
+  # extraction with grep over the whole 512 KiB tail takes 22 ms.
+  #
+  # A transcript earns such a line the moment a tool result or a pasted file is
+  # inlined into one of its first hundred, and the board asks for a title on
+  # every recent session — so this was a board that could simply stop, with no
+  # error, on ordinary content. Found because a whole-store differential run sat
+  # on one 0.3 MB file for 35 minutes.
+  # Same single-pass treatment as the tail. The head window is only 100 LINES, but
+  # a line can be 229 KB (see above), so it is not automatically small either.
+  local custom_in="" ai_in="" user_msg_in="" _head _uline
+  _head="$(head -n 100 "$f" 2>/dev/null || true)"
+  _hits="$(printf '%s\n' "$_head" \
+    | LC_ALL=C grep -oE '"(customTitle|aiTitle)"[[:space:]]*:[[:space:]]*"([^"\\]|\\.)*"' \
+        2>/dev/null || true)"
+  custom_in="$(printf '%s\n' "$_hits" | LC_ALL=C grep '^"customTitle"' 2>/dev/null \
+    | tail -n 1 | sed -E 's/^"customTitle"[[:space:]]*:[[:space:]]*"//; s/"$//' || true)"
+  ai_in="$(printf '%s\n' "$_hits" | LC_ALL=C grep '^"aiTitle"' 2>/dev/null \
+    | tail -n 1 | sed -E 's/^"aiTitle"[[:space:]]*:[[:space:]]*"//; s/"$//' || true)"
+  # The opening user message: the FIRST user line, then its "text" (the array
+  # shape) or, failing that, its "content" (the plain-string shape).
+  _uline="$(printf '%s' "$_head" | LC_ALL=C grep -m1 '"role"[[:space:]]*:[[:space:]]*"user"' 2>/dev/null || true)"
+  if [ -n "$_uline" ]; then
+    user_msg_in="$(printf '%s' "$_uline" \
+      | LC_ALL=C grep -oE '"text"[[:space:]]*:[[:space:]]*"([^"\\]|\\.)*"' 2>/dev/null \
+      | head -n 1 | sed -E 's/^"text"[[:space:]]*:[[:space:]]*"//; s/"$//' || true)"
+    [ -n "$user_msg_in" ] || user_msg_in="$(printf '%s' "$_uline" \
+      | LC_ALL=C grep -oE '"content"[[:space:]]*:[[:space:]]*"([^"\\]|\\.)*"' 2>/dev/null \
+      | head -n 1 | sed -E 's/^"content"[[:space:]]*:[[:space:]]*"//; s/"$//' || true)"
+  fi
 
   # Precedence mirrors _claude_meta_for_file (the board's extractor) so the two
   # views can't drift again: newest customTitle (tail → head) outranks aiTitle
@@ -376,6 +687,19 @@ adapter_title_for_file() {
   [ -n "$stitle" ] || stitle="$tail_ai"
   [ -n "$stitle" ] || stitle="$ai_in"
   [ -n "$stitle" ] || stitle="$user_msg_in"
+  # 🔴 CAP BEFORE CLEANING. The three `${//}` substitutions below are global and
+  # bash runs them in roughly O(n²): on a title taken from a 229 KB user line —
+  # which is what the opening-message fallback yields when a tool result or a
+  # pasted file is inlined — they did not finish in 60 SECONDS. That is the
+  # second half of the same hang the grep rewrite above fixed, and it survived
+  # the first fix because the extraction was no longer slow, only the cleaning.
+  #
+  # A caller renders this in a handful of columns, so nothing past a couple of
+  # hundred characters is ever seen. _claude_meta_for_file already caps at 200
+  # for exactly this reason; this function never did. Cut generously (the cap is
+  # on BYTES here and the display truncation is on COLUMNS, so leave room for a
+  # multibyte title to still have enough to show).
+  [ "${#stitle}" -gt 400 ] && stitle="${stitle:0:400}"
   stitle="${stitle//\\n/ }"
   stitle="${stitle//\\t/ }"
   stitle="${stitle//\\\"/\"}"
@@ -383,7 +707,17 @@ adapter_title_for_file() {
 }
 
 adapter_recent_sids() {
-  local dir="$1" limit="${2:-5}" proj mt f
+  if [ "${_CLIKAE_BOARD:-0}" = 1 ]; then
+    # Snapshot first (board_generation keeps it fresh per-render on its own —
+    # see board_stale). Only fall through to the live glob below when the
+    # snapshot itself has nothing to say, never disable the glob outright:
+    # 2026-09-12 round-1 fix review, P1-1 — a board with no snapshot at all
+    # for THIS scope must still answer, and a live guess here is bounded by
+    # this one directory's own file count, not by every transcript on disk.
+    local _bout; _bout="$(board_recent claude "$@")"
+    if [ -n "$_bout" ]; then printf '%s\n' "$_bout"; return 0; fi
+  fi
+  local dir="$1" limit="${2:-5}" proj mt f emitted=0
   proj="$dir/projects/$(_claude_project_slug "$PWD")"
   [ -d "$proj" ] || return 0
   # This-dir scope = $PWD's project glob; one sessions_by_mtime (shared kernel)
@@ -391,10 +725,23 @@ adapter_recent_sids() {
   # transcript by session id).
   # NB: plain `read -r mt f` (NOT `IFS= read`) so the "<mtime> <path>" line splits
   # into two fields; IFS= would shove the whole line into mt and leave f empty.
-  sessions_by_mtime "$proj"/*.jsonl | head -n "$limit" | while read -r mt f; do
+  # Subagent transcripts are skipped BEFORE the cut, not after, or a directory
+  # whose newest N files are all `agent-*` hands the board an empty list while
+  # real sessions sit just below the cut. The board's warm path (board_recent,
+  # above) already excludes them — this is the cold path learning the same
+  # rule. See adapter_transcript_is_resumable for why it is the basename.
+  # The limit is enforced HERE, inside the loop, not by a trailing
+  # `| head -n "$limit"`: once `head` has its fill and exits, the next `printf`
+  # in this loop writes into a closed pipe and (being a bash builtin) reports
+  # the EPIPE as a literal "Broken pipe" line on stderr instead of dying
+  # silently — see adapter_list_sessions above, same failure shape.
+  sessions_by_mtime "$proj"/*.jsonl | while read -r mt f; do
     [ -n "$f" ] || continue
+    [ "$emitted" -lt "$limit" ] || break
+    adapter_transcript_is_resumable "$f" || continue
     f="${f##*/}"
     printf '%s\037%s\n' "$mt" "${f%.jsonl}"
+    emitted=$((emitted + 1))
   done
 }
 
@@ -414,10 +761,74 @@ adapter_recent_sids() {
 adapter_find_session() {
   local dir="$1" sid="$2" f
   [ -n "$sid" ] || return 1
+  if [ "${_CLIKAE_BOARD:-0}" = 1 ]; then
+    # Snapshot first; fall through to the all-projects glob when this sid is
+    # simply not in the snapshot's sids index (2026-09-12 round-1 fix review,
+    # P1-1(b): a sid outside $PWD's own project slug still needs an answer).
+    f="$(board_find claude "$dir" "$sid" 2>/dev/null)" && [ -n "$f" ] && { printf '%s\n' "$f"; return 0; }
+  fi
   for f in "$dir"/projects/*/"$sid".jsonl; do
     [ -f "$f" ] && { printf '%s\n' "$f"; return 0; }
   done
   return 1
+}
+
+# Optional hook: is this transcript a conversation a PERSON can reopen?
+#
+# 🔴 claude writes a subagent's transcript beside its parent session's, in the
+# same project directory, as `agent-<id>.jsonl` (every line carries
+# `"isSidechain":true`). Those are not sessions anyone resumes — verified by
+# doing, not assumed: `claude --resume agent-<id>` answers "Provided value
+# 'agent-…' is not a UUID and does not match any session title". They also
+# outnumber real sessions badly on a working store, and their "title" is
+# whatever brief the parent dispatched with ("Effort: high. Expected ~60 tool
+# steps…"), so a list of them is noise that buries the one conversation you
+# were looking for.
+#
+# The rule is the BASENAME, not a content read: lib/core/board_state.sh has
+# skipped `agent-*` by basename since round 5 (its sid/scope resolution), so
+# the board's warm path already agrees with this — what this hook does is give
+# the COLD paths and the store-wide lists the same answer, from the adapter
+# that owns the layout fact rather than from four `case` statements.
+#
+# 🔴 WHAT THIS MUST NOT NARROW: finding a session BY ID. adapter_find_session
+# is deliberately not gated on this — paste a full `agent-<id>` and clikae
+# still locates the tank and cd's there. Only the LISTS and the COUNTS use it.
+# `clikae clean` does not use it either, on purpose: a subagent transcript is
+# pure disk, exactly what a disk tool should still be able to reclaim.
+adapter_transcript_is_resumable() {
+  case "${1##*/}" in agent-*) return 1 ;; esac
+  return 0
+}
+
+# Optional hook: EVERY transcript path under this profile dir — no cwd filter,
+# no limit, no per-file reads (see codex.sh's and antigravity.sh's twins).
+# This is what `clikae resume` enumerates the store with: its list is
+# deliberately store-wide and directory-free, so it asks each adapter for
+# everything it holds rather than keeping a glob per engine of its own (the
+# list grok was never added to).
+#
+# For burn's before/after attribution this stays a no-op in practice on the
+# claude path: claude is TOLD its session id (--session-id) before it runs, so
+# burn records that proven id and never reaches the snapshot diff — the diff is
+# only consulted when no transcript for the launched sid ever appeared.
+#
+# 🔴 -maxdepth 2, matching the pre-adapter glob this replaced
+# (`projects/*/*.jsonl`: project-dir, then the transcript). A session's sibling
+# `<sid>/` directory holds subagent/workflow transcripts of its own
+# (`<sid>/subagents/*.jsonl` — see _clean_add_candidate's header in
+# clean.sh), one level deeper; without the bound, `find` recurses into it and
+# hands back that nested file as a SECOND, independent top-level transcript.
+# `clean`'s batched `du -sk` then prices the sid dir AND that same file
+# together in one invocation — harmless on BSD du (each argument's total is
+# computed independently), but GNU du de-duplicates by inode ACROSS the whole
+# argument list, so the directory total comes back 0 once its one file was
+# already counted under its own argument. That silently dropped the sibling
+# dir's bytes from the transcript's price on Linux only (CI: clean.bats
+# "clean prices a claude transcript together with its sibling sid dir"),
+# reproduced locally with GNU coreutils' `gdu`.
+adapter_all_transcripts() {
+  find "$1/projects" -maxdepth 2 -type f -name '*.jsonl' 2>/dev/null
 }
 
 # Optional hook: the working directory a transcript was recorded in. Claude Code
@@ -467,7 +878,7 @@ adapter_relay() {
     return 1
   fi
 
-  log_ok "Carried session ${sid%%-*}… into the target profile."
+  log_done "Carried session ${sid%%-*}… into the target profile."
   log_dim "Resuming on the new profile's quota; the original session is untouched."
   CLAUDE_CONFIG_DIR="$to_dir" exec claude --resume "$sid" "$@"
 }
@@ -541,3 +952,290 @@ adapter_migrate_credentials() {
   secret=""
   return 0
 }
+
+# Optional usage hook. Secrets exist only in this subshell and curl's stdin.
+#
+# The darwin branch below mirrors adapter_migrate_credentials' own
+# `command -v security` guard, and bounds the call (round-1 review, P2-7):
+# burn's candidate loop no longer reaches this (P2-2), but `clikae usage`/
+# `--fresh` still can, and a locked keychain or an ACL prompt with no one
+# there to answer it must not hang a headless caller.
+#
+# P2-2 (round-2 review): this used to resolve its own two-arm bound
+# (timeout, gtimeout, nothing else) right here, on the one platform this
+# branch runs on (stock macOS), which ships NEITHER by default — so the 5s
+# bound was silently empty on every install that had not gone out of its
+# way to add one. lib/core/timeout_bin.sh's _burn_timeout_bin already has
+# the correct three-arm resolver (timeout, gtimeout, perl, plus an honest
+# warning when none exist); call that instead of re-rolling it narrower.
+# P3-5 (round-6 review, a first step toward #107): when this returns
+# non-zero it may print ONE line of JSON naming why, and nothing else —
+# never a vendor body, never anything derived from one. lib/core/usage.sh
+# reads at most `.reason`, through a closed enum, and discards the rest. See
+# usage_unknown there for what the words are allowed to mean, and
+# _claude_usage_call_failed below for which observation produces which (#107
+# took the old `network` catch-all apart: an HTTP 401/403 is now observed,
+# not inferred, and an unparseable body has its own word).
+_claude_usage_unreadable() {
+  printf '{"source":"unknown","reason":"%s"}\n' "$1"
+}
+
+# #107: why a call that did not come back usable failed, from what is actually
+# observable — curl's own exit status, the HTTP status curl wrote (see the
+# `-w` below), and two facts the credentials themselves record: is there a
+# refresh token, and has the access token's own expiry passed. Its own
+# function so every failure exit below says the same thing for the same facts.
+#   401/403, or an access token already past its own expiry:
+#     refresh token present  -> expired-token. Only a session (or `clikae usage
+#                               --wake`) refreshes it; nothing is wrong with
+#                               the login, and an operator must not be told so.
+#     no refresh token       -> no-credentials. Nothing here can renew it; it
+#                               needs a login, which is what that word means.
+#   curl rc 63 (body over the byte cap) -> unparseable.
+#   HTTP 429 -> rate-limited (#136, below).
+#   everything else (no connection, timeout, 5xx) -> network.
+# "Expired by its own record" wins over a transport failure on purpose: that
+# token would not have worked on a healthy network either — and a 429 IS a
+# transport failure in that sentence's terms, so #136's new branch lands
+# BELOW the expiry check, not beside the 401/403 one. An observed 401/403
+# still wins over everything, unchanged.
+#
+# #136: 429 is pulled out of the `network` lump — it is the one failure the
+# vendor tells you how long to wait for, and `clikae watch`'s usage poll
+# (lib/commands/watch.sh) can only honour that hint if the hint survives to
+# it. NOTE WHAT THIS DELIBERATELY DOES NOT DO: the issue proposed collapsing
+# 401/403 into a single `reauth`, which would undo #107/#117 — that PR split
+# the auth case into `expired-token` (a session fixes it; the board says
+# `expired · usage --wake <tank>`) and `no-credentials` (this one really
+# does need a login), because an idle tank at 99% weekly used to read exactly
+# like a tank with no login at all. Those two words ARE the auth class, finer
+# than `reauth`; callers that want the class ask for "expired-token or
+# no-credentials" (see `_watch_usage_poll_one`) rather than losing the split.
+_claude_usage_call_failed() {
+  local rc="${1:-}" code="${2:-}"
+  case "$code" in
+    401|403) _claude_usage_auth_failed; return 0 ;;
+  esac
+  if [ "${_claude_token_expired:-0}" = 1 ]; then _claude_usage_auth_failed; return 0; fi
+  case "$code" in
+    429) _claude_usage_rate_limited "${_claude_retry_after:-}"; return 0 ;;
+  esac
+  if [ "$rc" = 63 ]; then _claude_usage_unreadable unparseable; return 0; fi
+  _claude_usage_unreadable network
+}
+_claude_usage_auth_failed() {
+  if [ "${_claude_has_refresh:-0}" = 1 ]
+  then _claude_usage_unreadable expired-token
+  else _claude_usage_unreadable no-credentials
+  fi
+}
+# #136: reason `rate-limited`, plus `retry_after` ONLY when the vendor's own
+# `Retry-After` header was present AND is a delta-seconds integer in 1..86400.
+# Everything else about that header is dropped on the floor and the caller
+# falls back to its own backoff: the empty string (no header), a non-integer
+# (`abc`), a negative (`-5`), a zero, an HTTP-date (RFC 9110 allows one; no
+# vendor sends one here and parsing dates in bash 3.2 to honour a hint we
+# already bound is not worth the surface), and anything over 86400 — which is
+# also the digit bound, since `[ 99999999999999999999 -le 86400 ]` is an
+# arithmetic overflow in bash, not a comparison (the same shape
+# lib/core/usage.sh's `_USAGE_CACHE_PEEK_MAX_AGE_SEC` guard was given).
+# 86400 = one day: longer than any ceiling clikae has, so a value past it is
+# not a wait, it is a bug or a hostile server.
+_claude_usage_rate_limited() {
+  case "${1:-}" in
+    ''|*[!0-9]*|??????*) ;;
+    *)
+      if [ "$1" -ge 1 ] && [ "$1" -le 86400 ]; then
+        printf '{"source":"unknown","reason":"rate-limited","retry_after":%s}\n' "$1"
+        return 0
+      fi ;;
+  esac
+  printf '{"source":"unknown","reason":"rate-limited"}\n'
+}
+
+adapter_usage() (
+  set +x
+  set +a
+  local dir="$1" service token response creds
+  export -n token response creds
+  # #107: one read yields three tab-separated facts — the access token, whether
+  # a refresh token exists (1/0), and whether the access token's own recorded
+  # expiry has passed (1/0) — so the Keychain path answers the same questions
+  # the file path does (it used to be file-only for the expiry, and neither
+  # path ever looked for a refresh token). The refresh token's VALUE never
+  # leaves jq: only its presence does.
+  local _claude_creds_jq='
+    .claudeAiOauth | select(type == "object") |
+    (.accessToken // empty) as $t |
+    "\($t)\t\(if (.refreshToken|type) == "string" and .refreshToken != "" then 1 else 0 end)\t\(if (.expiresAt|type) == "number" and (.expiresAt / 1000) < $now then 1 else 0 end)"'
+  local _claude_now
+  _claude_now="$(date +%s)"
+  creds="$(
+    if [ -f "$dir/.credentials.json" ]; then
+      jq -er --argjson now "$_claude_now" "$_claude_creds_jq" "$dir/.credentials.json" 2>/dev/null
+    elif [[ "${OSTYPE:-}" == darwin* ]]; then
+      command -v security >/dev/null 2>&1 || exit 1
+      service="$(_claude_keychain_service "$dir")" || exit 1
+      local _tbin=""
+      # P3-3 (round-3 review): `2>/dev/null` here swallowed _burn_timeout_bin's
+      # own honest warning (lib/core/timeout_bin.sh:25) when all three arms
+      # are missing, so a stock-macOS box with none of timeout/gtimeout/perl
+      # ran the Keychain read UNBOUNDED, silently. burn.sh's own call sites
+      # (:741, :2476) already leave stderr unsuppressed for this reason.
+      declare -F _burn_timeout_bin >/dev/null && _tbin="$(_burn_timeout_bin)"
+      if [ "$_tbin" = timeout ] || [ "$_tbin" = gtimeout ]; then
+        "$_tbin" 5 security find-generic-password -s "$service" -w 2>/dev/null |
+          jq -er --argjson now "$_claude_now" "$_claude_creds_jq" 2>/dev/null
+      elif [ "$_tbin" = perl ]; then
+        perl -e 'alarm shift; exec @ARGV or exit 127' 5 security find-generic-password -s "$service" -w 2>/dev/null |
+          jq -er --argjson now "$_claude_now" "$_claude_creds_jq" 2>/dev/null
+      else
+        security find-generic-password -s "$service" -w 2>/dev/null |
+          jq -er --argjson now "$_claude_now" "$_claude_creds_jq" 2>/dev/null
+      fi
+    fi
+  )" || { creds=""; _claude_usage_unreadable no-credentials; return 1; }
+  local _claude_has_refresh _claude_token_expired _claude_rest
+  token="${creds%%$'\t'*}"
+  _claude_rest="${creds#*$'\t'}"
+  _claude_has_refresh="${_claude_rest%%$'\t'*}"
+  _claude_token_expired="${_claude_rest#*$'\t'}"
+  creds=""; _claude_rest=""
+  [ "$_claude_has_refresh" = 1 ] || _claude_has_refresh=0
+  [ "$_claude_token_expired" = 1 ] || _claude_token_expired=0
+  # Restrict to bearer-token characters; reject curl-config injection.
+  case "$token" in ''|*[!a-zA-Z0-9._~+/-]*) token=""; _claude_usage_unreadable no-credentials; return 1 ;; esac
+  # #107: curl's `--fail` stays (a 4xx/5xx body is never read as a reading),
+  # but it collapses every HTTP refusal into exit 22 — so the status itself is
+  # written, and only the status, to a private temp file through `-w
+  # '%{stderr}…'` (stderr carries nothing else: `-s` silences curl's own
+  # messages). That is what makes a 401 observable instead of inferred. No
+  # temp file (mktemp failed) just means no status: the failure falls back to
+  # the pre-#107 inference from the credentials' own expiry.
+  local _claude_code_file="" _claude_http_code=""
+  _claude_code_file="$(mktemp "${TMPDIR:-/tmp}/clikae-usage-status.XXXXXX" 2>/dev/null)" || _claude_code_file=""
+  # #136: the RESPONSE headers, for one field only — `Retry-After` on a 429.
+  # Its own file, never the status file above: that file's contract is "one
+  # line, the three-digit status, nothing else" (`IFS= read -r` takes the
+  # FIRST line), and a header dump's first line is `HTTP/2 429`. Measured
+  # (curl 8.5, a real 429): `--fail` suppresses the BODY but still writes the
+  # header dump, so this costs the failure path nothing it did not already
+  # have. `-D` is the portable spelling — curl's own `%header{name}` write-out
+  # variable would be smaller but needs 7.84+, and ubuntu-22.04 ships 7.81.
+  # A failed mktemp just means no header: the 429 falls back to plain backoff,
+  # exactly as it did before this existed.
+  local _claude_hdr_file="" _claude_retry_after=""
+  _claude_hdr_file="$(mktemp "${TMPDIR:-/tmp}/clikae-usage-hdr.XXXXXX" 2>/dev/null)" || _claude_hdr_file=""
+  # shellcheck disable=SC2064  # expand now: the paths are fixed for this subshell
+  [ -z "$_claude_code_file" ] && [ -z "$_claude_hdr_file" ] ||
+    trap "rm -f '$_claude_code_file' '$_claude_hdr_file'" EXIT
+  # P3-2 (codex security review, round-5): the whole body used to land in
+  # this variable, and jq's own parsing/copying work, with no upper bound —
+  # neither curl's --max-time (bounds TRANSFER TIME, not bytes) nor the small
+  # final cache shape protects against a faulty or hostile upstream sending
+  # a huge body (measured: a 16MiB synthetic body was fully accepted and
+  # normalized). `--max-filesize` is the line that actually does the work on
+  # a modern curl: since 8.4 it applies DURING the transfer, so it aborts a
+  # chunked/streamed body too, not only one whose Content-Length announces
+  # itself too large (measured on curl 8.5: 65536 accepted, 65537 refused
+  # with rc=63, identically across Content-Length / chunked / close-delimited
+  # — round-6 review). The `head -c` below is the fallback for a curl old
+  # enough to apply the flag only to an announced length.
+  #
+  # P3-3 (round-6 review): that fallback used to be nondeterministic. It read
+  # exactly the cap and TRUNCATED, so an over-long body whose overflow was
+  # trailing whitespace came back as a perfectly valid reading whenever curl
+  # happened to finish before `head` closed the pipe, and as a failure
+  # whenever head won the race (measured 6/20 accepted for one padding, 17/20
+  # for another) — the same response accepted or refused by pipe scheduling.
+  # Read exactly ONE byte more than the cap instead, and refuse outright if
+  # that byte arrives: over-long is over-long whoever wins the race. (If head
+  # closing the pipe kills curl first, PIPESTATUS[1] is non-zero and we
+  # refuse on that instead — both roads lead to the same verdict now.) The
+  # trailing `X` is a sentinel: `$( )` strips trailing newlines, and without
+  # it a body that overflows by exactly a newline would measure as fitting.
+  #
+  # PIPESTATUS[1] carries curl's OWN exit status, since `head` closing early
+  # would otherwise hide a real curl failure behind head's always-zero status.
+  local _claude_usage_max_bytes=65536
+  response="$(
+    printf 'header = "Authorization: Bearer %s"\nheader = "anthropic-beta: oauth-2025-04-20"\n' "$token" |
+      curl -q -s -K - --fail --connect-timeout 3 --max-time 8 \
+        --max-filesize "$_claude_usage_max_bytes" -w '%{stderr}%{http_code}' \
+        -D "${_claude_hdr_file:-/dev/null}" \
+        https://api.anthropic.com/api/oauth/usage 2>"${_claude_code_file:-/dev/null}" |
+      head -c "$(( _claude_usage_max_bytes + 1 ))"
+    _claude_usage_curl_rc="${PIPESTATUS[1]}"
+    printf 'X'
+    exit "$_claude_usage_curl_rc"
+  )" || {
+    _claude_usage_curl_rc=$?
+    token=""; response=""
+    [ -z "$_claude_code_file" ] || IFS= read -r _claude_http_code < "$_claude_code_file" || true
+    case "$_claude_http_code" in [0-9][0-9][0-9]) ;; *) _claude_http_code="" ;; esac
+    # #136: the ONE header field this reads, and only on a 429 — never parsed
+    # for any other status, so a healthy call pays nothing. `head -c` first:
+    # --max-filesize bounds the BODY, nothing bounds a header block, and this
+    # runs on whatever a faulty or hostile upstream sent. `tr -d '\r'` because
+    # HTTP line endings are CRLF and a stray CR would fail the digit test
+    # below in a way that looks like "no header". Name matched
+    # case-insensitively by hand (RFC 9110: field names are case-insensitive;
+    # BSD sed has no `I` flag), value taken from the FIRST occurrence — we
+    # never follow redirects, so there is only ever one header block.
+    if [ "$_claude_http_code" = 429 ] && [ -n "$_claude_hdr_file" ]; then
+      _claude_retry_after="$(head -c 65536 "$_claude_hdr_file" 2>/dev/null | tr -d '\r' |
+        sed -n 's/^[Rr][Ee][Tt][Rr][Yy]-[Aa][Ff][Tt][Ee][Rr][[:space:]]*:[[:space:]]*//p' |
+        head -n 1)"
+      _claude_retry_after="${_claude_retry_after%%[[:space:]]*}"
+    fi
+    _claude_usage_call_failed "$_claude_usage_curl_rc" "$_claude_http_code"; return 1
+  }
+  response="${response%X}"
+  if [ "$(printf '%s' "$response" | wc -c | tr -d ' ')" -gt "$_claude_usage_max_bytes" ]; then
+    token=""; response=""; _claude_usage_unreadable unparseable; return 1
+  fi
+  token=""
+  # P3-1 (codex security review, round-5): a response holding MULTIPLE JSON
+  # documents used to become multiple cached readings — burn's shell `read`
+  # only ever consumes the first TSV line, silently discarding whichever
+  # reading came later (measured: a two-document stub produced a second,
+  # tank-less 99%/99% reading that nothing downstream ever looked at, but
+  # that a different caller could). Slurp (`-s`) so exactly one JSON value —
+  # a single object — is ever accepted; anything else (0, 2+, or a
+  # non-object root) is `empty`, which `-e` turns into an honest failure
+  # rather than a partial or duplicated reading.
+  # #137: the per-model weekly quota the REPL's `/usage` shows as a second line
+  # ("Current week (Fable) 11%" next to "Current week (all models) 14%") IS in
+  # this response — #133's PR body said it was not, and that was measured off
+  # the wrong part of the body. It is NOT a sibling of `five_hour`/`seven_day`
+  # (the `seven_day_opus` / `seven_day_sonnet` keys next to them were null on
+  # every tank probed, 2026-09-17) and it is NOT `seven_day_breakdown`, whose
+  # rows are SURFACES (Claude Code / Chats / Cowork / Other), not models. It is
+  # an entry in the `limits` array whose `kind` is `weekly_scoped`, carrying
+  # the model under `scope.model.display_name` — and `scope.model.id` was null
+  # there, so the display name is the only model identifier the vendor gives.
+  #
+  # Surfaced, not acted on. The board's dot deliberately keeps using the
+  # all-models number: choosing the RELEVANT per-model quota needs to know
+  # which model a tank runs, and clikae has no such fact — `--model` is a
+  # pass-through argument on `burn`/`relay`, never a property of a tank. A dot
+  # coloured by whichever per-model row happened to be first would be worse
+  # than one that is honestly all-models. So these numbers reach `clikae
+  # usage`'s output (and the cache) and stop there; see docs/usage.md.
+  printf '%s' "$response" | jq -ce -s '
+    if (length != 1) or ((.[0]|type) != "object") then empty else .[0] end |
+    select(.five_hour.utilization|type == "number") |
+    select(.seven_day.utilization|type == "number") |
+    . as $r |
+    ([ (if ($r.limits|type) == "array" then $r.limits[] else empty end) |
+       select(type == "object") | select(.kind == "weekly_scoped") |
+       {name: .scope.model.display_name, pct: .percent, resets_at: .resets_at} |
+       select((.name|type) == "string" and (.name|length) > 0 and (.name|length) <= 40) |
+       select((.pct|type) == "number" and .pct >= 0 and .pct <= 100) |
+       if (.resets_at|type) == "string" then . else .resets_at = null end
+     ] | .[0:8]) as $models |
+    {window_pct:$r.five_hour.utilization,weekly_pct:$r.seven_day.utilization,
+     window_resets_at:$r.five_hour.resets_at,weekly_resets_at:$r.seven_day.resets_at,source:"vendor"} +
+    (if ($models|length) > 0 then {models:$models} else {} end)' 2>/dev/null ||
+    { _claude_usage_unreadable unparseable; return 1; }
+)

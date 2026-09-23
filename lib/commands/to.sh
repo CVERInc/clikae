@@ -4,8 +4,8 @@
 #
 # Reads as English — "clikae to codex" = "switch TO codex" — and the source is
 # auto-detected from this shell. clikae picks the mechanism and announces it:
-#   • target is the SAME engine     -> a real resume        (delegates to relay)
-#   • target is a DIFFERENT engine  -> a written brief, cold (delegates to handoff)
+#   · target is the SAME engine     -> a real resume        (delegates to relay)
+#   · target is a DIFFERENT engine  -> a written brief, cold (delegates to handoff)
 # See docs/grammar.md §3.2. `relay`, `handoff`, `continue` are hidden aliases.
 
 # _to_detect_source -> "engine\ttank" for whichever engine this shell is on (its
@@ -57,8 +57,8 @@ the tank you're on runs dry. The source is auto-detected from this shell.
 With NO target, falls through to the next tank of the engine you're on (your
 tanks ARE the reserve — there's nothing to configure). clikae picks the
 mechanism and tells you which:
-  • same engine, another tank  -> a real resume (your conversation continues)
-  • a different engine         -> a written brief (that engine can't resume a
+  · same engine, another tank  -> a real resume (your conversation continues)
+  · a different engine         -> a written brief (that engine can't resume a
                                   foreign session, so it starts cold from a summary)
 
   clikae to                  fall through to the next tank of THIS engine

@@ -28,8 +28,9 @@ Switch (the main thing — no verb needed):
   clikae <engine>                  one tank → use it; several → list them
   clikae to <target> [tank]        carry your CURRENT session onto another tank
                                    (same engine → resume; another → a brief)
-  clikae resume [session-id]       reopen a PAST session by id, in whatever tank
-                                   owns it (no id → pick from recent, by title)
+  clikae resume [session-id]       reopen a PAST session by id (a unique prefix
+                                   is enough), in whatever tank owns it
+                                   (no id → pick from recent, by title)
   eval "$(clikae env <engine> <tank>)"   put THIS shell on a tank (so to/status see it)
 
 Make & manage tanks:
@@ -39,15 +40,23 @@ Make & manage tanks:
   git-id <engine> <tank>           set a tank's git commit identity (--name --email)
   memory <share|isolate|status>    share one markdown "brain" across your tanks (claude·codex·agy)
   solo <engine> <tank>             make a tank standalone (out of relay/burn/share)
+  settings apply [engine] [tank]   merge permissions template (--check or --dry-run)
   migrate [engine]                 adopt a hand-rolled config-dir + alias setup
+  cockpit [engine] <tank>          mark the tank that dispatches build/review
+                                   lanes with `burn` instead of spawning them
+                                   in-session (--off removes it; bare = show)
 
 Keep burning when a tank runs dry:
   to [target]                      carry your session to the next tank (bare = next
                                    in your burn order); your tanks ARE the reserve
   auto [ask|safe|full]             how much clikae carries on its own (BETA, claude)
   watch <engine> [tank]            watch for a dry tank and switch onward
+  wake [on|off]                    when a tank runs dry, resume it the moment the
+                                   limit lifts (asks once) · wake <engine> <tank>
   burn <engine> <tank> -- <cmd>    run a headless task on a tank; on a dry tank,
                                    re-fire it on the next (verify by --artifact)
+  wait <run_id|status-file>...     block until a burn (or several) reaches a
+                                   terminal state — never a hand-rolled loop
   conduct --leg <e>/<t>... --prompt-file <f>   (BETA) fan ONE prompt across N
                                    accounts in parallel, collect each full result
 
@@ -57,6 +66,8 @@ Use & inspect:
   lang [<locale>]                  interface language (bare `clikae lang` lists them)
   tanks                            list all tanks (with the logged-in account)
   status [engine]                  which tank each engine is on (+ recent carries)
+  usage [engine] [tank]            vendor usage window(s): used% and reset time
+                                   (--json · --fresh forces a live call)
   clean                            free disk space: one smart list of deletable
                                    session data, preview first, asks before deleting
   doctor                           read-only health check: what clikae can do here
@@ -69,6 +80,8 @@ Meta:
 
 Antigravity (agy) is global single-account, but folds into the same verbs:
   clikae init agy <tank> · clikae agy <tank> · clikae remove agy <tank>
+  A new agy tank ships with a harness: a claim of verified work needs a command
+  to have run. It lives in the tank's config/ — edit it, or delete it to turn it off.
   clikae agy --release             restore a normal ~/.gemini, keep your tanks
   clikae agy <tank> -- -p "…"      one-shot dispatch: agy can't `burn`, but -p sends a single prompt
 

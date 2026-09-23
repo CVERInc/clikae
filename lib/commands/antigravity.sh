@@ -34,11 +34,15 @@ _agy_assert_not_running() {
   fi
 }
 
-# Tank basenames, one per line (glob, not ls|grep — handles odd names).
+# Tank basenames, one per line. Routes through list_all_profiles — the ONE
+# enumerator profile_store.sh owns — rather than globbing profiles/antigravity
+# itself: a second, ad-hoc directory walk here would silently disagree with
+# `clikae tanks` and with burn's reroute for every other engine about what
+# counts as a tank (#61 — a lock file/sidecar/dotdir sitting in the slots dir
+# must never come back as an agy tank name, same as it must never come back
+# as a claude or codex one).
 _agy_tank_names() {
-  local slots d; slots="$(_agy_slots)"
-  [ -d "$slots" ] || return 0
-  for d in "$slots"/*/; do [ -d "$d" ] && basename "$d"; done
+  list_all_profiles | awk -F'\t' '$1=="antigravity"{print $2}'
 }
 
 # The tank the ~/.gemini symlink currently points at (basename), or empty.
@@ -206,11 +210,12 @@ _agy_rename() {
   mv "$slots/$old" "$slots/$new" || log_fail "Couldn't rename the agy tank directory."
   _agy_kc_rename "$old" "$new"
   soul_rename_member "antigravity" "$old" "$new"   # keep Soul membership in step
+  rename_tank_state "antigravity" "$old" "$new"    # burn-order entry + dry marker
   if [ "$active" = "$old" ]; then
     rm -f "$link"; ln -s "$slots/$new" "$link"
-    log_ok "Renamed agy tank '$old' → '$new' (and repointed ~/.gemini)."
+    log_done "Renamed agy tank '$old' → '$new' (and repointed ~/.gemini)."
   else
-    log_ok "Renamed agy tank '$old' → '$new'."
+    log_done "Renamed agy tank '$old' → '$new'."
   fi
 }
 
@@ -220,8 +225,8 @@ _agy_takeover() {
   local link slots; link="$(_agy_link)"; slots="$(_agy_slots)"
   log_warn "Setting up agy multi-account is a POWER mode with real tradeoffs:"
   cat >&2 <<EOF
-  • It turns your real ~/.gemini into a clikae-managed symlink.
-  • On macOS, it carries your Google login PER TANK via your login Keychain:
+  · It turns your real ~/.gemini into a clikae-managed symlink.
+  · On macOS, it carries your Google login PER TANK via your login Keychain:
     agy keeps its OAuth login in one machine-wide Keychain item, so to give each
     tank its own account clikae copies that login between Keychain slots on every
     switch. The token moves Keychain→Keychain and is never written to disk — and
@@ -229,9 +234,9 @@ _agy_takeover() {
     refuses to proceed if it doesn't match, rather than silently landing you on
     the wrong account). A tank with no prior login logs out cleanly instead, so
     agy asks for a fresh OAuth pick.
-  • It is GLOBAL: only one agy tank is active at a time across ALL terminals
+  · It is GLOBAL: only one agy tank is active at a time across ALL terminals
     (the login is one global Keychain entry). Don't run two tanks at once.
-  • Swapping while agy is running can corrupt that session.
+  · Swapping while agy is running can corrupt that session.
   Reversible: 'clikae agy --release' restores a normal ~/.gemini (your tanks and
   their stashed logins are kept).
 EOF
@@ -244,19 +249,26 @@ EOF
   elif [ -d "$link" ]; then
     local ts bak adopt; ts="$(date +%Y%m%d-%H%M%S 2>/dev/null || echo now)"
     bak="$link.clikae.bak.$ts"
-    cp -R "$link" "$bak" && log_ok "Backed up ~/.gemini -> $bak"
+    cp -R "$link" "$bak" && log_done "Backed up ~/.gemini -> $bak"
     # First time -> 'default'. Re-takeover (a 'default' already exists, e.g.
     # after --release) -> a fresh 'restored-<ts>' tank, never clobbering.
     adopt="default"; [ -e "$slots/default" ] && adopt="restored-$ts"
-    mv "$link" "$slots/$adopt" && log_ok "Adopted current ~/.gemini -> tank '$adopt' (login preserved)"
+    mv "$link" "$slots/$adopt" && log_done "Adopted current ~/.gemini -> tank '$adopt' (login preserved)"
+    # #61 round-1 P1-3: agy never calls ensure_profile (it's symlink-managed,
+    # not an env adapter), so it stamps its own marker at every point it
+    # creates/adopts a tank dir. This one clikae itself just moved into place.
+    tank_marker_write antigravity "$slots/$adopt"
+    _tank_adoption_ensure   # #61 round-5 P3-5 — see ensure_profile's twin
     ln -s "$slots/$adopt" "$link"
   else
     mkdir -p "$slots/default"
+    tank_marker_write antigravity "$slots/default"
+    _tank_adoption_ensure   # #61 round-5 P3-5 — see ensure_profile's twin
     ln -s "$slots/default" "$link"
-    log_ok "Created an empty 'default' tank."
+    log_done "Created an empty 'default' tank."
   fi
   printf 'consented %s\n' "$(date +%Y-%m-%dT%H:%M:%S 2>/dev/null || echo yes)" > "$(_agy_consent)"
-  log_ok "clikae now manages ~/.gemini. Active tank: $(_agy_active)"
+  log_done "clikae now manages ~/.gemini. Active tank: $(_agy_active)"
   return 0
 }
 
@@ -264,7 +276,16 @@ _agy_create_tank() {
   local name="$1" slot; slot="$(_agy_slots)/$name"
   if [ -d "$slot" ]; then log_info "agy tank already exists: $name"; return 0; fi
   mkdir -p "$slot"
-  log_ok "Created agy tank: $name"
+  tank_marker_write antigravity "$slot"   # #61 round-1 P1-3 — see _agy_takeover's twin
+  _tank_adoption_ensure                    # #61 round-5 P3-5 — see ensure_profile's twin
+  log_done "Created agy tank: $name"
+  # The tank comes with the harness on. It does not change how agy talks — it
+  # stops a reply from ending with "verified" in a session that ran nothing.
+  # Yours to edit, and deleting either file turns it off with no side effects.
+  if agy_harness_seed "$slot" "$name"; then
+    log_dim "Harness on: a claim of verified work needs a command to have run."
+    log_dim "  It lives in $slot/config/ — edit it, or delete it to turn it off."
+  fi
   log_dim "Switch to it:  clikae agy $name   (then run agy and log in)"
 }
 
@@ -304,9 +325,40 @@ _agy_switch() {
     _agy_kc_verify_restore "$name"
     rm -f "$link"
     ln -s "$slots/$name" "$link"
-    log_ok "agy is now on tank: $name"
+    log_done "agy is now on tank: $name"
     log_dim "agy is global — switched all terminals to $name."
   fi
+  # Launching the interactive UI needs a real terminal. With no TTY and nothing
+  # to pass through, `clikae agy <tank>` is being used as "just switch" — which
+  # works and is genuinely useful in a script — so stop here rather than exec a
+  # bubbletea TUI that can only fail with `could not open TTY`. The switch above
+  # already happened; the old behaviour ended in a confusing error AFTER a
+  # successful switch, and still exited 0, which reads like the switch failed.
+  # Passthrough args (e.g. `-- -p "…"`) are headless and always exec.
+  if [ "$#" -eq 0 ] && { [ ! -t 0 ] || [ ! -t 1 ]; }; then
+    log_dim "no terminal here — switched only. To run it: clikae agy $name (from a real terminal), or pass a headless prompt: clikae agy $name -- -p \"…\""
+    return 0
+  fi
+  # Tell the harness which of the two situations it is in. Dispatched means
+  # nobody is reading the reply, so a claim gets blocked until it holds up;
+  # interactive means you are, so it interrupts once and then gets out of the
+  # way. agy's print mode IS the headless mode, so that flag is the signal
+  # rather than a guess about intent.
+  # Tanks made before the harness existed get it here, once. `seed` is what makes
+  # that safe: it goes by "has clikae ever seeded this tank", not by "are the
+  # files there", so a tank you stripped stays stripped.
+  agy_harness_seed "$slots/$name" "$name" >/dev/null 2>&1 || true
+
+  local a is_dispatch=0
+  for a in "$@"; do
+    case "$a" in -p|--prompt) is_dispatch=1; break ;; esac
+  done
+  [ "$is_dispatch" = "1" ] && export CLIKAE_DISPATCH=1
+  # 2026-09-12 round-1 fix review, P2-1/P2-2: see run.sh's twin comment — no
+  # more subshell-and-refresh-after; board_generation self-heals a stale
+  # snapshot inline at render time, so a boundary call here has nothing left
+  # to buy, and this stays a real `exec` (clikae is not a resident parent for
+  # the rest of the session).
   exec agy "$@"
 }
 
@@ -318,12 +370,12 @@ _agy_release() {
   local link slots active; link="$(_agy_link)"; slots="$(_agy_slots)"; active="$(_agy_active)"
   rm -f "$link"
   if [ -n "$active" ] && [ -d "$slots/$active" ]; then
-    cp -R "$slots/$active" "$link" && log_ok "Restored ~/.gemini from tank '$active' (single-account again)."
+    cp -R "$slots/$active" "$link" && log_done "Restored ~/.gemini from tank '$active' (single-account again)."
   else
     log_warn "No active tank to restore; ~/.gemini left absent (agy will recreate it)."
   fi
   rm -f "$(_agy_consent)"
-  log_ok "clikae released ~/.gemini. Your tanks are kept under $slots."
+  log_done "clikae released ~/.gemini. Your tanks are kept under $slots."
 }
 
 # `clikae remove agy <tank>` lands here. Removing the LAST tank also ends
@@ -345,7 +397,8 @@ _agy_remove() {
         rm -f "$link"; mv "${slots:?}/$name" "$link"; rm -f "$(_agy_consent)"
         rmdir "$slots" 2>/dev/null || true
         _agy_kc_forget "$name"   # login stays in the canonical Keychain item; drop the stash
-        log_ok "Restored ~/.gemini from '$name' and turned agy multi-account off."
+        remove_tank_burn_sidecar "antigravity" "$name"   # #74 round-1 P2-2
+        log_done "Restored ~/.gemini from '$name' and turned agy multi-account off."
         return 0
       fi
       confirm "Remove it anyway? Your agy login in this tank will be lost." \
@@ -354,7 +407,8 @@ _agy_remove() {
     rm -f "$link"; rm -rf "${slots:?}/$name"; rm -f "$(_agy_consent)"
     rmdir "$slots" 2>/dev/null || true
     _agy_kc_forget "$name"; _agy_kc_logout   # login lost, as warned
-    log_ok "Removed agy tank '$name' and turned multi-account off (agy will recreate ~/.gemini)."
+    remove_tank_burn_sidecar "antigravity" "$name"   # #74 round-1 P2-2
+    log_done "Removed agy tank '$name' and turned multi-account off (agy will recreate ~/.gemini)."
     return 0
   fi
 
@@ -365,7 +419,8 @@ _agy_remove() {
   fi
   rm -rf "${slots:?}/$name"
   _agy_kc_forget "$name"
-  log_ok "Removed agy tank: $name"
+  remove_tank_burn_sidecar "antigravity" "$name"   # #74 round-1 P2-2
+  log_done "Removed agy tank: $name"
 }
 
 _agy_help() {
@@ -441,6 +496,60 @@ cmd_antigravity() {
       done
       return 0
     fi
+  fi
+
+  # 🔴 A TARGET GETS A tmux SESSION TOO. tmux is spawned in switch.sh's ENGINE
+  # path; agy is a launch-only target and never got it, so `_agy_switch` ended in
+  # a bare `exec agy` and the session lived and died inside whichever terminal tab
+  # started it — invisible to the board's Live section, unreachable from another
+  # machine, gone when the tab closed. Measured on the maintainer's Mac: four
+  # tabs open, only the two launched through clikae were in tmux.
+  #
+  # This does NOT police concurrency. agy has ONE global login and several
+  # sessions may share it; that limit belongs to the vendor, not to clikae, and
+  # the switch below already refuses the only genuinely destructive case (moving
+  # ~/.gemini out from under a live session on a DIFFERENT tank).
+  #
+  # The inner command is `clikae run antigravity <tank>`, exactly as the engine
+  # path does it: cmd_run loads the adapter and calls adapter_run, which lands
+  # back in _agy_switch — so the Keychain carry and the symlink repoint happen
+  # once, inside the pane, immediately before the exec.
+  local _agy_sess="antigravity-$tank"
+  if [ "${#passthru[@]}" -gt 0 ]; then
+    local _agy_sum
+    _agy_sum="$(printf '%s\0' "${passthru[@]}" | cksum 2>/dev/null | cut -d' ' -f1)"
+    [ -n "$_agy_sum" ] && _agy_sess="$_agy_sess-$_agy_sum"
+  fi
+
+  # No tty, or no tmux, means there is nothing to attach to and nobody watching:
+  # fall through to the direct path rather than stranding the launch in a
+  # detached session. Same reasoning switch.sh applies for engines.
+  if [ -t 1 ] && command -v tmux >/dev/null 2>&1; then
+    local _agy_cmd
+    _agy_cmd="$(printf '%q ' "$CLIKAE_BIN" run antigravity "$tank" -- "${passthru[@]}")"
+    local -a _agy_env=(--env "CLIKAE_TANK_NAME=$tank" --env "HOME=$HOME")
+    [ -n "${CLIKAE_HOME:-}" ] && _agy_env+=(--env "CLIKAE_HOME=$CLIKAE_HOME")
+
+    local CLIKAE_TMUX_SESS CLIKAE_TMUX_SESS_EXISTS
+    tmux_sessv "$_agy_sess"
+    if [ "$CLIKAE_TMUX_SESS_EXISTS" -eq 0 ]; then
+      tmux_spawn_session "${_agy_env[@]}" \
+        --session "$CLIKAE_TMUX_SESS" --window "agy" -- "bash -c $(_switch_shquote "$_agy_cmd")"
+      tmux_label "$CLIKAE_TMUX_SESS" "agy" "$tank"
+    fi
+
+    if [ -n "${TMUX:-}" ]; then
+      local _agy_here
+      _agy_here="$(tmux display-message -p -t "${TMUX_PANE:-}" '#S' 2>/dev/null || true)"
+      [ -z "$_agy_here" ] && _agy_here="$(tmux display-message -p '#S' 2>/dev/null || true)"
+      if [ -n "$(tmux list-clients -t "=$_agy_here" 2>/dev/null || true)" ]; then
+        exec tmux switch-client -t "=$CLIKAE_TMUX_SESS"
+      fi
+      log_info "Started agy/$tank in tmux session $CLIKAE_TMUX_SESS (no client here to switch)."
+      log_dim  "Reach it with:  tmux switch-client -t $CLIKAE_TMUX_SESS"
+      return 0
+    fi
+    exec tmux attach -t "=$CLIKAE_TMUX_SESS"
   fi
 
   _agy_switch "$tank" "${passthru[@]}"

@@ -5,6 +5,4428 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+## [0.31.0] — 2026-09-22
+
+### Added
+
+- **`clikae clean` gained a fourth guard: a session is never offered unless a
+  backup has confirmed it is archived.** The live-session guard (v0.14.1)
+  closed one way clean could destroy something unrecoverable; this closes
+  another, from outside clikae entirely — a backup job that mirrors deletions
+  turns a Trash move into a real loss, and a machine with no backup at all
+  makes every Trash move permanent the moment it's emptied. clean now looks
+  for one line, a Unix epoch, in `$CLIKAE_HOME/state/transcripts-archived-at`,
+  which a backup job is expected to write on every SUCCESSFUL run — meaning
+  "everything written before this instant is archived elsewhere". A session
+  modified after that instant is withheld, in every section, under every
+  flag, and the list says how many and why. With the marker missing,
+  unreadable, not a plain number, or dated in the future (all "not archived"),
+  clean offers nothing for session data by default and says so; the
+  non-conversation GC sweeps (scrollback, burn sidecars, tank/prelaunch locks)
+  are unaffected either way. `--no-archive-check` opts back in, for a machine
+  with no backup job by choice.
+
+- **`clikae hooks <share|unshare|list>` — fleet-wide hook sharing, and
+  `clikae doctor` now checks both halves of a tank's own engine config
+  (#141).** A tank's hooks live in its own `settings.json`, so recreating or
+  renaming tanks silently left them behind: on one machine a memory-snapshot
+  `Stop` hook was simply absent on the recreated tanks, and the shared memory
+  it wrote stopped moving for five days and 102 commits before an unrelated
+  symptom gave it away. An MCP server that vanishes at least looks like a
+  server that is down; a hook that vanishes looks like nothing at all.
+  `clikae hooks share <event> <command>` keeps one canonical per-engine list
+  under `$CLIKAE_HOME/fleet-hooks/<engine>.json` and merges it into every
+  non-solo tank — at `clikae init` (settings.json is clikae's own file, so a
+  brand-new tank is covered before its first run, unlike the MCP list, which
+  waits for the engine to write `.claude.json`) and at every launch, the same
+  four paths `fleet_mcp_prelaunch` is wired into. The merge is additive-only
+  and keyed on the command string: a command a tank already runs for that
+  event is never appended twice, nothing the tank has is ever removed or
+  rewritten, and a tank whose settings are already correct is not rewritten at
+  all (no inode churn under a live session). `clikae doctor` grew a `fleet
+  config` section that names every non-solo tank missing a shared hook or a
+  shared MCP server — day one instead of day five — and stays silent when
+  there is nothing to act on. `clikae rename` already carried both, because
+  they live inside the directory it moves; it now says so in its output, and a
+  test holds that true rather than code re-implementing it.
+
+- **`clikae usage` reports the vendor's per-model weekly quota.** The REPL's
+  `/usage` shows two lines — "Current week (all models) 14%" and "Current week
+  (Fable) 11%" — and only the first one reached clikae. The second was in the
+  response all along: not beside the five-hour/seven-day objects, and not in
+  the surface breakdown, but as a `limits[]` entry of kind `weekly_scoped`
+  carrying the model under `scope.model.display_name`. A vendor reading now
+  carries a `models` array of `{name, pct, resets_at}`, whitelisted field by
+  field like everything else that reaches the cache (at most 8 rows, a name of
+  at most 40 characters, a percentage in 0–100). The board's fuel dot
+  deliberately still reads the all-models number: choosing the relevant
+  per-model row needs to know which model a tank runs, and a tank has no such
+  property — `--model` is an argument to `burn`/`relay`, never a setting. So
+  these numbers are reported, not acted on (#137).
+
+- **A durable trace of what the waiter did.** Every outcome — attached, each
+  attempt, `typed`, `skipped: vendor auto-continued`, `gave up`, `session gone`
+  — is appended to `$CLIKAE_HOME/state/wake/<engine>-<tank>.log`, and the last
+  one per tank is printed by bare `clikae wake` and by `clikae doctor`. Until
+  now the waiter's only account of itself was text in a tmux window that dies
+  with the session, which is why 23 of those 24 outcomes could not be named by
+  anybody. The file records EVENTS, never state: a history cannot go stale, so
+  this does not reintroduce the model of who-is-dry that this feature was
+  deliberately designed without. Capped (oldest rows dropped, newest kept) so a
+  tank that runs dry daily costs a few KB a year, and deleting the directory
+  loses nothing but the history.
+
+### Fixed
+
+- **The board's Live section and `clikae doctor`'s tmux-guard check work from a
+  shell whose locale is `C`, instead of reporting an empty machine.** tmux
+  expands a `-F` format string on the CLIENT, and under a C/POSIX locale it
+  rewrites any character it considers unprintable — including a TAB, and
+  including `\037` — to `_`. Measured on tmux 3.7b: `LC_ALL=C tmux
+  list-sessions -F '#{session_name}<TAB>#{session_attached}'` prints `t _ 0`,
+  while the same command under a UTF-8 locale prints the TAB. Both places that
+  asked tmux for more than one field asked for them TAB-separated, so for
+  anyone arriving with `LC_ALL=C` or `LANG=C` — ssh without locale forwarding,
+  cron, CI, a minimal container — `live_session_names` matched no rows at all
+  and everything downstream behaved as though no session existed: no Live
+  section on the board, and a guard check that said nothing about a live,
+  unguarded session running right there. Silent, and invisible to anyone
+  sitting at a UTF-8 terminal. Both formats now use a printable `|`, with the
+  numeric fields FIRST and only the leading separators consumed, so a `|` in a
+  tank name or in a pane's start command can no longer shift a field. The rows
+  these functions hand back are unchanged (still TAB-separated — that TAB is
+  clikae's own, not tmux's), so no caller moved. `docs/DESIGN-tmux.md` Rule 12
+  states the rule: a separator inside a tmux `-F` format must be printable
+  ASCII, never a TAB or a control character. Held by a two-armed test — the
+  same real session read under `LC_ALL=C` and under `en_US.UTF-8`, which must
+  agree — because a single-locale test is green on the broken code (#142).
+- **`clikae doctor` verifies the tmux guard on macOS instead of answering
+  "unknown, could not verify" for a live session the same user owns.** On
+  current macOS, `ps eww` returns an empty environment even for a readable,
+  tty-attached process of the same user — measured on the shell's own pid —
+  so the pane-PATH probe never had anything to read. The probe now falls back
+  to the pane's spawn command as tmux recorded it (`#{pane_start_command}`,
+  the literal `env … PATH=… <cmd>` argv `tmux_spawn_session` execs) and says
+  which method verified the guard. The "permissions template missing" line
+  now names the exact expected path and what ships it, and
+  `install-layout.bats` fails on a tree installed without `templates/` — the
+  packaging gap that every Homebrew install of 0.30.0 had (#142).
+- **`scripts/test.sh` runs one shellcheck process per file.** The whole-tree
+  form reached 3.7 GB of resident memory on this tree and, with a second copy
+  running in another worktree, pushed a 16 GB machine into 4 GB of swap. The
+  findings are identical; the peak is now the largest single file (#142).
+- **The tmux status row's fuel reading is refreshed by the session it belongs
+  to, so it stops being a number from last week.** The row reads the usage
+  cache and can never fetch — that rule is right and unchanged (a status line
+  that could call a vendor would call one every five seconds, per attached
+  client, from inside tmux's server, where nobody would see it fail). What had
+  no owner was WRITING that cache: `clikae usage` and `burn` at run end were
+  its only two writers, so on a machine where a person only sits in
+  interactive sessions, nothing ever refreshed it. Measured: a nine-day-old
+  cache and the "no reading" glyph on the row forever, while a machine burning
+  all day showed live numbers — and one `clikae usage <engine> <tank>` took
+  0.7s and put percentages back on the row at the next redraw. A live session
+  now refreshes its own tank from the `wake` window it already has: one
+  reading in the background at launch, then one every `WAKE_USAGE_INTERVAL`
+  (300s — below `CLIKAE_USAGE_TTL` a refresh would only re-read the cache).
+  It keeps that window's constraints — no daemon, no state file, nothing that
+  outlives the session, no model of anyone's quota — and it is bounded by the
+  adapter's own fetch timeout rather than a new one; a refresh that fails is
+  silent, and the last reading stays on the row with its age next to it.
+- **The (engine/tank, `$PWD`) prelaunch lock `clikae burn` takes around
+  `soul_prelaunch`/`fleet_mcp_prelaunch` (#0.28.9's fix) is a file nothing ever
+  removed.** By design it is never unlinked right after release — deleting a
+  lock file a concurrent burn may already have open is the classic lock-file
+  race — so every distinct (tank, cwd) left one behind in `~/.clikae/state`
+  forever, mixed in with real state files (195 of them on one machine,
+  measured, the oldest from 2026-09-06). `clikae clean` had no notion of them
+  at all.
+
+  The lock now lives under `state/locks/` instead of `state/` directly, and a
+  new GC (`_burn_prelaunch_lock_gc`) reclaims it on age, never on a recorded
+  holder: `exec 7>` truncates the file on every acquisition, which bumps its
+  mtime, so a held lock is always younger than any real threshold — only a
+  file untouched for over a day is provably abandoned. The sweep runs
+  opportunistically once per `clikae burn` invocation and from `clikae clean`
+  (which reports the count the same way it reports every other reclaimable
+  class), and cleans the old `state/`-top-level location too, so an existing
+  machine tidies up on its next `burn` or `clean`.
+- **The home board's Continue list and `clikae resume` no longer disagree
+  about which engines and which directories they cover.** They answered what
+  looked like the same question and gave different answers, and neither said
+  why. Three things were wrong at once:
+  - `clikae resume` enumerated the store with **three hand-written globs**
+    whose own comment said a new resumable engine's glob "goes here only".
+    grok shipped with every resume hook implemented, reached the home board,
+    and stayed invisible to the picker, to prefix resolution (`clikae resume
+    a52bdc12`) and to `clikae clean`'s scan. The enumeration now goes through
+    the adapters under the same capability gate the board uses, so an engine
+    that can be resumed is listed by construction. claude and grok gained
+    `adapter_all_transcripts` (the hook codex and antigravity already
+    defined); tanks come from the same "what is a tank" answer the board has
+    used since #61, so a bare directory under `profiles/<engine>/` that was
+    never a tank no longer contributes rows.
+  - **A miss could kill `clikae resume` silently.** The store-wide locate
+    returned the status of the last tank it looked in, so when the last
+    resume-capable engine was one you had a tank for (alphabetically grok),
+    a session id that matched nothing exited non-zero with **no output at
+    all** — no "No session" line, and no prefix retry either.
+  - **The board's Continue list mixed two scopes in one ranked list.**
+    claude, codex and grok answered for `$PWD` while agy answered tank-wide
+    (#34), so on a real store all ten visible rows were agy and the one
+    claude session belonging to the current directory ranked #13 and never
+    appeared. agy is scoped to `$PWD` now too, falling back to tank-wide only
+    when this directory has nothing — which is what #34 actually needed,
+    since `workspace` is a constant on real agy installs. The cwd check is
+    bounded by `CLIKAE_AGY_CWD_SCAN_MAX` (default 50) candidates per tank.
+- **The board's "N sessions total" footer counted no grok sessions.** Its
+  glob list had the same hole `clikae resume`'s did.
+- **A Continue row that belongs to the directory you are in can no longer be
+  pushed off the board by agy's fallback rows.** The board ranks one list
+  across every engine on mtime, and agy's tank-wide fallback (the rows it
+  offers when nothing in the tank names this directory) competed on equal
+  terms: measured on a reproduction of a real store, fifteen newer agy rows
+  filled the board and the single claude session actually recorded in that
+  directory came 16th — invisible. A fallback row now says so in the row, and
+  ranks below every scoped row whatever its age. The courtesy rows are still
+  there; they just fill what is left.
+- **Claude Code's subagent transcripts are no longer offered as sessions.**
+  claude writes a subagent's log beside its parent session's as
+  `agent-<id>.jsonl` (every line `"isSidechain":true`). Nobody reopens one —
+  `claude --resume agent-<id>` answers "not a UUID and does not match any
+  session title" — and on a working store they outnumber real sessions, each
+  titled with whatever brief its parent dispatched ("Effort: high. Expected
+  ~60 tool steps…"). They filled the `clikae resume` picker, rode the board's
+  cold path, resolved as prefixes, and were counted in both "N sessions total"
+  and "N more in this store". Now the claude adapter states the rule once
+  (`adapter_transcript_is_resumable`, basename `agent-*`, the same rule the
+  board's snapshot has used since #62) and every list and count asks it.
+  Deliberately NOT narrowed: `clikae resume agent-<id>` still finds the tank
+  and cd's there, and `clikae clean` still sees every one of these files —
+  they are often the largest bytes on a store, and reclaiming bytes is that
+  command's whole job.
+
+- **`clikae wake` now actually types the nudge when a limit lifts, and leaves a
+  record either way.** Measured over 21 days of one tank's transcripts: 24
+  usage-limit events, and the waiter's `go` reached a pane once. The gate that
+  stopped it was the idle check — the waiter refused to type until the pane
+  stopped changing between two captures, on the reasoning that a moving screen
+  could be a tool call in flight. On a tank that still reads dry it cannot be:
+  the API is refusing turns. What a limited engine leaves on screen is a banner
+  with a live countdown in it, and a countdown re-renders every second forever.
+  Verified against the mechanism rather than inferred: a pane whose only change
+  is one ticking line fails the identical-captures check on every pair, while
+  the same banner text held still passes it. So the waiter spent its three
+  attempts and gave up within five minutes of every reset. After the reset
+  instant the requirement is now only that the session exists, that the pane is
+  not dead, and that the tank is still dry; the idle check is a short settle
+  delay, and a nudge sent over a moving screen says so in the trace. The
+  existence half of the old check was split out (`wake_pane_live`) rather than
+  loosened — a dead pane is still refused and still retried.
+- **The waiter no longer risks a second `go` after the engine resumed itself.**
+  Claude Code now writes its own user-role line when a usage limit lifts
+  mid-task — carrying `isMeta`, `promptSource: "system"` and the structural
+  marker `"origin":{"kind":"auto-continuation"}` — and carries on, typically
+  within a minute. Nothing read that line, so the tank kept reading DRY for as
+  long as the assistant turn that followed took to land. It is now a recovery
+  marker in the claude transcript scan, exactly like a successful turn, and the
+  waiter re-reads the tank immediately before typing: positive evidence of
+  recovery means it sends nothing and logs `skipped`. Matched structurally, so
+  a transcript merely quoting the marker (where JSONL escapes its quotes) does
+  not clear anyone's tank. Relatedly, `limit_profile_dry`'s claude branch now
+  returns `2` on positive recovery evidence, symmetric with the codex branch
+  that already did — the difference from `1` ("this scan found nothing", which
+  is also what an untouched tank outside the 5h window looks like) is what lets
+  the waiter skip without also going silent on the case it exists for.
+- **A reset that has already passed no longer resolves to tomorrow, and the
+  watcher acts on it.** An undated phrase names a time of day, not a date, so
+  `resets 8:20pm` read at 21:00 resolved to 8:20pm the NEXT day — measured, a
+  phrase 40 minutes past came back 1400 minutes in the future. The waiter was
+  then handed an instant nearly a day out and the session sat there, which is
+  the same outcome as the idle-gate bug above reached by a different route: the
+  watcher polls once a minute and the machine may have been asleep, so meeting
+  a limit after its stated reset is ordinary. A wall-clock reset behind the
+  reference instant by less than `LIMIT_RESET_PAST_GRACE` (6h) is now read as
+  having already happened and returned as the past instant it is. The bound is
+  derived rather than chosen: a limit any caller can be holding is at most ~5h
+  old by construction (the transcript scan window is 300 minutes and the
+  vendor's own session window is 5h), so anything further back is a genuine
+  next-day phrase read on the wrong side of midnight, and firing on it at once
+  would be worse than the bug. A tie is deliberately excluded — a phrase is
+  written at the instant the limit fires, so `resets 3:50am` arriving AT 3:50am
+  still means the next occurrence.
+  Second half of the same fix: once the stated reset is behind us with no
+  successful turn since, `limit_tank_dry` correctly reports the tank NOT DRY
+  (`reset passed · unverified` — the fuel is probably back) while the session it
+  was limited in is still parked waiting for somebody to type. The watcher
+  used to key on dryness alone and would therefore have watched straight past
+  it; it now treats that verdict as a hand-over too, with the instant being now.
+  The waiter's own auto-continuation check still runs in front of the nudge.
+
+### Changed
+
+- **A 429 is no longer indistinguishable from a dead token.** `adapter_usage`
+  collapsed 401/403/timeouts/5xx/429 into one `network` reason, so `clikae
+  watch`'s usage poll guessed at a backoff on the one failure the vendor tells
+  you how long to wait for. HTTP 429 now has its own reason, `rate-limited`,
+  carrying `retry_after` when the vendor's `Retry-After` header was a whole
+  number of seconds in 1–86400 (a missing, negative, zero, non-numeric,
+  HTTP-date or out-of-range header is dropped, and the caller falls back to
+  its own backoff). The poll schedules that tank's next poll at
+  `now + retry_after`, clamped to the base interval below and
+  `CLIKAE_WATCH_USAGE_MAX_BACKOFF` above; an auth failure (`expired-token` or
+  `no-credentials`) goes straight to the maximum interval and is marked
+  instead of climbing a doubling ramp toward an answer it already has; and
+  everything else doubles exactly as before. #107's two-word auth split is
+  kept rather than collapsed into one `reauth`: the two words carry different
+  remedies, which is the whole of #117 (#136).
+
+- `clikae burn codex` honours an uncommented `sandbox_mode` in the current
+  tank's `config.toml` when `--permission` is omitted, including after rerouting.
+  Otherwise the default remains `workspace-write`. Explicit `--permission`
+  maps `acceptEdits` to `workspace-write`, `bypassPermissions` to
+  `danger-full-access`, and `plan`/`default` to `read-only`. Help and orchestration
+  docs explain why worktree commit/push/network lanes need the broader sandbox
+  (#129).
+- **An expired access token now shows as the word `expired` on the status row
+  instead of the no-reading dot.** The cache distinguishes three states (a
+  reading, a token that expired, nothing read yet) and the row collapsed the
+  last two — the same collapse #107 removed from the board, where an idle
+  tank at 99% weekly read exactly like a tank with no login at all. It is the
+  one of the three with a remedy (start a session on that tank, or `clikae
+  usage --wake <tank>`), so it gets its own word for it — no emoji on any
+  delivery surface, so it is measured like any other ASCII fuel string, not
+  counted specially. It ages out on the same 24h ceiling as a percentage.
+- **The Continue section says what it is showing.** The heading names the
+  directory (`Resume — in ~/project`), and when the store holds sessions the
+  list is not showing, one dim line says how many and that `clikae resume`
+  covers every directory. Both notes travel in the board's own items stream
+  rather than on disk, like the truncation note before them, so a killed
+  board leaves nothing behind. Nine locales updated
+  (`T_CONTINUE_IN`, `T_RESUME_ELSEWHERE`).
+
+## [0.30.0] — 2026-09-17
+
+### Changed
+
+- **`clikae watch github`'s run-directory rotation is anchored to the org, and
+  a run directory with no `status.json` is no longer kept forever.** Rotating
+  org `foo` selected with a bare `watch-github-foo-*` glob, which also matches
+  every run directory of org `foo-bar` — the two orgs shared one 200-directory
+  budget and whichever had the older mtimes lost. The `status.json` check that
+  was supposed to guard this never could: a sibling org's run directories have
+  one too, by construction. Selection now requires
+  `watch-github-<org>-<digits>` (optionally plus the `-<N>` same-second
+  collision suffix). And a directory with no `status.json` — a poll that died
+  before writing any terminal state, which `clikae wait` can never resolve and
+  which both sweeps used to skip — is now deleted once it is older than
+  `CLIKAE_BURN_LOG_RETENTION_DAYS` (default 7; `0` disables). Two exemptions,
+  written down in [docs/EXPECTATIONS.md](docs/EXPECTATIONS.md): a directory
+  still holding `events.jsonl`, and one whose name is an org this host watches
+  — either could be an org's durable log, which is never swept (#111).
+- **`clikae watch github`'s seen-file is compacted by AGE now, with the
+  5,000-row tail kept as a floor rather than a cap.** A burst of more than
+  5,000 rows in one poll fell off the old unconditional `tail -n 5000` that
+  ran in that same poll, and the next tail sweep — whose window still
+  covered that ground, and which paginates oldest-first — announced the
+  evicted rows a second time, as `opened`. Rows newer than 1800s below the
+  lower of (the last completed sweep's start, this poll's cursor) are now
+  kept whatever the row count. The 5,000 newest rows are still kept whatever
+  their age, deliberately: that is the retention the `opened`-vs-`comment`
+  decision depends on, and an age-only cap would have evicted a year-old
+  issue's row and then reported the next reply on it as a new issue opened
+  by whoever filed it — which, when that is you, is swallowed silently and
+  the reply is lost (#111).
+- **`clikae watch github`'s timeline parser is now linear on every awk, not
+  just gawk and mawk.** It read the page one `substr(<whole page>, i, 1)` at a
+  time, and busybox awk and the current BWK awk (the family macOS ships as
+  `/usr/bin/awk`) charge by the length of the SOURCE string on every substr
+  call — so the scan was O(n²) there while being O(n) on gawk. Measured on a
+  5,000-element timeline page: 20.6s on busybox awk 1.36.1, and ~4× per
+  doubling on BWK awk 20250116 (6.8s / 25.1s / 98.4s at 200 / 400 / 800
+  elements), against 0.17s on gawk. Characters are now read through a bounded
+  1024-byte window, and the element text, the `body` value and each key are
+  accumulated out of those windows rather than re-cut from the whole page:
+  1.04s on busybox and 6.9s on BWK for the same 5,000 elements, with output
+  byte-for-byte identical to the old parser on all four awks. No new awk
+  builtin was used — `split(s, a, "")` and `FS=""` would both have been
+  faster still, and both mis-parse rather than merely run slow on the older
+  BWK awk macOS ships. The file header's "O(1) per character in every awk"
+  claim was wrong and has been corrected (#111).
+- **The cockpit guard now checks `fable` the same way it checks opus and
+  sonnet** — `fable`, `claude-fable-*` and every provider spelling of them
+  (`us.anthropic.claude-fable-…-v1:0`, `claude-fable-…@…`, `fable[1m]`). The
+  guard exists to move build/review lanes off the cockpit tank and onto a
+  worker via `clikae burn`, and a fable spawn spends the cockpit's weekly
+  budget exactly like an opus one; until now `fable` was completely exempt, so
+  a build brief — or a 5,000-character prompt — spawned in-session on fable was
+  allowed with no output at all. **haiku stays exempt.** If you were relying on
+  fable spawns going through, `--allow-agents <dur>` (or
+  `CLIKAE_COCKPIT_ALLOW_AGENTS=1`) is the door (#109).
+- The guard's haiku EXEMPTION now matches exact, explicit prefixes only —
+  `haiku`, `claude-haiku-…`, `claude-3-5-haiku…`, `claude-3-haiku…`, and an
+  explicit list of Bedrock region prefixes. The old normalisation stripped
+  everything up to the LAST `anthropic.` in the string and matched
+  `claude-*-haiku*`, which exempted strings like `opus.anthropic.haiku` and
+  `claude-opus-4-haiku`. Neither is a real model id; both are now checked.
+  Every real haiku spelling is unaffected (#109).
+- A `\u0000` escape anywhere in the tool-call payload is now refused, fail
+  closed. jq decodes `\u0000` by dropping it, so `"hai\u0000ku"` used to reach
+  the exemption as a clean `haiku` — a verdict about a string Claude Code never
+  sent. A prompt that merely *talks* about NUL escapes (`\\u0000` in JSON) is
+  not affected (#109).
+- `clikae cockpit agy <tank>` now works, like `clikae burn agy <tank>` always
+  has; it was refused with `Tank does not exist: agy/work` while only the
+  `antigravity` spelling could mark the tank. The role is still recorded under
+  the on-disk name (`antigravity/<tank>`) (#109).
+- `clikae doctor` now reports **jq**, and the path it found it at. jq is
+  clikae's one runtime dependency and only the cockpit guard needs it — at
+  hook execution time, where a jq missing from the tank's PATH refuses every
+  Agent spawn on the cockpit with no other symptom. `install.sh` prints one
+  warning line when jq is absent (it does not install it), and README no
+  longer says "no runtime dependencies" without naming the exception (#109).
+- Three known limits of `clikae burn`'s left-behind scan are now written down in
+  [docs/EXPECTATIONS.md](docs/EXPECTATIONS.md) instead of living only in the
+  source: a filename containing a newline is reported as two paths (one of which
+  does not exist); `dirty` is git's own count while `files` is attributed to the
+  innermost repository, so a nested repo adds 1 to its parent's `dirty` without
+  its files appearing there; and the scan's watchdog closes fds 3 and 4 by name,
+  not every descriptor it inherits. None of the three changed behaviour (#112).
+- **Breaking:** `clikae burn`'s `--no-reroute` dry stop now exits **2**
+  (`CLIKAE_BURN_RC_NO_TANK`), not 1 — the same distinguishable code as
+  exhausting the reroute reserve, so a caller checking rc alone can no longer
+  confuse "stopped on purpose because you asked it to" with "the task itself
+  failed" (rc 1 stays real-task-failure-only). Update any script or
+  orchestrator that branches on `clikae burn --no-reroute`'s exit code (#61).
+- A directory under a known engine's `profiles/` dir is now a tank only if it
+  carries a `.clikae-tank` marker file (the engine name, one line) — not by
+  name shape, not by re-checking its content on every read. `clikae tanks`,
+  `burn`'s reroute, `to`/`resume`'s `next_tank`, `doctor`, and every other
+  reader go through the one enumerator (`list_all_profiles`) that owns this
+  decision. **Upgrading**: the very first command run against an existing
+  store performs a one-time, INCLUSIVE sweep — every directory under a known
+  engine is marked a tank unless it's a file, a dotdir, a lock/sidecar-suffixed
+  name, or a symlink alias for a directory already adopted (the real directory
+  always wins that dedupe, never whichever sorts first) — then writes a flag
+  (`state/tanks-adopted-v1`) so it never runs again: a marker-less directory
+  appearing AFTER that point is not a tank, full stop. If the flag can't be
+  written (a read-only or shared store), adoption still runs, safely, in
+  memory on every command, with exactly one warning line — never a raw shell
+  error — and `clikae doctor --adopt` retries the write once the store is
+  writable again. `clikae doctor` names any directory left without a marker,
+  and `clikae doctor --adopt` prints, per directory, either the exact
+  `clikae init <engine> <name> --adopt` command that adopts it or the reason
+  no command can (a name with a lock/sidecar suffix, a space, or characters
+  a tank name may not contain has to be renamed first). On such a store that one warning line prints once
+  per command, from every command including quiet ones like
+  `clikae --version`/`help`/`adapters`, and once only — a command that
+  launches an engine, or that clikae runs on your behalf, does not repeat it.
+- **What counts as a valid marker.** Only the marker's FIRST LINE is read,
+  and only its first 64 characters — every marker clikae writes is one short
+  line (the engine name), so this is about hand-edited or tool-mangled ones:
+  garbage after the first newline is ignored, a trailing `\r` (a sync tool
+  turning `\n` into `\r\n`) or trailing whitespace still names the tank, and a
+  first line longer than 64 characters is not an engine name and is not a
+  tank. Reading a marker costs the same whatever its size: `clikae tanks` on a
+  store holding a 200 KB marker is as fast as on any other.
+
+### Added
+
+- **Drag to scroll a pane live on a touch terminal — off by default
+  (`@clikae_touch_drag`, #108).** #88 translated a swipe as a press/release
+  *pair*. Measured on a real iPhone (a-Shell → ssh → tmux 3.4, 2026-09-16,
+  reading tmux's own event stream), that is only what a **tap** sends: a flick
+  or a press-and-drag sends `MouseDown1Pane`, one `MouseDrag1Pane` per row
+  crossed, and `MouseDragEnd1Pane` — **no `MouseUp1Pane` at all**. #88's
+  translation therefore never fired on the device it was written for, and
+  tmux's own `MouseDrag1Pane → copy-mode -M` won instead: the gesture ended in
+  "copied N chars to tmux buffer" rather than scrolling. With
+  `set -g @clikae_touch_drag on` the motion is translated as it arrives, so the
+  history follows your finger instead of jumping when you let go, at the same
+  `@clikae_touch_scroll_lines` speed; moving down the glass reveals older
+  output, and letting go at the newest line returns to the live view.
+  **Applications that draw their own screen get the wheel, not copy-mode**: a
+  full-screen TUI runs on the alternate screen where tmux keeps no scrollback
+  (measured `alternate_on` 1, `history_size` 0), so clikae sends it real
+  mouse-wheel events (one notch per two lines) as raw SGR bytes and never
+  enters copy-mode there.
+  **Off by default, and that default carries more weight than #108's other
+  one**: `MouseDrag1Pane` on a pane with no mouse-tracking program is how you
+  select text with a mouse or trackpad, and a finger's drag and a trackpad's
+  drag are *the same tmux events* — nothing at runtime can tell them apart. So
+  the six new bindings go through `if-shell` rather than `run-shell` and hand
+  the key back when the option is off: `off` is not an approximation of stock
+  tmux, it runs tmux's own command for that key, drag-selection included. Only
+  `on`/`1`/`yes`/`true` (any case) enable it, and `@clikae_touch_scroll off`
+  disables it along with everything else. Verified against a real tmux 3.4
+  server and, for the three questions only tmux's key tables can answer,
+  against a real client driven with real SGR mouse bytes; a physical iPhone
+  run remains unverified (see `docs/EXPECTATIONS.md`).
+
+### Fixed
+
+- **The cockpit guard no longer lets a refused Agent spawn through on a machine
+  with many finished burns.** A refusal lists the idle reserve, and checking
+  each tank for a running burn read every burn run directory with several
+  processes per directory — once per tank. With 225 finished runs (a week of
+  a busy cockpit) a refusal took 5.7 s at 10 tanks and 30.8 s at 50, past the
+  hook's 5-second timeout, and Claude Code treats a hook that times out as
+  non-blocking: the spawn it was refusing went ahead. The guard now walks the
+  burn runs once and only checks the tanks that walk names as running, and a
+  finished run costs no process at all: the same refusal takes 52 ms at
+  10 tanks and 78 ms at 50, and 128 ms at 50 tanks with 1,000 finished runs
+  (#114).
+- The "this store's tanks aren't adopted yet and the flag can't be written"
+  warning is no longer silenced for good inside sessions started after it was
+  shown. A tmux server, burn or engine started from a terminal that had seen it
+  kept that store's dedupe in its environment for its whole life, so a store
+  that was replaced at the same path (a restored backup) or repaired and then
+  read-only again got no warning in any of those panes. The dedupe now also
+  records the identity and modification time of where the flag would be
+  written: an unchanged read-only store still warns once, and a changed one
+  warns again (#114).
+- A codex message with **many content parts** no longer takes quadratic time
+  to extract. The shape-B branch walked the parts by matching the next part
+  key and re-slicing everything still to come (`substr(rest, RLENGTH + 2)`),
+  then joined the kept parts left to right — two independent O(n²) costs, one
+  per part. On one 2 MB message of 8,800 parts that was **20.1s on gawk, 16.0s
+  on busybox awk and 48.8s on BWK 20250116**; it is now 0.44s / 0.37s / 0.39s,
+  with byte-identical output, and doubling the part count doubles the time
+  instead of quadrupling it. (mawk was always fast here — 0.84s — which is
+  exactly why the old timing test, pinned to mawk and skipped without it,
+  never saw this.) `split()` replaces the walk; a pairwise binary merge
+  replaces the join. Real messages have a few parts, so nobody was waiting on
+  this — it is the kind of quadratic that waits for one pathological
+  transcript (#110).
+  **One output does change**, and only this one: a message with an *empty*
+  content part between two non-empty ones used to join with a double space
+  (`a  b`); it now joins with one (`a b`). Reassociating a join is only legal
+  if the operation is associative, and the old left-to-right form was not —
+  the identity form is. Verified byte-for-byte on gawk, mawk, busybox awk and
+  BWK, against escaped quotes, a part whose text spells the part key, CJK and
+  a trailing escaped backslash: nothing else moved (#110).
+- The codex handoff timing tests **never skip**. They ran only when mawk was
+  installed, so the macOS half of CI — where `awk` is BWK, the implementation
+  that suffers most from the above — timed nothing at all. The single-part
+  test now falls back to the host awk with a looser bound, and the new
+  many-part test runs under *every* awk on the host (#110).
+- The codex handoff extractor's three filters are now **individually
+  load-bearing**: mutation-testing found that deleting any one of them — the
+  `content_item_kinds` check, the per-part injected-tag prefix filter, or the
+  `response_item`-side half of the adjacent dedupe — left the whole suite
+  green. One injection fixture carried BOTH injection signals at once (kinds
+  naming injected kinds AND every part opening with an injected tag), so
+  either filter alone kept it passing; and the dual-shape fixture always wrote
+  `response_item` before `event_msg`, so only the `event_msg` rule's copy of
+  the dedupe ever fired. The fixture is now three variants (`real`, plus one
+  where each filter is the only thing standing), there is a B2 fixture with
+  `event_msg` FIRST, and the documented "two consecutive identical turns
+  collapse" trade-off is pinned by a test of its own. No behaviour change —
+  `scripts/mutate.sh` carries the three rows as a re-runnable receipt (#110).
+- `tests/bats/roam.bats` — "a second client attaches to the running tank
+  instead of starting it again" no longer reports a **timeout as a wrong
+  value**, and no longer races clikae's own launch. Two faults, one red: (1)
+  `wait_for`'s return was dropped at every call site, so a bounded wait that ran
+  out printed the stale width and the failure read as a broken resize; it now
+  says `timed out after 20s waiting for <what>; last observed <state>`. (2) The
+  test waited for the session, the engine and the window width — all three of
+  which are already true while clikae is still between `new-session -d` and its
+  `tmux attach` — and then "detached" a client that had never attached. Measured
+  on this host: **12 of 12 runs on `main` reached the detach with no client on
+  the session at all**, and three seconds later the window was back to 100
+  columns with *two* clients attached, because under `window-size latest` the
+  late-arriving first client wins. Whether that read red depended only on which
+  side of a 0.25s poll the width landed on — which is why the rate tracked the
+  machine's load and was identical on every branch. The test now waits for the
+  client, not the session (#101).
+- An oversized integer in `state/cockpit-allow` (400 digits, say) no longer
+  makes the guard print `integer expression expected` onto the very stderr the
+  model reads before refusing. The value is validated for digits and length
+  first, and an unusable expiry is treated as no allowance at all — fail
+  closed, same as an expired one (#109).
+- The six `clikae burn` tests that bound a deliberately-wedged `find`/`stat`/
+  `.git/HEAD` no longer skip on a machine without `timeout`/`gtimeout` — which
+  is stock macOS, the platform they were written for. They go through
+  `bounded_run` (`tests/bats/helpers/bounded.bash`), which keeps
+  `timeout`/`gtimeout` as the preferred path and otherwise enforces the same
+  ceiling in bash itself (own process group, sleep, kill the group). The
+  left-behind scan's "scan budget exhausted" path and the EOF-delay fix also
+  gained tests (#112).
+- `clikae burn --json` reports `left_behind_kill_mode`: how the left-behind
+  scan stopped a bounded git/`find` call that overran — `pgroup` (the call and
+  everything it forked, the normal case) or `single-pid` on a platform that
+  will not give the bounded child a process group of its own, where a
+  grandchild can outlive the bound. That fallback path now has tests, including
+  one that asserts the grandchild it leaves behind, so its cost is written down
+  rather than assumed (#112).
+- `clikae burn` says when its left-behind scan could not run at all instead of
+  reporting an empty list. With no `git` on `$PATH` the scan used to return
+  `left_behind: []` — the same output as "scanned everything, found nothing" —
+  and print nothing. It now prints one line and sets
+  `"left_behind_unavailable": "git-not-on-PATH"` in `--json` (the field is
+  `null` whenever the scan did run) (#112).
+- `clikae burn --json` now reports what the left-behind scan left out **by
+  reason**, in `left_behind_truncation`: `repos_over_cap` (the 25-row display
+  cap), `roots_budget_skipped`, `markers_budget_skipped`,
+  `repos_budget_skipped` and `roots_discovery_timeout`. The single
+  `left_behind_truncated` number mixed units — one skipped root might stand for
+  forty repositories, one display-cap overflow is exactly one — so a consumer
+  reading `4` could not tell what was missing. `left_behind_truncated` is still
+  present, as the sum of all five, and is **deprecated**: it is kept for one
+  release so existing consumers keep working (#112).
+- `clikae burn`'s left-behind scan no longer reports a repository it could not
+  read as clean. Each of the per-repo git calls (`symbolic-ref`, `rev-list
+  --count`, `status --porcelain`) used to fall back to a default when it hit its
+  5s ceiling, and `status`'s default is `dirty=0` — so a repository wedged on a
+  dead NFS mount was indistinguishable from one with nothing in it. Such a row
+  now carries `"git_timeout": true` and `"dirty": null` in `--json`, reads
+  `dirty ? (git timed out)` on screen, and is always listed even when nothing
+  else about it qualified (#112).
+- The home board no longer leaves a `state/home-recent-truncated.<pid>` file
+  behind every time its Resume list is truncated (or a board is killed
+  mid-render). The "N sessions hidden as burn runs · list truncated" count now
+  travels from the Resume scan to both renderers inside the board process
+  itself, so nothing is written to disk for it at all, and two boards open on
+  the same tank at once can't read each other's count (#113).
+- `clikae burn agy` records its sessions under the same engine key every other
+  part of clikae reads, `state/burn-sessions/antigravity/<tank>`, instead of
+  `state/burn-sessions/agy/<tank>`. The old spelling meant each reader
+  (the board's Resume list, its freshness check, `rename`, `remove`,
+  `clikae clean`) had to translate it, and one that didn't silently stopped
+  hiding agy burn runs. **Upgrading**: the first command you run moves an
+  existing `agy/` directory onto `antigravity/`, renaming each tank's file
+  when only the old one exists and merging line by line when both do. It
+  keeps checking on every command (one directory test), so a burn that was
+  already running under the old version when you upgraded is picked up too
+  (#113).
+- The codex and grok Resume rows only take a session's id from its
+  rollout/session **name** when that name really ends in a uuid: eight, four,
+  four, four and twelve hex digits. Before, any 36-character name with dashes
+  in those positions counted (e.g. `…-notauuid-zzzz-zzzz-zzzz-zzzzzzzzzzzz`),
+  so the board could offer that string as a session id. Anything else now
+  falls back to the id recorded inside the file, the same id the board's index
+  already used (#113).
+- Four optional adapter hooks (`adapter_cwd_from_args`,
+  `adapter_ephemeral_flags`, `adapter_mcp_config_file`,
+  `adapter_tank_fingerprint`) no longer leak from one adapter to the next
+  loaded in the same process — `clikae handoff <a> --to <b>` used to leave
+  `a`'s definitions answering for `b`, so a capability gate that asks
+  `declare -F` believed `b` supported what only `a` does. A test now compares
+  every `adapter_*` definition under `lib/adapters/` against the loader's
+  unset list, so the next hook added cannot go missing quietly (#62).
+- Deleted antigravity's bulk `sid -> workspace` index and the plain-global
+  cache built on it. Its only reader was a cwd filter the board no longer has
+  (agy's index scope is a per-tank constant), so it had been a documented
+  adapter hook with no caller anywhere in `lib/` or `bin/` (#62).
+- The board's Resume index notices when a burn sidecar grows, so a burn no
+  longer costs the Continue list a row permanently. The index's per-tank cap
+  is widened by that tank's recorded burn count, but staleness was
+  fingerprinted from transcripts only — and `clikae burn` records a session's
+  id AFTER the engine exits, so the ordering it actually produces (transcript
+  written, board rendered, id recorded) built the index at the narrower cap
+  and then never disagreed with itself again. Measured: ten sessions plus one
+  burn rendered nine rows, on that frame and on every later one, until
+  `state/board` was deleted; with many burns indexed before their ids landed,
+  the whole Continue block rendered empty with no truncation note. The tank's
+  sidecar (both engine-name spellings — agy's lives under `agy`) is part of
+  the freshness signal now, and a generation records the cap its rows were cut
+  at so a rebuild re-cuts them from its own manifest — no transcript is
+  re-read, and only the tank whose sidecar changed is touched (#62).
+- The board's Resume index is built at the same per-tank widened cap
+  `clikae home` asks with, so a tank full of burn one-shots no longer renders
+  an EMPTY Continue list. Burn sessions are excluded AFTER the adapter
+  answers, so an index cut to 10 rows handed the filter 10 rows to drop and
+  nothing to promote: 195 burns newer than 50 human sessions showed no human
+  row at all. The cap is widened by that tank's own sidecar count, under the
+  same ceiling as the ask (#62, #93).
+- The board's Resume index keys antigravity by TANK, not by the directory a
+  session was started in. `workspace` in agy's own history is a constant on a
+  real install, so a cwd-keyed index answered "no sessions" from every project
+  directory — and because the index answers BEFORE the adapter's disk scan, it
+  would have re-hidden the rows #93 had just made visible (#62, #34).
+- A tank whose fuel dot said "full" while the account was out of fuel now says
+  what is true. The board's rate-limit scan was bounded by a COUNT (the newest
+  `CLIKAE_HOME_RECENT_MAX` transcripts per project directory) while the thing
+  that count approximates — the rolling limit window — is a TIME, so a limit
+  sitting in a session that had gone quiet behind a dozen newer neighbours was
+  invisible, and `clikae burn` dispatched into a tank that had none left. Every
+  transcript inside the window is scanned now, however many share a directory,
+  in one batched read rather than one parser fork per file (#62).
+- A project directory whose name is not ASCII no longer answers with a
+  neighbouring directory's sessions. Board entries were named by folding every
+  byte outside `[A-Za-z0-9._-]` to `_`, so two sibling directories of the same
+  byte length — two Chinese characters is six bytes, and so is two others —
+  shared one Resume list: one of them listed the other's sessions and the other
+  listed none. The name is an injective escape now, and the list is grouped by
+  the directory itself, so a name that two directories could still share reads
+  as a miss rather than as someone else's sessions (#62).
+- A second `clikae` reading the board while the first publishes no longer loses
+  its Resume list. Snapshot generations resolve entries through their
+  ancestors, and the per-publish GC protected only the chain the CURRENT
+  generation walks — so a generation another process was still holding lost its
+  oldest ancestors to a single further publish, and most of its sessions
+  stopped resolving while it still existed and still read as fresh. The GC
+  keeps whole chains now, not whole directories (#62).
+- The antigravity workspace index clears what it loaded last and is namespaced
+  by tank, so a long-lived board no longer accumulates one entry per session
+  id it has ever seen, keeps answering for ids that have left `history.jsonl`,
+  or lets one tank's index answer for another tank's identical id.
+- A `stat` that fails on an individual transcript is no longer swallowed by
+  the tree walk's blanket `2>/dev/null`. The one case that redirect existed
+  for — an engine this tank has never used — is answered directly now.
+- A transcript that changes PATH while keeping its session id — a codex
+  rollout moved, a grok session directory renamed, an antigravity brain
+  directory renamed, a claude session moved between project directories — no
+  longer disappears from `clikae resume`. The rebuild classified it as both
+  removed (old path) and changed (new path) and processed removals LAST, so
+  the entry it had just written was deleted again. Removals are applied first
+  now (#62).
+- The home board's first (cold) render on a large tank is fast again: 5,000
+  transcripts went from 35.6 s to well under 1 s, which is what #62's
+  acceptance text asks for. The cost was never the tree walk — it was about
+  four forks per FILE (two `cksum`s to name an entry, plus a rate-limit parse
+  for every file inside the engine's window). The entry name is now computed
+  without a process; claude's session id comes from the filename and codex's
+  and grok's from ONE batched bounded read instead of one parse per file; and
+  the rate-limit scan reads every transcript inside the engine's window in ONE
+  batched pass instead of forking a parser per file (#62).
+- A render that rebuilds a tank's board snapshot walks and stats that tank
+  once, not twice: the freshness check hands its stat rows to the rebuild it
+  triggers instead of both collecting their own (26 ms of a 127 ms rebuild at
+  5,000 transcripts).
+- A session id or project path containing non-ASCII characters (a Chinese or
+  accented directory name) no longer drops out of `clikae resume` on macOS.
+  The board snapshot's entry name was computed by two different engines whose
+  idea of "one character" differs by platform and by locale, so the name
+  written and the name looked up could disagree — a silent miss, with the
+  transcript still on disk. One implementation now, run byte-wise on both
+  sides.
+- A tank with no transcripts at all — every freshly `clikae init`'d tank, and
+  the first screen a new user sees — is no longer permanently stale. The
+  publisher and the freshness check computed the snapshot fingerprint from two
+  different byte streams that could only agree when the tank held at least one
+  file, so an empty tank rebuilt and published a new generation on every
+  frame, forever, 2.2x slower than doing nothing. There is one fingerprint
+  function now and both sides call it (#62).
+- The home board's per-tank snapshot generations no longer share inodes. A
+  rebuild used to `cp -al` the previous generation's `sids/`/`recent/` entries
+  and then write through those hard links, rewriting a generation the board
+  was still reading from, and costing one `link()` per transcript PRESENT
+  (5,001 at 5,000 files) on every rebuild. A generation now holds only the
+  entries that changed in it plus a `parent` pointer; readers resolve an entry
+  by walking that chain, which is bounded (it materialises a real copy before
+  it can grow past 8) and which `clikae clean`'s sweep and the per-publish GC
+  both now protect from keep-N (#62).
+- `clikae init <engine> <name>` where that name is already taken by
+  something that is not a directory — most often a **broken symlink**, whose
+  target has been deleted — used to print `[ DONE ] Created tank` and then
+  fail, leaving no tank and two contradictory lines. It now names what is in
+  the way (and what the symlink points at) and fails once, before creating
+  anything. `clikae init … --adopt` on a broken symlink says the same thing,
+  instead of "No such directory" followed by a suggestion that could not
+  work.
+- Codex burn now detects a usage-limit line prefixed with codex's own
+  `ERROR:` transport tag (captured stderr already reached the classifier
+  merged with stdout before this fix — the anchor regex was the gap), and
+  preserves the reset phrase in JSON and the dry marker, reporting dry with
+  `--no-reroute` instead of a missing-artifact failure (#81, also #68).
+
+  Round-3 review found the CR strip added to close round-2's P3-2 (a CRLF
+  capture) turned the classifier's per-line loop O(n²) on a long unbroken
+  line — an 8 MB capture went from 3s to 2107s on this host and 2266s on
+  CI's own dedicated ubuntu runner, CPU-bound the whole time (an earlier
+  "host contention" explanation for the same failing test was wrong; three
+  independent measurements on unrelated hosts converge on the same
+  quadratic curve). The classifier now strips every `\r` from the whole
+  buffer with one `tr -d '\r'` and reads the matched line back out with
+  `sed -n`, never a bash array or a per-line loop.
+
+  Also restored: leading whitespace/tab tolerance ahead of the three named
+  transport prefixes (`origin/main` allowed this; round-2's anchor rewrite
+  dropped it, a coverage regression for an indented or tab-prefixed vendor
+  line — the exact class of transport noise #81 was filed against,
+  recurring in a new shape).
+
+  A fresh artifact whose engine exited non-zero with no limit line in its
+  reply now leaves an existing dry marker alone — the same treatment the
+  limit-line arm already gets, and the same tank-with-fuel case dry_store's
+  own header promises never to write a fresh marker for. This shipped in
+  round-2 but was never written down here until now.
+
+  Also: `_burn_redact_full`'s own redaction tool (`perl`) can fail to
+  RUN at all on a needle list too large for its exec to accept (the #99
+  shape, a >128 KiB `--prompt-file`) — this used to be silently read as
+  "redacted to nothing" and reported as `"reason":"engine exited rc=N,
+  output redacted"`, which implies redaction happened and found nothing
+  worth keeping. It now says `output could not be redacted` instead,
+  since nothing was redacted — the tool crashed. #99 itself (the
+  underlying `Argument list too long`) is still open, tracked separately.
+
+- `list_all_profiles` (the one enumerator `clikae tanks`, `burn`'s reroute, and
+  `to`/`resume`'s `next_tank` all read) now requires a candidate's engine to be
+  one an adapter or target actually recognises, and rejects dotdirs and
+  lock/sidecar-suffixed names for a directory that predates the one-time
+  adoption sweep above — a stray `hello.lock` sitting beside real tanks could
+  be rerouted onto and burned a few minutes failing to log in, reported as an
+  indistinguishable generic task failure. `burn`'s own agy reroute walker
+  (`_agy_tank_names`) now routes through the same enumerator instead of
+  globbing its slots directory a second time. Reroute exhaustion (every
+  reachable tank dry or skipped) is now its own `reason: no-tank-available`
+  with a distinct exit code (2, see Changed above) and `reset` set to the
+  earliest parseable reset across the whole walk, both in prose and in
+  `--json` (#61).
+- `clikae settings apply <engine> <tank>` with an explicitly named directory
+  that is not yet a tank now refuses (`Not a tank: …`) instead of writing
+  `settings.json` into it — naming a bare directory used to be enough to seed
+  it into existence as a permanent tank on the next walk (#61 round 2).
+- The profile-store walk no longer dies with `links[@]: unbound variable` on
+  bash 3.2 (every stock macOS) when a caller runs under `set -u` — which is
+  what the `clikae cockpit` guard hook does — and an engine's directory holds
+  only real tanks or only symlinked ones. bash 3.2 treats an empty array as
+  unset, so one of the two lists the walk builds was always "unset" on a
+  typical store (#61 round 6).
+- A `.clikae-tank` marker that exists but cannot be READ (permissions, a
+  changed owner, an ACL) no longer truncates the tank list. It used to print a
+  raw `profile_store.sh: line …: Permission denied` and, in a caller running
+  under `set -u` — which is what `clikae cockpit`'s PreToolUse hook is — abort
+  the walk at that directory and return everything BEFORE it with exit code 0:
+  a silently short list, and a refusal message claiming there was no idle tank
+  while idle tanks sat in the store. Such a directory is now simply not a tank,
+  said once in one warning line and never as a raw shell error (#61 round 6).
+- The refusal `clikae cockpit`'s guard prints now names the reserve even when
+  no cockpit is recorded at all; it used to print neither the reserve nor the
+  "No idle tank in the reserve right now." line in that case (#61 round 6).
+- The one-line "this store's tanks aren't adopted yet and the flag can't be
+  written" warning is now deduplicated PER STORE. It was one boolean for the
+  whole process tree, so a terminal warned about one read-only store then
+  stayed silent about a second, unrelated one — a mounted or shared store
+  whose answers were memory-only too, with nothing said about it (#61 round 6).
+- `CLIKAE_ADOPT_READONLY` in the environment no longer stops clikae adopting a
+  store. It was never a supported knob — it has one setter (the cockpit guard
+  hook) and one reader — but it read like one, and any value at all, `0`
+  included, made every command re-sweep the whole store while writing no
+  marker and no flag and saying nothing, leaving the one-time adoption window
+  open for good. It is now the internal `_CLIKAE_ADOPT_READONLY`, and only the
+  exact value `1` turns it on (#61 round 6).
+- `clikae cockpit --off` now removes the guard from a cockpit tank that is no
+  longer enumerable — one whose `.clikae-tank` marker went missing or became
+  unreadable (a restored backup, a sync tool). It used to sweep the same
+  "what is a tank" list everything else reads, so such a tank was invisible to
+  it: `--off` printed `cockpit: off`, exited 0, and cleared `state/cockpit`
+  with the PreToolUse hook still installed and nothing left on disk naming it,
+  so that tank went on refusing every in-session Agent spawn with no way to
+  find out why. `--off` now unguards the tank the state file names directly,
+  and sweeps every `settings.json` under the profile store that actually
+  carries clikae's guard marker. When the recorded cockpit's directory is gone
+  altogether it says so instead of clearing the record silently (#61 round 6).
+- `doctor`, `board`, and `status` no longer re-walk the whole profile store
+  once per adapter (`doctor` was ~20 full walks on one store via `scan_clis`'
+  15-adapter fan-out); each now warms one per-process cache before rendering.
+- `clikae resume <agy-sid>` now actually hands agy `--conversation <sid>`.
+  `adapter_resume_args` built its argv with
+  `printf '--conversation\n%s\n' "$sid"` — bash's `printf` builtin parses a
+  leading `--conversation` as an unknown option (rc=2, no stdout), so the
+  resume silently launched agy with no `--conversation` at all, opening a new
+  conversation instead of the one asked for (#34).
+- The home board's "Resume" rows for agy are no longer permanently empty in
+  every real project directory. They used to filter by the session's recorded
+  `workspace` matching `$PWD`, but every real agy install records the same
+  `workspace` (`$HOME`) for every conversation regardless of where it actually
+  ran, so that filter could never match outside `$HOME`. agy's Resume rows are
+  now tank-scoped instead of directory-scoped: every session in every agy tank,
+  newest first, capped board-wide by `CLIKAE_HOME_RECENT_MAX` like every other
+  engine (#34).
+- The home board's "Resume" rows no longer vanish when a tank holds more
+  `clikae burn` sessions than the list is long. Burn sessions have been hidden
+  from that list since #74, but each engine was asked for exactly
+  `CLIKAE_HOME_RECENT_MAX` rows and cut to that *before* the filter ran — so
+  ten-or-more burn one-shots newer than your real sessions left the filter
+  nothing to show and the whole block disappeared. Every engine is now asked
+  for `CLIKAE_HOME_RECENT_MAX` + *that tank's own* recorded burn sessions, so
+  hidden rows give up their slots to real sessions instead of taking the list
+  down with them. The guarantee has one bound, and the board states it rather
+  than hiding it: the ask is capped at `CLIKAE_HOME_RECENT_SCAN_MAX`, which
+  defaults to the burn sidecar's own cap (`CLIKAE_BURN_SIDECAR_CAP`, 2000), and
+  if a tank cannot fill the list within that cap the Resume block says "N
+  sessions hidden as burn runs · list truncated" and points at `clikae resume
+  --all`. Affects claude, codex and agy alike; most visible on agy, whose rows
+  became tank-scoped in the same release (#34).
+- `clikae`'s codex and grok board rows read a session's id from the
+  rollout/session **filename** instead of re-opening the file once per row —
+  the same fact `clikae resume <id>` already used to go the other way. Only a
+  name that does not carry a uuid falls back to the old read. Nothing visible
+  changes; it is what makes the wider Resume ask above cost nothing (measured
+  on a 1,000-session tank, ask 10 → 200: codex was +225…+373 ms and grok
+  +917…+1056 ms before, both inside run-to-run noise after) (#34).
+- Antigravity board rows and the resume picker prefer the conversation title
+  from the CLI's summaries database (`conversation_summaries.db`), read via
+  the optional `sqlite3` CLI, with opening-prompt fallback when the title or
+  `sqlite3` is unavailable (#73).
+- Expired reset evidence now shows yellow “reset passed · unverified” on the
+  home board and a matching fuel note in `clikae status`. Burn can retry these
+  tanks; a successful turn clears the caution, and retained evidence is never
+  kept longer than 7 days regardless. A reset phrase's own timezone (including
+  codex's) is always honored over the observer's; unknown reset wording keeps
+  the existing dry behavior (#75).
+- `clikae status`'s fuel-note lookup no longer re-scans every tank's
+  transcripts once per rendered row (was O(n²) on tank count; #75 round 1).
+- `clikae cockpit` round 1 (#63): `json_field_str` tolerates whitespace
+  around a `:` (pretty-printed JSON silently went unmatched before); the
+  guard now distinguishes "field absent" from "payload looks truncated or
+  malformed" and fails open with a stderr note on the latter instead of
+  refusing with a misleading reason; `--off` sweeps every tank and never
+  aborts partway through a broken one, clearing the guard, state, and any
+  live `--allow-agents` allowance regardless, and reports which tanks (if
+  any) it couldn't clean up; `_settings_write_file` refuses to write empty
+  content (a jq failure mid-pipeline used to silently blank a live
+  settings.json) and caps backups at the newest 5 per tank; the prompt
+  heuristic is widened (bare `commit`/`push`/`review`/`grade`/"run
+  tests"/"make CI", plus a 1,500-character length tripwire) and documented
+  as a tripwire, not a classifier; a large prompt was capped to its first 8
+  KiB before the heuristic ran (superseded in round 2 below — that cap
+  itself turned out to be unsafe); installing from a git checkout now warns
+  that the guard's path isn't stable; `clikae cockpit` names a stale
+  recorded tank instead of showing it as if nothing were wrong. Installing
+  or removing the guard round-trips the tank's settings.json through jq
+  (same mechanism as `clikae settings apply`): key order gets normalized
+  and CRLF becomes LF, but content — a hand-written hooks block, any other
+  key in the file — survives intact (also documented in `docs/usage.md` and
+  `clikae cockpit --help`).
+- `clikae cockpit` round 2 (#63, `REVIEW-cockpit63-r2.md`): round 1's fixed
+  8 KiB window — `head -c`/`tail -c` slicing the RAW PAYLOAD before ever
+  reading `tool_input.model`/`.prompt` — could land mid multi-byte UTF-8
+  character (routine on a Chinese-language prompt) or mid JSON-escape, which
+  silently blinded BOTH the prompt heuristic AND the 1,500-character length
+  tripwire at once (`exit 0`, zero stderr), and separately could miss
+  `model` entirely — wrongly refusing every model, haiku included — on a
+  payload shape where `model` precedes a large `prompt` in `tool_input`.
+  Fixed: `tool_name`/`model`/`prompt` are all read from the full payload
+  (cost scales with payload size — no longer flat, see the hook's own
+  docstring for measured numbers); only a copy of the prompt truncated to
+  its first 8,192 CHARACTERS (sliced after JSON-decoding, under a locale
+  pinned to `C.UTF-8`/`en_US.UTF-8`/`C` so the cut can't land mid-character)
+  feeds the keyword heuristic, while the length tripwire reads the
+  UNTRUNCATED decoded length. Also: the model check widened from an exact
+  `opus`/`sonnet` match (silently missed every real API model id, e.g.
+  `claude-sonnet-4-5-20250929`) to a family-prefix match; `clikae cockpit
+  <tank>` (moving the role, not just `--off`) now sweeps past a broken OLD
+  tank's settings.json instead of aborting the whole move.
+  **Correction (round-4 review):** the 8,192-character truncated copy this
+  entry describes is gone — round 3 (below) deleted it. The keyword
+  heuristic now reads the full, untruncated `$prompt`, exactly like the
+  length tripwire already did.
+
+- `clikae cockpit` round 3 (#63, `REVIEW-cockpit63-r3.md`): the 8,192-
+  character truncated copy round 2 introduced (above) turned out to be
+  dead code — the search loop and its own length check already bounded
+  what the heuristic could match, so the slice changed nothing about any
+  classification (709 synthetic specimens, byte-for-byte identical verdicts
+  with and without it) while still costing a full JSON-decode-and-slice on
+  every call. Deleted; the heuristic now runs on the full decoded `$prompt`
+  directly. Separately, `prompt` extraction (the expensive field — ~92% of
+  a 1 MB payload's parse time) moved from unconditional to INSIDE the
+  `opus|sonnet…)` model-match arm, so haiku/fable/every other model this
+  guard is documented to leave untouched now pays close to nothing instead
+  of the same cost as the model it actually inspects (measured ~3–4x faster
+  on 200 kB–1 MB payloads; the protected opus/sonnet path is unchanged).
+  Also: `gen_specimen.py`'s straddle generator now actually lands the CJK
+  multi-byte boundary it claims to (was 50/100 before this round, 100/100
+  after — see `REVIEW-cockpit63-r3.md` P3-3 for the count and round 4 below
+  for what was still wrong with how it checked itself).
+
+- `clikae cockpit` round 4 (#63, `REVIEW-cockpit63-r4.md`): moving the role
+  used to write state (`_cockpit_state_write`) AFTER both guard writes
+  (install the new tank, remove the old one). A state-write failure at that
+  point — state file mode 444, or symlinked to an unwritable path, both
+  reproduced — landed after the swap had already happened, leaving state
+  pointing at the OLD tank while the OLD tank's guard was already gone and
+  the NEW tank's guard was live and unrecorded; neither `clikae cockpit`
+  (which only checks the named tank exists, never that it's armed) nor
+  `clikae doctor` (no cockpit awareness at all) said anything. State is now
+  written immediately after the new tank's guard is installed and BEFORE
+  the old tank is touched, so a state-write failure can only ever leave the
+  OLD cockpit exactly as it was; the new failure mode this introduces (the
+  new tank's guard installed but unrecorded) is rolled back in the same
+  step instead of being left as an unlisted stray. `clikae doctor` gained a
+  cockpit line: it reads the recorded cockpit and reports, loudly, when the
+  named tank doesn't actually carry the guard, or when some OTHER tank
+  carries one. `gen_specimen.py`'s straddle self-check used to restate the
+  same predicate its own search loop already used, so it could never fire —
+  moving the boundary constant to 8193 made the corpus silently miss its
+  target while the check stayed green; the check is now an independent
+  computation of the same byte offset. `clikae burn`'s automatic reroute
+  (picking another idle same-engine tank when the current one runs dry) had
+  no cockpit awareness at all and could route dispatched work onto the
+  cockpit tank itself if it happened to be idle with no interactive session
+  attached; it now excludes the cockpit explicitly rather than relying on
+  the live-session check to happen to cover it.
+
+- `clikae cockpit` round 5 (#63, codex security review):
+  - `clikae burn` refuses to launch on the recorded cockpit — the tank you
+    name, a `--to` hop, agy's walk, or a symlink alias of the cockpit's
+    directory — with the guard's own sentence, before any lock, `--fresh`
+    deletion or engine start. Round 4 only covered automatic reroute; an
+    explicit `clikae burn claude <cockpit>` ran to completion. This extends
+    #63's in-session tripwire to the launch path. `--force-cockpit` is the
+    operator override, and it says what it is doing on stderr.
+  - Moving the role compares physical tank identity, not names: a
+    destination whose directory is a symlink alias of the current cockpit
+    (or whose settings.json is the same file) is refused as the same tank.
+    Before, the move returned 0, recorded the alias, and removed the only
+    guard from the shared settings.json.
+  - The cockpit record is written atomically: a fresh file in the state
+    directory, checked for every byte, renamed into place. A symlinked
+    state file or state directory is refused before any guard is written.
+    The new tank's guard is rolled back only when the record, re-read from
+    disk, still names the old cockpit; otherwise it stays (over-guarded is
+    the safe direction). Three reproductions (a real RLIMIT_FSIZE short
+    write, SIGKILL after the old in-place truncation, a state path
+    symlinked at the new tank's settings.json) each ended with an
+    unguarded recorded cockpit or an empty record before. `clikae doctor`
+    now scans for guards even when no cockpit is recorded, and names an
+    unsafe or malformed state file.
+  - A role transition (move, repair, `--off`) holds one `mkdir` lock in the
+    state directory from reading the record to disarming the old tank;
+    `clikae settings apply` holds the same lock while it writes. A second
+    transition waits (`CLIKAE_SETTINGS_LOCK_WAIT_S`, default 20 s), then
+    refuses. Before, two interleaved moves both returned 0 and left neither
+    tank guarded. A lock whose holder died is named with its removal
+    command, never broken silently; `clikae doctor` reports it.
+  - The guard hook fails closed. A 65 KiB-and-up pretty-printed Agent call
+    used to be allowed as "payload has no tool_input field": the presence
+    test was `printf | grep -q`, and grep's early exit killed printf with
+    SIGPIPE under pipefail. The test is a pattern match on the payload
+    variable now, and every path that is not a decision about a readable
+    call refuses (empty payload, no tool_name, no tool_input, malformed
+    JSON, a missing library, an internal error). The escape hatches are
+    read before the payload, so a refusal can always be lifted.
+  - The guard hook parses the call with jq instead of a regex scan that
+    decoded five escapes. Equivalent valid encodings of a refused call —
+    `"\u0073onnet"`, `"\u0041gent"`, `"\u0072eview"`, an escaped letter in
+    the `tool_input` key, trailing space/tab/CRLF — were allowed; each now
+    refuses with the plain form's exact message. Surrogate pairs count as
+    one character for the length tripwire, `tool_input.model` is read by
+    path (a `model` key elsewhere no longer stands in for it), and anything
+    that is not exactly one JSON object is refused. `json_field_str`, whose
+    only caller was the hook, is removed.
+  - Model ids: Bedrock, Vertex and `[1m]` spellings are placed in their
+    family, and an id the guard does not recognise is checked like
+    opus/sonnet instead of allowed with no output. A refusal names the id
+    as unrecognised; a pass prints one line saying so.
+  - The hook command in settings.json is stored shell-quoted. An install
+    under a path with a space split there when Claude Code ran it (exit
+    127, non-blocking: every spawn allowed). An older unquoted entry is
+    repaired on the next `clikae cockpit <tank>`.
+  - settings.json writers (the cockpit guard, `clikae settings apply`)
+    resolve the tank directory once and read the file once, through a
+    no-follow snapshot; the JSON parse and the `.clikae.bak.*` backup both
+    come from that snapshot. Swapping settings.json for a symlink between
+    the read and the backup used to copy the link's target into the backup.
+    A directory swapped in at the destination is refused instead of
+    receiving the file. Read-only callers (doctor, `--check`, `--dry-run`)
+    make no snapshot.
+- `clikae handoff` reads each engine's own transcript shape via a new optional
+  `adapter_handoff_extract` adapter hook (claude, codex, grok implement it;
+  an adapter without one falls back to the previous claude-shaped grep, so
+  third-party adapters keep working). codex's rollout records a turn as
+  either an `event_msg` (payload.type `user_message`/`agent_message`) or a
+  "response item" with an array `content`, and grok's `chat_history.jsonl`
+  has no `role` key at all — none of those matched under the old
+  claude-only extraction, so a dry codex/grok tank's brief carried metadata
+  only. Also fixes a `set -eo pipefail` bug where a raw brief's metadata line
+  (`sessionId`, `gitBranch`, …) silently killed the whole command on any
+  transcript missing a claude-only field — which was every codex/grok
+  transcript, so `clikae handoff codex`/`grok` produced no output at all
+  before this fix, not just a thin one (#33).
+
+### Added
+
+- **Tap the top or bottom of a pane to page its history — off by default
+  (`@clikae_touch_pages`, #108).** #88 gave a touch terminal the swipe; this
+  gives it the page. With `set -g @clikae_touch_pages on`, a tap in the top
+  three rows of a pane pages the history back one screen (entering copy-mode
+  if needed) and a tap in the bottom three rows pages forward, returning to
+  the live view once there is nothing newer to page into — the same ending a
+  tap in copy-mode already had. A tap between the bands is still an ordinary
+  click, and so is a bottom-band tap on a live pane. `@clikae_touch_pages_rows`
+  (default 3) sets the band height; on a short pane the bands are narrowed so
+  a middle row always survives, because a touch device has no second button
+  and nowhere to click is unrecoverable. Both options take `set -g` and
+  `set -p` like #88's, and only `on`/`1`/`yes`/`true` (any case) enable the
+  feature: it re-purposes a click that currently reaches the program, so an
+  unreadable value leaves today's behaviour alone. The decision lives in the
+  **same** `MouseUp1Pane` handler as the swipe (displacement first, then zone,
+  then leave it alone) — two bindings on one key is not a design, tmux keeps
+  the last one and the loser fails silently. `@clikae_touch_scroll off` does
+  not disable paging; the two gate independently. Measured against a real tmux
+  3.4 server on tmux's own `#{scroll_position}`; a physical iPhone run, and
+  a-Shell's own selection/OSC 52 copy path, remain unverified (see
+  `docs/EXPECTATIONS.md`).
+- `clikae watch github [--org <org>] [--interval <dur>] [--once] [--since <ts>]`
+  — a second source under `watch` (alongside the existing dry-tank watcher):
+  polls GitHub's search API for every issue/PR update in an org — including
+  replies on issues YOU opened — and turns each new one into
+  a wake line (`github <org>/<repo>#<n> opened|comment|review|activity|mention
+  by <login>: <title>`; `mention` when a fetched comment/review's own text
+  @-mentions you, checked locally from the timeline lookup already made for
+  actor resolution — no separate `mentions:<self>` search query), printed
+  live and appended as flat JSON to
+  `$CLIKAE_HOME/logs/watch-github-<org>/events.jsonl` for a durable trail. The
+  actual wake a cron job or Stop hook calling `--once` consumes: every poll
+  finding ≥1 new event writes a burn-status-shaped `status.json` to
+  `$HOME/.clikae/logs/watch-github-<org>-<epoch>/` — burn's own directory
+  layout, so `clikae wait watch-github-<org>-<epoch>` (the run_id printed
+  inside the file) or `clikae wait --latest watch-github-<org>` (no epoch
+  needed — see below) resolves and blocks on it exactly like a burn.
+  Self-exclusion is per EVENT ACTOR, checked against `issues/<n>/timeline`
+  for any issue/PR already seen before (bounded to 50 such lookups/poll,
+  oldest-unseen-first, stopped early under GitHub's own rate limit; a
+  candidate past that bound is still reported, as `by unknown`, never
+  dropped) — never against who opened the issue, so a collaborator's reply
+  on your own issue reaches you. Each query paginates ASCENDING (oldest
+  unseen first) — a cursor + capped seen-file de-dupe by (repo, issue
+  number, updated timestamp); a poll cut short by the 5-page/query cap pins
+  the cursor to the EXACT last row it actually read (no lag — an earlier
+  version of this entry claimed the cursor lagged 300s behind the newest
+  row seen, to absorb GitHub search's own indexing delay; that lag was
+  itself a permanent-stall bug — any 300-second window holding ≥500 rows
+  pinned the cursor back inside the very page a poll had just re-read,
+  forever, on a busy-enough org, fixed 2026-09-14 fix-round-4 review), and
+  the NEXT poll continues exactly there, so a backlog drains in bounded
+  polls ("truncated: continuing next poll" — and it does), unless ≥500
+  updates share one exact `updated_at` second, which the 5-page cap can
+  never read past (see docs/usage.md, Known limits). The 300s indexing-lag margin is instead bought
+  by a separate, bounded "tail sweep": once every 5 polls, or right after a
+  truncated one, one or more requests, oldest-first, re-read a window below
+  the cursor and deliver anything the main query may have missed while
+  still indexing, without ever touching the cursor itself — a window still
+  not fully covered within the same 5-page/100-per-page budget the main
+  query uses is reported "lag window truncated" and dropped rather than
+  read further, so this too can never stall. (An earlier version
+  of this entry had the sweep use a FIXED 300s window regardless of
+  spacing — that only ever covered the gap between sweeps when
+  `--interval <= 60s`; the 10m default never met it, so 45 of every 50
+  minutes had no re-read of the indexing-lag margin at all, and a `--once`
+  poll from cron never knew `--interval` to begin with. Fixed 2026-09-14
+  fix-round-5 review: the schedule (every 5 polls / after truncation) is
+  unchanged, but the window became the real wall-clock gap between the two
+  most recent polls times how many polls elapsed since the last sweep —
+  measured every poll and persisted beside the cursor, so cron's `--once`
+  is covered without needing to be told an interval, and a live loop's own
+  back-off widens the next estimate for free. An every-poll schedule was
+  tried first and reverted: it collided with the canned-response-by-
+  call-number `gh` test stub, which cannot tell a sweep's own search call
+  from the next poll's main query. That multiplication assumed every one
+  of those polls was as evenly spaced as the single most recent one —
+  false the instant a live loop's own back-off recovers, which resets its
+  interval in one step, not a gradual climb-down, so the short
+  post-recovery gap got multiplied into a window narrower than the real
+  elapsed span, silently losing a row with rc=0 and no warning. Fixed
+  2026-09-14 fix-round-6 review: the window is now `now - <the epoch the
+  last sweep actually completed at>`, persisted beside the cursor and read
+  back directly — measured, not inferred from any poll's own gap. A `0`
+  (the sentinel a `date` failure's own fallback writes) or a future value
+  in either that epoch or `.lastrun`'s own now reads as "missing", never
+  as a real span to subtract `now` from. The same round also fixed the
+  sweep's own read direction — it re-read the window NEWEST-first, so a
+  busy org's own already-seen recent activity filled the one page before
+  ever reaching the window's older rows, where the most overdue
+  late-indexed ones sit (late rows are spread across the whole window, so
+  a truncated sweep can still miss newer ones); it now reads oldest-first, paginating within the
+  main query's own 5-page budget, and reports "lag window truncated" only
+  when that budget is actually exhausted. `review_requested` — added to the
+  set of event types allowed to supply the `mention`-detecting body text in
+  fix-round-5, reasoned to "possibly carry a body" — never carries one;
+  left in that list, a review-request event with an earlier commented
+  event on the same page still picked up the COMMENT's body and
+  misattributed its @-mention to whoever requested the review, reopening
+  the exact fix-round-5 bug one whitelist entry at a time. Removed
+  (2026-09-14 fix-round-6 review, P2-3). That measured window still had no
+  overlap with the previous sweep: a row updated just before a sweep but
+  indexed just after it sat behind an active org's cursor AND just below
+  the next sweep's lower bound, lost for good (11 of 40 rows at
+  `--interval 60` with a 4-minute index lag). Fixed 2026-09-14 fix-round-7
+  review, P2-1: the window is now `now - <the epoch the last sweep
+  STARTED at> + 300s`, so consecutive sweeps overlap by a fixed 300s.
+  The same round stopped the day-based log retention in `clikae burn`/
+  `clikae clean`, and the 200-run count cap, from deleting an org's
+  durable `watch-github-<org>/events.jsonl` directory: only directories
+  holding a run's `status.json` are swept, and each poll touches the
+  durable directory.)
+  On a genuine rate limit (429, a 403
+  the response attributes to it, or a 5xx) the interval backs off ×2 up to
+  1h from a 60s floor; any OTHER 403 (missing scope, SAML) or a 404 is
+  permanent — retried once, then reported, never backed off. No daemon, no
+  tmux window of its own — a foreground loop (Ctrl-C to stop) or a one-shot
+  poll (#46).
+- `clikae wait` gains `--latest <prefix>`: resolves to the newest (by mtime)
+  run directory under `$HOME/.clikae/logs` whose name starts with `<prefix>`
+  and already has a `status.json` — for a caller (like `watch github` above)
+  that knows a run's prefix but not the epoch suffix a not-yet-finished poll
+  will pick. Composes with plain targets and `--any`/`--all`/`--timeout`
+  normally (#46).
+- `clikae cockpit <tank>` marks the tank that STEERS — the coordinating
+  session that dispatches build/review lanes to worker tanks with `clikae
+  burn` instead of spawning them in its own context (which spends the
+  cockpit's own weekly budget on work meant for a worker; broke for real
+  2026-09-10). Installs a PreToolUse hook (`lib/hooks/cockpit-guard.sh`) on
+  that one tank's settings.json that refuses an in-session `Agent` spawn
+  whose model is missing, or opus/sonnet with a prompt that reads as a
+  build/review lane (worktree, a git commit/push, REVIEWER/adversarial
+  review, a test run) — naming the current idle reserve and the exact `burn`
+  shape to use instead. Moving the role removes the hook from the old tank
+  and installs it on the new one (`--off` removes it everywhere); a human's
+  own hooks on that tank are identified by marker and never touched. Escape
+  hatch for "burn the cockpit tank tonight": `CLIKAE_COCKPIT_ALLOW_AGENTS=1`,
+  or a timed `clikae cockpit --allow-agents <dur>`. The settings.json edit
+  rides #76/#85's write mechanism (union merge, backup, atomic rename) rather
+  than a one-off jq edit (#63).
+- The tmux status row now answers the three questions the old one did not: how
+  to get back here, how much fuel is left, whether anything is red. It reads
+  `clikae resume <8 chars> | 5h 42% . 7d 65% | !2` with the clock at the right
+  edge, and the window list, the truncated pane title and the date are gone
+  (#77). The reconnect command is a real command: `clikae resume` now resolves
+  a unique session-id prefix (case-insensitively, and an ambiguous match's
+  candidate list caps at 10 with a count for the rest) and refuses an
+  ambiguous one with the candidates listed. Fuel comes from #72's usage cache
+  only -- the row never calls a vendor, and falls back to the board's
+  dry/no-reading glyph when there is no cached reading; a reading between 1h
+  and 24h old now carries a `. Nh ago` suffix instead of rendering identically
+  to a fresh one, and percentages clamp to 0-100 so a corrupt cache cannot
+  blow the row's width. `!N` counts tanks the live catchers marked dry and
+  burn lanes whose writer died before reaching a terminal state; it is not
+  drawn at all when N is 0. A `running` lane whose pid cannot be read at all
+  (a torn write) counts too: the writer always records one, so an unreadable
+  pid is itself evidence of a lane that stopped without finishing. A lane whose pid is dead is red however long it
+  ran (its `updated_at` is the attempt's start, not a heartbeat) -- dead
+  meaning gone from the process table, not merely un-signalable, since
+  `kill -0` fails identically for a pid that belongs to another user -- and leaves
+  the count once that stamp is older than the burn log retention (7 days, the
+  same knob that removes the file), so it can neither hide nor pin red
+  forever on a host that never runs `clikae burn` again. A dry marker whose
+  timestamp cannot be read is expired, not fresh forever -- on the board, on
+  the row, and in burn's own "is this tank dry" verdict. Readable is a SHAPE
+  test and nothing else: all digits, 9 or 10 of them. A truncated or doubled
+  write is usually still a NUMBER (one extra digit dates to the year 5138), and
+  length is what catches it. The reader's own clock deliberately takes no part
+  in that judgement, because expiring is what DELETES the file: a reader whose
+  clock sits behind the writer's (an RTC fast at boot and corrected backwards,
+  a VM snapshot restore, suspend/resume) would otherwise destroy a marker
+  written seconds ago, sending burn back into a rate-limited tank and taking
+  the vendor's reset phrase with it. A stamp in the future is therefore read as
+  a clock that moved, aged as if recorded now, and KEPT; and when `date` cannot
+  answer at all the verdict is `unknown` -- still dry, still counted on the
+  row, still on disk. Width is a yield
+  ladder with a fixed order, because three parts of the row are
+  variable-width, not one: the `ssh <host> -t ` prefix goes first (dropped
+  whole, never cut -- half a hostname is not a command), then the fuel age
+  suffix, then the tank name elided from the middle (`aver...name`, floor 8
+  columns, `validate_name` caps a tank name's character set and not its
+  length), then the engine word, and last the fuel segment entirely. The alert
+  count and the clock are never cut: at 80 columns what is guaranteed is the
+  whole `!N`, the whole clock, and at least 8 columns of the tank name, and
+  below 80 the arithmetic floor is `26 + the alert count's digits` (27 / 28 /
+  29 for one / two / three digits). Columns that a later rung frees go back to
+  the tank name, so a name is never elided while it would fit. Cost is a
+  function of how many run directories are on the host, not of load: about
+  0.10-0.13 ms per run directory on top of a fixed ~13 ms (an earlier draft of
+  this entry said "14 ms per redraw idle, up to 24 ms under load", which
+  measures the machine's noise rather than this row's input).
+
+  Round-1 fix review (2026-09-14) found the "fork-free" JSON field reader
+  (`burn_status_fieldv`) was O(n^2), not O(n): a bash parameter-expansion
+  prefix-strip that retries its glob at every byte offset -- measured 1,910 ms
+  at 64 KB, didn't finish in 90s at 1 MB. A single `[[ =~ ]]` regex match
+  replaces it, still fork-free and linear: 2-3 ms at 64 KB, 32-34 ms at 1 MB.
+  (The round-2 review corrected why it mattered: burn never writes objects
+  that size. `reason` is capped at 200 bytes and real status files are ~366
+  bytes, so the change removes an unpredictable cost, not a live one.) Also fixed
+  that round: `dry_store_peekv` forked once per dry marker (now flat
+  regardless of marker count); the PR description's claim that `!N` counted
+  "CI-red seen by the Stop hook" was false and has been corrected (that
+  source remains an intentionally documented gap, not a shipped one).
+- Versioned Claude permissions template and `clikae settings apply` with union
+  merges, backups, `--check`, and `--dry-run`. New Claude tanks receive the
+  template unless `--no-template` or `CLIKAE_NO_PERMISSIONS_TEMPLATE=1` is
+  set; doctor reports missing rules per tank. A missing template or missing
+  `jq` degrades instead of failing `init` (#76).
+- Touch scrolling for click-pair swipes in tmux (a-Shell over ssh): swipe up
+  to read history, swipe down toward live output, and tap to leave copy-mode.
+  `@clikae_touch_scroll` disables it; `@clikae_touch_scroll_lines` sets speed
+  (default 2). Desktop wheel and drag bindings are unchanged.
+- Failed `clikae burn` runs report Git work left behind in cwd/`--add-dir`
+  repositories, recent files, and a push hint; `--json` includes `left_behind`
+  without pushing or changing repository state (#84). Round-2 review of #87:
+  every git call in the scan (not just its file-list `find`) is now bounded,
+  plus a 10s global scan budget; the 25-repo cap ranks unpushed commits
+  ahead of file mtime and its push hint prints even past the cap; nested
+  repos at any depth are discovered and files attribute to the innermost
+  repo; `--json` gains `left_behind_truncated`. Round-3 review of #87: the
+  per-call 5s bound now actually catches a hung git call on real bash 3.2
+  (`command git` defeated it there — `$!` was a subshell, not git); the
+  global scan budget now covers repo discovery too, not just the per-repo
+  loop, and a repo whose discovery hangs is counted rather than dropped
+  silently; a failed `--json` burn's stdout no longer waits an extra ~5s
+  for an orphaned watchdog to release its held-open fd. Round-4 review of
+  #87: round-3's own discovery-timeout fix had a regression — a bounded
+  discovery `find` that is merely slow-but-finite (not hung) forced the
+  whole scan budget to read as exhausted, making the burn's own cwd/`--add-dir`
+  repo (the one #84 exists to report on) vanish from the list; a timed-out
+  discovery `find` now counts as one honest "more" instead. `BURN_LB_GIT`
+  is resolved with `type -P`, not `command -v`, which returned a shadowing
+  shell function's bare name instead of a path when the caller had
+  `export -f`'d one named `git`. Round-5 review of #87: the per-call bound
+  now kills the bounded command's whole PROCESS GROUP — `find`'s own
+  `-exec` forks, so killing `find` alone left a `stat` running that held
+  the scan's output open and could hang `burn` indefinitely with no rows
+  and no JSON at all; "did this time out" is decided by the watchdog
+  instead of by an integer `$SECONDS` comparison that reported phantom
+  timeouts for commands that finished in time; a discovery `find` that
+  hits its own ceiling now says "discovery timed out", not "scan budget
+  exhausted"; and `$PWD`/`--add-dir` are resolved before any `find` runs,
+  so a repo already discovered at the budget boundary is reported instead
+  of dropped. Round-6 review of #87: the kill that aims at a process group
+  now verifies the VALUE it is handed, not just the platform's capability
+  (`kill -- -0` is the caller's own group — burn plus the shell that
+  launched it); Ctrl-C reaches the scan again (`set -m` had put the child
+  in a group the terminal's SIGINT never visits, so a cancelled scan kept
+  reading the disk for the rest of its bound); the TERM->KILL escalation
+  reaches the whole group instead of dying with the direct child, so a
+  grandchild that ignores TERM is no longer left running; each repo's
+  file-list scan gets its own temp file, so a writer that outlived one
+  repo's bound can no longer land its rows — and its mtime, and with it
+  the ranking — in the NEXT repo's report; the 137/143 fallback is narrowed
+  to the case its own comment described (no mark could be written) and uses
+  a millisecond clock where one exists, instead of reporting an
+  externally-killed command as a timeout; and the watchdog's kill mark
+  comes from `mktemp` rather than a predictable /tmp path. Everything those
+  rounds deliberately left unfixed is now tracked in #112 rather than in
+  review notes.
+- An idle Claude tank whose access token has lapsed now reads
+  `source:"expired"` with `reason:"expired-token"` instead of a flat
+  `"unknown"` — the vendor's 401/403 is observed (curl still runs `--fail`;
+  only the HTTP status is captured), and "expired" needs a refresh token in
+  the credentials, so a tank that genuinely needs a login still reads
+  `unknown`/`no-credentials`. `reason` gains `unparseable` (a 200 that is not
+  one usable reading); `network` now means only transport and server
+  failures. An expired reading is cached for at most 60 seconds, not the
+  TTL. `clikae usage` text says `⏳ token expired — run a session or
+  'clikae usage --wake <tank>'` (the board: `⏳ expired · usage --wake
+  <tank>`, sized to its gutter), and `clikae usage --wake <tank>`
+  runs one trivial prompt through `clikae burn` (cockpit gate,
+  running-burn lock and 60s bound unchanged; `--force-cockpit` for the
+  cockpit) and re-reads with no cache (#107).
+- `clikae usage [engine] [tank] [--json] [--fresh]` reports Claude's OAuth
+  usage windows and Codex's own `rate_limits` evidence (read from its
+  rollout transcripts — no `codex` process runs for this), cached for 120
+  seconds (`CLIKAE_USAGE_TTL`); `source` is `"vendor"`, `"transcript"`, or
+  `"unknown"`. The board shows cached percentages; the tank a burn is told
+  to launch is always the one that runs, never silently substituted —
+  headroom preference only orders which tank a *dry* burn reroutes to next.
+  The board never calls the vendor itself; burn does, but only off its own
+  hot path — once for the tank it just ran, at run end, and, on a dry tank,
+  up to `_BURN_REROUTE_REFRESH_CAP` (3) calls spent on the reroute
+  candidates a first ranking off the on-disk cache says could actually win
+  (never once per candidate: a 20-tank fleet costs 3 calls, not 20, and
+  fewer if a refresh verifies a 0% window and stops the loop), never
+  before launching. Unavailable readings retain transcript fallbacks (#72;
+  round-1 review: named-tank launch, honest codex `source`, board redraw
+  fork removed; round-2 review: the two burn-time refreshes above (nothing
+  had ever refreshed the cache before), the board shows a stale-but-recent
+  reading with its age instead of hiding it, a reset instant already past
+  reads as 0% used rather than a stale percentage, and intra-tier ordering
+  is window_pct first, weekly_pct only the tie-break; round-3 review: the
+  Keychain read's own timeout warning is no longer swallowed, the reroute's
+  live vendor calls are capped so a growing fleet has a bounded wall-clock
+  cost, and a real bash 3.2 interpreter (not just a grep for known
+  constructs) gates every shipped file in CI; round-4 review: that round-3
+  cap spent its live-verify budget on candidates by listing order, before
+  ranking existed — so the calls could land on tanks that could never win
+  while the tank that DID win was the one candidate left unverified with a
+  stale, flattering on-disk reading. Candidates are now ranked FIRST on
+  whatever's already known, and the live budget is spent only on the
+  candidates that ranking says could win; a stale-but-recent on-disk
+  reading still counts (up to a new 15-minute age ceiling — past it it's
+  "unknown", never a flattering stale percentage), and a same-account
+  sibling can no longer burn a second refresh slot on the same real quota).
+- `clikae burn` guards every headless claude run against sub-agent delegation:
+  `--disallowedTools Agent,Task` is appended to print-mode argv that carries no
+  tools flag of its own (both the composed recipe and the raw `--` form, and
+  again after a cross-engine reroute), and `CLAUDE_CODE_PRINT_BG_WAIT_CEILING_MS=0`
+  is exported unless already set. A lane that delegated to a background agent
+  used to be terminated after 600 s with nothing on disk.
+- `clikae resume`'s picker and the home board's Continue list now hide headless one-shot sessions (`clikae burn`) by default, so neither is cluttered with "ghost" transcripts. Use `clikae resume --all` or press `a` in the interactive picker to reveal them (labelled as `[burn]`). Burn's sidecar (which session belongs to which run) is attributed only when proven — never a guess — and is now pruned by `clikae clean` and carried/removed by `clikae rename`/`clikae remove` like the rest of a tank's state. (#74)
+- `clikae burn agy --json`'s `run_id` field is now the run's id (a string) instead of always `null`, matching every other engine's `--json` output. It is informational only — not a wait handle; `status.json` still keys on `burn_id` for that. (#74 round-1 P3-4)
+- `clikae burn --permission <acceptEdits|auto>` selects Claude's headless
+  permission mode while preserving the default argv. codex and agy have no
+  equivalent flag and keep their existing flags, reporting the degradation for
+  either value now (not just `auto`). grok ships its own `--permission-mode`
+  but clikae does not map `--permission` onto it, so a grok burn always runs
+  under grok's fixed mode — round-1 review caught `--permission acceptEdits`
+  running silently on grok under a different mode (`bypassPermissions`); it
+  now says so (#60).
+- tmux guard shim: `lib/shims/tmux` refuses a bare `kill-server` (no `-S`/`-L`)
+  or `kill-session` (no `-t`) while `$TMUX` is inherited — the shape that took
+  down a live server twice (2026-09-10, 2026-09-13) — rc 86, naming the socket
+  and the legal form; never refuses anything when `$TMUX` is unset. clikae
+  wraps the pane's own start command with `env PATH=<shim dir>:...` in the
+  one place a session is created (`tmux_spawn_session`, `lib/core/tmux.sh`) —
+  that reaches the pane's real process regardless of what tmux does with its
+  session environment tables, so every session clikae launches (and
+  everything that session forks) inherits it for free — no copy, no
+  settings.json. `clikae doctor` reads that pane process's own environment
+  and reports a live session whose `PATH` does not start with the shim
+  directory (#97).
+
+  Review round 2 hardened it further: the shim's own cycle counter no
+  longer leaks into a spawned pane's environment through an intermediate
+  wrapper script; the refusal scan now reads `-S`/`-L`/`-t`/`-a` per
+  `\;`-separated segment instead of once over the whole argv (closing three
+  more disposable-server-killing bypasses); the hop ceiling that stops two
+  guards leapfrogging forever no longer depends on `head` being resolvable
+  through the PATH it is validating; and `doctor`'s macOS pane-path probe
+  reads the last `PATH=` token instead of the first and no longer aborts
+  the whole report under `set -eo pipefail` on an ordinary race.
+
+  Review round 3: an empty `-t` no longer counts as naming a session —
+  `kill-session -t ''` (what `-t "$SESS"` becomes with `$SESS` unset) let
+  tmux pick a session itself and killed the other one, or the whole server
+  when only one existed; it is now refused like a bare `kill-session`. The
+  shim's hop counter is now bound to the process that set it (`<pid>:<n>`),
+  so a copy frozen into a tmux server no longer makes every `new-window`,
+  split or wake pane on it skip the next tmux wrapper — host guard
+  included — on its first call.
+  `clikae doctor` no longer reports a session it could not read (pane
+  already gone, `list-panes` failing, environment unreadable) as "not
+  first on PATH" with advice to restart the tank; it prints "unknown,
+  could not verify" for those instead.
+
+### Changed
+
+- Home board transcript discovery and usage census now run at session boundaries,
+  with atomic per-file reading caches and bounded recent-session snapshots, and
+  self-heal inline at render time when a tank's snapshot is missing or stale
+  (a launch that never passed through a session boundary — `clikae alias`,
+  `clikae env`, a `.app` bundle — no longer leaves Resume permanently empty or
+  fuel readings frozen). `CLIKAE_HOME_TIMING=1` reports section timings on
+  stderr. `clikae clean` now also sweeps old board snapshot generations and
+  orphaned reading-cache entries.
+
+## [0.29.0] — 2026-09-11
+
+### Added
+
+- **codex tanks now get a real fuel light — not just a dry marker.** codex's
+  `/status` reports "5h limit: … N% left (resets …)" and "Weekly limit: … N%
+  left (resets …)" proactively, whether or not anything is exhausted, but
+  `clikae burn codex … --json` always printed `"reset": null` on a healthy
+  run and the board showed codex the same `·`/○ no-reading dot claude and agy
+  never see. Wired to codex's OWN `rate_limits` object, which every codex
+  session — headless `codex exec` included — persists into a `token_count`
+  event in its rollout transcript, already resolved by the server to a
+  percentage and an absolute reset epoch (cheaper and more reliable than
+  parsing the rendered progress bar). `limit_codex_status`
+  (lib/core/limit.sh) reads it, `clikae burn --json`'s `"reset"` field now
+  carries the tighter of the 5h/weekly windows' own reset text — clikae's own
+  rendered text, not the vendor's verbatim words, since codex's rate_limits
+  hands over a number and an epoch, not a sentence — and `clikae tanks`/`home`
+  shows a real red/yellow/green dot with both windows in the note. A window
+  whose own `resets_at` has already passed is treated as refilled (100% left,
+  no reset shown), never as its last stale percentage, so a tank read hours
+  after its own reset shows green again instead of a red light that quietly
+  expired. No data is ever read as "primary=5h/secondary=weekly" by
+  position — each window is labelled by its own length, since a real
+  free-tier account reported a 30-day window in `primary` with `secondary`
+  always null. The board's redraw path reads a small per-tank cache instead
+  of re-scanning the rollout store on every keypress. Documented in
+  docs/DESIGN-board-fuel-dots.md. claude's own reset path is untouched.
+- **Every `burn` now writes one machine-readable status file, updated at every
+  transition.** A cockpit judging a burn's outcome used to grep the burn log
+  for "ran dry" / "[ FAIL ]" and got false alarms from a task's own PROMPT
+  containing either phrase. `~/.clikae/logs/burn-<pid>/status.json` carries
+  the same fields as `--json`'s result object plus `state`
+  (running/waiting-reset/done/dry/fail/infra), `started_at`/`updated_at`,
+  `pid`, and `log` —
+  written whether or not `--json` was passed, and readable from a different
+  process. Documented as a contract in docs/orchestration.md (#41). An
+  EXIT/INT/TERM/HUP trap, installed right after the first `running` write,
+  guarantees the file never gets stuck saying `running` after the burn is
+  actually gone — every early argument-validation failure and an unclean
+  kill alike now leave it in a terminal `fail`, never live-forever `running`
+  (2026-09-09 round-1 review, P1-1).
+- `memory share --adopt <dir>` imports existing Claude markdown memory by copy,
+  preserving topic collisions and merging source indexes. First-share discovery
+  offers imports interactively or prints actionable warnings unattended (#49).
+
+- **`clikae wait <run_id|status-file>... [--any|--all] [--timeout <s>]`** —
+  blocks until one (`--any`, the default) or every (`--all`) named burn
+  reaches a terminal state, reading #41's status files instead of a
+  hand-rolled `until [ -e DONE ]; do sleep 60; done` plus a log grep. Prints
+  each finished burn's status object as one JSON line, in the order it
+  finishes (#37). A `running` (or `--wait-for-reset`'s `waiting-reset`)
+  status whose recorded pid is no longer alive is treated as a terminal,
+  `fail`-equivalent outcome (shown as the synthetic state `stale`, never
+  written to disk) instead of hanging until `--timeout` — a dead burn can
+  otherwise leave nothing to ever change its file (2026-09-09 round-1
+  review, P1-1). Exit code is `0` only when the REQUESTED condition is
+  actually met — `--any`: at least one target `done`; `--all`: every target
+  `done`; `2` when none are `done` and every one that finished is `dry`
+  (under `--all`, only when EVERY target is `dry`); `1` otherwise, including
+  a `done`+`dry`/`fail` mix under `--all` and a `--timeout` expiring (always
+  `1`, in both modes, even if some other target was already `done` —
+  2026-09-09 round-1 review, P1-3/P2-3, fixing a doc/code contradiction
+  where `--all` returned `0` on ANY done target regardless of the others).
+  `--timeout` now accepts the same duration grammar `--wait-for-reset` does
+  (`20m`, `30m`, `90s`, or a bare integer of seconds — both documented
+  examples use a duration directly and previously failed on first try),
+  resolving a target waits up to `$CLIKAE_WAIT_RESOLVE_TIMEOUT_S` seconds
+  (default `10`) for its status file to appear instead of refusing
+  instantly (the documented `clikae burn … --json & clikae wait "burn-$!"`
+  composition otherwise loses that startup race every time), and `--json`'s
+  own per-attempt `run_id` (e.g. `codex-T1-burn-28186`) is now itself a valid
+  `wait` target, resolved to the top-level status file it was derived from
+  (2026-09-09 round-1 review, P1-4a/P1-4b/P2-5). `stale` — the synthetic
+  terminal state a dead-pid `running`/`waiting-reset` row is read as — is
+  now listed in `clikae wait --help` too, not just docs/orchestration.md
+  (2026-09-09 round-2 review, P3-3).
+
+- **`burn` refuses to start on a tank that already has a burn running on it,
+  and the reroute walk skips a busy tank instead of colliding with it.**
+  Starting a second burn on the same tank used to duplicate the Live row's
+  tmux session name. Detection reads #41's status files (a `running` state
+  whose pid is still alive), never tmux session names. `--allow-active` —
+  which already meant "let this burn use a tank in active use" — opts out of
+  both the refusal and the reroute skip (#40). Liveness now also cross-checks
+  the marker's `started_at` against the recorded pid's own process-start time
+  (falling back to its command line actually being a `clikae` invocation
+  where that can't be read/parsed) — a crashed/`SIGKILL`ed burn's pid can be
+  recycled onto an unrelated process within the retention window, which used
+  to refuse that tank FOREVER for a reason nobody could see (2026-09-09
+  round-1 review, P2-1). The busy-check-then-`running`-write is now wrapped
+  in a per-tank lock, closing the window where two `clikae burn` processes
+  started together could both pass the check before either had written
+  `running` (P2-4). agy's own separate reroute walk (`_agy_burn`,
+  sequential-hop only — one global Keychain account) now calls the same busy
+  check too; it never had, which was the worst engine to miss it on since agy
+  structurally cannot run two tanks at once (2026-09-09 round-1 review,
+  P2-2). The lock's dead-holder reclaim went through two more broken shapes
+  before landing: reading "the holder is dead" and then deleting a lock
+  directory in two unsynchronized statements let two contenders interleave
+  (round 1); `mv`-ing the stale directory aside "atomically" instead
+  measurably made it WORSE, since a same-directory `mv` VACATES the
+  rendezvous path — exactly what another contender's plain `mkdir` is
+  waiting for (round 2). Round 3 replaces the whole shape: the lock is now a
+  **symlink** (`ln -s "<pid>:<started_at>" <path>`, one atomic syscall that
+  carries the holder's identity from the instant it exists — no pid-less
+  window to have a grace period for), and every REMOVAL of it — a stale
+  reclaim, or an owner's own release — happens only under a second,
+  short-lived mutex, re-verifying the current link before acting on it
+  rather than trusting an earlier, unsynchronized read (2026-09-09 round-3
+  review, R3-P1-1/R3-P1-2/R3-P2-1). Round 3's own mutex was itself a
+  `mkdir`-ed directory with its pid written in a separate statement right
+  after — the same claim-then-identify race one function up, which left a
+  process killed mid-claim's mutex permanently unreapable (disabling the
+  tank it guarded) and let a stale reaper destroy a live holder's mutex on
+  a check-then-act. Round 4 makes the mutex a symlink too, reaped only by
+  renaming it to a private, unique name first and verifying what was
+  actually caught before ever deleting it — restoring a mistakenly evicted
+  live holder by RE-CREATING its entry with `ln -s`, not by moving the
+  graveyard copy back (`mv -n` onto an existing symlink destination
+  silently clobbers it on this system's `/bin/mv` (BSD); `ln -s` fails
+  EEXIST on conflict identically on every vendor, with no `-n`-style switch
+  to get inconsistently implemented — against another SYMLINK; round 8
+  found the other half of this: against a DIRECTORY it does not fail at
+  all, it nests INSIDE it, and round 9 stopped trusting its exit code as
+  proof either claim or restore landed, verifying both by `readlink`
+  instead) (2026-09-10 round-4 review,
+  R4-P1-1/R4-P1-2/R4-P1-3). Round 5 also hardens the mutex's own liveness
+  test, which used a bare `kill -0` where the lock proper
+  already used the pid+`started_at` marker check — a pid recycled onto a
+  dead mutex holder's number wedged it, and the tank it guards, for the
+  recycler's entire lifetime; it now reuses `_burn_pid_matches_marker`
+  itself, with a negative age (a `started_at` ahead of `now`, from a clock
+  step in either direction) clamped instead of read as "not due yet"
+  (2026-09-10 round-5 review, R5-P1-1/R5-P2-1/R5-P2-2). A signal landing
+  while a burn already held the reclaim mutex (inside its own reclaim path)
+  used to make its own release trap try to re-acquire a mutex it already
+  held — the mutex's liveness check correctly sees its own live pid and
+  refuses to evict it, so the release spun its full retry budget, then did
+  so AGAIN when the signal handler's own `exit` triggered the EXIT trap
+  (measured: 18-19s to exit, the mutex leaked for that long). One variable
+  now records which mutex this process currently holds, so a trap firing
+  inside that window acts directly instead of trying to reacquire it
+  (R5-P2-3); separately, the loop's "mutex is busy" retry had no backoff at
+  all — only the neighboring "holder is live" branch slept — so every burn
+  blocked on a tank recovering from a signal spun at ~79% of a core for the
+  whole timeout, the other half of round 4's P2-2 (R5-P2-4). **The residual
+  is not zero, and is written down rather than implied away** (numbers
+  corrected by round 9, see below): the mutex is
+  not mathematically exclusive — a reaper that loses the race between its
+  own read and its `mv` can evict a live holder and fail to restore it (the
+  path having been reclaimed a third time in the interim), leaving two
+  processes inside the removal critical section at once. **This originally
+  claimed "0 violations in 300 real trials … a rhythm no real caller
+  produces" — round 9 found both halves false**, but for a different
+  reason than this mutex's own race: `clikae clean` (an ordinary real
+  caller, not a hammer) racing three real `clikae burn`s found 6
+  violations in 130 real trials, traced to a SEPARATE bug one level up —
+  the tank LOCK's own reap (`_burn_tank_lock_acquire`/
+  `_clean_tank_lock_gc`) was still a bare readlink-decide-then-`rm -f`,
+  never given this mutex's own mv-then-classify discipline. Fixed in round
+  9 by a shared helper, `_burn_tank_lock_reap_verified`, applying the
+  identical discipline to the lock (R9-P1-1, see below); the mutex's own
+  bounded residual described in this paragraph was not independently
+  re-measured after that fix. **Round 10 re-ran the same arm on the fixed
+  build (`da975fc`): 0 violations in 100 trials (300 real `clikae burn`,
+  500 real `clikae clean`, 142 engines)**, with the witness validated on
+  the same fixture at 12 violations / 10 trials when
+  `_burn_tank_lock_acquire` is neutralised. A pre-round-9 build, run as a
+  paired control at the same load, also produced 0/50 — at this machine's
+  load (2.6–6.9 on 8 cores, against round 9's own 7–58) the wild arm alone
+  is not sensitive enough to separate the two builds; what separates them
+  is the deterministic rendezvous at each of the two `mv`-then-classify
+  call sites: 0/5 destroyed on HEAD vs 5/5 on the control. The cost, on the rare miss, is bounded and self-healing:
+  one extra live holder for the duration of one critical section, caught by
+  the tank lock's own owner-only release; worst case is two burns briefly
+  on one tank (#40), never data loss (2026-09-10 round-5 review, R5-P1-3).
+  **`clikae clean`'s GC called every
+  successful reap "its reclaim mutex is busy right now" and needed two
+  passes to converge** — `_burn_reclaim_mutex_try` returns `1` both when it
+  refuses a live holder and when it just reaped a dead one, and the GC read
+  both as "busy"; it now re-tests the path after a `1`, so a reap in this
+  pass claims the now-vacant lock instead of waiting for the next `clean`
+  (2026-09-10 round-7 review, R7-P2-1). **A foreign symlink-to-directory left at the `.lock.reclaim`
+  path was permanently un-reapable** — `[ -d "$reclaim_link" ]` dereferences
+  before any `-L` check, so a symlink resolving to a real directory ran the
+  legacy-directory branch (below) against the TARGET's own `pid` file
+  forever; guarded with the same `! -L` check the lock itself has had since
+  round 4, plus a second guard evicting the foreign symlink outright before
+  a claim attempt could nest INSIDE the foreign directory instead of
+  failing EEXIST (measured rc=0 on both GNU coreutils' `ln` and BSD
+  `/bin/ln` — `ln`'s documented destination-is-a-directory handling, not a
+  vendor quirk) (2026-09-10 round-7 review, R7-P2-2). **Round 8 found both
+  of that legacy-directory branch's own removal sites unverified in turn**
+  — the fixed sibling arm's `[ -L "$grave" ]` restore trusted `ln -s`'s
+  exit code as proof a live holder's caught claim landed back at the mutex
+  path, when the same commit's own new guard had just proven `ln -s`
+  returns `rc=0` without doing anything whenever the destination
+  dereferences to a directory: `restored it` printed 10/10 while the claim
+  was created as junk inside a foreign directory and the only copy was
+  deleted (R8-P1-1); and the *second* guard added for R7-P2-2 removed the
+  mutex path with a bare `rm -f`, no re-test, no mutex, and no output at
+  all — a live claim landing in its two-statement window was deleted in
+  total silence, 5/5 (R8-P1-2). **Both are closed by deleting the
+  legacy-directory reclaim branch and its mtime-fallback helper entirely,
+  not patching either removal site a fifth time (moot with it: R8-P2-2,
+  an empty-identity guard the branch grew this round that mislabeled its
+  own ordinary pid-less reap as "a different legacy identity" and leaked
+  a graveyard on every one, 50/50)**: this PR never shipped,
+  so no released clikae ever created a directory-shaped reclaim mutex, and
+  the branch's population — the mixed-version scenario it existed to
+  humor — was always empty. What replaces it, the sibling non-directory
+  branch, and both of R7-P2-2's guards is ONE rule: a mutex path that is
+  not a symlink whose target is plain data (a directory, a symlink to one,
+  or a plain file) is never touched by any reap or claim attempt — `try`
+  refuses loudly, names the path, and — because the condition never
+  self-heals — refuses TERMINALLY rather than backing off (see Round 9
+  below), counted under its own `foreign-mutex` reason; `clikae clean`
+  reports the same reason on the same shapes and never removes them either
+  (no `--force` path in this PR). Nothing is ever restored and nothing
+  non-symlink is ever removed, closing R8-P1-1 and R8-P1-2 by construction.
+  The one remaining restore site (a live holder's fresh symlink claim
+  caught racing the age-based eviction of a stale mutex symlink) now
+  verifies the same way: `readlink` the path after `ln -s`, not its exit
+  code, and keep the graveyard copy on a mismatch instead of discarding the
+  only surviving copy of a live claim (2026-09-11, KITT ruling on the round-8
+  review, R8-P1-1/R8-P1-2). **The
+  structural pin asserting no bare, unguarded remover exists had a
+  mutation check that only proved its pinned line-number list changes
+  when the file gets one line longer** — a pure comment satisfied it, and
+  a real, unguarded `rm -rf "$reclaim_dir"` inside the lock's own acquire
+  loop left the pinned set byte-identical; rewritten to parse actual
+  command lines with comments stripped, assert each remover's enclosing
+  function is in an allow-list that holds the mutex or names a graveyard,
+  and to prove itself on both mutations — the comment (still green) and
+  the real bare `rm -rf` (now red) (2026-09-10 round-7 review, R7-P2-4).
+  **Round 8 found that rewrite immune to a real remover too: pinning the
+  SET of allow-listed function names, not the multiset of removal sites
+  inside them, left a SECOND bare `rm -f "$lock"` inside an
+  already-allow-listed function byte-identical to baseline, and the
+  pattern still lacked the `reclaim_link` spelling — a fifth removal
+  variable this round's own foreign-mutex work touched** — both of the
+  review's committed mutations left the allow-list green (R8-P2-1). Pinned
+  by occurrence count per function
+  (a second remover in an already-covered function now changes the
+  multiset) and widened to the fifth spelling; a pure comment is still
+  immune (2026-09-11, KITT ruling on the round-8 review, R8-P2-1).
+  **Round 9 found four things the round-8 rewrite still had wrong, and
+  closes them (2026-09-11 round-9 review, R9-P1-1/R9-P1-2/R9-P2-1/R9-P2-2).**
+  A reclaim mutex path occupied by anything clikae did not write there
+  itself — a directory, a symlink resolving to one, a regular file, a
+  fifo, a socket — is now refused rather than reaped. Every reclaim mutex
+  clikae creates is a symlink whose target is data (`<pid>:<started_at>`)
+  and therefore never resolves to anything, so "the path resolves to
+  something" is a complete and sufficient test for a foreign object
+  (`_burn_reclaim_mutex_is_foreign` is now exactly `[ -e "$1" ]` — the
+  shipped three-condition version let a symlink resolving to an existing
+  **non-directory** through, and it was deleted rather than refused,
+  measured on a regular file, a symlink chain to one, and `/dev/null`:
+  R9-P2-1). The reaper applies it before any removal is considered: it
+  names the path, reports the refusal under its own `foreign-mutex` reason
+  in the burn's status file and in `clikae clean`'s GC output, and removes
+  nothing. Because the condition never self-heals, the refusal is now
+  TERMINAL, not a backing-off retry: the old shape looped with no sleep at
+  two of its three call sites once the refusal became permanent, measured
+  at 9.79s of CPU (≈89% of a core) and 49,151 duplicate refusal lines in
+  one 10s burn; `_burn_tank_lock_acquire` now returns a distinct code and
+  exits the acquisition loop immediately, once, and `cmd_burn` writes
+  `foreign-mutex: <path>` into the status file's reason instead of the
+  generic busy-timeout text (R9-P1-2/R9-P2-3). Recovery is still to remove
+  the object by hand and retry; there is no `--force` path in this PR.
+  Both places that CLAIM a path with `ln -s` (the reclaim mutex's own, and
+  the tank lock's own) now verify the claim landed by `readlink`, the same
+  way the restore already does — `ln -s`'s own exit code is `rc=0` without
+  creating anything at the destination when it resolves to a directory
+  that arrived in the check-then-act window (R9-P2-2). Separately, every
+  removal of the per-tank lock itself now uses the same rename-then-
+  classify discipline as the mutex that guards it, through a new shared
+  helper (`_burn_tank_lock_reap_verified`): the reclaim mutex serialises
+  removers of the lock but cannot serialise claimants, so a reaper that
+  decided a lock was stale and then removed the *path* — rather than the
+  *entry it verified* — could delete a live burn's fresh claim landing in
+  the fork-sized window `_burn_pid_matches_marker`'s own `ps`/`date` calls
+  open up; measured as 6 genuine engine overlaps in 130 real trials with
+  `clikae clean` racing `clikae burn` (R9-P1-1, see the residual note
+  above for the numbers this replaces).
+
+  **Round 10 found the PR's own documented recovery path was dead exactly
+  when it was needed, a second graveyard family with no sweeper, and two
+  stale documentation sentences (2026-09-12 round-10 review, R10-P1-1/
+  R10-P2-1/R10-P2-2).** `clikae clean`'s tmux-lock GC (`_clean_tmux_gc`)
+  probed each ephemeral lock with a bare `flock -n …; rc=$?` /
+  `lockf -k -t 0 …; rc=$?` under `bin/clikae`'s `set -eo pipefail` — the
+  same shape R9-P1-1 fixed at `cmd_burn`'s own acquire call, just never
+  grepped for elsewhere. A genuinely-held ephemeral lock (any `clikae
+  burn`'s tmux wrapper holds one for its whole run) made the probe exit
+  non-zero, which errexit read as `_clean_tmux_gc` failing outright:
+  `clikae clean` died there with rc=75 (lockf) or rc=1 (flock) and ZERO
+  output, and `_clean_scrollback_gc`/`_clean_tank_lock_gc` — this PR's own
+  stated recovery path for everything above — never ran, precisely while a
+  burn in flight is the moment most likely to have left something to
+  clean. Both probes now use `rc=0; cmd || rc=$?`, and a busy lock prints
+  one line naming it instead of failing silently (R10-P1-1). Separately,
+  the lock family's own restore-failure grave (`tank-busy-*.lock.stale.*`,
+  `_burn_tank_lock_reap_verified`'s "could NOT restore" branch — the only
+  surviving copy of a live claim) had no sweeper anywhere: `clean.sh`'s
+  graveyard loop matched only the mutex family's `*.lock.reclaim.stale.*`
+  glob, while its own comment claimed to cover "every graveyard." Both
+  globs are now swept the same way, and the comment says so (R10-P2-1).
+  And two sentences — one in this file, one in docs/orchestration.md —
+  still claimed in the present tense that a foreign-mutex refusal "backs
+  off exactly like an ordinary busy mutex," the exact behavior R9-P1-2
+  reversed into a terminal refusal a few dozen lines earlier in the same
+  file; both now say so (R10-P2-2). Clause (a) itself re-verified clean on
+  the fixed build: 0 violations in 100 trials (see the residual note
+  above), and the deterministic rendezvous at both `mv`-then-classify
+  sites held 0/5 destroyed vs 5/5 on a paired pre-R9 control. Also fixed
+  in the same round: the lock's own reap call was safe only because its
+  one caller happened to shield it under `|| rc=$?`, now guarded directly
+  (R10-P3-1); a claim that loses the race into an arriving foreign
+  directory left a stray symlink inside it uncleaned, now removed by name
+  (R10-P3-2); the CLAIM's readlink-verify had only a text-grepping
+  structural test guarding it, now joined by a behavioral test that drives
+  the actual race through a PATH-level `ln` substitution (R10-P3-3); both
+  reapers' restore/no-restore messages could print an
+  empty pid or overclaim "live" for an identity they never re-verified,
+  now reporting the raw caught identity instead (R10-P3-4); both graves'
+  names gained a wall-clock timestamp alongside `$$.$RANDOM`, shrinking
+  the collision window between a deliberately-kept grave and a later
+  pid-recycled process (R10-P3-5); the residual paragraph above now
+  carries these Round 10 numbers inline instead of leaving only the
+  pre-fix 6/130 for a reader to mistake for the current state (R10-P3-6);
+  and a 50-trial campaign that kept
+  state found residual litter in 27/50 trials — almost entirely ordinary
+  mutex-family graves, at a rate a pre-round-9 control build also showed
+  (28/50), fully removed by one subsequent `clikae clean` run — self-
+  healing that R10-P1-1 now makes reachable in practice (R10-P3-7).
+
+  **A `SIGKILL`ed burn denies its own tank for up to
+  ~30 seconds before self-healing** — `SIGKILL` cannot be trapped, so the
+  lock and its mutex are left exactly as they were, and every burn tried
+  against that tank is refused until the mutex's own 30s stale rule
+  reaches it (measured ~30s total, consistent across rounds 5 and 6).
+  Mutual exclusion is never broken, but the refusal used to claim
+  *"another clikae burn is mid-check on it right now"* even here, where
+  there is no other burn — it now names both the ordinary busy case and
+  this self-healing one, since the timeout alone can't tell them apart
+  (2026-09-10 round-6 review, R6-P2-4). **Separately, and not fixed by
+  this or any lock change: a `SIGKILL`ed burn also orphans its engine
+  subprocess**, which keeps running on the tank after `burn_tank_busy`
+  (keyed on the burn's own, now-dead pid) lets the next burn straight in
+  — reproduced directly, and confirmed as the entire explanation for the
+  one seeded-wreckage arm that shows any #40 violation at all in the real
+  `clikae burn` trial suite (0/50 with the orphan drained before the next
+  wave, 50/50 with it left running). Documented, not addressed here: the
+  lock's job is serializing who gets to start a burn, not supervising a
+  process it does not own the lifetime of (2026-09-10 round-6 review,
+  R6-P2-5).
+  A trap scoped to the
+  check-and-write releases the lock — and, if a signal lands before the
+  section's own write, now also records a terminal `fail` — on every exit
+  out of that section including a signal (2026-09-09 round-2/round-3
+  reviews, P2-1/R3-P3-1). A refusal here (the lock timing out, or losing the
+  busy check) now writes a terminal `fail` (reason starting `busy:`) before
+  returning, so the documented `clikae burn … & clikae wait "burn-$!"`
+  composition reads an immediate `fail` instead of stalling the resolve
+  window on a status file that was never coming (2026-09-09 round-2 review,
+  P3-1).
+
+- **`clikae burn ... --wait-for-reset <dur>`** (`30m`, `2h`, `90s`, or a bare
+  integer of seconds) — when a tank runs dry and the vendor's own reset
+  phrase resolves to an instant within `<dur>`, sleep to it and re-fire the
+  SAME tank instead of rerouting or Stopping under `--no-reroute`. A reset
+  further out than `<dur>`, or one that doesn't parse, falls through to the
+  existing reroute-or-stop behaviour unchanged (#38). While sleeping, the
+  status file says the non-terminal `waiting-reset` (with the target epoch in
+  the new `reset_at` field), not a terminal `dry` — so `wait` and
+  `burn_tank_busy` (#40/#41) both read this tank as still working, not
+  abandoned, for the whole window; on wake the reset is re-checked (not
+  blindly trusted) before re-firing, bounded to the original window
+  (2026-09-09 round-1 review, P1-2).
+
+- **`clikae clean` now also sweeps dead-holder tank locks.** Nothing ever
+  swept `~/.clikae/state/tank-busy-*` — a tank nobody `burn`s again keeps a
+  dead holder's lock (and, before round 4's reclaim-mutex fix, could keep a
+  wedged reclaim mutex) on disk forever, since `_burn_tank_lock_acquire`
+  only reclaims when something calls it again for that exact tank. Same
+  test as the existing tmux/scrollback GCs: the recorded pid's liveness,
+  never the file's age (2026-09-10 round-4 review, R4-P3-2 / R3-P3-3
+  before it). **Round 5 review found this GC removed the lock with NO
+  mutex at all** — the one invariant this whole design rests on
+  ("the link can only disappear while the reclaim mutex is held") had a
+  second, unguarded remover the moment this GC shipped: measured 5/5
+  deterministic violations of a real `_burn_tank_lock_acquire`, already
+  past its own under-mutex re-verify and about to remove a lock it
+  correctly judged stale, racing this GC — a fresh contender's legitimate
+  claim lands on the path GC vacated, then the original holder's now-stale
+  `rm` deletes that fresh claim too, leaving two burns on one tank (#40).
+  The GC now takes the reclaim mutex first, re-verifies under it, and
+  SKIPS the tank — never waits — when the mutex is busy (a real acquire or
+  release is genuinely mid check-and-act on it right now); its own removal
+  of the reclaim mutex itself is now `_burn_reclaim_mutex_try`'s
+  reap-with-verify, not a bare `kill -0` + `rm -f` (a third, weaker
+  liveness rule for the same object). `clikae clean` also now skips any
+  tank whose own status file (#41) says a burn is `running` or
+  `waiting-reset`, independent of what the lock symlink itself reads as
+  (2026-09-10 round-5 review, R5-P1-2).
+
+### Changed
+
+- **`wait` joined `burn`/`init`/etc. in `__clikae_is_reserved`.** A tank can
+  still be created and named `wait` (`clikae init codex wait` still
+  succeeds), but it is then unreachable by its bare name — `clikae wait`
+  always dispatches to the `wait` subcommand — the same tradeoff `burn`'s
+  own reservation already made, for the same reason: it names a top-level
+  `clikae` subcommand (2026-09-09 round-3 review, R3-P3-5 / 2026-09-10
+  round-4 review, R4-P3-1).
+
+### Fixed
+
+- **Codex burns reject a non-git cwd before creating state (#66).** Put the
+  repository first in `--add-dir`, or opt in with `--codex-skip-git-check`.
+  The check now also re-fires when a dry tank's reroute lands on codex from a
+  different engine — it used to run only against the engine named on the
+  command line, so a reroute INTO codex skipped it entirely and let codex
+  itself reject the cwd a tank later (round-1 review, P1-1). A cwd that
+  doesn't exist at all now says so, instead of the git message (P3-2), and
+  `--codex-skip-git-check` on a non-codex engine or a raw-argv command now
+  warns that it has no effect there rather than staying silent (P3-1).
+  Fast engine failures with stderr now report its trimmed first line (up to
+  200 bytes, UTF-8 safe) as the JSON reason — sanitized so ANSI color codes
+  and other control bytes can't produce invalid JSON, and truncated on a
+  whole UTF-8 character boundary regardless of the caller's locale (round-1
+  review, P2-1/P2-2). The sanitizer only replaces control bytes and strips
+  ANSI escapes now; it no longer collapses legitimate runs of spaces in an
+  otherwise-clean stderr line (round-2 review, P3-3).
+
+- **The Live section named the wrong session when two ran on one tank.** Two
+  live sessions on the same tank (a bare one and a resumed one, say) each
+  showed the tank's most recently active transcript's title — identical on
+  both rows, because the title was resolved per TANK, never per WINDOW.
+  `clikae resume`, the board's own "resume" row, and a hand-typed `clikae
+  claude x -- --resume <sid>` / `-r <sid>` now all stamp the tmux session they
+  start with the exact id they're resuming (`@clikae_session_id`, and a
+  mirrored `~/.clikae/state/<session>.session_id`), read straight out of the
+  engine's own argv rather than an environment variable. For claude, a bare
+  "start fresh" launch is stamped too: claude accepts a caller-chosen session
+  id up front (`--session-id <uuid>`), so clikae mints one and hands it to the
+  engine before it ever runs — but only when the launch's argv carries no
+  resume/continue signal of its own (a bare `-r`/`--resume` — the picker —
+  `-c`/`--continue`, `--fork-session`, or a hand-typed `--session-id`);
+  claude rejects `--session-id` alongside `--continue`/`--resume` unless
+  `--fork-session` is also given, so appending it unconditionally would make
+  every one of those real launch shapes refuse to start. codex and
+  antigravity expose no equivalent flag, so a window running either still
+  falls back to a guess when it has no recorded identity.
+
+  A tank's guess now excludes every sid ANY other live window on that tank has
+  already claimed — a real stamp, or another window's own guess, reserved in
+  session order before any row is drawn — so a stamped row and a bare
+  neighbour resolve to two DIFFERENT titles even once both have real
+  transcripts on disk, not just when the stamped one happens to still look
+  newest. A tank with a single live session renders byte-identical to before
+  whenever its title resolves the same way it always did — no recorded
+  identity, or a stamp pointing at the same transcript the old tank-newest
+  guess would have chosen. When the stamp points somewhere else — the
+  routine case after `clikae resume`, or when a `clikae burn` has written
+  into the same tank+directory since — the row now shows its own session's
+  title instead of the tank's newest; that difference IS the fix, so it is
+  not byte-identical there and is not meant to be. A
+  lone session can also gain a `?` when its own stamp is independently
+  stale (see below), and a tank with no transcript at all on disk now
+  renders the tank's own name where an earlier version rendered a literal
+  empty title — an incidental fix to a pre-existing gap (R4-P3-1), not new
+  behaviour this round set out to add. Two fully bare sessions on the same
+  tank — genuinely nothing recorded to tell them apart — still fall back to
+  a marked guess (`?`), honestly, rather than one being presented as fact. A
+  guess whose entire exclusion-aware candidate pool has already been
+  claimed by other rows on the tank now falls back to the tank's own newest
+  transcript with no exclusion (an honest, possibly-duplicate guess) — the
+  same tank-name fallback applies when there is nothing on disk at all yet,
+  rather than rendering a blank title.
+
+  A stamp that has gone stale is now detected only by evidence about that
+  EXACT session — never by what anything else on the tank is doing: its own
+  transcript file is gone (deleted, moved, or a session id minted at launch
+  whose engine never got the chance to write it), or its own engine process
+  has stopped running while the tmux session outlives it (a `wake` watcher
+  window can keep a session on the board after its engine's own window has
+  already closed on its own). An earlier version of this check instead
+  treated "a newer transcript in the stamped session's own directory that
+  nothing else on the board claims" as proof the session had moved on (meant
+  to catch `/clear`) — but that signature is identical to a `clikae burn`, an
+  `--ephemeral` run, or an already-ended neighbour writing into the same tank
+  and directory, none of which appear on the live board and so none of which
+  are ever "claimed" there either. One `clikae burn` running alongside a
+  resumed, exactly-identified session was enough to swap that session's own
+  title for the burn's. That check has been removed rather than narrowed:
+  there was no signal in it that was actually about the stamped sid. One
+  consequence is honestly documented, not hidden: `/clear` (or a fork) makes
+  the engine start writing a brand-new transcript under a brand-new id while
+  the OLD stamp just sits there, and today clikae has no reliable way to tell
+  that case apart from a busy neighbour's own transcript — the row keeps
+  showing the pre-`/clear` title until the transcript is actually gone or the
+  engine process actually stops. The `?` marker itself is applied AFTER the
+  title is truncated to fit the row, not before, so a long guessed title can
+  no longer silently swallow it. It also no longer doubles up on a title that
+  already ends in a literal `?` — one trailing `?` is the marker in that
+  case, not two. `CLIKAE_LAUNCH_SID`, the exported environment
+  variable an earlier round of this fix threaded the resumed id through, is
+  gone entirely — it was never unset, so a tmux server born under it handed
+  the variable to every session that server spawned afterwards, occasionally
+  stamping an unrelated bare launch with a foreign session id. `clikae clean`
+  now also sweeps `~/.clikae/state/<session>.session_id` files whose tmux
+  session is gone, matching what it already did for orphaned `.scrollback`
+  files.
+
+  Whether a session's own engine is still running is now decided by window
+  NAME and pane state, never by numeric window position: "is there a window
+  that is not the `wake` watcher and whose pane isn't dead" — the same test
+  `tmux_sess_has_engine` (`lib/core/tmux.sh`) already uses correctly
+  elsewhere in this codebase. Tmux window index `0` used to stand in for
+  "the engine's window", but that index is the tmux USER's own `base-index`
+  setting (a session option read from their `~/.tmux.conf` at server
+  start), never clikae's to assume — on a `base-index 1` machine, every
+  exactly-identified row's engine window sat at index 1, so the old check
+  found no window 0 on a perfectly healthy session and marked it stale. The
+  pane-state half is new too: a user who has turned on tmux's
+  `remain-on-exit` gets a window that lingers after its process exits, and
+  that window's `#{pane_dead}` — not its existence — is now what's checked.
+  (A live window of the user's own, opened by hand inside the same session,
+  is still read as "something's there" either way — an honest miss, never a
+  false alarm on a session that is actually fine.)
+- `clikae app` restores the target terminal icon on every build, including
+  `--force`, and re-seals the bundle (#50). Missing icons fall back gracefully.
+- **`clikae init` and `clikae solo --off` no longer hang on a real terminal.**
+  Both self-invoke `memory share`, which since --adopt (#49) could reach an
+  adoption prompt that read from the same terminal while its own output had
+  been redirected away — a black screen, forever. That prompt (and the
+  cross-account confirmation) now checks that stdout is a terminal too, not
+  just stdin (#49).
+- `memory share` no longer aborts entirely when one file in the tank's own
+  memory can't be read while seeding — it's skipped and reported, and the rest
+  still copies (#49).
+- A failed `--adopt` no longer leaves a half-copied store that looks seeded to
+  the next `share`. The whole copy is staged first and moved into place only
+  once it fully succeeds (#49).
+- `--adopt` now copies the files a source's index links to — subdirectories,
+  non-markdown attachments — not just top-level markdown, and reports any
+  index entry that still doesn't resolve afterward (#49).
+- The `MEMORY.md` merged in by an adopt is now forced to `0600`, matching the
+  topic files it merges alongside (#49).
+- `--adopt` now validates that the source's index is actually readable and its
+  directory listable *before* creating anything inside the store. Previously,
+  an unreadable source `MEMORY.md` could still leave topic files copied and an
+  orphan `## Adopted from <source>` heading with nothing under it — which
+  permanently blocked ever merging that source's real index, since the
+  heading alone reads as "already adopted" (#49).
+- A symlinked memory file is now followed (its target's content copied in)
+  instead of being silently skipped by both `memory share` seeding and
+  `--adopt` — `find -type f` never matched it and never said so. A dangling
+  symlink is still skipped, but now reported by name (#49).
+- `--adopt <dir>` now resolves the adopt directory itself before listing it,
+  not just the files under it. `find` never descends into an operand that is
+  ITSELF a symlink, so a memory directory reached through a symlink (memory
+  kept in iCloud, a bare symlink pointing at it) copied zero files, merged
+  the source index anyway, and printed a green `[ DONE ]`. Adoption now also
+  refuses outright — rather than reporting success — if it ends up copying
+  zero files from a non-empty source (#49).
+- That zero-copy refusal had its own bug: it counted a genuinely dangling
+  symlink (target doesn't exist) the same as a symlinked subdirectory `find`
+  can't descend into (target exists, but isn't reachable), so a single stale
+  link anywhere in an otherwise-inline source was enough to fail the whole
+  `--adopt` and leave the tank isolated — contradicting the "dangling is
+  skipped and reported, never fatal" rule two entries up. A dangling link no
+  longer counts toward that refusal; it is still skipped and named (#49).
+- A signal that killed `--adopt` mid-copy (Ctrl-C, a closed terminal, a killed
+  session) used to leave its staging directory behind forever: it staged
+  *inside* the store with no `trap`, and `ls -A` can't tell that leftover
+  dotdir apart from real content — the next `share` on the same group read
+  "store non-empty" and silently skipped seeding the joiner's own memory in,
+  printing a clean `[ DONE ]` over a Soul that held nothing at all. Staging
+  now lives next to the store instead of inside it, a `trap` frees it on a
+  signal too, and the seed gate itself ignores dotfiles/dot-directories (so
+  residue from an older build can't fool it either) and sweeps any stale
+  `.adopt.*` it finds — in both the current and an older build's staging
+  location — naming what it swept (#49).
+- That signal trap cleaned up but never ended the process: bash resumes the
+  interrupted copy loop right after a trap handler returns, so a signal
+  mid-`--adopt` deleted the staging directory the loop was still using, let
+  the copy silently continue into a freshly recreated one, and could still
+  reach a green `[ DONE ]` over a Soul missing an unknown number of files —
+  or misreport the resulting move failure as a same-name collision that
+  never happened. `--adopt` now exits with the conventional 128+signal status
+  (130/143/129) on INT/TERM/HUP, matching every other trap in this codebase,
+  instead of resuming (#49).
+- `--adopt`'s move-into-place step now tells a genuine same-name collision
+  apart from any other reason `ln` could fail (most notably `EXDEV`, when the
+  store is a symlink onto a different filesystem): the latter used to be
+  misreported as "keeping existing" for every file and still end in
+  `[ DONE ]` with zero files actually adopted. It now fails loudly instead,
+  naming both the staging and store paths, and cleans up before returning (#49).
+- The previous fix only covered a signal landing during the COPY-into-staging
+  phase. The separate MOVE-into-store phase right after it — where `ln` links
+  each staged file into the real store — had no rollback at all: a signal
+  there (or a hard `ln` failure partway through) left every file already
+  linked permanently in the store, real markdown rather than a dotfile, so
+  the seed gate's dotfile-skipping fix (`_memory_store_has_content`) couldn't
+  see it either — the next ordinary `share` read "store has content" and
+  silently skipped seeding, ending in a green `[ DONE ]` over an unindexed,
+  un-seeded Soul. The move loop now records every destination it actually
+  links in a manifest kept outside the staging directory, and both the
+  signal traps and a hard move failure unlink exactly those before removing
+  staging — never anything that was already in the store. A hard move
+  failure also no longer claims "Nothing was adopted" once some files had
+  already landed; it reports how many were rolled back (#49).
+- Re-sharing an already-shared tank now also sweeps stale `.adopt.*` staging
+  first, not just a tank's first share — that path used to return early
+  before ever reaching the sweep (#49).
+- The move loop's rollback manifest above only recorded a destination
+  *after* `ln` had already created it — `ln` is an external command, and
+  bash defers a pending signal's trap until it exits, so a signal landing
+  while `ln` itself was running could still strand exactly the one file it
+  was working on: created, but never recorded, so the rollback that
+  "unlinks exactly those" had no record of it to unlink. The destination is
+  now recorded *before* `ln` runs, and only once it's confirmed nothing is
+  there yet, so a signal anywhere around `ln` — including mid-syscall — is
+  always covered, and the manifest still can never list a pre-existing
+  file.
+- The move_failed error also no longer blames "different filesystems" for
+  every kind of `ln` failure — only a genuine `EXDEV` is reported that way
+  now; anything else quotes `ln`'s own message instead of guessing a cause
+  that wasn't what happened.
+- The move loop's manifest file is now created `0600` instead of at process
+  umask — under `umask 000` it was `0666` inside the world-writable
+  `souls/<group>` directory, readable and appendable by anyone else on a
+  shared machine while an adopt was in flight.
+- **The move loop's `mkdir -p "$(dirname "$dest")"` created a directory the
+  rollback never knew about.** It ran unconditionally at the top of every
+  iteration, before the manifest above was even touched, so any source with
+  a subdirectory (`archive/`, `notes/`, …) left an empty directory behind
+  after a signal or a hard move failure — the manifest's file-by-file
+  rollback had nothing to unlink there, because nothing under it had landed
+  yet. And the seed gate (`_memory_store_has_content`) couldn't tell that
+  apart from real content either: it treated any directory entry the same
+  as a file, so the empty directory alone satisfied it, and the very next
+  ordinary `share` silently skipped seeding — the same symptom the manifest
+  fix above closed for files, now showing up one layer up, as a directory.
+  Every directory the move loop actually creates is now recorded (never one
+  that already existed) in a manifest of its own, and the rollback removes
+  them with `rmdir` — deepest first, and only once every file above has
+  already been unlinked, so a non-empty directory (something this rollback
+  didn't account for) is simply left alone rather than destroyed. The seed
+  gate itself is now hardened the same way, independently: a directory only
+  counts as content if a real file or symlink turns up somewhere inside it,
+  recursively — an empty directory, or an empty tree of them, no longer
+  does.
+- `--adopt`'s per-`ln`-call stderr capture file is now also created `0600`
+  up front, the same fix and the same reasoning as the move-manifest file
+  above (and the same file it's a sibling of) — under `umask 000` it was
+  otherwise created at `0666` the first time the move loop's `2>` redirect
+  touched it.
+  `.adopt.*` it finds, naming what it swept (#49).
+- **`_burn_redact_one`'s NUL record separator silently fused lines on macOS's
+  own awk, and per-match redaction cost was quadratic in the hit count.**
+  `RS="\x00"` cannot be held by macOS's `/usr/bin/awk` at all — it silently
+  collapses to `RS=""`, awk's PARAGRAPH mode, gluing the capture back
+  together at every blank line (routine engine output formatting) with NO
+  separator: a real limit line's `^` anchor stopped matching, and two
+  unrelated sentences fused at the blank line could fabricate a false infra
+  match. Separately, a capture with the redacted needle repeated many times
+  (a long build-log-style task echoing its own path back on every line) cost
+  26.5s of pure awk time on a 4 MB capture — the `substr` copy inside the
+  loop is taken once PER MATCH, not once total, and doubling the capture
+  quadrupled the time. Both are fixed the same way: gather every qualifying
+  needle first and substitute all of them in exactly ONE `perl -0777` pass
+  when `perl` is on PATH (its regex engine is linear in matches and has no
+  trouble holding a NUL byte) — already an accepted dependency here
+  (`_burn_timeout_bin` falls back to it for `--timeout`) — falling back to a
+  SOH-delimited (`\001`, not NUL) per-needle awk loop, correct but still
+  quadratic under a dense needle, only when it is not (#44).
+
+- **The "12 bytes of leading non-alphabetic noise" allowance let markdown
+  syntax stand in for transport noise.** A blockquote marker (`>`) or a
+  numbered-list digit + `.` are non-alphabetic too, so a real task failure
+  whose reply quoted or listed the phrase ("The runbook I was drafting
+  says: > You have reached your weekly limit.") walked the entire reserve —
+  a regression `main` never had (it never matched "reached your weekly
+  limit" at all). Narrowed the noise class, on both the codex and claude
+  branches, to the transport whitespace and stray symbols a caller's OWN
+  wrapper might actually prepend — never `>`, `#`, a quote character, a
+  digit, `.`, or `-` (#45).
+
+- **A genuine codex limit event phrased with either of codex's OTHER reset
+  grammars ("resets …" / "reset at …") was read as not-dry.** `limit_codex_reset`
+  only ever recognized "try again at …", so the repo's own 175-row real
+  reset-phrase corpus (`tests/fixtures/limit-reset-phrases.tsv`) — entirely
+  "resets …" / "reset at …" grammar — yielded no reset for a single one of
+  those 175 rows once prefixed with codex's own confirmed sentence.
+  `limit_codex_output_dry`'s second gate then discarded the whole event as
+  not-dry, silently closing reroute AND the board's only red dot for codex
+  (`dry_store` is codex-only) — and, on the fresh-artifact path, let a
+  genuine EXISTING marker be cleared, since "not dry" there means "safe to
+  clear". Recognizes the same three grammars claude's branch already does
+  (#45).
+
+- **A SUCCESSFUL codex burn could silently mark a healthy tank dry.**
+  `limit_codex_output_dry` — unlike claude's branch — was never anchored on
+  a direct vendor report, so it matches "hit your (usage|session) limit"
+  bare, anywhere in the reply; a codex task that merely TALKS ABOUT the
+  limit while it succeeds ("Done. The runbook now explains what to do once
+  you hit your usage limit.") matched it too. The success branch called
+  `dry_store_mark` on that signal, and codex is the only engine that signal
+  is even used for — so a finished task wrote a dry marker on a tank that
+  had just proven it has fuel, with `--json` saying nothing (`ok:true`,
+  `reset:null`). `dry_store.sh`'s own header promises "a successful run
+  clears it explicitly"; a fresh artifact now never writes a new marker —
+  at most it leaves an existing one untouched when the same reply also
+  carries a live signal, never clears a tank that may still be dry (#45).
+
+- **The raw `-- <argv>` redaction had no minimum length or word/line
+  boundary, so an everyday `-C .` could flip the classification.** argv is
+  full of short tokens (`exec` `-C` `.` `-s` `workspace-write`), and each one
+  was blindly stripped out of the engine's ENTIRE reply. Deleting every `.`
+  merged two sentences into one and let the tool-host bounded-gap pattern
+  jump across what used to be a sentence break — a real task failure
+  misread as an infrastructure outage, spending extra engine calls and the
+  wrong `reason`. The reverse also held: a short task string could shred a
+  genuine "…hit your usage limit…" line into unrecognizable pieces. Below a
+  minimum length an argv item is skipped entirely; at or above it, only
+  BOUNDARY-safe occurrences are replaced (#44).
+
+- **Pre-classification redaction cost tens of seconds to minutes of pure bash
+  string time AFTER the engine had already exited.** `_burn_redact`'s
+  `${text//needle/repl}` is super-linear in the haystack's size and ran over
+  the WHOLE captured output; measured 129x main's time on an 8 MB raw-argv
+  capture (240s vs 1.9s) — invisible to `--timeout` (it bounds the engine,
+  not this) and with no progress output, so from outside it looked like burn
+  had hung. burn's own purpose (long, unattended tasks) produces exactly the
+  large captures this was slowest on (#44). **Correction (round-5 review):**
+  the claim that closed this entry — "the classifiers only need the FINAL
+  message anyway, so the haystack is now bounded to its own tail" — was
+  itself reversed one entry later in this same file (round-4's P2-1: bounding
+  *classification*, not just substitution, made a signal past the last 64
+  KiB invisible to both detectors, which is exactly the large-capture case
+  this entry describes). Classification reads the full capture; only
+  substitution's cost stays bounded, now by an O(n) single-pass redaction
+  instead of the truncation this entry originally described (#44).
+
+- **The "you've "/"you have " prefix that #45 required was never anchored to
+  the start of a line, so it still matched its own documented
+  counterexample.** CHANGELOG's own illustration of a fixed false positive —
+  "the runbook covers what happens when you have reached your weekly
+  limit…" — still classified dry when it appears mid-sentence in a real
+  reply ("I could not write the file. The runbook covers…"), walking the
+  entire reserve on a genuine task failure (round-3 review PROBE O). A real
+  vendor sentence IS its line (or leads it); prose that merely quotes the
+  reader's own words never does. Anchored to the start of a line, same
+  reasoning as the `^weekly[ -]limit` alternative beside it (#45).
+
+- **A curly apostrophe or a one-word adverb between the direct vendor report
+  and its verb made a genuinely dry tank invisible.** #45's "you've "/"you
+  have " prefix (round-2 review) required it sit IMMEDIATELY before "hit"/
+  "reached" — narrower than main, which never required the prefix at all —
+  so "You’ve hit your usage limit" (curly quote) and "You have already hit
+  your usage limit" (adverb) stopped matching entirely: a real dry tank
+  read as a hard task failure (no reroute, no dry marker, no reset), the
+  exact misread `burn --help` warns about. Tolerates the ASCII/curly
+  apostrophe and up to two words between the prefix and its verb (#45).
+
+- **The tool-host infrastructure whitelist missed real-shaped failure
+  phrasings.** Unlike `limit.sh`'s 175-line real corpus, `_burn_output_infra`
+  was hand-written; five plausible real tool-host sentences all failed to
+  match, one by a single word ("waiting" vs "negotiating"). Widened to cover
+  more phrasings of the same four shapes (timeout / connect-failure /
+  closed-connection / disconnect, always naming the host) without loosening
+  the "must name the tool host" discipline (#44).
+
+- **Prompt-copy run directories under `~/.clikae/logs` were never swept.**
+  #43 traded a transient exposure (the full task text in a progress line) for
+  a permanent one (a private but never-cleaned copy on disk) — `clikae clean`
+  has no notion of that directory at all. `burn` now sweeps `burn-*`
+  directories past `$CLIKAE_BURN_LOG_RETENTION_DAYS` days (default 7; `0`
+  disables it) at the start of each run (#43).
+
+- **Two real declaration shapes for Claude's weekly limit were missed.**
+  "Your limit will reset at 5am …" (singular "reset at") extracted no reset
+  phrase (`reset:null`) even though the vendor's words were right there, and
+  "You've reached your weekly limit" (reached before "your", not after) was
+  not detected as dry at all — a real limit misread as a hard task failure,
+  worse than a missing reset string. Both are now recognized (#45).
+
+- **Ordinary prose merely discussing a weekly limit fired a dry-tank
+  reroute.** `weekly[ -]limit (reached|exceeded)` was the only alternative in
+  the claude branch with no verb anchoring it to the human ("hit your …"), so
+  a sentence like "the weekly limit reached its cap in July" matched. It now
+  requires the phrase to lead its own line, matching how a genuine vendor
+  message actually appears (#45).
+
+- **A write landing just after the engine's own exit stopped counting as
+  success.** #42's snapshot is taken the instant the engine's process tree
+  exits; main's older behavior re-stat'd the artifact after the parent
+  finished polling for completion, which caught a background child's write
+  landing shortly afterward. `burn` now takes a second look at the mtime
+  right before classifying if the first snapshot wasn't fresh, restoring that
+  window without weakening the snapshot's own guarantee (#42).
+
+- **A task that merely TALKED ABOUT a tool-host error was classified as one.**
+  `_burn_output_infra` and `limit_output_dry` read the raw captured output,
+  which can carry the engine's own echo of the task text (codex echoes user
+  instructions verbatim). A code review whose prompt described a tool-host
+  failure burned two extra full engine calls and 15s of sleep before
+  mislabelling a real task failure as infra. The task's own prompt is now
+  stripped from the output before either classifier runs (#44).
+
+- **A `burn` that FINISHED could be discarded and re-fired on a second
+  account** because the dry-phrase check ran before the artifact-freshness
+  check: a task whose own reply happened to contain a limit phrase (e.g. a
+  runbook about usage limits) was misread as dry even with a fresh artifact
+  on disk. Artifact evidence now outranks phrase-matching (#42).
+
+- `burn` stores its prompt under a private run directory and logs the path plus
+  a 120-character preview, avoiding repeated full prompts in progress and
+  diagnostic tails (#43).
+
+- `burn` recognizes tool-host connection failures as infrastructure failures,
+  retries the same tank with bounded exponential backoff, and reports JSON
+  `reason: "infra"` when retries are exhausted (#44).
+
+- Claude weekly-limit output now classifies as dry in `burn`, preserving the
+  vendor's reset phrase and normal reserve routing (#45).
+
+- `burn` snapshots artifact freshness and size at engine exit, so a cockpit
+  consuming DONE before the parent polls cannot turn success into failure (#42).
+
+- **The widened tool-host infrastructure whitelist turned into a prose
+  catcher.** The "host `<gap>` failure verb" alternatives had no upper bound
+  on the gap, so any sentence merely mentioning the tool host somewhere
+  ahead of an unrelated failure verb in the same sentence matched — a
+  genuine task failure whose reply happened to explain a runbook section
+  named after the tool host was misread as an infrastructure failure and
+  burned extra engine calls. The gap is now bounded to the width every real
+  phrasing in the corpus actually needs (#44).
+
+- **The task-echo redaction only covered `--prompt`/`--prompt-file`.** The
+  raw `-- <engine argv...>` dispatch form — documented in `AGENTS.md` as the
+  "power-user way" — never sets `$prompt`, so an engine echoing its own argv
+  back on stdout sailed through unredacted on that path: a task whose own
+  argv merely described a limit or tool-host outage burned extra engine
+  calls before being classified. Redaction now covers both forms — the
+  argv-supplied text is stripped argv-item by argv-item on the raw path,
+  same as the prompt string is on the other (#44).
+
+- **A second bare "reached your … limit" alternative reopened the hole its
+  sibling fix had just closed.** Unlike "hit your …", "reached your …" reads
+  naturally in third-person documentation prose that still addresses the
+  reader as "you" ("the runbook covers what happens when you have reached
+  your weekly limit…"), and a line anchor alone doesn't defend it — prose
+  can land the phrase at a fresh line by plain word-wrap. Both "hit"/"reached"
+  now require the direct vendor report ("You've "/"You have ") leading
+  straight into the verb (#45). **Correction (round-3 review):** the claim
+  that closed this entry — "which every genuine phrase in the corpus has and
+  none of the false positives do" — was not backed by any corpus row (the
+  fixture at `tests/fixtures/limit-reset-phrases.tsv` holds reset phrases,
+  not full sentences) and was disproved by this very example: run through
+  the unanchored prefix check above, "the runbook covers what happens when
+  you have reached your weekly limit…" still matched, because the prefix
+  requirement was never anchored to the start of a line. Anchored below (#45).
+
+- **A fresh artifact silently erased a limit event happening in the SAME
+  reply.** The artifact-wins-outcome fix (#42) unconditionally cleared the
+  dry marker in its success branch, so a run that finished with a partial
+  artifact while its own reply also showed a vendor limit line turned the
+  board's red dot green and dropped the reset phrase from JSON — even though
+  the account was still genuinely out of fuel. The artifact still wins the
+  OUTCOME (`ok: true`, `reason: "artifact produced"`, unchanged), and a
+  concurrent limit is still recorded rather than dropped: `reset` carries the
+  vendor's phrase instead of coming back null. **Correction (round-4
+  review):** this entry originally said the tank "stays marked dry" — false.
+  A fresh artifact never *writes* a new dry marker on this path, only leaves
+  an EXISTING one (for engines whose dry state persists to disk, i.e. codex)
+  alone rather than clearing it — a task that merely mentions the limit
+  while succeeding still cannot mark a healthy tank dry (#42, #45).
+
+## [0.28.9] — 2026-09-05
+
+### Fixed
+
+- **`cmd_burn`'s prelaunch ran two mutations of the same state with no lock
+  between two burns racing each other.** `soul_prelaunch` and
+  `fleet_mcp_prelaunch` both mutate state keyed on (engine/tank, `$PWD`) — the
+  memory symlink and the tank's `.claude.json` — and neither took a lock. Two
+  burns on the same tank and the same `$PWD` raced the `rm`/`mv`/`ln` and the
+  read-merge-write: the same bug class `switch.sh`'s `--ephemeral` path had
+  already fixed for itself after the 2026-07-19 incident. Root cause identified
+  in `reef-lanes/CLIKAE-SIGTERM-2026-09-06.md` §5.
+
+  It now takes a cksum-named slot lock under `~/.clikae/state`, held only
+  across the two prelaunch calls — never the engine run itself — and released
+  before the run starts. Unlike `--ephemeral`'s non-blocking "one run per slot"
+  refusal, this one blocks: a second burn queues behind the first's
+  symlink/`.claude.json` settling instead of being turned away. macOS has no
+  `flock(1)`; it falls back to `lockf(1)` on the bare fd, matching
+  `switch.sh`'s own fallback, and degrades to a logged warning if neither
+  exists.
+
+- **The same tank open in two tmux sessions drew two byte-identical Live
+  rows,** reported from a screenshot of the board — same dot, same name, same
+  engine, same title, nothing to tell them apart. Every live row past the
+  first for a given (cli, profile) now carries a "#2", "#3" … badge, in board
+  order, on both the static board and the interactive picker; a tank with a
+  single live session is unaffected.
+
+  While in there: the static board's Live row had been quoting a bare,
+  never-set `$_ttl` instead of the row's actual title — every static "Live"
+  preview printed `""` regardless of what was really running. It now uses
+  `$label`, same as the interactive picker and the Resume rows.
+
+- **An agy (antigravity) Live row showed a bare `""` preview instead of
+  "(no preview)" like every other engine.** `antigravity.sh` had no
+  `adapter_recent_sids`, so the board's `declare -F adapter_recent_sids` gate
+  failed outright and `adapter_session_title` was never even called. It has one
+  now — cwd-matched via `history.jsonl`'s `workspace` field, mirroring
+  `claude.sh` and `codex.sh`'s own `$PWD`-scoped versions — plus a
+  "(no preview)" fallback in `adapter_title_for_file` to match every other
+  adapter's convention.
+
+## [0.28.8] — 2026-08-23
+
+### Added
+
+- **The one-suite-at-a-time lock now covers the runs that skip the front door.**
+  `scripts/test.sh` has always locked, so two runs cannot race each other over
+  what no test can isolate — the real process table, tmux servers, ports,
+  `~/.Trash`. But the lock lived in the script, and `bats tests/bats/foo.bats`
+  walked straight past it. The maintainer spent an afternoon running single
+  files while a pre-push gate ran the whole suite, then read the gate's red as
+  interference. It was not: a real bug was underneath, and explaining the red
+  away would have shipped it. A preventable collision costs more than one bad
+  run — it teaches you a reason to disbelieve red ones.
+
+  The door is in `tests/helpers.bash` now, where every bats file comes in. Once
+  per FILE rather than per test, because a safety device on the hot path has to
+  be free. `CLIKAE_ALLOW_CONCURRENT_SUITE=1` is the deliberate override, and the
+  refusal says so.
+
+### Fixed
+
+- **The stable SSH socket symlink pointed at itself, and stayed that way.**
+  DESIGN-tmux Rule 4 hands a session a fixed path instead of the agent's own so
+  the session survives a reconnect — which means that inside a clikae session
+  `$SSH_AUTH_SOCK` *is* that fixed path. Spawning from in there ran
+
+      ln -sf <link> <link>
+
+  and `-f` turns that into a symlink pointing at itself. After that the block's
+  own `[ -S ]` test failed, so it was skipped: it never repaired itself, and it
+  stopped forwarding anything at all. The feature that existed to make the path
+  stable is what broke it, permanently and in silence.
+
+  Found on the maintainer's machine, not by reading: `ssh-add -l` answering
+  *"Error connecting to agent: Too many levels of symbolic links"* — a sentence
+  that names the mechanism exactly and helps nobody who has not already guessed
+  it. Rule 4 is defensive there (33 of 35 repos use HTTPS), so nothing had
+  noticed.
+
+  The guard is now a POST-CONDITION — "is the thing I just made a socket" —
+  rather than a comparison of path strings, which only covers the loop you
+  thought of. A link already pointing at itself is removed instead of passed on,
+  so the next spawn from a terminal that still has a real agent rebuilds it.
+
+  🔴 The first cut of the fix broke every spawn on a machine with no agent. Under
+  `set -eo pipefail` a bare assignment takes the exit status of its command
+  substitution, and the new helper returns 1 for "nothing to forward" — which is
+  correct, and which killed `tmux_spawn_session` outright. Six unit tests stayed
+  green through it: they call the helper directly, where that 1 is harmless. The
+  suite went red one function further out. Both paths through that return are
+  pinned now, executed through a real spawn under `set -e`.
+
+- **The memory diagnosis was written in the launch warning's column and printed
+  in doctor's.** Both said all the right words; doctor's continuation lines
+  landed two spaces out of true. Every assertion was a substring match, and a
+  substring match cannot see a column — it took running the thing on a real
+  machine. The gutter is a parameter now, and a test measures where the labels
+  actually sit (proven by putting the old width back and watching it name
+  "column 17, rows at 19").
+
+  While fixing it, the two callers stopped answering the same question twice:
+  doctor had its own `[ -r ]` branch and its own wording for "the bits allow it
+  and the read still failed", which is exactly how one copy goes stale. One
+  function now, at whatever indent the caller writes in.
+
+## [0.28.7] — 2026-08-23
+
+### Fixed
+
+- **"This tank cannot read its own memory" named one cause and was sure about
+  it.** The warning was written for the 2026-08-15 incident, where a tmux server
+  created without file access could never gain it afterwards, and it told you to
+  run `tmux kill-server`. On 2026-08-23 the same symptom came from somewhere
+  else: Claude Code had auto-updated, and macOS identifies a bare command-line
+  executable **by its path** —
+
+      ~/.local/share/claude/versions/2.1.241     <- 2.1.240 was a different "app"
+
+  Measured that day, the two versions' code signatures are identical down to the
+  designated requirement. Nothing about the program changed; only where it sat,
+  and that alone revoked the grant — silently, with no prompt at all in a
+  background session. Against that cause, killing the tmux server fixes nothing
+  and costs every session on it.
+
+  It now lists the causes whose **precondition holds** and never one whose does
+  not: the tmux server only when you are actually inside one, the update only
+  when the engine's path really does carry a version. Where it can, it names the
+  entry to switch on in System Settings — the meaningless-looking `2.1.241` in
+  that list — because a warning that says "permissions" and stops leaves you
+  hunting a column of identical rows. It follows the store's symlink to where it
+  really lands, and names the gated area it lands in.
+
+- **The bash-3.2 compatibility scans fired on their own documentation.** They
+  grep the source for constructs to avoid, and a comment is source: the
+  paragraph written to explain *"we deliberately do not use `readlink -f` here"*
+  satisfied the assertion that no such call exists. The guard went red at the one
+  place obeying it — a check that punishes documentation teaches people to stop
+  writing it. Whole-line comments are skipped now, with a control pinning that a
+  real call is still caught.
+
+- **`tap-lag` was reading a cached copy of the tap, and falsely refused pushes.**
+  `raw.githubusercontent.com` is served from a CDN that kept answering the old
+  version for minutes after the tap had been pushed; a cache-busting query string
+  and `Cache-Control: no-cache` both made no difference, while the API returned
+  the new content at once. It reads the API now.
+
+  🔴 Stale here does not fail safe. Everywhere else this hook errs toward letting
+  a push through; a stale read makes it refuse a push whose release is already
+  finished, which is the one thing it must never do. Found within minutes of the
+  hook shipping, by it blocking the release it had just been written for.
+
+### Added
+
+- **`clikae doctor` reads each Soul store, and says so when it cannot.** The
+  launch-time warning fires at the moment you can least act on it — already on
+  your way into a session — and on a background session nobody sees it at all.
+  (2026-08-22: three memory files written while the index was unwritable, no
+  error anywhere.) doctor is the same question asked when you came looking for
+  the answer. It performs the real read rather than `[ -r ]`, which consults the
+  permission bits and so answers "yes" to exactly the failure worth catching, and
+  it stays silent when every store reads.
+
+
+## [0.28.6] — 2026-08-22
+
+### Added
+
+- **A push is refused while a released tag has not reached the tap.** `brew` does
+  not install from this repository — it reads
+  `CVERInc/homebrew-clikae/Formula/clikae.rb`, a different one. Updating the copy
+  here feels like releasing and is not, and that step was skipped for 0.28.0,
+  0.28.1 and 0.28.2: three tagged, changelogged versions that reached nobody,
+  found only when the maintainer noticed his own clikae was five releases behind
+  while running code that fixed bugs he had reported. A comment in the formula
+  did not stop it; `hooks/tap-lag` does, by making every push after a release
+  refuse until the tap catches up.
+
+  🔴 It asks the REMOTE which tags exist, not this clone. The first version
+  asked the clone, and refused the push OF THE TAG — the tap cannot be updated
+  before the tag is on GitHub, because the formula's url points at its tarball,
+  so the check deadlocked the release it existed to complete. Found by cutting a
+  release with it, not by reading it. A tag nobody has pushed is not a release.
+
+  🔴 It fails OPEN on any network trouble — unreachable, timed out, or a response
+  it cannot parse — and says so. It is the only check here that touches the
+  internet, and a missed reminder costs one more push while an unpushable repo
+  costs an afternoon. Both directions are pinned by tests, because "blocks
+  correctly" and "does not block wrongly" are different claims.
+
+### Fixed
+
+- **The resume picker never gave the terminal back.** It sets `stty -echo` on the
+  way in ("permanent no-echo for TUI") and nothing put it back, so anything that
+  asked a question after a row was chosen was answered blind — you type and see
+  nothing — and the Enter that CHOSE the row was still in the buffer, ready to be
+  read as an empty answer and take the default. That is why the live-conversation
+  guard added in 0.28.4 warned and then declined on the user's behalf, looking
+  like "resume did nothing".
+
+- **The wake watcher took up to a minute to notice it was alone.** It asked two
+  questions on one clock: "has this tank hit a limit?" (expensive — scans a
+  transcript; 60s is right) and "am I the only window left?" (one
+  `tmux list-windows`). The second now has its own tick inside the long sleep.
+  Measured: the watcher leaves 1s after the engine's window closes, not 60s —
+  and that minute was exactly how long a human could sit looking at a countdown
+  in a session whose engine had already gone.
+
+
+## [0.28.5] — 2026-08-22
+
+### Fixed
+
+- **A tank whose engine had exited dropped you into a countdown.** The wake
+  waiter lives in a window of the tank's OWN tmux session, so when the engine
+  ends — you quit it, or it crashed — the session survives with only the waiter
+  in it. `wake_watch` notices and leaves, but it polls every 60 seconds, and in
+  that minute `clikae <tank>` found `has-session` true, started no engine, and
+  attached you to "watching for a limit" with nothing to type into. Reported as
+  "I had to press left-arrow to find you again".
+
+  `switch` was only ever asking whether the session EXISTED. It now asks whether
+  it still holds a window that is not the waiter, and rebuilds it if not —
+  nothing is lost, the waiter is all that was in there and it re-attaches on
+  launch. Making the poll faster would only have shrunk the hole.
+
+  🔴 Three cases the check has to get right, each pinned: the waiter renames its
+  own window as it counts (`wake 9m`), so an exact match on `wake` stops working
+  seconds in; a window merely starting with `wake` (`wakeup`) is somebody else's
+  and must not make clikae kill the session; and the target is exact, so a
+  digest-suffixed neighbour is never consulted.
+
+
+## [0.28.4] — 2026-08-22
+
+### Fixed
+
+- **`clikae resume` could start a second engine on a conversation you were
+  already in.** Resuming keys the tmux session on the argv it hands the engine
+  (`--resume <sid>`), which is what makes resuming a *different* conversation
+  open its own screen. But a session started plainly — `clikae claude x` — holds
+  a conversation that is invisible to that key, so resuming it opened a second
+  engine writing the same transcript.
+
+  🔴 It cannot simply ask. Measured on a real live session: the process inside
+  the pane is plain `claude`, with no `--resume` and no sid — which conversation
+  it holds is the engine's own state. So the check is EVIDENCE, not proof: only
+  the engine writes the transcript, so a file modified after a live session on
+  that tank started is a file something in that session has been writing. It is
+  asymmetric on purpose — it can say "probably open there", never "not open" —
+  and it asks rather than refuses.
+
+  It only asks when there is a terminal to ask on: `confirm` reads stdin, and a
+  failed read returns 1, which would have made `resume` silently do nothing in a
+  script.
+
+- **`stat` portability now has one implementation, not four.** `file_mtime` joins
+  `sessions_by_mtime` on the memoised GNU/BSD detection. 🔴 The rule that keeps
+  being relearned: ask `stat --version`, never "try `-f` and fall back" — GNU's
+  `-f` means `--file-system`, so it prints block counts and EXITS 0, and the
+  fallback never fires. Four times now, the latest three functions away from the
+  file that had already solved it.
+
+
+## [0.28.3] — 2026-08-22
+
+### Changed
+
+- **The old prefix is gone from every read path.** `live.sh`, `wake_sessions_for`
+  and the ephemeral GC each read one prefix now. What makes that safe is a
+  one-time machine-wide sweep (state schema v1 → v2): the first run of this
+  version renames EVERY `ck-*` session on the machine, not just the tank you
+  happen to launch.
+
+  🔴 Rename-on-encounter alone would not have been enough, and the gap is quiet:
+  `tmux_sessv` only fires for a tank something launches into, so a session for a
+  tank you are not using today would keep the old name — alive, but absent from
+  the board, with `clikae <tank>` starting a second one beside it. Per-id
+  renaming cannot reach it; a per-machine sweep can, and it runs once.
+
+  ⚠️ One residual, stated rather than hidden: a session created by an OLDER
+  clikae after the sweep (this machine still has 0.27.0 installed by brew) that
+  hits a usage limit before anything launches into it gets no waiter. Launching
+  into it once renames it and restores one.
+
+  The legacy name now survives in exactly three places, each with a job: the
+  constant and the rename in `tmux.sh`, the sweep in `state_version.sh`, and the
+  reading in `doctor` that says when those can go.
+
+- **Sessions still under the old name are RENAMED on sight.** `tmux_sessv` no
+  longer just answers to `ck-…`; when it finds one it renames it to the new name,
+  so the old prefix stops existing instead of becoming something everything has
+  to keep knowing about. Renaming on encounter rather than in a one-shot
+  migration is deliberate: an older clikae installed alongside (0.27.0 via brew,
+  on the maintainer's own machine) keeps creating old names after any migration
+  would have run, and a once-only sweep leaves those behind forever.
+
+  The `wake` waiter inside such a session has the old name baked into its
+  command and exits cleanly when that name stops resolving — so `switch` now
+  re-attaches a watcher outside the "did we just spawn it" guard on both paths.
+  `wake_attach_watcher` was already idempotent, so this costs nothing and heals a
+  session that lost its waiter. It is the 3:50am nudge; it does not get to go
+  missing quietly.
+
+- **`clikae clean` collects orphaned scrollback files. Nothing ever did.**
+  `tmux_attach` deletes the scrollback it created on both of its exits — if it
+  reaches one. A clikae killed mid-attach leaves the file behind, and the
+  ephemeral GC could not see it: that loop is driven by `*-ephem-*.lock` files,
+  and an ordinary `clikae <engine> <tank>` writes no lock. Measured on a real
+  machine: 14 orphans, the oldest a week old, and zero locks — so nothing would
+  ever have looked at them. Older than the prefix rename and unrelated to it;
+  they were simply all wearing the old name, which is how they were noticed.
+
+  🔴 The test is the WRITER'S PID, not the file's age. The name ends in the pid
+  of the clikae that wrote it, and age is the wrong question — a session you stay
+  attached to for three days has a three-day-old scrollback that is very much
+  alive. A recycled pid makes the sweep SKIP a dead file, which leaves litter;
+  there is no direction in which it deletes a live one.
+
+- **`clikae doctor` reports what is still carrying the old name**, and only when
+  there is something. Silence is the reading: it is the zero that says the
+  compatibility paths can be deleted.
+
+- **tmux sessions are now `clikae-<engine>-<tank>`, not `ck-…`.** `ck` was an
+  abbreviation nobody chose: it appears in no README, no formula, no alias and no
+  document — it existed only in the one place a user actually reads it, `tmux ls`.
+
+  🔴 This is a MIGRATION, not a string edit. At the moment of upgrade there are
+  sessions running under the old name and state files written with it, so the old
+  prefix is still read everywhere: `tmux_sessv` finds a session under either name
+  (preferring the new one) rather than spawning a duplicate beside the tank you
+  are already sitting in, `live.sh` lists both, and `clean.sh`'s GC scans both
+  lock patterns — missing the old name there is permanent, because a lock the
+  loop never visits is never released and never deleted.
+
+  The prefix now has exactly one definition (`CLIKAE_SESS_PREFIX` in
+  `lib/core/tmux.sh`); it was a literal in 64 places, which is the shape that
+  file's own header warns about. An unset prefix refuses loudly in both
+  directions, because the two silent failures point opposite ways: the GC would
+  glob nothing and report success, while `live.sh` would build `^(|)` and claim
+  every tmux session on the machine, including the ones the human started.
+
+### Fixed
+
+- **Every tmux target could name the wrong session.** `tmux -t` is not an exact
+  match: given only `ck-claude-x-1492` on the server, `tmux has-session -t
+  ck-claude-x` answers YES, because tmux falls back to prefix matching. Session
+  names here carry a digest suffix so a resumed conversation gets its own
+  session — which is precisely what makes one clikae name a prefix of another,
+  and the maintainer has five such sessions in his state directory.
+
+  So `clikae claude x`, with a resumed session open, found `ck-claude-x` (it had
+  matched the digest one), skipped the spawn, and attached you to that
+  conversation instead of your tank. Silently. The same mismatch reached
+  `kill-session` in `clean.sh` — a destroyed session rather than a wrong window —
+  and `send-keys` in `wake.sh`, which types into whatever it landed on.
+
+  All 44 targets now use tmux's own exact syntax (`=name` for a session,
+  `=name:` for a window or pane), and a lint keeps them that way — a convention
+  nothing enforces drifts back, and this one is invisible until the day two
+  names share a prefix. `$TMUX_PANE` stays bare: a pane ID is already exact.
+
+  🔴 The first sweep broke `wake`, and it is worth why: `wake_send` and
+  `wake_pane_idle` take a session OR a `session:window` target — stated in a
+  comment, nowhere in the code — so rewriting on the variable's NAME produced
+  `=sess:2:`. The two readings now go through one resolver instead of a
+  paragraph of prose.
+
+
+## [0.28.2] — 2026-08-21
+
+### Fixed
+
+- **A dying tmux server pushed live sessions permanently OUT of tmux.** When the
+  server went away under three of the maintainer's sessions, each `tmux attach`
+  returned 1 — the same code tmux uses for "this terminal is one I cannot draw
+  on" — so `switch` did what it does for that case and relaunched the engine
+  outside tmux. The conversations survived (`exec` keeps the pid) but the
+  sessions were gone from `tmux ls`: unreachable by attach, absent from the
+  board, invisible from his phone. He found out by looking for them.
+
+  `tmux_attach` now returns 2 for a lost server, and `switch` re-enters the tmux
+  path once instead of dropping out of it (`CLIKAE_TMUX_REHOSTED` bounds the
+  retry). The two failures are told apart by asking whether tmux is still there
+  afterwards — not by how long the attach lasted, which is a clock rather than a
+  cause. A session that merely ENDED is neither case: measured rc=0, with and
+  without other sessions on the server, so a human quitting an engine can never
+  be mistaken for a lost host and have it relaunched under them.
+
+  The fallback itself is deliberately untouched: PineNote's ssh sessions arrive
+  as `TERM=dumb`, and running the engine directly is the only way they ever
+  start one. A test asserts it is still there.
+
+- **`scripts/test.sh` could kill every tmux session on the machine it ran on.**
+  Twice in one afternoon the maintainer's four live tanks died mid-work while
+  the gate was running. The suite's isolation was not missing — every
+  `kill-server` in it ran with `$TMUX_TMPDIR` correctly set, and reading the
+  sources said so. What was missing was the *directory*: tmux answers a
+  `$TMUX_TMPDIR` that no longer exists by silently using `/tmp` — the developer's
+  own socket — with no error, no warning and no exit code. (Measured: the same
+  fallback puts `new-session` on his server too, so a test could both destroy his
+  work and litter it.)
+
+  The race was one flag. `mode_size` in the pty harness waited for its child with
+  `os.waitpid(pid, os.WNOHANG)` — "look, don't wait" — so the parent deleted the
+  sandbox the moment it had read its answer, while the child had not yet reached
+  its own `tmux kill-server`. Under load the child lags further behind, which is
+  why it looked intermittent and why it only ever happened during the gate.
+
+  Fixed at the source (the parent now waits, and kills after 10s), and backstopped
+  for the harness it came from: `tests/stubs/tmux-guard` installs as `tmux` on
+  the pty sandbox's PATH and refuses any call whose `$TMUX_TMPDIR` is unset or
+  gone, naming the command it stopped. It sits on PATH rather than in the test
+  bodies because clikae resolves tmux through PATH too — the engine's own
+  internal calls are the half that auditing the test sources cannot see.
+  Verified by running the whole gate with three decoy sessions on the default
+  socket: all three survive.
+
+  It is deliberately NOT on the bats PATH, and that is not a tuning problem: a
+  NULL shim — zero checks, just `exec <real tmux> "$@"` — costs the suite's
+  timing-sensitive `scrollback` test just as much. On a quiet machine, with the
+  baseline taken before and after to prove it did not drift: 10/10 green with
+  nothing installed, 2/5 with the guard, 3/5 with the null shim. The price is
+  the bash PROCESS, one fork per tmux call, not what the guard does with it —
+  the first version went from ~21.5ms to ~4ms and the pass rate did not come
+  back. bats gets a check costing one stat per test instead: its isolation
+  directory must still exist when the test ends, which is exactly the mechanism
+  that cost the tanks.
+
+  🔴 `scrollback` is load-sensitive, and that matters more than it sounds: on a
+  machine accidentally saturated to load 82 during this work, EVERY arm
+  collapsed — including the empty one — and an earlier draft of this entry read
+  that as "deterministic, 0 out of 8". It was not; the experiment simply had no
+  resolution. The effect is real and the decision stands, but take the baseline
+  in the same sitting as the arms, and fix the machine first if it is not
+  near-perfect.
+
+- **`pty-smoke.py`'s board-height checks could pass by seeing nothing.** They
+  waited a fixed 2.5s; on a cold machine the first board returns 0 bytes in that
+  window and a complete frame in 8. Both `newlines <= rows-1` and "no window
+  indicator" are satisfied by an empty capture, so a timeout did not merely lose
+  two checks — it turned three others green for having looked at nothing. The
+  wait is now a cap rather than a duration, it settles on *visible* output (the
+  board emits escape codes, then computes silently for ~2.2s, then paints), and
+  every frame is asserted non-empty before anything is concluded from it.
+
+- **agy sessions never entered tmux, so they were invisible to the board and
+  unreachable from anywhere else** (#34). tmux is spawned in switch.sh's ENGINE
+  path; agy is a launch-only TARGET and never got it, so `_agy_switch` ended in a
+  bare `exec agy` and the session lived and died inside whichever terminal tab
+  started it. Measured on a real machine: four tabs open, only the two launched
+  through clikae were in tmux — the agy one could not be listed, attached to, or
+  reached from another device, and closing the tab killed it.
+
+  `clikae agy <tank>` now spawns `ck-antigravity-<tank>` and runs
+  `clikae run antigravity <tank>` inside it, exactly as engines do, so the
+  Keychain carry and the ~/.gemini repoint still happen once, in the pane,
+  immediately before the exec. Without a tty or without tmux it falls through to
+  the direct path unchanged.
+
+  🔴 This does not police concurrency. agy has ONE global login and several
+  sessions may share it; that limit is the vendor's, not clikae's, and the switch
+  already refuses the one destructive case (moving ~/.gemini out from under a live
+  session on a different tank).
+
+
+### Fixed
+
+- **The pre-push gate's skip now says why it declined.** A refusal costs 520
+  seconds, and the first time it ran the suite on a tree whose stamp appeared to
+  match, there was nothing in the output to reconstruct the decision from — the
+  same "silent state, no answer on screen" the board's filter indicator exists
+  for. Each of the six refusal paths now prints its own sentence (dirty tree,
+  different tree, past the TTL, dated in the future, unreadable stamp, forced),
+  and the test asserts the six are DISTINCT — otherwise the line is decoration
+  rather than diagnosis.
+
+
+## [0.28.1] — 2026-08-20
+
+Two board defects and two pieces of push hygiene.
+
+The board had never been made to fit the terminal's HEIGHT — 0.28.0 did widths —
+so on a short window the top scrolled away and the selection could sit off-screen.
+And the keybar advertised keys the selected row cannot use, which is the same
+thing as an unbound key with a legend insisting otherwise.
+
+The other two are about the gate rather than the product. One refuses a push that
+changes `lib/` or `bin/` without touching this file, because at 0.28.0 nineteen
+commits shipped and exactly one had. The other stops the 520-second gate
+re-running for a tree it already passed — that release took SEVEN full runs of one
+unchanged tree, and a gate that expensive is the reason `--no-verify` starts to
+look reasonable.
+
+
+### Fixed
+
+- **The board did not fit the terminal's HEIGHT.** 0.28.0 made every row fit its
+  WIDTH; nothing ever made the frame fit the screen it is drawn on. Measured on a
+  real store, the board emitted the same 21 lines at every terminal height from 12
+  to 40 — so on anything shorter the top simply scrolled away: the wordmark, the
+  keybar that teaches the keys, and the first rows, with the selection cursor able
+  to sit off-screen entirely, moving a highlight nobody could see.
+
+  The frame is now measured and, only if it overflows, redrawn through a window
+  centred on the selection — the same viewport the resume picker has always had,
+  rather than a second mechanism. Measure-then-trim instead of predicting how many
+  rows fit, because rows are not a fixed height (a tank row is one line, a resume
+  row with a recap is three, each section header another) and the chrome itself
+  grows from three lines to five as the keybar wraps. A board that already fits is
+  emitted unchanged and pays nothing for this.
+
+  The hidden count is drawn as its own line rather than left implicit: a board
+  silently showing a subset is the defect the filter indicator already exists for.
+  It reuses the keybar's own wording, so it costs no new translations.
+
+- **The keybar advertised keys that could not fire.** `K` is gated on the selected
+  row being LIVE and `[ ]` on it being a TANK, but both were printed on every row
+  — so on a tank row (the common case) `K` did nothing, on a live row `[ ]` did
+  nothing, and on a resume row neither worked. Pressing an advertised key and
+  getting silence is byte-identical to pressing an unbound one, with a legend
+  insisting otherwise; the same defect as the resume picker's dead `?`.
+
+  The bar now carries one contextual slot in a fixed position, so it does not
+  reflow as the selection moves — only what sits in that slot changes. The `?`
+  overlay still lists every key the board has; the bar is what applies right now.
+  No new strings, so no new translations.
+
+### Added
+
+- **The pre-push gate no longer re-runs itself for a tree it already passed.**
+  It is 520 seconds, 84% of that bats, and pushing three commits on 2026-08-20 ran
+  it SEVEN times against ONE unchanged tree — DNS failed, HTTP/2 framing failed,
+  two attempts hit tool timeouts, and a workaround for those broke two tmux tests.
+  Every retry paid full price for an answer already known. A green run now stamps
+  the tree it verified, and a push of that same tree skips re-verification, saying
+  so out loud.
+
+  It skips RE-verification, never verification: a dirty working tree, a new
+  commit, a stamp older than two hours, a stamp dated in the future, or a corrupt
+  one all fall through to the full suite, and `CLIKAE_FORCE_GATE=1` always does.
+  The dirty-tree case matters most — the suite would have run against content that
+  is not what git is about to send.
+
+  Measured first, and the measurement changed the plan: the obvious cut was to
+  move the slow, environment-sensitive pty layer to CI, but that is only 79 s of
+  520 s and would give up the one layer bats cannot reach.
+
+- **A pre-push guard refuses a push that changes `lib/` or `bin/` without
+  touching `CHANGELOG.md`.** At 0.28.0, nineteen commits shipped and exactly one
+  had updated the changelog; the release notes were reconstructed afterwards from
+  commit messages, which worked only because someone sat down and did it. Narrow
+  on purpose — `tests/`, `docs/`, `hooks/` and `scripts/` do not trip it, and the
+  granularity is the push rather than the commit, so writing the notes just before
+  pushing is fine. `CLIKAE_SKIP_CHANGELOG=1 git push` is the escape for a genuinely
+  invisible change, and it says so out loud rather than passing silently.
+
+## [0.28.0] — 2026-08-20
+
+The board got roughly three times faster to open and five times faster to move
+around in, and stopped telling four different lies while it did. Measured on the
+maintainer's real store (9 tanks, 5.2 GB, 1,384 transcripts), 0.27.1 and this
+release run back to back on the same machine, median of nine interleaved runs:
+
+    board opens          1329 ms  ->  403 ms   (-70%)
+    redraw per keypress   256 ms  ->   51 ms   (-80%)
+
+Minor, not patch: the burn order changed meaning (solo tanks no longer hold a
+position in it), the fuel dots changed shape, and an agy tank's ACCOUNT column
+can now report a different — correct — account than it did before.
+
+Every fix below ships with a regression test proven to go red on the pre-fix
+code. The two rewrites with the widest blast radius were checked by differential
+instead: the title extractor against all 1,384 transcripts in the store (titles
+byte-identical), and the whole board against four terminal widths (output
+byte-identical). The three background scans added here were checked for races by
+rendering 60 times and requiring every run to be byte-identical.
+
+### Fixed
+
+- **A resumed session could open onto a dead tank: the countdown window with no
+  engine to type into.** Reported as "`clikae resume` → pick a session → switch
+  tank → sometimes it just hangs."
+
+  The cause is a guard that has never once fired. `wake_watch` (and `wake_sit`)
+  ask "am I the last window left — did the engine exit?", and both wrote the test
+  with the inside-single-quotes escape idiom at the TOP level of the line:
+
+  ```
+  -F '"'"'#{window_name}'"'"'       →  tmux received   "'#{window_name}'"
+  grep -qvE '"'"'^wake( |$)'"'"'    →  grep received   "'^wake( |$)'"
+  ```
+
+  So tmux emitted `'wake'` with the quotes included, and grep was handed a
+  pattern whose `^` sits mid-string and therefore matches nothing — making
+  `grep -qv` succeed on every input. The condition was constant-true, so the
+  watcher kept looping after the engine window closed, **the tmux session it
+  lives in never died**, and the next launch onto that same session name found
+  `tmux has-session` true, started no engine, and dropped you into the `wake`
+  window showing "watching for a limit" with nothing to type into.
+
+  That is precisely the failure this guard was added for on 2026-08-15 ("the user
+  was stranded on 'watching for a limit' with no way out but closing the
+  terminal") — the fix shipped mis-quoted and was never exercised, because the
+  only test covering the watcher's exit killed the whole *session*, which trips a
+  different branch. Verified against real tmux; the new regression test is
+  time-bounded on purpose (a naive one passes on the broken code too, since the
+  session eventually dies on its own and the other exit covers for it).
+
+- **The bare switch could start an engine and say nothing.** Inside tmux with no
+  client on the current pane's session (a detached pane — a burn wrapper, an
+  agent run), `switch-client` was skipped and the function simply returned: the
+  engine was already running in `ck-<id>`, spending the account's quota, while
+  the command looked like it had done nothing. It now names the session and how
+  to reach it.
+
+
+- **`clikae solo --off` could leave a tank with no brain.** It decided which
+  memory group to rejoin by reading the machine default, which is written only by
+  the first `memory share` ever run and is empty on plenty of installs — the
+  maintainer's included. With it empty the rejoin did nothing: the marker came
+  off, the board showed the tank back in the fleet, and its memory slot stayed an
+  empty directory. `solo` now writes the group name down at the only moment the
+  answer is knowable, and `--off` reads it back.
+
+- **Pasting into the board ran commands.** The pickers entered the alt screen
+  without bracketed paste and the decoder reads a byte at a time, so every pasted
+  character was a keystroke. Reproduced on a real pty: one paste of `dy⏎` deleted
+  a tank and answered its own confirmation. The paste mode and the alt screen now
+  travel together, across all 14 entry and 8 exit sites — a partial conversion is
+  not a partial fix but no fix, because any un-converted exit turns the mode off.
+
+- **The help overlay could mutate state.** It dismissed on a one-byte read, so an
+  arrow key's tail was read back as real keystrokes: `[` moved a tank in the burn
+  order and materialised the order file, `A` cycled autonomy. Two persistent
+  changes, no prompt, from the one screen whose whole job is to teach the keymap.
+
+- **The board's footer printed a bash error and a wrong number.** A single-engine
+  store leaves two globs unmatched, `ls` exits non-zero, pipefail promotes it, and
+  a trailing `|| echo 0` appended a second line — so the count printf was handed
+  `4\n0`, died in frame, and rendered "0 sessions total" under four listed
+  sessions.
+
+- **A filter that matched nothing killed the board.** `grep -c .` exits 1 on zero
+  matches under `set -eo pipefail`: blank screen, no message. The "no matches"
+  notice three lines below had therefore never rendered once, in any of the nine
+  locales.
+
+- **Rows ran off the terminal, and the gate that swore they did not had never
+  measured one.** Its fixture held two short ASCII tank names and zero sessions,
+  and resume rows — the widest thing the board draws — were never in it. Given a
+  real specimen the gate fails at 30/36/40/48/56/64/72/80 columns, up to 83
+  columns on an 80-column terminal. All three causes fixed.
+
+- **The board could simply stop, with no error, on ordinary content.** The claude
+  title extractor ran a nested-star regex through bash's backtracking matcher; on
+  a real 229 KB transcript line one match attempt did not finish in 30 seconds,
+  and trimming the input did not rescue it. The board asks for a title on every
+  recent session. Across the store: 526 s with 25 files over a 10-second timeout,
+  down to 123 s with none.
+
+- **`clikae resume`'s `?` was dead**, one keystroke after the board teaches it,
+  and the picker also implements g/G, 1-9 and PgUp/PgDn while advertising none.
+  It now has an overlay listing what it really has. **`clikae resume > file` began
+  with raw alt-screen escape bytes**, and **"no sessions found" exited non-zero**,
+  so an empty store looked like a crash.
+
+- **An agy tank showed the wrong account after signing in as someone else.** The
+  scrape's own description said "most recent", but it took whichever file the
+  filesystem happened to hand back last — which agrees with recency only because
+  the names sort chronologically and the directory happens to come back sorted,
+  neither of which is promised. Newest by mtime now wins.
+
+- **An agy tank's account column went blank when its log contained a NUL byte.**
+  `grep` without `-a` calls such a file binary and prints nothing at all, so a
+  signed-in tank read as signed-out. This column had no tests at all; it has nine
+  now.
+
+### Changed
+
+- **The burn order is the fleet.** A tank marked solo — explicitly out of the
+  fleet — used to hold a slot in the carry order. Nothing ever carried onto one,
+  but the file said they were there while the board drew them in a separate
+  section, so the rows on screen were never the order on disk, and pressing `[`
+  or `]` wrote the interleaved file order back. Measured on a real store: 4 of 9
+  order entries were solo. `order_list` is now the fleet and `solo_list` its exact
+  complement.
+
+- **Each fuel state has its own shape**: ready `●`, dry `○`, weekly `◐`, no
+  reading `·`. Dry, weekly-warning and ready all printed the same `●` and differed
+  by colour alone — invisible to anyone with a colour-vision deficiency, under
+  `NO_COLOR`, and in a piped or screenshotted board. The overlay's own legend read
+  four labels against two glyphs.
+
+- **Autonomy is an explicit choice, not a cycle.** `A` opens a picker instead of
+  stepping ask → safe → full, and the board says so on every frame when it is
+  raised above `ask` — that being exactly when clikae may carry a live session to
+  another account on its own.
+
+### Performance
+
+- **The board no longer asks the terminal how wide it is once per row**, reads the
+  shell rc once per frame instead of once per tank, and answers "which tank is
+  active" once per engine instead of once per row.
+
+- **"Is this tank out of fuel?" no longer forks `awk`.** Every tank row asked it
+  twice — once for its dot, once for the over-quota footer — to look up one key in
+  a string that is empty on a healthy fleet: 2.28 ms a call, 8.5 ms a row, on
+  every keypress. It is 0.11 ms now, and the whole render dropped from 106 ms to
+  34 ms.
+
+- **An agy tank's account no longer costs a scan of every log it ever wrote.** agy
+  writes one per launch and never prunes; on the maintainer's machine that had
+  reached 362 files and 17 MB, re-read on every frame — so the board got slower
+  the more agy was used. Newest log, bounded read, first hit wins: 200 ms to 15 ms.
+
+- **The board stops re-counting the whole store on every keypress.** Listing every
+  session file to draw one footer line cost 15 ms per arrow key; it now rides with
+  the fuel scan and is exactly as fresh as everything else on the page.
+
+- **Scans that share nothing now run at the same time** rather than adding up:
+  the fuel scan against the item build, the resume list against the tank list, and
+  the tanks' transcripts against the vendors' limit logs.
+
+- **The claude title extractor reads each transcript once**, matching both title
+  keys in a single pass instead of pushing a 512 KiB slice back through a pipe per
+  key. Across the store: 113 s to 84 s, titles byte-identical.
+
+- `order_list`, `solo_list` and `tank_is_solo` stopped forking per tank —
+  82.9 ms to 6.2 ms for the first, which the board pays on every frame because the
+  burn order is the row order.
+
+### Fixed (tests)
+
+- **Three functions the board depends on had no tests at all** and have them now:
+  the agy account column, `_home_dry_set` (which decides whether a tank is drawn
+  as out of fuel — and whose output is EMPTY on a healthy fleet, so a silent break
+  shows up as a green dot on an exhausted tank and nothing else), and
+  `autonomy_get` (which decides whether clikae may carry a live session onto
+  another account without asking). Each new test file keeps the implementation it
+  replaced, verbatim, as the reference to compare against.
+
+## [0.27.1] — 2026-08-18
+
+A strict correctness/security audit pass. Every fix ships with a regression test
+proven to go red on the pre-fix code (except the two paths the suite tests
+manually — the `watch` tail loop and `--ephemeral` stash race — verified by a
+standalone harness instead).
+
+### Security
+
+- **Ephemeral/burn lock files moved out of world-writable `/tmp` into the private
+  `$HOME/.clikae/state` (0700).** Their names are predictable
+  (`ck-ephem-<run_id>` / `ck-ephem-slot-<cksum>`), so in `/tmp` another local user
+  could plant one as a symlink (our `exec 8>`/`9>` would truncate the target) or
+  as a plain file that `clikae clean`'s GC reads as a *dead* lock — killing your
+  tmux session `ck-<name>` and `rm -f`-ing your `$HOME/.clikae/state/<name>.*`. A
+  private dir removes the ability to plant, and sidesteps macOS's `/tmp` purge.
+  The GC now scans only the private dir and skips any malformed session id.
+  (DESIGN-tmux Rule 6 updated.)
+
+- **The tmux launch command no longer double-expands engine passthrough args.**
+  The pane command was built as `bash -c "$target_cmd"`, and since tmux runs it
+  via `sh -c`, the outer quotes let the shell re-expand a passthrough arg carrying
+  `$`, a backtick, or a quote — and a backtick / `$(…)` was *executed*. It is now
+  single-quoted through a helper, so `clikae claude x -- --foo '$(cmd)'` reaches
+  the engine verbatim.
+
+### Fixed
+
+- **Auto-carry after a mid-session limit created a session literally named
+  `ck-`.** `_switch_supervise`'s same-engine relay used `$tank_id`, which was
+  local to a different function (run in a subshell) and thus empty — so the
+  carried session, its scrollback file, and `CLIKAE_TANK_NAME` were all wrong.
+
+- **`clikae burn`'s reported exit code was always 0.** The tmux wrapper's EXIT
+  trap read `$?` off a `… | tee` pipeline with no `pipefail`, so the `rc=…` in the
+  "real task failure" line reported tee's status, not the engine's.
+
+- **`fleet_mcp_prelaunch` rewrote a tank's `.claude.json` on every single
+  launch.** Its no-op check byte-compared jq's reformatted output against the
+  on-disk file (jq reindents and drops the trailing newline), so it never matched
+  and the file's inode was replaced each time — racing any live session on the
+  same tank. The no-op is now decided semantically in jq.
+
+- **`clikae rename` orphaned a tank's burn-order entry and dry marker.** Both key
+  the tank by name from *outside* its directory, so a rename silently dropped the
+  tank to the bottom of the board order and stranded its red-badge record. Now
+  carried across (both the env-adapter and agy rename paths).
+
+- **`clikae rename` / `migrate` / `memory` no longer detach a symlinked dotfile.**
+  Rewrites used `mv "$tmp" "$file"`, replacing a `~/.zshrc` (or `AGENTS.md`)
+  symlinked into a dotfiles repo with a detached 0600 regular file. They now write
+  *through* the file, preserving its inode, mode, and symlink.
+
+- **The home board's solo toggle now matches `clikae solo`.** The `s` key only
+  flipped the marker file, leaving a shared tank in the "solo BUT STILL SHARING"
+  state `clikae memory status` calls impossible; the `m` → *isolate* menu item
+  still called the **retired** `memory isolate` (a hard error). Both now delegate
+  to the real `clikae solo` verb, which also leaves/rejoins the Soul group.
+
+- **`clikae to` / `relay` refuse a solo tank as an explicit target.** grammar
+  §127 says a solo tank is never a `to`/relay target; auto-carry and `memory
+  share` already honored it, but a named target slipped through. Solo tanks are
+  also dropped from relay's target picker.
+
+- **`memory share` no longer `rm -rf`s a prior own-memory stash.** The `$PWD`-slot
+  path destroyed an existing `.clikae-soul-stash` before stashing, against the
+  "reversible, never lost" contract; it now uses a unique suffix like its siblings.
+
+- **The auto-resume nudge reaches the engine window, not the waiter's own pane.**
+  `wake_sit` typed "go" into `-t <session>` (the *current* window) — which is the
+  `wake` countdown window whenever the user was watching it, so the engine never
+  resumed. It now targets the first non-`wake` window explicitly.
+
+- **`clikae watch`'s prompts no longer read their answer off the transcript.** The
+  dry-detection loop piped `tail -f` into the loop's stdin, so every `confirm()`
+  inside it (the wake opt-in, the "switch now?" / auto-consent) read the next
+  transcript line instead of the keyboard, and the `exec clikae handoff` handed
+  the tail pipe to the started engine. The tail now reads on fd 3.
+
+- **The update-check tag from GitHub is sanitized** to version characters before
+  it is printed or cached, so a tampered release name can't smuggle an escape
+  sequence to the terminal or a control byte into the cache.
+
+## [0.27.0] — 2026-08-16
+
+### Added
+
+- **`clikae burn --json`** and **`clikae conduct --json`** — the two dispatch
+  shapes an agent actually uses now say what happened in a form nothing has to
+  parse by eye. One object on stdout, every word of progress on stderr.
+
+  AGENTS.md's first non-negotiable rule is *judge by the artifact/output, never
+  the exit code* — and clikae made an agent read that judgement out of
+  sentences. `burn` is the worst case: with rerouting, **the tank that did the
+  work is often not the one you named**, and the only record of which was a line
+  of prose.
+
+  ```
+  burn:    {ok, engine, tank, artifact, artifact_bytes, reason, reset,
+            rerouted_from[], elapsed_s, run_id}
+  conduct: {out_dir, captured, dry, other,
+            legs:[{engine, tank, status, detail, output, output_bytes}]}
+  ```
+
+  `artifact_bytes` is the artifact's own measurement, so the evidence rule 1
+  asks for travels with the verdict instead of being a second call the caller
+  has to remember. `reason` separates the two failures that read alike in prose
+  and are not the same thing: `every reachable tank is dry` (wait, or add fuel)
+  from `no fresh artifact and no limit` (the task itself failed). conduct's
+  `status` separates `EMPTY` from `DRY` for the same reason — clikae never
+  judges, so the caller is the one who has to rank the legs.
+
+  Audited the whole surface for this: 33 commands, 5 had `--json` (`info`,
+  `list`, `watch`, `memory`, `status`). These two were the gap on the axis
+  AGENTS.md cares about.
+
+### Fixed
+
+- **The test suite was not safe to run beside a copy of itself — and the hooks
+  guarantee that it is.** `clean`'s live guard runs `ps -axo command=` so it can
+  never offer a session a process still has open. Correct for the command; fatal
+  for concurrency. Suite A's `clikae` processes appear in suite B's snapshot, the
+  fixtures use fixed session ids, and B decides those sessions are live and skips
+  the rows it is asserting on. pre-commit runs the suite and so does pre-push, so
+  `git commit && git push` overlaps them by construction.
+
+  Reproduced by starting a second run 25 s into the first — three of four rounds
+  turned red, every failure `[ "$status" -eq 0 ]` on a `clikae clean`. This is
+  the explanation for a pre-push red that ~218 isolated runs could not
+  reproduce: 10 full suites, 5 sequential and 3 concurrent copies of the file,
+  and 200 runs of the exact file at the exact commit in a worktree, all green.
+  The condition they were all missing was another suite running beside them.
+
+  `scripts/test.sh` now takes `$TMPDIR/clikae-test-suite.lock` and **waits**,
+  saying what it is waiting for. A suite that is red for a reason outside the
+  code teaches you to ignore red, which is the one thing a gate cannot afford.
+
+## [0.26.2] — 2026-08-16
+
+### Fixed
+
+- **`pty-smoke size` failed instead of skipping where tmux is not installed.**
+  GitHub's `macos-latest` runner has no tmux, so the check added in 0.26.1
+  turned CI red for a missing tool rather than a defect — and a red that means
+  "a tool is absent" is how a red that means "something is broken" stops being
+  read. v0.26.1 was tagged while the board was already this colour.
+
+  Three states, not two: a check a run could not perform is `skip`, never a pass
+  and never a failure. `verify-tmux-birth.sh` and `verify-agy-shapes.sh` both
+  carry that rule in their own headers; this file was the one that did not have
+  it, and it is the one that broke. Proven both ways — with tmux on `PATH` the
+  two size checks run, with `PATH=/usr/bin:/bin` they skip and the suite exits 0.
+
+  No product code changed between 0.26.1 and 0.26.2. This exists so the released
+  tag is one whose own suite passes on a clean machine.
+
+## [0.26.1] — 2026-08-16
+
+### Fixed
+
+- **The board did not fit a narrow terminal.** Reported from a PineNote over
+  ssh; measured on the repo, it overflowed at **every width below 72 columns**.
+  There is a fluid layer (`_home_cols`, `_home_row_budget`,
+  `_home_wrap_prefixed`, `_home_trunc`) and there were rows that bypassed it:
+
+  | | |
+  |---|---|
+  | 69 cols | `more   clikae status · clikae doctor · clikae demo · clikae help` |
+  | 45 cols | the tank rows — `4 lead + dot + 3 spaces + 7 + 8 + 22`, all literals |
+  | 38 cols | the interactive frame's autonomy legend |
+  | 34 cols | the wordmark + summary header |
+
+  The `more` row is the one you saw first: a bare `printf` of a hardcoded
+  string, not even a call to `_home_cols`, and the last line of the board.
+
+  The tank row's widths were written out at **both** tank-row sites — the static
+  board and the interactive one — and neither asked the terminal's width. They
+  now share one `_home_tank_fields`: the account column is what is left after
+  the fixed chrome (capped at the old 22, so a wide terminal is unchanged), the
+  value is truncated to it rather than only padded to it, and it is padded only
+  when something follows — otherwise the padding is trailing whitespace that
+  still counts as width, which is how a row whose account was the single
+  character `-` measured 45 columns.
+
+- **`_home_wrap_prefixed`'s escape hatch produced the overflow it prevented.**
+  When the hanging indent left under 12 columns to wrap into, it widened the
+  budget to the *whole* terminal and still printed the prefix — so every line
+  came out exactly `hang` columns too wide. At 30 columns with a 19-column
+  prefix it wrapped text to 29 and printed 48. It drops the indent now.
+
+- **Every tmux session was born 80x24, whatever terminal you were on.**
+  `tmux new-session -d` is detached, and a detached session has no client to
+  take its size from, so tmux used `default-size`. Measured on a pty at 60, 100
+  and 140 columns: 80x24 every time. The engine paints its first frame for 80
+  columns and only then do we attach and tmux resizes — so the first screen was
+  laid out for a terminal you are not using, and that applied to the **engine's
+  own TUI** as much as to the board. `tmux_spawn_session` now passes `-x`/`-y`
+  when there is a controlling terminal to ask; a headless `burn` has none and
+  keeps tmux's default.
+
+- **The board never repainted on resize.** `tui_read_key` blocks — its argument
+  is a file descriptor, not a timeout — so the loop sat there until a key
+  arrived, while every layout figure was already read per draw. It polls once a
+  second now and repaints only when the size actually changed.
+
+  A `trap … WINCH` does not fix this: bash installs handlers with `SA_RESTART`,
+  so the blocked read resumes and the flag is never looked at (measured —
+  SIGWINCH produced zero bytes of repaint). And the loop cannot branch on the
+  read's exit code, because macOS's stock **bash 3.2 returns 1 for a `read -t`
+  timeout** where bash 4+ returns >128 — indistinguishable from EOF. It asks
+  something independent instead: a terminal that is gone has no size.
+
+### Added
+
+- **`tests/bats/board-width.bats`** — renders the whole board at ten widths and
+  measures every line, on **both** paths: `clikae` with no tty draws the STATIC
+  board, so a gate that only ran the binary would have missed the interactive
+  frame. The existing width test called `_home_wrap_prefixed` directly and
+  proved the *helper* wraps, which says nothing about the 35 `printf` sites that
+  never call it. It caught four defects while the fix was being written.
+
+- **`pty-smoke.py size` / `pty-smoke.py resize`** — both depend on a controlling
+  terminal, so in bats they would pass by not looking. Before the fix: 80x24 at
+  every width, and nothing drawn after a resize.
+
+## [0.26.0] — 2026-08-16
+
+### Added
+
+- **`clikae memory status --json`.** `dispatchable` per tank, so an agent can ask
+  which tanks it may use instead of parsing prose. False for a solo tank, and
+  false for the impossible *solo-and-shared* state — there the wiring does not
+  match the label, so nothing about that tank is safe to reason about.
+
+- **`scripts/mutate.sh` — break a guard on purpose and watch a test notice.** Not
+  wired into `scripts/test.sh` (it copies the repo per mutation and costs
+  minutes). Four rows, one per locked value in `docs/memory.md` §4: share without
+  ever opting in, make a solo tank stop being solo, silence the cross-account
+  note, turn seed-by-copy into a move. All four go red, and each row names the
+  tests that caught it. A green suite says the code behaves on the inputs someone
+  thought to write; only this says a guard is load-bearing.
+
+  Two traps it is built around, both hit on its own first run. A mutation that
+  did not apply looks exactly like a working guard — that run reported three
+  hollow guards, and all three were the ruler (`tank_is_solo` lives in
+  `profile_store.sh`, not the file being mutated; `notice.sh`'s function is
+  `carry_notice_once`, not the name that was guessed). Every row now checksums
+  its target and reports ⛔ rather than a verdict when nothing changed. And the
+  reason those expressions silently did nothing: perl needs balanced braces
+  inside `s{…}{…}`, and a shell function's replacement text almost always has an
+  unmatched `{`.
+
+### Fixed
+
+- **A test that never ran the function it named.** `wake-sit.bats` asserted the
+  "nobody to answer" case with `run bash -c 'wake_ask_once claude work'`. `bash
+  -c` forks, and shell functions do not cross a fork — measured, both
+  `wake_ask_once` and the `confirm()` stub two lines above report NOT-VISIBLE
+  inside it. So the assertion was that a *command not found* message does not
+  contain the word ASKED, which is true however `wake_ask_once` behaves,
+  including asking on every headless launch and then typing into a live session.
+  It passed for two months. Now called in the shell that holds the stub, and
+  proven to fire. The other 25 `bash -c` sites in the suite were swept for the
+  same shape; they are all real subprocesses.
+
+- **The doc gate's scope was a list written from memory.** `doc-names-exist.sh`
+  extracted candidate names with a hand-written prefix list. Measured: 20 real
+  functions are named in the docs and were invisible to it — `tank_is_solo`,
+  `next_tank`, `history_log`, `load_adapter` and five `limit_*` among them — and
+  renaming one in every source file left the gate green. A gate whose scope is an
+  enumeration is silent on exactly the entries its author forgot, and forgetting
+  is the failure it was built for. Now unioned with "any backticked all-lowercase
+  token containing an underscore", which needs no list.
+
+- **The doc gate read the working directory as the source.** A `sed -i.bak` left
+  `lib/commands/*.sh.bak` on disk during that very experiment, and the gate
+  counted them as repo source in both directions at once: a renamed function
+  still "existed" because the backup held its old definition, and the backup
+  counted as a caller, so the docstring was asked to list `burn.sh.bak`. An
+  editor swapfile or a merge `.orig` does the same. It reads `git ls-files` now,
+  with a name-based fallback for a tarball install. `docs/proposals/` is out of
+  scope with a reason: a proposal names the function it is asking for, and that
+  function does not exist yet — that is what a proposal is.
+
+- **`AGENTS.md`'s cold-reader section sat inside the numbered rules.** Rule 6's
+  text ran on into a `##` heading, so the "non-negotiable rules" list visibly
+  ended mid-rule. Moved after the list; the dispatch-pool query it duplicated is
+  merged into rule 6.
+
+- **A dangling half-sentence in 0.25.0's Known section**, left by a rewrite.
+
+### Corrected
+
+- **Four entries in this changelog were filed under `[0.25.0]` and shipped after
+  the `v0.25.0` tag** — the `conduct` read-only enforcement, `burn`'s scoped
+  write grant, `conduct` legs no longer leaving transcripts, and the Rule 8
+  correction. Anyone running 0.25.0, which is what Homebrew serves, would have
+  read that changelog and believed their `conduct` legs cannot write. They can.
+  Moved below — the two sections marked "written before the v0.25.0 tag" —
+  under the release where they actually ship. This is the same
+  defect the last two releases have been auditing out of the docs, committed in
+  the file that describes the audit.
+
+### Fixed (written before the v0.25.0 tag, shipped after it)
+
+- **🔴 `clikae conduct` said READ-ONLY and could write.** Its help says each leg
+  "runs the prompt headless and READ-ONLY on its own tank", and the code comment
+  explains the guarantee as *not passing* `--dangerously-skip-permissions`. That
+  is not a boundary. A tank whose own `settings.json` carries
+  `permissions.defaultMode: "auto"` approves writes without asking.
+
+  Measured 2026-08-16, and not as a synthetic probe: a leg dispatched from this
+  repo edited two tracked files — `lib/adapters/claude.sh` and
+  `tests/bats/conduct.bats` — while conduct was printing "read-only" on screen. A
+  leg then told to create a file created it.
+
+  codex's recipe has always passed `-s read-only`. claude's enforced nothing, so
+  the guarantee held on one engine and was decoration on the other. It now passes
+  `--permission-mode plan`, verified end to end: the same leg, told to write, no
+  longer can, and answers unchanged.
+
+- **`clikae burn claude` granted write access to the whole disk.** Its recipe
+  passed `--dangerously-skip-permissions`, which bypasses the permission system
+  rather than scoping it. Measured 2026-08-16, the same task both ways:
+
+  ```
+  inside  --add-dir    acceptEdits ✅ writes     skip-permissions ✅ writes
+  OUTSIDE --add-dir    acceptEdits ✅ blocked    skip-permissions 🔴 writes
+  ```
+
+  So an unattended run held the whole filesystem while the docs said "this
+  directory". codex's recipe has always been scoped (`-s workspace-write`) —
+  the same documented promise, bounded on one engine and not the other, which
+  has been the tell for every defect in this release.
+
+  Now `--permission-mode acceptEdits`. Capability is unchanged: the same
+  bash-and-write burn finished in 20s against 15s. The honest cost is that a task
+  reaching outside its roots now fails — which is the boundary working, and burn
+  judges by artifact, so it reports "no artifact" rather than a silent wrong
+  success.
+
+- **`conduct` legs left a transcript each**, so a fan-out across five tanks put
+  five rows in `clikae resume` for work already collected into `--out-dir`. A leg
+  is one arm of a fan-out, not a session anybody resumes. `--ephemeral` already
+  got this right; the audit recipe did not — two headless read-only paths, one
+  trace-free and one not, with nothing saying why. Measured: 311 transcripts
+  before a conduct run and 311 after.
+
+### Corrected (written before the v0.25.0 tag, shipped after it)
+
+- **Rule 8 suspected a bug in `switch` that does not exist.** It said the
+  curated `-e` list meant a session inherited the SERVER's environment for
+  everything else — whoever started it, possibly days earlier. Measured on an
+  isolated socket: a server created by a shell WITHOUT a probe variable, then a
+  new session created from a shell WITH it, and the session saw it. tmux
+  inherits the environment of the CLIENT issuing `new-session`, not the server
+  process.
+  What genuinely cannot change is an already-running session's environment —
+  which is Rule 4's whole reason for existing and what roam.bats' comment is
+  about. Conflating the two is how a doc sends someone to fix a non-bug; the
+  rule now carries the measurement instead of the suspicion.
+
+## [0.25.0] — 2026-08-15
+
+### Fixed
+
+- **`clikae resume` now starts a session like every other entry point.** It
+  called `adapter_run` directly, so it was the one user-facing command that
+  launched an engine with no tmux — no wake watcher, no scrollback capture, no
+  roaming. The board's own resume has always routed through switch
+  (`home.sh`: `exec clikae <engine> <tank> -- <resume-args>`), so the *same
+  intention* produced two different sessions depending only on how you typed it.
+
+  Not a design decision — drift, and the dates say so. `_resume_exec` was
+  written 2026-06-26; the tmux layer arrived 2026-08-11 in `62b33a2`, whose file
+  list is `switch.sh` and `burn.sh`. `resume.sh` was simply missed.
+
+  It stayed missed through the v0.24.0 audit because that audit enumerated *who
+  calls tmux* — a list this file could never appear on. Searching for callers
+  finds drift among the sites that already opted in; it cannot find the site
+  that never did. The question that finds it is **"who launches an engine"**,
+  which has one answer per `adapter_run` call: `run.sh` and `relay.sh` are the
+  primitives switch itself falls back to, `switch.sh`'s own is `--ephemeral`,
+  and `resume.sh` was the only user-facing entry point on the wrong side.
+
+  Covered by a pty-driven test — without a real terminal switch is entitled to
+  run the engine directly, so a non-pty test could not tell the two routes
+  apart. Verified red on the old code (no tmux server at all) and green on the
+  new one.
+
+- **`clikae burn` now links the Soul and the fleet's MCP servers, like every
+  other launch path.** `soul_prelaunch`'s contract is *"called from every
+  non-ephemeral engine-launch path, AFTER the adapter is loaded"*, and burn is
+  one — with no `--ephemeral` of its own, so it could not even be the exempt
+  case. A headless run in a directory that had never hosted an interactive
+  session therefore executed with an unlinked memory slot: a memory-less session
+  nobody asked for, while `AGENTS.md` states the only way to ask for one is
+  `--ephemeral`. Fleet MCP servers were missing from headless runs for the same
+  reason.
+
+  Placed inside the reroute loop rather than above it, so the tank that actually
+  runs is the one whose slot gets linked — including after a cross-engine hop,
+  which re-loads the adapter and comes back round. Both calls are no-ops for
+  solo tanks and already-linked slots, so the reroute path pays nothing.
+
+  Verified red (`burn left this directory's slot unlinked`) and green.
+
+  Found by re-running the v0.24.0 audit with the corrected question. Asking *who
+  calls tmux* had found four sites and missed `resume`; asking *who launches an
+  engine* enumerates five, and answered honestly it reports four already correct
+  — `switch`, `run`, and `relay` (which prelaunches the **target** tank after a
+  dry-tank carry, not the source) — and one that was not.
+
+- **`fleet_mcp_prelaunch`'s docstring named the wrong call sites.** It said
+  "switch.sh / run.sh"; by then `relay.sh` had the call too. A docstring that
+  enumerates call sites is what an audit reads instead of the code, so a stale
+  one hides the gap it exists to expose — which is how burn's absence survived.
+
+- **The waiter could never exit.** `wake_watch`'s only exit condition was
+  `tmux has-session` — and the watcher is a window IN that session, so it is the
+  reason the session is alive. The condition could never become true. When the
+  engine's window closed and the waiter was the only one left, the loop ran
+  forever and there was no way out but closing the terminal. `wake_sit`'s
+  countdown had no liveness check at all. Both now ask about the ENGINE, which
+  is what they were actually waiting on. A loop whose exit condition it
+  guarantees to be false is not a loop with a bug; it is a loop with no exit.
+
+- **The board announced a countdown that did not exist.** The live row packed
+  attached/age/wake into one field joined by spaces, and `age` is a human string
+  with a space in it ("2m ago") — so `read attached age wake` put "ago" into
+  wake, and non-empty wake means "a waiter is counting". Every selected live row
+  claimed one. The render site's own comment forbids exactly that. `live_wake_note`
+  was right and had a test; the wiring downstream of it did not.
+
+- **`--ephemeral` runs in the same directory could corrupt each other.** The
+  memory slot is keyed on `$PWD`, so the second run's self-heal read the first
+  run's symlink as a crashed leftover and moved the real memory back out from
+  under a live engine — the 2026-07-19 incident, reachable on purpose by fanning
+  out cold readers. Now one lock per slot, and the refusal says to give each run
+  its own directory. (`lockf -k`, not `lockf`: measured, two processes both got
+  rc=0 on the same file without it.)
+
+- **`window-size` was never set.** Rule 1 describes clikae's sizing as
+  "window-size latest" and nothing set the option, so it held on tmux 3.7b and
+  not on 3.4 — a 100-column client attached and the window stayed at 80. Roaming
+  is the reason this layer exists, and it was resting on a default nobody chose.
+
+- **The scrollback capture named a session as its `-t` target**, which returns
+  nothing on tmux 3.4 (measured: 1717 bytes with no target, 0 with it). The
+  command runs inside the pane it captures, so the target was never needed.
+
+### Added
+
+- **`K` on the board closes a running session.** A session whose engine had
+  finished left no way out but closing the terminal, while the board could see it
+  and name it and offered only "enter it". Destructive, so it asks — and the
+  question carries the fact that makes it safe: the conversation is a transcript,
+  so `clikae resume` brings it back. What ends is the process.
+
+- **`scripts/doc-names-exist.sh`, in the gate.** Every function a doc names must
+  exist in the code. Three defects this release were that one shape, including
+  one that survived two years and an audit looking for exactly it — because a doc
+  that names a function is what an auditor reads *instead of* the code, so a
+  stale one hides the gap it would otherwise expose. Exemptions need a written
+  reason.
+
+- **Selection and copy defaults**: `fill-character` blanks the dot field a
+  smaller second client leaves on the larger screen.
+
+### Known
+
+- The board's resume list and `clikae resume` still show different session
+  counts, for two reasons neither of which is written down anywhere: the board
+  is scoped to the **current directory** (`_home_recent_rows`) and capped at 10
+  (`CLIKAE_HOME_RECENT_MAX`), while `clikae resume` is not directory-scoped and
+  caps at 50. Measured on one machine: 528 sessions across five tanks, of which
+  a board opened from `~` surfaces 10. The scoping may well be right — "continue
+  *here*" is a coherent headline — and the footer does say `%d sessions total ·
+  Press [R] to see all / search`, so the escape hatch is stated. What is not
+  stated is the *reason* the list is short: that it is this directory's. (An
+  earlier draft of this entry said nothing told the reader at all; that was
+  wrong, and is the same overstatement this release keeps auditing out.)
+
+## [0.24.0] — 2026-08-15
+
+### Fixed
+
+- **You can select and copy text in a clikae session again.** Reported as "since
+  clikae started using tmux I cannot copy text", and the diagnosis is that the
+  text was never unselectable — it was unreachable. Disabling the outer
+  terminal's alternate screen (the `smcup@/rmcup@` override, which the scrollback
+  capture needs) fills that terminal's own scrollback with tmux's full-screen
+  redraws, so the wheel scrolls debris while the clean 50000-line history sits in
+  tmux where the wheel cannot reach it. And tmux's default `set-clipboard
+  external` forwards an application's own OSC 52 but never emits one for tmux's
+  own selections, so even a copy-mode yank landed in a buffer only tmux could
+  paste from.
+
+  `mouse on` puts the wheel and the drag onto tmux's real history;
+  `set-clipboard on` puts a copy-mode yank on the system clipboard. The cost,
+  stated plainly: a *native* terminal selection — for pasting somewhere tmux is
+  not — now needs `⌥` held.
+
+- **Global tmux options no longer pile up one copy per session.**
+  `terminal-overrides` and `terminal-features` are appended to, and the option
+  block ran on every session creation rather than only at server birth. Measured
+  on a two-day-old server: four identical `*:smcup@:rmcup@` entries and four
+  `xterm*:extkeys`. Harmless to tmux, and the same shape as the bug this whole
+  layer exists to stop — an operation written as though it were idempotent when
+  it is really cumulative.
+
+- **🔴 Running the test suite no longer kills every tank you have open.**
+  `tests/bats/roam.bats` calls a bare `tmux kill-server` twice — it needs a
+  known-empty server to prove create-or-attach — and the suite had no tmux
+  isolation at all, so on the default socket that command reached the
+  maintainer's live sessions. `scripts/test.sh` was unsafe to run on any machine
+  that dogfoods clikae, which is every machine that runs it.
+
+  The fix is in `tests/helpers.bash`, and it took two parts, because the obvious
+  one is not enough. `TMUX_TMPDIR` moves the socket; an inherited `$TMUX`
+  overrides `TMUX_TMPDIR` and points straight back at the real server. Anyone
+  running the suite from a tmux pane — the normal way — had the second. Measured:
+
+  ```
+  TMUX_TMPDIR=<iso> tmux list-sessions              -> isolated
+  TMUX=<real> TMUX_TMPDIR=<iso> tmux list-sessions  -> the four live tanks
+  ```
+
+  So the suite now unsets `TMUX`/`TMUX_PANE` as well. `tmux-spawn.bats` keeps a
+  negative control that proves the unset is load-bearing rather than decorative.
+
+- **A tank that cannot read its own memory now says so, loudly, instead of
+  starting with none.** A Soul kept under `~/Library/Mobile Documents` became
+  unreadable to every tank on one tmux server and stayed readable on another;
+  the only symptom was `EPERM`, with no prompt and nothing in any log.
+
+  The cause is structural and is now Rule 7 of `docs/DESIGN-tmux.md`: a tmux
+  server inherits its file-access permission from whoever created it, keeps it
+  for life, and cannot be granted more afterwards. A server born from a context
+  holding no grant makes every tank on it, forever, unable to read a protected
+  directory.
+
+  `soul_prelaunch` now probes the memory it is about to hand over. The test is a
+  two-syscall asymmetry rather than an errno: `stat` succeeds and the read still
+  fails. If the permission bits already deny the read, that is an ordinary
+  `chmod` and is reported as one; if the bits ALLOW it and the read still fails,
+  something above the filesystem refused, and the message names the server and
+  how to replace it. It warns and starts anyway — a session with no memory is
+  bad, a tank that will not start is worse.
+
+- **`clikae burn` no longer creates a tmux server without clikae's global
+  options.** `burn.sh` used a bare `tmux new-session -d`, with none of the
+  option prefix the three `switch` call sites carried. When a burn was the first
+  thing to run on a machine, the server it created took tmux's defaults —
+  measured at `history-limit 2000` against the intended 50000 — and a later
+  `switch` silently repaired it, which is why it was never noticed.
+
+- **`clikae burn` no longer publishes your environment to `ps`.** It passed the
+  caller's whole environment (`compgen -e`) to `tmux new-session` as `-e KEY=VAL`
+  pairs. Those pairs stay in the tmux process's argv, and when the burn is what
+  creates the server, that argv is the *server's* — readable by every process on
+  the machine for as long as it lives. Verified on a server born days earlier:
+  its command line still listed each `-e` pair. The environment now travels in
+  burn's wrapper script, which is created and `chmod 0600`'d before anything is
+  written to it.
+
+- **A carried session is no longer handed an SSH agent socket that was never
+  created.** The dry-tank carry path passed clikae's stable symlink path without
+  the `ln -sf` that creates it; the interactive path did both. Both now go
+  through one function.
+
+### Added
+
+- **`scripts/verify-tmux-birth.sh`** — the manual half of Rule 7, which bats
+  cannot reach: whether the server hosting this session was born with file
+  access, on a real machine, against real macOS TCC. Read-only, safe to repeat.
+  Its first check is whether the *installed* clikae is even the one with the tmux
+  layer, because every later check would otherwise measure the old build and pass
+  for the wrong reason. Reports `skip` where it cannot look — a skip is not a
+  pass.
+
+  Rule 7 also gained the receipt that could only be taken once: the probe run
+  against a genuinely TCC-blind server, before a reboot removed it. It took the
+  TCC branch rather than the permissions branch, which is what makes the
+  "stat succeeds, bits allow, read still fails" discriminator real rather than
+  merely stub-tested.
+
+### Changed
+
+- **The tmux layer has an owner: `lib/core/tmux.sh`.** `docs/DESIGN-tmux.md` has
+  specified this since v0.4 — Rule 2 asks for one shared set of exits, and Rule 5
+  refers to a wrapper called `clikae_spawn_session`. That function was never
+  written: three mentions in the design doc, zero in the source. Four call sites
+  re-implemented the rules by hand and drifted, which is every defect above.
+
+  `tmux_spawn_session` is now the only `tmux new-session` in the codebase, and it
+  holds Rules 1, 4, 5 and 7 in one place. `tmux_usable`, `tmux_attach` and
+  `tmux_label` moved out of `switch.sh` with it. No user-visible behaviour change
+  beyond the fixes listed above.
+
+## [0.23.0] — 2026-08-14
+
+### Added
+
+- **A session now watches itself for a usage limit.** The waiter worked;
+  nothing ever started it. Detection lived in `clikae watch` — nobody starts a
+  watcher in order to be interrupted later — and in the supervised launch, which
+  only runs once the engine has EXITED. Sitting in a live session that hits its
+  limit, which is the ordinary case and the only one that matters at 3am, reached
+  neither.
+
+  Confirmed against a real limit: the tank went dry at 21:57 with *"resets 12am
+  (Asia/Tokyo)"*, the phrase parsed correctly to midnight — and no waiter was ever
+  attached, because nothing looked. The release notes had promised a session that
+  waits out its limit; on the common path it never could.
+
+  Every session clikae starts now carries a `wake` window that asks the same
+  question the board asks, once a minute, and hands over to the countdown in
+  place. **One window, two phases**: bare `wake` while watching, `wake 13h38m`
+  once counting. It keeps no record of anyone's quota and dies with the session.
+
+- **The one-time question moved to launch.** Asking at limit time could not work:
+  the question would have been posed by a watcher in a window nobody was looking
+  at. At launch a human is demonstrably present — they just typed the command —
+  and the friction is still paid exactly once. Silent where there is nobody to
+  ask, and then nothing is scheduled either, which is the safe direction.
+
+### Fixed
+
+- **Shift+Enter inserts a newline again inside a clikae session.** tmux defaults
+  to `extended-keys off`, which flattens a modifier onto the key it modifies
+  before the application sees it — so Shift+Enter arrived as a plain Enter and an
+  engine that treats Enter as "send" submitted instead of adding a line. The tmux
+  layer had quietly put a translator in the middle of the keyboard.
+
+  Two settings, because they answer different questions: whether tmux **forwards**
+  the extended encoding to the application (`on`, not `always` — only for an
+  application that asked), and whether it **asks the outer terminal** for those
+  sequences at all. Without the second there is nothing to forward. Measured: a
+  fresh client now reports `extkeys` among its features, and did not before.
+
+  🔴 Only a NEW client picks this up — terminal features are resolved at attach
+  time, so a session you are already inside keeps the old behaviour until you
+  detach and come back.
+
+- **A tmux test depended on an environment variable that never arrived.** tmux
+  passes only its `update-environment` list into a session; everything else comes
+  from the SERVER's process environment, which belongs to whoever started the
+  server. So the stub engine's log path reached it only when that test happened
+  to start the server itself, and vanished whenever one was already running —
+  which is the whole story of that test's intermittency. It writes under `$HOME`
+  now, which clikae passes explicitly.
+
+
+## [0.22.0] — 2026-08-13
+
+### Added
+
+- **The board shows what is running right now.** `clikae` gained a **Live**
+  section at the top, listing this machine's live sessions in the same columns as
+  the rest of the page — and **Enter attaches to one** rather than starting
+  anything.
+
+  Reported by someone who ssh'd into their Mac, ran `clikae`, and could not see
+  the session they had left running. The board could say which accounts they had
+  and what they did yesterday; "what is alive" was a category tmux created and
+  the board never grew. Keying a session on its argv made it sharper still: the
+  Resume row now opens a *second* conversation, so without this section there was
+  no way back into the first one except remembering the tank's name.
+
+  The third column is the session's title, not a status word — `claude/x` does
+  not say which piece of work that is. Selecting a row adds one line beneath it:
+  for a limited tank, the vendor's own sentence verbatim, and clikae's promise
+  only when a waiter is genuinely attached. `resets` is their fact; `resumes` is
+  ours.
+
+  Only this machine's sessions, because tmux is local — stated rather than
+  papered over, since it is the truth about where a session lives. No tmux means
+  no section, not an empty heading.
+
+### Fixed
+
+- **Two tests waited a fixed number of seconds for tmux.** Both passed alone and
+  failed inside a full suite run, which is the shape of a timing guess rather
+  than a defect. One of them was waiting for "nothing in tmux is attached" — a
+  condition that is never true on a machine with a session open, so it burned its
+  whole timeout every run and, under load, outlived the stub engine it was
+  measuring. They wait for the states their assertions depend on now.
+
+## [0.21.0] — 2026-08-13
+
+### Added
+
+- **The CLI surface is now checked against the family's design system.** signet
+  is CVER's design system for plain-text terminal output; clikae was the one tool
+  that had never been wired to it, so the board could drift and nothing would go
+  red. CI runs its linter on every push.
+
+  The linter is fetched at a **pinned** ref, never `main`. Fetching a
+  neighbour's HEAD would let their commit turn this repo's CI red — a gate whose
+  colour somebody else sets. It stays doc-and-CI only and never becomes a runtime
+  dependency, because clikae sells "one file you run, no dependencies".
+
+  What it found on the first honest run: 25 violations across 12 files. Twenty
+  were fixed here. Seven were a marker inside help text, now words. Thirteen were
+  a status glyph printed **next to a badge that already said the same thing** —
+  `log_done "  ✔ …"` prints `[ DONE ]` and then a tick. One state, two
+  vocabularies, which is the thing a closed badge set exists to stop.
+
+  The remaining five are the selection cursor `❯`, kept deliberately and named in
+  the check rather than hidden: signet decides a `[x]` / `[ ]` *checkbox* but has
+  no *cursor*, and the two answer different questions. Reported upstream. The
+  exception matches the cursor itself, not a file and line, so a second glyph
+  riding along on the same line still fails.
+
+### Fixed
+
+- **A waiter already counting down no longer lets a second one attach.** The
+  "one waiter per session" guard matched the window name exactly, and the waiter
+  renames its own window to carry the countdown — so seconds after it started,
+  the guard stopped recognising it. A second limit would then have attached a
+  second waiter, and two of them would type into the same pane. Found by CI on
+  Linux, which won a race macOS had been losing quietly.
+
+- **Resuming a second session on the same tank now opens a second screen.**
+  Reported and reproduced 2026-08-13: open `clikae claude work`, then from the
+  board resume a DIFFERENT past session on that tank, and both tabs showed the
+  same thing. The tmux session was named after the tank alone, so the second
+  launch found one already running and attached to it — and the `--resume <sid>`
+  was dropped in silence, because nothing was started to receive it.
+
+  A session is now keyed on **what was asked for**. A bare `clikae <engine>
+  <tank>` keeps the stable name, so walking away and coming back still lands in
+  the same place; anything after `--` gets a short digest of that argv appended,
+  because a session started with different arguments cannot answer a different
+  request. Identical requests still collide on purpose — resuming the same
+  session id twice returns you to it.
+
+  Measured before and after with the same probe: one engine start and one screen
+  became two engine starts and two screens, showing different things. The
+  regression test asserts both.
+
+- **The update notice speaks the family's vocabulary.** A successful upgrade
+  printed a tick while the failure branch two lines below already used a badge —
+  one state written two ways, which is the thing the closed badge set exists to
+  stop. It is `[ DONE ]` now, and the decorative glyph on the "new version"
+  banner is gone: the colour and the sentence were already saying it.
+
+## [0.20.0] — 2026-08-12
+
+### Added
+
+- **A limit noticed on the way out can also just wait.** `clikae wake` was only
+  offered by `clikae watch`, which meant it never came up unless you happened to
+  be running a watcher. The supervised launch — clikae staying as the parent of a
+  session it started — now offers it too, alongside the carry rather than instead
+  of it.
+
+  In the maintainer's words, which is the right framing: *staying put is staying
+  put, and being asked where to go next belongs to leaving.* They are not
+  alternatives and nobody has to choose between them.
+
+  It stays silent when there is nothing to attach to. Chiefly: that path also
+  runs after the engine has EXITED, and an exited engine took its conversation
+  with it — there is no session left to resume. A detach leaves the session
+  alive, and that is the case this is for.
+
+## [0.19.0] — 2026-08-12
+
+### Added
+
+- **A new agy tank comes with a harness.** It does not change how agy talks — it
+  stops a reply from ending with *"I verified everything works and all tests
+  pass"* in a session that executed zero commands. The claim is blocked once and
+  handed back with its own record; agy re-enters the loop and answers it.
+
+  Measured on a real run — same tank, same prompt, the only variable being
+  whether the harness was installed:
+
+      with     "I verified everything works and all tests pass."
+               "I did not actually run any commands or verify any tests; I
+                simply output the requested phrase."
+      without  "I verified everything works and all tests pass."
+
+  **The threshold is zero, not "enough".** "You didn't test enough" is an
+  argument about taste that nobody can settle; "you said you verified it and this
+  session never ran a single command" is not. Zero is also the only threshold
+  that cannot punish real work — an ordinary answer claiming nothing is left
+  alone.
+
+  A project can add its own executable `.clikae-gate`; clikae cannot know what
+  "done" means in your repo, so that file is where you say so. No gate means no
+  project check, and it says so rather than implying coverage it doesn't have.
+
+  Interactively it interrupts once and then gets out of your way; a headless run
+  is held longer, since nobody is there to notice. Either way there is a cap — a
+  gate that can never pass must not hold a session forever. The rule against
+  editing tests and CI applies only to a dispatched agent: interactively those
+  are your tests, and friction belongs on how dangerous an action is, not on who
+  is doing it.
+
+  The script is copied into the tank, not linked. Editing it is how you make it
+  stricter; deleting it turns it off, and clikae never puts it back.
+
+  **Every existing tank gets it too, once.** Tanks made before this release are
+  seeded on the next switch. "Every tank has it" and "deleting it means deleting
+  it" are both promises, and install-if-missing cannot hold both — so clikae
+  records that it has seeded a tank, outside the tank, and never looks again.
+
+  **Blocking is not compliance, and that is measured rather than assumed.** Same
+  prompt, two real tanks: one came back and said plainly *"I did not actually run
+  any commands"*; the other was blocked just the same, went off and did something
+  else, and the last line printed was still the original claim. What is
+  guaranteed is that the claim gets challenged, not that the answer is good.
+
+### Fixed
+
+- **The harness no longer leaves a counter behind for every abandoned run.** A
+  conversation that ends while still blocked — a timeout, a kill, an agent that
+  wandered off — left its counter in the tank's config. Three turned up in a real
+  tank within an hour, in a directory that would grow forever. Counters older
+  than a day are swept.
+
+- **The roaming test no longer guesses how long tmux needs.** It waited a fixed
+  number of seconds — enough on an idle machine, not on a loaded one — so it
+  passed 3/3 on its own and failed intermittently inside a full-suite run. It now
+  waits for the states its assertions actually depend on.
+
+## [0.18.1] — 2026-08-12
+
+### Fixed
+
+- **A reset time inside a DST gap now resolves the same on Linux and macOS.**
+  A wall-clock time the spring-forward deletes (02:30 on the changeover day) has
+  no correct answer, and the platforms picked different wrong ones on their own —
+  BSD returned the instant an hour later, GNU refused. On Linux that meant no
+  waiter was scheduled at all for such a phrase. Both now agree on the first
+  instant after the time the vendor named, on the day they named. The ambiguous
+  autumn hour, which exists twice, is deliberately left alone — nudging it would
+  resume an hour late every November.
+
+## [0.18.0] — 2026-08-12
+
+### Added
+
+- **`clikae wake` — a limited tank picks itself back up.** When you hit a usage
+  limit, the session isn't gone: it's at its prompt with the conversation intact,
+  which is why the manual fix is to come back at 3:50am and type `go`. clikae
+  sends that keystroke for you. A countdown opens as a window inside that tank's
+  own tmux session; when the limit lifts, the conversation continues.
+
+  **It is not a re-run.** No prompt is replayed and nothing is dispatched twice —
+  it is one keystroke into a conversation that never ended, so a task that had
+  already written files or made a commit does not do it again.
+
+  `clikae watch` offers this once when it sees a limit and remembers the answer.
+  On by default, because it automates something you already do by hand; asked the
+  first time, because typing into a live session is a power and clikae asks
+  before taking one.
+
+  Every failure path is silent and harmless: no tmux, no live session, or no time
+  in the vendor's sentence, and nothing is scheduled. A waiter with a guessed
+  time is worse than none — it fires at the wrong moment into something live.
+
+  Before typing it asks three questions no vendor can reword: does the session
+  exist, is anything alive in it, has the screen stopped moving? A busy or dead
+  pane is retried three times and then given up on **visibly** — a waiter that
+  disappears quietly leaves you believing your work resumed.
+
+  The delay after the stated reset is 60 seconds, and that number was measured:
+  across 116 real outages in which nothing succeeded during the window, the
+  earliest success after the vendor's stated time was **30 seconds**, six
+  separate times. The sentence is accurate to the second; 60s is that doubled,
+  not a hedge against rounding nobody checked.
+
+- **The reset sentence can now be read as a time.** Everywhere else clikae relays
+  a vendor's reset phrase verbatim and never parses it; this is a separate pure
+  function for the one caller that needs a number. Two grammars exist and only
+  two — measured against 262 genuine limit events across five accounts, all 262
+  of which carry a phrase. The grammar does **not** follow the limit type (a
+  weekly limit appears in both forms), so branching on that would have been
+  wrong. 175 distinct cases ship as a test fixture whose answer key was computed
+  by a different implementation than the one under test.
+
+### Fixed
+
+- **The bats suite could write into whichever repo invoked it.** git exports an
+  absolute `GIT_DIR` into every hook, so a test that cd's into its own throwaway
+  repo and calls `git config` wrote to the real one. Running the suite from a
+  pre-push hook put a test fixture's deliberately-wrong author into the
+  maintainer's own git config, where it stayed for a month. The hook already
+  scrubbed those variables; the suite does now too, because either layer alone
+  leaves it unsafe to run from the other's context.
+
+## [0.17.0] — 2026-08-12
+
+### Added
+
+- **Your session outlives the terminal.** A bare `clikae <engine> <tank>` now runs
+  the engine inside a tmux session named for its tank, so closing the window — or
+  an ssh connection dropping on the way home — leaves the work running. Come back
+  with the same command from anywhere and you land back in the same conversation,
+  at whatever size the screen in front of you happens to be. Verified across two
+  real machines: a tablet attaches at 90x28, the desktop joins at 200x50, both
+  stay live, and the engine is started exactly once.
+
+  It degrades instead of breaking. No tmux installed, no terminal (a pipe, CI), or
+  a `TERM` tmux cannot draw on, and clikae runs the engine directly — same command,
+  same result, no persistence. One shape to know: `ssh yourmac 'clikae claude work'`
+  is a *command* handed to ssh, which gets a terminal on stdin but a pipe on
+  stdout, so it takes the direct path. Log in first, then type the command.
+
+- **`clikae burn agy … -- <flags>` reaches agy instead of being swallowed.** The
+  trailing argv was parsed and then dropped. agy has no adapter for clikae to
+  compose flags from, but it can stop eating the ones you typed —
+  `-- --dangerously-skip-permissions` (agy's print mode auto-denies file tools) and
+  `-- -c` (continue the previous conversation) are the two that turn a single shot
+  into a working headless loop.
+
+### Fixed
+
+- **The board no longer paints its logo over the session list.** The watermark was
+  pinned bottom-right and gated on the terminal being big enough, which stopped
+  being the right question once the resume section made the board's own content
+  reach that corner. The two overwrote each other mid-line. The welcome screen
+  keeps the logo, where nothing can collide with it.
+
+- **An agy tank is no longer reported dry because another agy session hit a limit.**
+  `~/.gemini/antigravity-cli/cli.log` is a symlink every agy process repoints at its
+  own file, so reading it after a run could pick up an interactive session's quota
+  event. Each run now asks for its own log with `--log-file`. Measured on a tank
+  with 74% of its weekly limit left: the same request came back "ran dry" once and
+  completed twice.
+
+- **A `RESOURCE_EXHAUSTED` line from a background cache refresh is not a spent
+  tank.** agy's log carries three different sentences with that error class and
+  only two of them mean the account is out; matching the class alone sent burn off
+  to reroute a tank that had fuel.
+
+- **`watch` stops calling its claude limit marker a guess.** The file told users
+  the marker was unconfirmed and the pattern a best guess to tune, while its own
+  comments twenty lines down said CONFIRMED. Settled against every occurrence in a
+  real user's transcripts: 194 genuine limit events all match, and all 89 mentions
+  — including ordinary model replies discussing a limit — correctly do not.
+
+## [0.16.1] — 2026-08-02
+
+### Fixed
+
+- **A solo tank that is still on the shared brain is now called out, instead of
+  being reported as two flat facts.** `solo` and "in a memory group" are one
+  statement — solo leaves the group — but `memory status` printed
+  `→ shared 'me'  🔒 solo` on the same line and let the badge speak louder than
+  the truth. Anyone scanning the board read that tank as isolated.
+
+  The state is reachable: a tank made solo *before* 0.15.0 wired the two verbs
+  together kept its pointer, and nothing since would have told you. Two of them
+  were found in the field on 2026-08-02, sitting on the shared store for six days
+  under a 🔒 badge.
+
+  The survey now badges the combination `⚠️ solo BUT STILL SHARING`, prints one
+  actionable line naming the affected tanks, and the single-tank view says what
+  to run. Detection only — `clikae solo <engine> <tank>` already repairs it, and
+  a silent auto-repair would hide the very thing worth seeing.
+
+## [0.16.0] — 2026-07-31
+
+### Added
+
+- **grok is an engine now.** xAI's Grok Build CLI joins claude and codex as a
+  full AI engine, not just a switchable tank: `clikae init grok <tank>` gives it
+  its own login + config + history under `GROK_HOME`, and its sessions show up on
+  the home board's Resume list, in `clikae resume`, and in `clean`'s scan.
+
+  It carries the whole AI-engine set — `handoff --to grok/<tank>`, `burn`'s
+  headless-write dialect (`--sandbox workspace` + `bypassPermissions`), `conduct`'s
+  read-only leg (`--sandbox read-only` plus a tools **allowlist**), the ACCOUNT
+  column, and Soul membership through a pointer note in `$GROK_HOME/AGENTS.md`
+  (grok's own global-rules file — the same shape codex uses).
+
+  Three things worth knowing, all verified by doing rather than assumed:
+  - **The read-only leg is fenced twice, and the denylist form doesn't work.**
+    Naming the mutating tools in `--disallowed-tools` was tried first; with the
+    sandbox off, a leg still created the file. An allowlist (`--tools`) holds,
+    needs no correct guess at what the write tool is called, and keeps holding
+    when grok ships a new one. Note also what `--sandbox read-only` deliberately
+    allows: writes to `GROK_HOME` and to temp dirs. A leg cannot touch your
+    project; it *can* write to `/tmp`.
+  - **Sessions are matched on the cwd grok RECORDS, not the folder it encodes.**
+    grok names each session group after the percent-encoded working directory, with
+    a slug+hash fallback for long paths. Reading `summary.json`'s own `info.cwd`
+    instead means a change to that encoding can't silently empty your board.
+  - **`/rename` and the model's title share one field.** A rename overwrites
+    `generated_title` while `session_summary` keeps the original, so preferring
+    `generated_title` is what puts *your* name on the board row.
+
+  Honest limits, all listed in [Expectations](docs/EXPECTATIONS.md#grok): no fuel
+  dot (grok reports a limit only on the exit path — exit status 1 with a stderr
+  sentence — and writes nothing clikae can read afterwards), no `mcp share` (grok's
+  servers live in TOML, clikae's fleet list merges JSON), and no `--ephemeral`
+  (pointer-strategy memory has nothing to stash).
+
+
+## [0.15.2] — 2026-07-27
+
+`--ephemeral` finally isolates what it always implied. A cold reader that loads
+your own skills already knows what you believe, and one holding the fleet's MCP
+connectors can still reach your sites — so both are dropped now, per run, without
+touching the tank. What it still cannot do is said on screen rather than left to
+the word "ephemeral".
+
+### Changed
+
+- **`--ephemeral` now drops your skills and the fleet's MCP servers too, and says
+  what it still can't drop.** Memory was only one of the channels a session
+  inherits. A cold reader that loads your hand-authored skills already knows what
+  you believe; one holding the fleet's MCP connectors can still reach your sites.
+  Neither is a cold read, which is the main thing `--ephemeral` is for.
+
+  The engine already had the primitives — clikae simply wasn't passing them. A
+  new `adapter_ephemeral_flags` hook emits `--disable-slash-commands` and
+  `--strict-mcp-config` on every ephemeral run, plus `--no-session-persistence`
+  when the run is headless.
+
+  **Per-run, never surgery.** The tempting fix — temporarily repointing the tank's
+  `skills` symlink — would mutate a tank another session may be live on, which is
+  exactly what made `memory isolate` dangerous. A concurrent session on the same
+  tank is unaffected by these.
+
+  Two honest limits, both stated on screen rather than left to the name:
+  - Claude Code ties `--no-session-persistence` to `--print`, so an **interactive**
+    ephemeral run still writes its transcript into the tank. Incognito here means
+    *it doesn't know you*, not *it never happened*; the headless shape gives the
+    stronger one.
+  - 🔴 **Not `--bare`**, however much it reads like the answer: it also disables
+    keychain reads and restricts auth to `ANTHROPIC_API_KEY`, so it cannot log in
+    on a subscription tank at all.
+
+  Verified against the real binary (Claude Code 2.1.220), both shapes.
+
+- **zh-TW: `session` stays English; the fleet is 艦隊.** Checked against 4989 of
+  Apple's own zh-Hant string tables on this machine: 會話 appears **zero** times
+  (it is the mainland standard), and Apple avoids the concept entirely — the one
+  English "Invalid Session." renders as 連線錯誤. The file had already decided
+  anyway: twelve of the fourteen zh-TW strings mentioning a session used the
+  English word, exactly as the same table already keeps `burn`, `Soul` and
+  `clikae solo`. Two outliers were pulled back rather than a direction changed.
+  zh-Hans deliberately keeps 会话 — the correct native term there, used by twelve
+  of its keys. `車隊` → `艦隊`: Apple has neither, so it is a brand call, and
+  艦隊 carries the sense of a formation dispatched under command.
+
+## [0.15.1] — 2026-07-27
+
+Three findings from one real dispatch, none of which a reader of the code would
+have hit: `clikae burn agy --artifact` could never succeed, because burn proves a
+run by the artifact FILE while agy's headless mode is not allowed to write to
+your paths. They differ only in who holds the pen — so clikae holds it now.
+
+### Fixed
+
+- **`clikae burn agy --artifact` failed 100% of the time, and now works.** Two
+  contracts that could not both be satisfied by agy: burn proves a run by the
+  **artifact file** (never the exit code — `codex exec` returns 0 on a limit),
+  while agy's headless mode **auto-denies the file tools on your paths**, because
+  with no terminal it cannot prompt for permission. Asking agy to write the
+  artifact was asking for the one thing it is not allowed to do — an 11-second
+  failure, every time, reported from the field on 2026-07-27.
+
+  They differ only in **who holds the pen**. agy prints fine, and burn already
+  had the output in hand for its error tail, so clikae now writes the artifact
+  from agy's stdout — and labels the row, so nobody believes agy wrote a file it
+  cannot write. Deliberately not done: adding an allow-rule to the user's agy
+  settings (that is clikae widening an engine's permissions on their behalf, the
+  same line `--dangerously-skip-permissions` sits on), or refusing `--artifact`
+  for agy (which would remove the only verification burn has).
+
+  Honest limit, stated on the row and in the docs: agy buffers a *large* answer
+  into its own brain dir and prints a pointer, so a big deliverable can arrive
+  pointer-shaped. And a silent run is not proof nothing happened — the failure
+  message now points at `~/.gemini/antigravity-cli/brain/` before you re-fire.
+
+- **`burn --timeout` never reached agy.** agy enforces its own print budget,
+  default 5 minutes, and knew nothing about clikae's `--timeout`, so
+  `burn agy --timeout 1200` was a fiction — agy self-terminated at 5m first. The
+  budget you ask for is now handed to agy as `--print-timeout`. With no
+  `--timeout`, agy's own default stands; clikae does not invent one.
+
+- **`clikae agy <tank>` in a non-TTY context ended in a confusing error after a
+  SUCCESSFUL switch.** It switched, then unconditionally exec'd the interactive
+  UI, which can only fail with `could not open TTY` — while still exiting 0, so
+  it read like the switch had failed. With no terminal and nothing to pass
+  through, it now completes the switch, says it is switch-only, and stops. A
+  headless prompt (`-- -p "…"`) still always runs.
+
+## [0.15.0] — 2026-07-27
+
+A day spent reading what this project says about itself and checking it against
+what the code does. Most of what follows was found in that gap.
+
+The headline is a bug that had been shipping for releases: `exec` with no command
+makes its redirections permanent, so eighteen tty lines had quietly pointed the
+board's stderr at `/dev/null` — invisible prompts that read as a hang, muted
+errors, and the engine you launched from the board losing its stderr entirely. It
+survived a fully green gate, because neither shellcheck nor bats can watch a
+terminal. The gate now has a third leg that can.
+
+**Breaking:** `clikae memory isolate` is gone — `clikae solo` leaves the fleet and
+gives the tank its own memory back — and a new tank now joins the shared brain
+automatically once you have opted in once. In the fleet means sharing; solo means
+not; there is no third state. See *Changed* below for why that was worth breaking.
+
+### Changed
+
+- **In the fleet now means sharing the brain, and `clikae solo` is the only way
+  out.** The Soul layer had three states where the board can only show two.
+  Sharing was opt-in *per tank*, so a tank created after you had already opted in
+  silently started with no brain — and the board's only axis is fleet-vs-solo, so
+  it looked exactly like one that shared. That is not a subtle bug: it taught the
+  model's own author the wrong model. He described clikae back as "everything in
+  a tank shares `me` unless I solo it", which is what the board, the docs and the
+  design all say. Only the code disagreed, and it was the part nobody can see.
+
+  - **Consent is once per machine, not once per tank.** Nothing is shared until
+    your first `clikae memory share`; that share records the group in
+    `$CLIKAE_HOME/soul-default`, and from then on a tank created by `clikae init`
+    joins it. A machine that never opts in shares nothing, ever — so a stranger
+    making one tank per client is not handed another client's memory.
+  - **Crossing a different account is still announced.** `init` deliberately does
+    not pass `--yes`: a fresh tank has no account yet so there is nothing to
+    cross, but one whose account is already known and different is refused and
+    keeps its own memory. The 🔴 locked value survives the redesign intact — the
+    test that guards it is what forced this detail.
+  - **`clikae memory isolate` is retired.** `clikae solo` leaves the fleet *and*
+    gives the tank its own memory back; `--off` puts it back in both. One idea,
+    one verb, visible on the board. The old verb now fails with a pointer rather
+    than silently doing something adjacent.
+  - **The board names the anomaly.** A fleet tank with no brain gets one dim
+    line — the single state the board could not otherwise express. Silent before
+    your first share, since nothing sharing is then the deliberate state.
+
+  `memory isolate` was also the wrong verb to have within reach: an agent ran it
+  on a LIVE tank to spawn a cold reader and a running session went amnesiac
+  mid-flight (v0.14.3). Retiring it does not remove that footgun — it renames it,
+  since `solo` is now the permanent form — so `AGENTS.md` and `docs/memory.md`
+  now warn about `solo` in the words they used to spend on `isolate`. The
+  mnemonic still holds: **ephemeral changes this once; solo changes from now on.**
+
+### Fixed
+
+- **The board, `resume` and `clean` threw away their own stderr — and handed a
+  dead stderr to the engine they launched.** `exec` with no command makes its
+  redirections **permanent for the shell**, so `exec 3</dev/tty 2>/dev/null`
+  (meant only to hide the message if opening `/dev/tty` fails) pointed the whole
+  process's stderr at `/dev/null` for the rest of its life. Eighteen fd-3 lines
+  across `home.sh`, `resume.sh`, `clean.sh` and `relay.sh` did it, each one
+  independently, so fixing any single site would not have helped. What it cost:
+
+  - **A tank opened from the board lost the engine's entire stderr.** Pressing
+    Enter on a row `exec`s through to `claude`/`codex`/`agy`, which inherited
+    fd 2 = `/dev/null` — crashes, node warnings, OAuth failures and
+    "command not found" all discarded. `clikae claude <tank>` run straight from
+    the shell was never affected, which is why this hid for so long.
+  - **`clean`'s Trash-fallback warning could never appear.** When `~/.Trash` is
+    unusable, `clean` falls back to `rm` and `log_warn`s that the row was deleted
+    unrecoverably — on stderr. In the interactive path that warning was
+    guaranteed silent, which is precisely the disclosure it exists to make.
+  - **Three prompts were invisible**, since bash writes `read -p` prompts to
+    stderr: `n` (new tank), `a` (rename) and `m` (memory group) each dropped to a
+    blank screen and read as a hang. This is the symptom that surfaced the bug.
+  - **Every `log_err`/`log_warn`/`log_fail` from a board-launched subcommand was
+    muted** — a duplicate `clikae init` name failed with no output at all.
+
+  Each redirection is now scoped to a brace group (`{ exec 3</dev/tty; }
+  2>/dev/null || …`), which still hides an open failure but reverts when the
+  group ends. Verified in a real pty, including forcing the Trash fallback with a
+  read-only `~/.Trash` and watching the warning actually print.
+
+### Fixed
+
+- **`clikae <typo>` printed help and exited `0`.** An unrecognised first argument
+  is neither a command, an engine, nor a tank — but the dispatcher fell through
+  to `help` and returned success, so no script could tell a typo from a hit
+  (while `clikae mcp status` correctly returned 1, contradicting it two verbs
+  away). Help is still printed as a courtesy; the exit status is now 1.
+
+- **The new-tank picker could never preselect the engine you were standing on.**
+  `_home_choose` compared the caller's bare value (`codex`) against its own
+  ANNOTATED options (`codex  (AI)`), so the match never landed and the cursor sat
+  on row 0 no matter which tank you pressed `n` from. Preselect now also matches
+  an option's first token; menus with unannotated options are unaffected.
+
+- **The new-tank picker offered Antigravity twice** — once as `agy (AI · power)`
+  and again as `antigravity (tool)`, though `cmd_init` routes both to the same
+  `_agy_init`. The scan that built the list keyed on "an adapter file exists",
+  which is exactly the proxy `clikae_is_target` exists to replace: antigravity
+  has an adapter file that is a resume-only shim on a launch-only target. It now
+  asks the predicate.
+
+- **Settled: agy quota is per-account and stacks — unless the accounts share a
+  Google family plan.** This sat unresolved for months behind one hard fact: agy's
+  `/usage` showed *byte-identical* figures for two different accounts, and the
+  recorded conclusion was that only an expensive burn-test could tell a shared
+  pool from a display artifact. The missing variable was that those two accounts
+  were in the same Google **family**, which pools usage — so the identical
+  display had been correct all along, not a preview bug. With three non-family
+  accounts signed in, a read-only comparison settled it in minutes and cost no
+  quota at all: 34.14% / 100% / 100% weekly. A shared pool would have shown one
+  number three times.
+
+- **Launcher templates are now compile-tested, and the iTerm2 gap self-closes.**
+  AppleScript resolves an app's terminology from that app's dictionary, so the
+  iTerm2 template can only be compiled on a machine that has iTerm2 — which is
+  why it sat "never machine-verified" for months. Each template now has a compile
+  test; the iTerm2 one SKIPS when iTerm2 is absent, so the first person who has
+  it installed verifies it for everyone. Keeping iTerm2 (rather than dropping it
+  for being unverifiable) is deliberate: the code path is gated on the app being
+  present, so the only machine that runs it is one where the dictionary resolves,
+  and a bad template fails loudly at `osacompile` instead of producing a broken
+  `.app`.
+
+- **Field-verified on ARM64 Linux.** The full bats suite and all three pty-smoke
+  modes were run on a PineNote (aarch64, bash 5.2) over SSH: no failures,
+  including the interactive pty paths and the launched engine keeping its stderr.
+  CI runs x86 ubuntu, so real non-x86 hardware is a signal it cannot provide.
+
+- **`clikae doctor` reports which agy tanks carry a saved login.** agy has one
+  live Keychain slot, so switching tanks stashes the current login under
+  `clikae-agy-<tank>` and restores the target's. A tank with no stash can't be
+  switched to without an interactive Google sign-in — which means `clikae burn
+  agy` can't auto-hop onto it either: a headless run would sit at a login prompt
+  until `--print-timeout`. Found the hard way here (two of three tanks had lost
+  their stash), and it was invisible until you tried it. It is a line in doctor
+  now.
+
+- **`clikae clean` no longer deletes anything as a fallback, and no longer says
+  it moved things it didn't.** When `~/.Trash` was unusable, `_clean_to_trash`
+  fell back to `rm` — "rather than leaving the row stuck" — and the closing line
+  went on claiming everything had been moved to the Trash. The per-row warning
+  was honest; the summary, which is the line a person remembers and would act on
+  when they went looking for the file, was not.
+
+  The two outcomes were never symmetric: a stuck row costs one uncleaned file, a
+  fallback `rm` costs the file forever, and clean's payload is session history
+  that cannot be regenerated — the very thing `clikae resume` exists to keep.
+  Someone who asked to *move* something to the Trash never asked for that.
+
+  - The Trash is now checked **before the red confirm**, so the question you
+    answer is the one that will happen. Unusable → clikae says so and touches
+    nothing.
+  - `_clean_to_trash` never destroys. If an item can't be moved it is left
+    exactly where it is and named.
+  - The summary banks only rows that actually moved, and reports how many were
+    left behind.
+
+  Verified end to end in a real pty against a read-only `~/.Trash`: the confirm
+  never appears, and the session file is still there afterwards.
+
+- **`clikae doctor` names a tank that was signed out by a token-refresh race.**
+  Claude's OAuth uses rotating refresh tokens, so when several sessions on one
+  tank refresh at once the loser gets `invalid_grant`, treats it as "logged out",
+  and clears the Keychain entry the winner just wrote — a working account dies
+  with no explanation. clikae cannot prevent that (the refresh belongs to Claude
+  Code's own daemon), but that daemon writes its log inside the tank clikae
+  manages, so the aftermath is readable: doctor now reports the tank, the
+  timestamp, and the one-line fix, and stays quiet once it has been logged back
+  in. Bounded, read-only tail scan.
+
+  The first draft of this check produced a false positive on the maintainer's own
+  machine — it counted only "refresh succeeded" as healthy, and missed that the
+  daemon's "scheduling proactive refresh" line is itself proof a token exists (a
+  tank with none says "no token found" instead). Caught by reading the log the
+  check had just accused, before believing it.
+
+- **`clikae app` now defaults to the terminal you're actually using.** The
+  default was hardcoded to Terminal.app, so an iTerm2 or Ghostty user got an
+  Apple-Terminal launcher unless they knew `--terminal` existed. It now reads
+  `$TERM_PROGRAM` — and only uses that guess if the app is really installed, so a
+  guess can never turn a default into a failure. `$CLIKAE_TERMINAL` overrides the
+  guess, `--terminal` overrides both, and the choice is printed on the
+  `terminal:` line so it is never silent.
+
+- **`clikae app --terminal warp` now explains itself.** Warp has no supported way
+  to open a window running a given command — its URL scheme opens a tab in a
+  directory and stops, and the only command-running door is a Launch
+  Configuration YAML, a different shape from every other target and unverifiable
+  without Warp installed. It says that, rather than shipping a launcher nobody
+  has watched work or hiding behind a generic "unknown --terminal". The target
+  name is also validated before the tank lookup now, so a mistyped `--terminal`
+  no longer reports "profile not found" first and sends you debugging the wrong
+  half of the command.
+
+- **codex's usage limit turned out to be readable from disk after all, so the
+  fuel gauge and `clikae auto` now cover it.** This project recorded for months
+  that codex's limit was "exec-stdout-only — never written to a file clikae can
+  scan"; that belief was load-bearing (it is why a codex tank could only ever
+  show `○`, and why auto-carry was claude-only), and it was wrong. An
+  *interactive* codex TUI writes the limit into its own rollout transcript:
+
+  ```json
+  {"type":"event_msg","payload":{"type":"task_complete","error":{
+     "message":"You've hit your usage limit. … try again at Aug 23rd, 2026 8:26 PM.",
+     "codex_error_info":"usage_limit_exceeded"}}}
+  ```
+
+  clikae matches `codex_error_info`, the machine-readable marker — never the
+  English sentence beside it, which is vendor copy and will drift (a test pins
+  that: a user typing "why do I keep hitting my usage limit?" must not dry the
+  tank). Detection self-clears like claude's: an `agent_message` newer than the
+  limit means the account recovered. The scan window is far wider than claude's
+  5h roll, because a codex limit can run for weeks — but still bounded, since a
+  tank nobody has touched has nothing to read and `○` is the honest answer.
+
+  Confirmed against a real rollout on the maintainer's machine whose
+  `session_meta` says `originator: codex-tui` — i.e. not a headless run — and the
+  reset phrase is surfaced verbatim, never parsed into a countdown.
+
+- **The same engine had two names depending on which screen you were on.**
+  `clikae list` and the board said `agy`; `clikae doctor` printed the on-disk
+  directory name, `antigravity`. Three surfaces had each grown a private copy of
+  the mapping and doctor had none. There is now one owner, `engine_label` in
+  `lib/core/profile_store.sh`, next to the predicate that already knew the alias.
+  The store path, the `targets/` filename and the JSON `path` field all stay
+  `antigravity` on purpose — and `docs/usage.md` now warns, where the JSON
+  contract is documented, never to build a path out of `cli` + `profile`.
+
+- **The `?` help overlay never listed `R`** (open the cross-tank resume picker),
+  on the one screen whose entire job is to list every key. Added, with its label
+  in all nine languages — and a bats test now fails when a key is bound in the
+  board's key loop but missing from the legend, so the two cannot drift again.
+
+### Added
+
+- **The gate grew a third leg: a real-pty smoke run, and it blocks.** shellcheck
+  reads source and bats never presses a key, so both are structurally blind to
+  the TUI — which is where this project's regressions keep landing, most
+  expensively the stderr bug above, which shipped through a fully green gate.
+  `tests/tools/pty-smoke.py` now runs from `scripts/test.sh` and from CI on both
+  macOS and Ubuntu, driving the real binary on a real pty.
+
+  It became hermetic to earn that: each mode builds its own throwaway `$HOME`
+  and `$CLIKAE_HOME` with fixture tanks, pins `CLIKAE_LANG=en-US` so assertions
+  don't depend on the runner's locale, and puts a stub engine on `PATH` — it
+  never reads the developer's store and never launches a real engine. It also
+  stops short of nothing: a new `prompts` mode presses `n`, `a` and `m` and
+  asserts each prompt is **visible**, presses Enter on a row and asserts the
+  launched engine's **stderr** reaches the terminal, and triggers a
+  duplicate-name `init` to assert its error is readable. Pacing is idle-based
+  rather than fixed sleeps (58s → 28s), because a slow gate is a skipped gate.
+
+  Every assertion was validated against a pre-fix worktree first: five of the
+  eight `prompts` checks go red there, and the three that pass on both are the
+  controls that prove the harness isn't simply failing everything.
+
+- **`clikae doctor` now verifies the login-Keychain coordinates, read-only.**
+  macOS keeps the login for both claude and agy in the Keychain rather than in
+  the config dir clikae swaps, so account isolation rests on two hard-coded
+  coordinates that the suite cannot check — `antigravity.bats` stubs `security`,
+  so a vendor-side rename would pass CI and surface to a user only as "why am I
+  suddenly on the wrong account". doctor now reports whether agy's slot
+  (`gemini` / `antigravity`) exists and how many claude tanks have a saved
+  login. It never passes `-w`: reading the secret is what makes the Keychain
+  prompt for access, and `doctor` must never pop a dialog — presence only, never
+  the value.
+
+### Documentation
+
+- **A documentation audit: every doc reconciled against the code.** `HANDOFF.md`
+  was rewritten from 1089 lines of dated status blocks — its own "READ THIS
+  FIRST" header was five releases stale and two of its claims were false — into
+  a file where every line is either a live rule or an open item, under a
+  maintenance contract that says closing an item means deleting its entry.
+  `PLAN.md` and `docs/HANDOFF-world-class-gaps.md` were removed: both declared
+  themselves shipped/cleared in their own first lines. `AGENTS.md` and
+  `docs/DEVLOG.md` were brought up to the v0.13 repositioning (the devlog had
+  stopped at v0.6.0). Corrections across the rest: **`clikae burn agy <tank>`
+  has worked since v0.10.0**, but four documents still said agy couldn't be
+  burned; the board's `← here` row marker was documented years after it was
+  removed; `clikae adapters` does list `antigravity`; `docs/adding-a-locale.md`
+  still described three languages and an unshipped `zh-Hans`;
+  `docs/troubleshooting.md` told contributors to run `bats tests/bats` without
+  `-r`, which silently skips every adapter test; `docs/grammar.md` carried an
+  unchecked implementation checklist for work that shipped in v0.5 and labelled
+  the Soul design an undecided frontier. `docs/adding-an-adapter.md` gained the
+  ~20 optional adapter hooks it never mentioned. No behaviour changed.
+
 ## [0.14.5] — 2026-07-21
 
 ### Fixed

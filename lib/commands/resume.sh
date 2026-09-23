@@ -28,6 +28,11 @@ clikae tank has its own config dir, so the session isn't in the engine's default
 home; clikae finds the tank and resumes it there.
 
   clikae resume <id>        find the tank holding <id> and resume it
+  clikae resume <prefix>    the first few characters are enough, as long as
+                            they name exactly one session (8 is what the
+                            tmux status line shows you); a prefix that
+                            matches more than one is refused, with the
+                            candidates listed
   clikae resume             no id → pick from recent sessions across ALL tanks
                             (by title, newest first — no UUID to copy). Picking
                             one asks "Resume on which tank?" whenever the engine
@@ -35,6 +40,8 @@ home; clikae finds the tank and resumes it there.
                             session is carried there (a real cross-tank resume,
                             not a fresh start). Press `c` in the picker to free
                             disk space (opens `clikae clean`, then comes back).
+  clikae resume --all       include headless "burn" sessions in the picker
+                            (they are hidden by default to avoid clutter).
   clikae resume <id> -- -p "…"   forward extra args to the engine after --
   clikae resume ask-tank [always|dry-only]
                             show or set whether resuming from the home board
@@ -58,8 +65,11 @@ _resume_split() {
   _rs_engine="${tmp%%$'\x1f'*}"; tmp="${tmp#*$'\x1f'}"
   _rs_tank="${tmp%%$'\x1f'*}";   tmp="${tmp#*$'\x1f'}"
   _rs_sid="${tmp%%$'\x1f'*}";    tmp="${tmp#*$'\x1f'}"
-  _rs_f="${tmp%%$'\x1f'*}"
-  _rs_mt="${tmp##*$'\x1f'}"
+  _rs_f="${tmp%%$'\x1f'*}";      tmp="${tmp#*$'\x1f'}"
+  _rs_mt="${tmp%%$'\x1f'*}"
+  _rs_is_burn="${tmp##*$'\x1f'}"
+  [ "$_rs_is_burn" = "$_rs_mt" ] && _rs_is_burn=0
+  return 0
 }
 
 # _resume_session_fields <path> — derive _rs_engine/_rs_tank/_rs_sid from a raw
@@ -76,21 +86,101 @@ _resume_session_fields() {
   if [ "$_rs_engine" = "antigravity" ]; then
     _rs_sid="${f%/.system_generated/*}"; _rs_sid="${_rs_sid##*/}"
   elif [ "$_rs_engine" = "codex" ]; then
-    _rs_sid="${filename%.jsonl}"; _rs_sid="${_rs_sid##*-}"
+    # #74 round-1 P1-1: a codex uuid embeds hyphens of its own (8-4-4-4-12), so
+    # `${_rs_sid##*-}` (the previous shape) kept only the uuid's OWN last
+    # segment — never what burn actually recorded (payload.id from the file
+    # body). A codex uuid is always exactly 36 characters — the same fact
+    # `_clean_session_is_live` (clean.sh) already trusts for its live-session
+    # guard, and now the one place both sides read it from. Mirrors
+    # lib/adapters/codex.sh's adapter_sid_canonical string-for-string (kept
+    # inline, not routed through load_adapter, so this per-session hot path —
+    # clean.sh's dedupe scan — never pays for an adapter (re)source).
+    _rs_sid="${filename%.jsonl}"
+    if [ "${#_rs_sid}" -gt 36 ]; then _rs_sid="${_rs_sid:$(( ${#_rs_sid} - 36 ))}"; fi
+  elif [ "$_rs_engine" = "grok" ]; then
+    # grok stores `sessions/<group>/<sid>/summary.json`, so the id is the
+    # DIRECTORY name — the same fact _grok_find_summary uses to go the other
+    # way (sid -> file). Without this branch the generic `${filename%.jsonl}`
+    # tail below would hand every grok session the id "summary.json".
+    _rs_sid="${f%/summary.json}"; _rs_sid="${_rs_sid##*/}"
   else # claude
     _rs_sid="${filename%.jsonl}"
   fi
 }
 
 # _resume_all_sessions — "<mtime> <path>" for EVERY tank's sessions, newest
-# first. The ONE home of the three-engine glob list (it appeared verbatim in
-# both the picker and `clikae clean`); a new resumable engine's glob goes here
-# only.
+# first, across every directory. That store-wide, cwd-free scope IS the
+# command: `clikae resume` reaches BACKWARD to a session wherever it lives,
+# unlike the home board's Continue list (this directory's recent sessions).
+#
+# 🔴 THE ENGINE LIST IS NOT WRITTEN DOWN HERE. It used to be three hand-typed
+# globs, and its own comment said "a new resumable engine's glob goes here
+# only" — which is exactly what did not happen: grok landed with
+# adapter_resume_args, adapter_recent_sids and adapter_find_session all
+# implemented, appeared on the home board, and was invisible to `clikae
+# resume` (its picker, its prefix completion and `clikae clean`'s scan) for
+# as long as those globs were a list someone had to remember to extend.
+#
+# So the enumeration goes through the ADAPTERS, under the same capability gate
+# the board's own Continue list uses (_home_recent_rows: load cleanly, then
+# declare the hooks) — an engine that can be listed here is one that can hand
+# over its transcripts and be resumed, and it qualifies by construction rather
+# than by being remembered. adapter_all_transcripts is the store-wide
+# enumerator (no cwd filter, no limit); adapter_recent_sids is deliberately
+# NOT used here — it is the $PWD-scoped one.
+#
+# Tanks come from tanks_for_engine, not a `*/` glob, for the reason #61 gives
+# in home.sh: a stray non-tank directory holding something transcript-shaped is
+# not a session store, and nothing else in clikae would call it a tank.
 _resume_all_sessions() {
-  sessions_by_mtime \
-    "$CLIKAE_HOME"/profiles/claude/*/projects/*/*.jsonl \
-    "$CLIKAE_HOME"/profiles/codex/*/sessions/*/*/*/rollout-*.jsonl \
-    "$CLIKAE_HOME"/profiles/antigravity/*/antigravity-cli/brain/*/.system_generated/logs/transcript.jsonl
+  # --resumable: keep only what a person could actually reopen, by asking the
+  # owning adapter (adapter_transcript_is_resumable). It is applied HERE, in
+  # the per-engine loop, because this is the one place each adapter is already
+  # loaded — a filter bolted onto the sorted output would have to re-load an
+  # adapter per row, and the rows interleave engines.
+  #
+  # 🔴 The DEFAULT is everything, and `clikae clean` keeps it that way. What
+  # the flag hides is claude's `agent-*.jsonl` subagent transcripts: noise in
+  # a list of conversations, but pure disk to a disk tool, and telling clean
+  # they do not exist would quietly make the largest files on a working store
+  # unreclaimable. Finding a session by id is not gated on it either (see
+  # _resume_locate).
+  local _ras_only_resumable=0
+  [ "${1:-}" = "--resumable" ] && _ras_only_resumable=1
+  local name tank tdir f
+  local -a _ras_files=()
+  while IFS= read -r name; do
+    [ -n "$name" ] || continue
+    # The gate runs in a subshell because load_adapter exit()s on a broken
+    # adapter; only the parent load below (of an adapter already proven to
+    # source cleanly) is safe to do in this shell. Same order as home.sh's.
+    ( load_adapter "$name" >/dev/null 2>&1 \
+        && declare -F adapter_resume_args     >/dev/null 2>&1 \
+        && declare -F adapter_all_transcripts >/dev/null 2>&1 ) || continue
+    load_adapter "$name" >/dev/null 2>&1
+    while IFS= read -r tank; do
+      [ -n "$tank" ] || continue
+      tdir="$(profile_dir "$name" "$tank")"
+      while IFS= read -r f; do
+        [ -n "$f" ] || continue
+        if [ "$_ras_only_resumable" -eq 1 ] \
+           && declare -F adapter_transcript_is_resumable >/dev/null 2>&1; then
+          adapter_transcript_is_resumable "$f" || continue
+        fi
+        _ras_files+=("$f")
+      done <<FILES
+$(adapter_all_transcripts "${tdir%/}" 2>/dev/null || true)
+FILES
+    done <<TANKS
+$(tanks_for_engine "$name")
+TANKS
+  done <<EOF
+$(list_adapters)
+EOF
+  # `stat` with no operands reads stdin on some platforms and errors on others;
+  # either way an empty store must print nothing, not hang.
+  [ "${#_ras_files[@]}" -gt 0 ] || return 0
+  sessions_by_mtime "${_ras_files[@]}"
 }
 
 # _resume_engines -> the engines whose adapter can resume by id AND look a session
@@ -108,6 +198,59 @@ _resume_engines() {
   done <<EOF
 $(list_adapters)
 EOF
+}
+
+# _resume_prefix_candidates <prefix> -> "sid\tengine\ttank" for every DISTINCT
+# session id that starts with <prefix>, newest first. Nothing when <prefix> is
+# empty or matches none.
+#
+# WHY A PREFIX RESOLVES AT ALL (#77). The tmux status line's whole left segment
+# is the command that brings you back here — `clikae resume a52bdc12` — and it
+# is eight characters because a 36-character UUID would own the row. That is
+# only honest if `resume` really accepts those eight characters, so this is the
+# other half of that feature, not a convenience bolted on beside it.
+#
+# 🔴 DISTINCT ids, not matching FILES. A relay copies one session into a second
+# tank (see _resume_locate's header), so the same id legitimately exists twice
+# on disk. Counting files would call that ambiguous and refuse a prefix that
+# names exactly one conversation — which is what the operator asked for. The
+# per-tank choice among copies is _resume_locate's job and it already makes it
+# (newest wins).
+#
+# One enumerator: _resume_all_sessions, the same scan the picker and
+# `clikae clean` use. Ids come from _resume_session_fields, the same decoder —
+# so a prefix works for every engine the picker can show, by construction,
+# including codex's dash-suffixed rollout names.
+_resume_prefix_candidates() {
+  local prefix="$1" mt f seen="" prefix_l
+  [ -n "$prefix" ] || return 0
+  # P3-5 (2026-09-14 round-1 fix review): session ids are always lowercase
+  # hex/UUID, so an uppercase-typed prefix (the status row itself only ever
+  # prints lowercase, but a human copying an id from somewhere else — a UUID
+  # generator, an editor's find/replace — will not always match case) used to
+  # match nothing and read as "no such session" instead of resolving. One
+  # fork (`tr`), once per `clikae resume` invocation — this is not the 5-
+  # second tmux hot path burn_status.sh/dry_store.sh are, so the usual
+  # fork-free discipline does not apply here.
+  prefix_l="$(printf '%s' "$prefix" | tr '[:upper:]' '[:lower:]')"
+  while read -r mt f; do
+    [ -n "$f" ] || continue
+    : "$mt"
+    _resume_session_fields "$f"
+    [ -n "$_rs_sid" ] || continue
+    case "$_rs_sid" in "$prefix_l"*) ;; *) continue ;; esac
+    # bash 3.2 has no associative arrays; a delimited string is the seen-set,
+    # and it is built without a single fork (this loop runs once per transcript
+    # on the machine). The `|` delimiters are load-bearing: without them `abc`
+    # would suppress `abcd`. `|` cannot occur in an id — every engine's decoder
+    # yields a UUID or a hex run.
+    case "$seen" in *"|$_rs_sid|"*) continue ;; esac
+    seen="$seen|$_rs_sid|"
+    printf '%s\t%s\t%s\n' "$_rs_sid" "$_rs_engine" "$_rs_tank"
+  done <<EOF
+$(_resume_all_sessions --resumable)
+EOF
+  return 0
 }
 
 # _resume_locate <sid> -> "engine\ttank\tdir\tpath" for every tank holding <sid>.
@@ -131,11 +274,65 @@ EOF
   done <<EOF
 $(_resume_engines)
 EOF
+  # 🔴 A MISS IS NOT A FAILURE. Without this, the function's status is the last
+  # thing its body ran — the per-tank subshell, whose own last command is
+  # `[ -n "$p" ] && printf …`, i.e. 1 on the common "this tank does not have
+  # it" case. `matches="$(_resume_locate "$sid")"` then inherits that 1 under
+  # `set -e` and the whole command dies with NO output at all: not the "No
+  # session '<id>' in any tank" line, not the prefix retry, nothing.
+  # It only bites when the LAST resume-capable engine is one you have a tank
+  # for — alphabetically that is grok — which is why it lay here unseen: a
+  # store with a grok tank could not be told "no such session", and a grok
+  # session could not be resumed BY PREFIX, because the retry is downstream of
+  # this return.
+  return 0
 }
 
 # _resume_exec <engine> <tank> <dir> <sid> [-- passthru...] — cd into the session's
 # recorded directory, then exec the engine's resume under <dir>'s config. Replaces
 # the process (never returns on success).
+# _resume_live_holder <engine> <tank> <transcript> -> the name of a live session
+# that may already be holding this conversation, or nothing.
+#
+# 🔴 WHY THIS CANNOT JUST ASK. A session started as `clikae claude x` carries no
+# conversation identity anywhere clikae can see: the pane runs plain `claude`,
+# and which conversation it is living in is Claude Code's own state. Measured on
+# the maintainer's own live session — the engine's argv is just `claude`, with no
+# --resume and no sid. So the question "is this conversation already open?" has
+# no direct answer, and anything claiming one would be guessing.
+#
+# What IS observable: only the engine writes the transcript. So a file modified
+# AFTER a live session on that tank started is a file something in that session
+# has been writing. Not proof — the same tank could have had two sessions — but
+# it is evidence, and it is asymmetric in the safe direction:
+#
+#   modified since the session began  -> probably open there, say so
+#   not modified                      -> unknown; stay quiet (today's behaviour)
+#
+# A fixed "modified in the last N seconds" window was the first idea and is
+# worse: a conversation whose agent is nine minutes into a test run has not
+# written for nine minutes and is extremely alive.
+_resume_live_holder() {
+  local engine="$1" tank="$2" file="$3" name created et
+  [ -n "$file" ] && [ -f "$file" ] || return 1
+  declare -F live_session_names >/dev/null 2>&1 || return 1
+  local mtime; mtime="$(file_mtime "$file")"
+  [ -n "$mtime" ] || return 1
+  while IFS="$(printf '\t')" read -r name created _; do
+    [ -n "$name" ] || continue
+    et="$(live_split "$name" 2>/dev/null)" || continue
+    [ "${et%%$(printf '\t')*}" = "$engine" ] || continue
+    [ "${et##*$(printf '\t')}" = "$tank" ] || continue
+    case "$created" in ''|*[!0-9]*) continue ;; esac
+    [ "$mtime" -gt "$created" ] || continue
+    printf '%s\n' "$name"
+    return 0
+  done <<EOF
+$(live_session_names 2>/dev/null)
+EOF
+  return 1
+}
+
 _resume_exec() {
   local engine="$1" tank="$2" dir="$3" sid="$4"; shift 4
   local -a passthru=()
@@ -147,6 +344,35 @@ _resume_exec() {
   local cwd="" found
   found="$(adapter_find_session "$dir" "$sid" 2>/dev/null || true)"
   [ -n "$found" ] && cwd="$(adapter_session_cwd "$found" 2>/dev/null || true)"
+
+  # 🔴 TWO ENGINES ON ONE TRANSCRIPT is what this is for. Resuming keys the tmux
+  # session on `--resume <sid>`, so a conversation you are ALREADY sitting in —
+  # under a session started plainly, which carries no sid in its name — is not
+  # recognised, and this opens a second engine writing the same file.
+  #
+  # The check is evidence, not proof (see _resume_live_holder), so it asks rather
+  # than refuses. And it only asks when there is a terminal to ask: `confirm`
+  # reads stdin, and a failed read returns 1, which would make resume silently do
+  # nothing in a script or a pipe — a worse outcome than the thing being guarded.
+  local _holder
+  if _holder="$(_resume_live_holder "$engine" "$tank" "$found" 2>/dev/null)"; then
+    log_warn "This conversation has been written to since '$_holder' started — it is probably open there."
+    log_dim  "  Attach to that screen instead:  clikae $tank"
+    log_dim  "  Resuming starts a SECOND engine on the same transcript."
+    # 🔴 The repo's own `confirm`, not a second reader written here. A first
+    # attempt read /dev/tty directly with a drain in front of it, to keep the
+    # Enter that chose a picker row from answering this — and it HUNG on the
+    # drain, printing the warning and then nothing at all. A prompt nobody can
+    # answer is worse than the duplicate engine it exists to prevent.
+    #
+    # The terminal is handed back before this is reached (the picker's `stty
+    # -echo` is undone at its call site), so a human can see what they type.
+    if [ -t 0 ]; then
+      confirm "Resume anyway?" || { log_dim "Left it alone."; return 0; }
+    else
+      log_dim "  (no terminal to ask — resuming anyway)"
+    fi
+  fi
   if [ -n "$cwd" ] && [ -d "$cwd" ]; then
     cd "$cwd" || log_warn "Couldn't cd to $cwd — resuming from $PWD instead."
   elif [ -n "$cwd" ]; then
@@ -163,12 +389,47 @@ _resume_exec() {
 $(adapter_resume_args "$sid")
 EOF
 
-  log_ok "Resuming $engine/$tank · session ${sid%%-*}…"
+  log_done "Resuming $engine/$tank · session ${sid%%-*}…"
   [ -n "$cwd" ] && log_dim "in $cwd"
   history_log "resume: $engine/$tank ${sid%%-*}"
-  soul_prelaunch "$engine" "$tank" "$dir"   # member tank → fan this dir into its Soul
-  fleet_mcp_prelaunch "$engine" "$tank" "$dir"   # non-solo tank → fan in the shared MCP list
-  adapter_run "$dir" "${rargs[@]}" "${passthru[@]}"
+
+  # Hand off to the switch path rather than running the engine here.
+  #
+  # WHY: this function called adapter_run directly, so `clikae resume` was the
+  # one user-facing entry point that started an engine with no tmux — no wake
+  # watcher, no scrollback capture, no roaming. The board's own resume has
+  # always done it this way (home.sh: `exec "$CLIKAE_BIN" "$cli" "$profile" --
+  # <resume-args>`), so the SAME intention got two different sessions depending
+  # on whether you picked from the board or typed `clikae resume`.
+  #
+  # Not a design decision — drift. `_resume_exec` was written 2026-06-26; the
+  # tmux layer arrived 2026-08-11 in 62b33a2, whose file list is switch.sh and
+  # burn.sh. resume.sh was simply missed, and stayed missed because the audit
+  # that followed enumerated "who calls tmux" — a list this file could never
+  # appear on. The question that finds it is "who launches an engine".
+  #
+  # The three remaining adapter_run sites are deliberate primitives: run.sh and
+  # relay.sh are what switch itself falls back to when tmux is unusable, and
+  # switch.sh's own is the --ephemeral path.
+  #
+  # Prelaunch is deliberately NOT done here: cmd_switch runs soul_prelaunch and
+  # fleet_mcp_prelaunch itself, and the board path leaves them to it for the
+  # same reason. The `cd` above survives the exec, and switch's argv digest
+  # keys the tmux session on `--resume <sid>`, so resuming a different session
+  # opens its own screen instead of attaching to the tank's (the 2026-08-13
+  # regression) — inherited for free by going through it.
+  # No environment variable carries $sid across this exec: "${rargs[@]}" IS
+  # `--resume <sid>` (or the engine's equivalent), and switch.sh's
+  # adapter_sid_from_args reads it straight back out of that argv before
+  # spawning, then stamps the new tmux session with it — so the board can show
+  # this row's REAL title instead of guessing at "the tank's newest
+  # transcript" (2026-09 report: a bare session and a resumed one on the same
+  # tank showed the same title, because both fell back to that same guess). An
+  # earlier version threaded this through an exported CLIKAE_LAUNCH_SID
+  # instead, which — never unset — leaked into every session a tmux SERVER
+  # born under it later spawned, stamping unrelated bare launches with a
+  # foreign sid (R1-P1-2).
+  exec "$CLIKAE_BIN" "$engine" "$tank" -- "${rargs[@]}" "${passthru[@]}"
 }
 
 # Draw the resume menu with row index $1 highlighted, from the inherited
@@ -219,7 +480,7 @@ _resume_pick_draw_body() {
   # localized key labels are correct and de/es/fr legitimately need the room
   # (de-DE measured 81 cols at 80). Hangs under the "clikae resume" wordmark.
   _home_wrap_prefixed \
-    "· ↑↓/Tab $T_K_MOVE · ⏎ $T_RESUME · / $T_K_FILTER · c $T_K_CLEANUP · q $T_K_QUIT" \
+    "· ↑↓/Tab $T_K_MOVE · ⏎ $T_RESUME · / $T_K_FILTER · a $T_K_TOGGLE_ALL · c $T_K_CLEANUP · ? $T_K_HELP · q $T_K_QUIT" \
     "$(printf '  %b%s%b  ' "$__C_BOLD" "clikae resume" "$__C_RESET")" 17 "$__C_DIM" "$__C_RESET"
   printf '\n'
 
@@ -233,6 +494,7 @@ _resume_pick_draw_body() {
     _resume_split "${sessions[s_idx]}"
     engine="$_rs_engine"; tank="$_rs_tank"; sid="$_rs_sid"
     label="${cached_title[s_idx]}"
+    [ "$_rs_is_burn" = "1" ] && label="[burn] $label"
     rage="${cached_age[s_idx]}"
 
     if [ "$idx" -eq "$sel" ]; then mark="${__C_GREEN}❯${__C_RESET}"; else mark=" "; fi
@@ -324,21 +586,20 @@ _lazy_parse_cwd() {
   [ -n "${cached_cwd[idx]}" ] && return 0
 
   _resume_split "${sessions[idx]}"
-  local engine="$_rs_engine" sid="$_rs_sid" f="$_rs_f"
+  local engine="$_rs_engine" f="$_rs_f"
 
   load_adapter "$engine" >/dev/null 2>&1 || true
 
+  # ONE extractor per engine, owned by the adapter — every engine's
+  # adapter_session_cwd takes a transcript PATH and every one of them is
+  # defined, so there is nothing for an engine list here to be right about.
+  # This used to name claude/codex/antigravity by hand and re-implement two of
+  # them inline (codex's meta field, antigravity's history.jsonl grep,
+  # $HOME fallback and all), so grok — which has had adapter_session_cwd since
+  # it landed — showed "?" for a directory the adapter could state exactly.
   local scwd=""
-  if [ "$engine" = "claude" ]; then
+  if declare -F adapter_session_cwd >/dev/null 2>&1; then
     scwd="$(adapter_session_cwd "$f" 2>/dev/null || true)"
-  elif [ "$engine" = "codex" ]; then
-    scwd="$(_codex_meta_field "$f" cwd)"
-  elif [ "$engine" = "antigravity" ]; then
-    local bdir; bdir="$(dirname "$(dirname "$(dirname "$(dirname "$f")")")")"
-    scwd="$(grep -F "$sid" "$bdir/history.jsonl" 2>/dev/null \
-      | grep -oE '"workspace"[[:space:]]*:[[:space:]]*"[^"]*"' | head -n 1 \
-      | sed -E 's/^"workspace"[[:space:]]*:[[:space:]]*"//; s/"$//' || true)"
-    [ -n "$scwd" ] || scwd="$HOME"
   fi
   [ -n "$scwd" ] || scwd="?"
   cached_cwd[idx]="$scwd"
@@ -351,13 +612,13 @@ _resume_pick() {
   trap '_home_tty_leave' EXIT
   trap '_home_tty_leave; exit 130' INT TERM
   stty -echo 2>/dev/null || true # Permanent no-echo for TUI
-  printf '\033[?1049h\033[?25l'
+  tui_screen_enter
   # Read keys from a DEDICATED /dev/tty fd (like _home_pick/_home_choose), never
   # bare stdin. The board draws escape sequences to stdout; on stdin those can come
   # back as stray bytes that a bare read would treat as keystrokes (the old `-t 0`
   # drain did exactly this — it silently swallowed a digit/letter that reset `sel`,
   # so paging "didn't work"). fd 3 isolates input from that feedback.
-  exec 3</dev/tty 2>/dev/null || exec 3<&0
+  { exec 3</dev/tty; } 2>/dev/null || exec 3<&0
 
   # Query terminal size ONCE at startup to avoid TTY driver ioctl overhead during scrolling
   local lsz lines max_visible=15
@@ -368,7 +629,7 @@ _resume_pick() {
     [ "$max_visible" -lt 5 ] && max_visible=5
   fi
 
-  local exit_loop=0 trigger_filter=0 trigger_select=0 trigger_clean=0
+  local exit_loop=0 trigger_filter=0 trigger_select=0 trigger_clean=0 trigger_help=0 trigger_all=0
 
   # Keys arrive pre-decoded by tui_read_key (lib/core/tui.sh) as symbolic names
   # — the byte-level ESC state machine that used to live here (and regressed
@@ -385,6 +646,12 @@ _resume_pick() {
       q|esc)            exit_loop=1 ;;
       /)                trigger_filter=1 ;;
       c)                trigger_clean=1 ;;
+      a)                trigger_all=1 ;;
+      # `?` opens help on the board, so a user arrives here having just been
+      # taught it — and it was dead: not bound, no feedback, byte-identical to an
+      # unbound key. This picker also implements g/G, 1-9 and PgUp/PgDn without
+      # advertising any of them, so the overlay is where they finally get said.
+      '?')              trigger_help=1 ;;
       enter)            trigger_select=1 ;;
     esac
     # MUST end with success: a branch whose last command is `[ cond ] && assign`
@@ -424,7 +691,7 @@ _resume_pick() {
         /) _home_tty_leave; printf '%b%s%b' "$__C_BOLD" "$T_FILTER_PROMPT" "$__C_RESET"
            IFS= read -r filter <&3 || filter=""
            stty -echo 2>/dev/null || true
-           printf '\033[?1049h\033[?25l'; sel=0; continue ;;
+           tui_screen_enter; sel=0; continue ;;
         *) [ -n "$filter" ] && { filter=""; sel=0; continue; }; break ;;
       esac
     fi
@@ -443,6 +710,8 @@ _resume_pick() {
     trigger_filter=0
     trigger_select=0
     trigger_clean=0
+    trigger_help=0
+    trigger_all=0
 
     _handle_key "$TUI_KEY"
     [ -n "${CLIKAE_RESUME_DEBUG:-}" ] && \
@@ -452,6 +721,29 @@ _resume_pick() {
       break
     fi
 
+    if [ "$trigger_all" -eq 1 ]; then
+      if [ "${CLIKAE_RESUME_ALL:-0}" -eq 1 ]; then
+        CLIKAE_RESUME_ALL=0
+      else
+        CLIKAE_RESUME_ALL=1
+      fi
+      # #74 round-1 P2-4: `a` used to skip the terminal-leaving cleanup `c`
+      # (right below) always does, going straight back to _resume_picker's
+      # rescan while still in the alt screen with `stty -echo` in effect. Not
+      # theoretical: toggling --all OFF on a store that is now all-burn makes
+      # `sessions` empty, which takes the "No sessions to resume yet" +
+      # `exit 0` path a few dozen lines down — those lines got printed INSIDE
+      # the alt screen, then the EXIT trap's `_home_tty_leave` wiped the whole
+      # screen on the way out, and the user saw nothing happen at all. Leave
+      # the alt screen the same way `c` does BEFORE rescanning, so anything
+      # the rescan prints (that message included) lands on the real screen.
+      { exec 3>&-; } 2>/dev/null || true
+      _home_tty_leave; trap - EXIT INT TERM
+      unset -f _handle_key
+      _RESUME_PICK_AGAIN=1
+      return 0
+    fi
+
     if [ "$trigger_clean" -eq 1 ]; then
       # `c` opens the clean screen and comes BACK here (screens cross-link and
       # return where you came from — grammar §8.1). It runs as a child process:
@@ -459,7 +751,7 @@ _resume_pick() {
       # Clean deletes session files this picker has already cached, so instead
       # of redrawing a stale list we signal _resume_picker to rescan the store
       # and re-enter the picker fresh.
-      exec 3>&- 2>/dev/null || true
+      { exec 3>&-; } 2>/dev/null || true
       _home_tty_leave; trap - EXIT INT TERM
       "$CLIKAE_BIN" clean || true
       unset -f _handle_key
@@ -467,12 +759,36 @@ _resume_pick() {
       return 0
     fi
 
+    if [ "$trigger_help" -eq 1 ]; then
+      # Every key this picker actually implements, including the four it has
+      # never advertised (g/G, 1-9, PgUp/PgDn). Drawn with the board's own
+      # _home_help_row so the two overlays line up identically, and dismissed
+      # through the shared decoder on fd 3 — a bare one-byte read here would
+      # leak an arrow key's tail back into the picker as real keystrokes, which
+      # is the defect just fixed on the board.
+      printf '\033[H\033[2J'
+      printf '  %b%s%b\n\n' "$__C_BOLD" "$T_HELP_TITLE" "$__C_RESET"
+      _home_help_row "↑ ↓  j k  Tab" "$T_K_MOVE"
+      _home_help_row "PgUp PgDn"     "$T_K_MOVE"
+      _home_help_row "g / G"         "$T_K_TOPBOTTOM"
+      _home_help_row "1-9"           "$T_K_JUMP"
+      _home_help_row "⏎ Enter"       "$T_RESUME"
+      _home_help_row "/"             "$T_K_FILTER"
+      _home_help_row "a"             "$T_K_TOGGLE_BURN"
+      _home_help_row "c"             "$T_K_CLEAN"
+      _home_help_row "q / Esc"       "$T_K_QUIT"
+      printf '\n  %b%s%b' "$__C_DIM" "$T_HELP_DISMISS" "$__C_RESET"
+      tui_read_key 3 || true
+      last_filter="--initial--"   # force a redraw of the list
+      continue
+    fi
+
     if [ "$trigger_filter" -eq 1 ]; then
       _home_tty_leave
       printf '%b%s%b' "$__C_BOLD" "$T_FILTER_PROMPT" "$__C_RESET"
       IFS= read -r filter <&3 || filter=""
       stty -echo 2>/dev/null || true
-      printf '\033[?1049h\033[?25l'; sel=0
+      tui_screen_enter; sel=0
       # Reset filter cache to re-trigger scan
       last_filter="--initial--"
       continue
@@ -494,7 +810,7 @@ _resume_pick() {
         target_tank="$(_home_choose "$T_RESUME_WHICH_TANK" "$cands" "$sel_tank")" || {
           trap '_home_tty_leave' EXIT; trap '_home_tty_leave; exit 130' INT TERM
           stty -echo 2>/dev/null || true
-          printf '\033[?1049h\033[?25l'; continue
+          tui_screen_enter; continue
         }
       else
         target_tank="$sel_tank"
@@ -505,7 +821,15 @@ _resume_pick() {
         _resume_carry_session "$sel_engine" "$sel_tank" "$target_tank" "$sel_sid"
       fi
 
-      exec 3>&- 2>/dev/null || true   # don't leak the tty fd into the resumed engine
+      { exec 3>&-; } 2>/dev/null || true   # don't leak the tty fd into the resumed engine
+      # 🔴 GIVE THE TERMINAL BACK BEFORE ANYTHING CAN ASK A QUESTION. The picker
+      # set `stty -echo` on the way in ("permanent no-echo for TUI") and nothing
+      # put it back, so a prompt after this point is answered blind: the human
+      # types and sees nothing. Worse, the Enter that CHOSE this row is still in
+      # the buffer, so a `read` here consumes it as an empty answer and takes the
+      # default — which is how the live-conversation guard below could warn and
+      # then decline on the user's behalf, and look like "resume did nothing".
+      stty echo 2>/dev/null || true
       if [ "${#passthru[@]}" -gt 0 ]; then
         _resume_exec "$sel_engine" "$target_tank" "$d" "$sel_sid" -- "${passthru[@]}"
       else
@@ -515,7 +839,7 @@ _resume_pick() {
       return 0
     fi
   done
-  exec 3>&- 2>/dev/null || true
+  { exec 3>&-; } 2>/dev/null || true
   unset -f _handle_key
 }
 
@@ -553,32 +877,81 @@ _resume_picker() {
     # 1. Scan + sort ALL tanks' sessions by recency in ~2 processes (sessions_by_mtime,
     #    the shared kernel; ~30ms for 500+ files). all-dirs scope = bare project globs.
     local files
-    files="$(_resume_all_sessions)"
+    files="$(_resume_all_sessions --resumable)"
 
     if [ -z "$files" ]; then
-      log_err "No resumable sessions found in any tank."
-      log_dim "Resume-capable engines: $(_resume_engines | paste -sd , - | sed 's/,/, /g')"
-      exit 1
+      # Having no sessions yet is a STATE, not a failure — it is where every new
+      # user starts. `[ FAIL ]` told them clikae had broken, and gave no next
+      # step. The exit code splits by audience, which is the honest reading of
+      # both: to a human at a terminal the command succeeded and reported, so 0;
+      # to a script (no tty) "found nothing" is still worth a non-zero so
+      # `clikae resume || fallback` keeps working. Nobody's shell script is
+      # driving an interactive full-screen picker.
+      log_info "No sessions to resume yet — nothing has run in a tank on this machine."
+      log_dim  "Start one:  clikae <engine> <tank>      (then this list fills itself)"
+      log_dim  "Resume-capable engines: $(_resume_engines | paste -sd , - | sed 's/,/, /g')"
+      if [ -t 1 ]; then exit 0; else exit 1; fi
     fi
 
-    # 2. Build indexed array in Bash (zero process spawn)
-    local -a sessions=()
-    local -a cached_title=()
-    local -a cached_age=()
-    local -a cached_cwd=()
-
+    # 2. Build indexed array in Bash (zero process spawn), then classify every
+    # candidate against the sidecar in ONE PASS (#74 round-1 P2-2): the old
+    # shape did a `case` substring compare against the WHOLE accumulated
+    # sidecar blob PER SESSION — O(sessions × sidecar lines), 8170ms measured
+    # at 20,000 sidecar lines (the sidecar had no GC at all before this
+    # round; `clikae clean` now prunes it — see clean.sh). _burn_sids_file
+    # (home.sh) is the one store read; grep -n -F -x -f is the one process
+    # that answers "which of these candidate lines is a member" for every
+    # candidate at once, instead of a bash loop re-scanning the member set
+    # per candidate.
+    local -a _rf_engine=() _rf_tank=() _rf_sid=() _rf_f=() _rf_mt=()
     local mt f
     while read -r mt f; do
       [ -n "$f" ] || continue
       _resume_session_fields "$f"
-      sessions+=("$_rs_engine"$'\x1f'"$_rs_tank"$'\x1f'"$_rs_sid"$'\x1f'"$f"$'\x1f'"$mt")
+      _rf_engine+=("$_rs_engine"); _rf_tank+=("$_rs_tank"); _rf_sid+=("$_rs_sid")
+      _rf_f+=("$f"); _rf_mt+=("$mt")
     done <<EOF
 $files
 EOF
 
+    local -a _is_burn=()
+    local idx
+    for ((idx = 0; idx < ${#_rf_sid[@]}; idx++)); do _is_burn[idx]=0; done
+    local burn_sids_file; burn_sids_file="$(_burn_sids_file 2>/dev/null || true)"
+    if [ -n "$burn_sids_file" ]; then
+      if [ "${#_rf_sid[@]}" -gt 0 ]; then
+        local _ln _rest
+        while IFS=: read -r _ln _rest; do
+          [ -n "$_ln" ] || continue
+          _is_burn[$((_ln - 1))]=1
+        done < <(printf '%s\n' "${_rf_sid[@]}" | grep -n -F -x -f "$burn_sids_file" 2>/dev/null || true)
+      fi
+      # #74 round-2 P3-5: this used to sit inside the ${#_rf_sid[@]} -gt 0
+      # branch — on the zero-candidate path (unreachable today: `files` empty
+      # exits earlier, at :743) _burn_sids_file's temp file would never be
+      # removed. Its own lifetime (created above) doesn't depend on there
+      # being any candidates to match it against.
+      rm -f "$burn_sids_file"
+    fi
+
+    local -a sessions=()
+    local -a cached_title=()
+    local -a cached_age=()
+    local -a cached_cwd=()
+    for ((idx = 0; idx < ${#_rf_sid[@]}; idx++)); do
+      local is_b="${_is_burn[idx]}"
+      if [ "$is_b" -eq 1 ] && [ "${CLIKAE_RESUME_ALL:-0}" -eq 0 ]; then
+        continue
+      fi
+      sessions+=("${_rf_engine[idx]}"$'\x1f'"${_rf_tank[idx]}"$'\x1f'"${_rf_sid[idx]}"$'\x1f'"${_rf_f[idx]}"$'\x1f'"${_rf_mt[idx]}"$'\x1f'"$is_b")
+    done
+
     if [ "${#sessions[@]}" -eq 0 ]; then
-      log_err "No resumable sessions found in any tank."
-      exit 1
+      # Same state, reached when every candidate file failed to decode. Same
+      # split: a human gets an answer and a next step, a script gets non-zero.
+      log_info "No sessions to resume yet — nothing has run in a tank on this machine."
+      log_dim  "Start one:  clikae <engine> <tank>      (then this list fills itself)"
+      if [ -t 1 ]; then exit 0; else exit 1; fi
     fi
 
     if [ ! -t 0 ] || [ ! -t 1 ] || [ -n "${CLIKAE_NO_INTERACTIVE:-}" ]; then
@@ -590,6 +963,7 @@ EOF
         _resume_split "${sessions[idx]}"
         engine_t="$_rs_engine"; tank_t="$_rs_tank"; sid_t="$_rs_sid"
         label_t="${cached_title[idx]}"
+        [ "$_rs_is_burn" = "1" ] && label_t="[burn] $label_t"
         rage_t="${cached_age[idx]}"
         _lazy_parse_cwd "$idx"
         cwd_t="${cached_cwd[idx]}"
@@ -626,7 +1000,7 @@ cmd_resume() {
       return 0
     fi
     if resume_ask_tank_set "$1"; then
-      log_ok "Resume ask-tank: $1 — $(resume_ask_tank_label "$1")"
+      log_done "Resume ask-tank: $1 — $(resume_ask_tank_label "$1")"
     else
       log_fail "Unknown choice: $1  (use: always | dry-only)"
     fi
@@ -638,6 +1012,7 @@ cmd_resume() {
   while [ $# -gt 0 ]; do
     case "$1" in
       -h|--help) _resume_help; return 0 ;;
+      --all)     CLIKAE_RESUME_ALL=1; shift ;;
       --)        shift; passthru=("$@"); break ;;
       -*)        log_fail "Unknown flag: $1  (clikae resume [session-id] [-- args])" ;;
       *)         [ -z "$sid" ] || log_fail "Too many arguments. Usage: clikae resume [session-id]"
@@ -656,6 +1031,51 @@ cmd_resume() {
   matches="$(_resume_locate "$sid")"
   local n
   n="$(printf '%s\n' "$matches" | grep -c . || true)"
+
+  # Nothing under that exact id — so read it as a PREFIX (#77). Exact first,
+  # always: a full id can never be made ambiguous by a longer one that happens
+  # to start with it, and the common case pays no extra scan.
+  if [ "$n" -eq 0 ]; then
+    local cands cn
+    cands="$(_resume_prefix_candidates "$sid")"
+    cn="$(printf '%s\n' "$cands" | grep -c . || true)"
+    if [ "$cn" -eq 1 ]; then
+      sid="${cands%%$'\t'*}"
+      matches="$(_resume_locate "$sid")"
+      n="$(printf '%s\n' "$matches" | grep -c . || true)"
+    elif [ "$cn" -gt 1 ]; then
+      # REFUSE, and say what the choices are. Picking the newest here would be
+      # the same shape as resuming a conversation the operator did not name:
+      # an id is how you say WHICH one, and a prefix that names two has not
+      # said it yet. Every candidate is printed in full so one of them can be
+      # copied straight back onto the command line.
+      log_err "'$sid' matches $cn sessions — say which:"
+      # P3-4 (2026-09-14 round-1 fix review): an uncapped list scrolls the
+      # "matches N sessions" header itself off screen on a real session store
+      # (12 candidates already did it) — the one line that says what the
+      # operator needs to do next is the first thing lost. Ten is enough to
+      # scan on an 80-column terminal without the header scrolling away, and
+      # the remainder is a count, not silence.
+      local c_sid c_engine c_tank shown=0
+      while IFS=$'\t' read -r c_sid c_engine c_tank; do
+        [ -n "$c_sid" ] || continue
+        if [ "$shown" -ge 10 ]; then
+          # P3-7 (2026-09-14 round-2 review): the list is newest first, so
+          # the cut hides the OLDEST — and there is no flag that prints them.
+          # Say which ones are missing and the two ways to reach one. `--all`
+          # (#74), not the bare picker: candidates here include burn-started
+          # sessions, which the bare picker hides.
+          log_dim "  … and $((cn - shown)) more, older — type more of the id to narrow it, or browse them all with \`clikae resume --all\`"
+          break
+        fi
+        log_dim "  clikae resume $c_sid    ($c_engine/$c_tank)"
+        shown=$((shown + 1))
+      done <<EOF
+$cands
+EOF
+      exit 1
+    fi
+  fi
 
   if [ "$n" -eq 0 ]; then
     log_err "No session '$sid' in any tank."

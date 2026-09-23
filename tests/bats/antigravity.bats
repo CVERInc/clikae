@@ -117,12 +117,33 @@ _stub_agy() {
   [[ "$output" == *"active agy tank"* ]] || false
 }
 
+@test "rename/remove agy carry and drop the burn sidecar under the engine-id key, 'antigravity' (#113)" {
+  # `clikae rename agy …` / `clikae remove agy …` reach rename_tank_state and
+  # remove_tank_burn_sidecar through antigravity.sh, which names the engine
+  # "antigravity" — the one sidecar key since #113. Pinned end to end so a
+  # future caller passing "agy" shows up here instead of silently orphaning a
+  # sidecar.
+  mkdir -p "$HOME/.gemini"
+  printf 'y\n' | "$CLIKAE_BIN" init agy work >/dev/null 2>&1          # default active, work exists
+  local sc="$CLIKAE_HOME/state/burn-sessions/antigravity"
+  mkdir -p "$sc"
+  printf 'aaaaaaaa-1111-4111-8111-111111111111\trun\t1700000000\n' > "$sc/work"
+  run clikae rename agy work laptop
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  [ ! -e "$sc/work" ]
+  grep -qF 'aaaaaaaa-1111-4111-8111-111111111111' "$sc/laptop"
+  [ ! -e "$CLIKAE_HOME/state/burn-sessions/agy" ]
+  run clikae remove agy laptop -f
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  [ ! -e "$sc/laptop" ]
+}
+
 @test "clikae tanks lists agy tanks without crashing (no adapter regression)" {
   mkdir -p "$HOME/.gemini"
   printf 'y\n' | "$CLIKAE_BIN" init agy work >/dev/null 2>&1
   run clikae tanks
   [ "$status" -eq 0 ]
-  [[ "$output" == *"agy"* ]]          # canonical engine name, not 'antigravity'
+  [[ "$output" == *"agy"* ]] || false   # canonical engine name, not 'antigravity'
   [[ "$output" == *"work"* ]] || false
 }
 
@@ -238,4 +259,48 @@ EOF
   [ "$status" -eq 0 ]
   [ "$(cat "$CLIKAE_TEST_KEYCHAIN/clikae-agy-laptop")" = "token-work" ]  # carried to the new slot name
   [ ! -f "$CLIKAE_TEST_KEYCHAIN/clikae-agy-work" ]                       # old slot name gone
+}
+
+# --- Live board preview (2026-09-06 report): the board's Live row for an agy
+# tank showed a bare `""` — no title, no "(no preview)", nothing — because
+# antigravity.sh had no adapter_recent_sids at all: _home_live_rows' own
+# `declare -F adapter_recent_sids` gate failed silently, so it never even
+# called adapter_session_title for agy. -----------------------------------
+@test "live: an agy tank's preview shows its opening request, not a bare empty string" {
+  command -v tmux >/dev/null 2>&1 || skip "tmux not installed"
+  cd "$BATS_TEST_TMPDIR"   # fix $PWD: agy's cwd-match keys off it
+  mkdir -p "$HOME/.gemini"
+  printf 'y\n' | "$CLIKAE_BIN" init agy work >/dev/null 2>&1
+  local profile="$CLIKAE_HOME/profiles/antigravity/work"
+  local sid="ag-test-0001"
+  local sdir="$profile/antigravity-cli/brain/$sid/.system_generated/logs"
+  mkdir -p "$sdir"
+  printf '{"role":"user","content":"<USER_REQUEST>fix the thing</USER_REQUEST>"}\n' > "$sdir/transcript.jsonl"
+  printf '{"sessionId":"%s","workspace":"%s"}\n' "$sid" "$PWD" > "$profile/antigravity-cli/brain/history.jsonl"
+  tmux new-session -d -s "clikae-antigravity-work" 'sleep 30'
+  run clikae
+  tmux kill-session -t "clikae-antigravity-work" 2>/dev/null || true
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"▸ Live"* ]] || { echo "$output"; false; }
+  [[ "$output" != *'""'* ]] || { echo "bare empty preview:"; echo "$output"; false; }
+  [[ "$output" == *"fix the thing"* ]] || { echo "$output"; false; }
+}
+
+@test "live: an agy tank with no extractable title falls back to (no preview), not empty" {
+  command -v tmux >/dev/null 2>&1 || skip "tmux not installed"
+  cd "$BATS_TEST_TMPDIR"
+  mkdir -p "$HOME/.gemini"
+  printf 'y\n' | "$CLIKAE_BIN" init agy work >/dev/null 2>&1
+  local profile="$CLIKAE_HOME/profiles/antigravity/work"
+  local sid="ag-test-0002"
+  local sdir="$profile/antigravity-cli/brain/$sid/.system_generated/logs"
+  mkdir -p "$sdir"
+  printf '{"role":"assistant","note":"nothing extractable here"}\n' > "$sdir/transcript.jsonl"
+  printf '{"sessionId":"%s","workspace":"%s"}\n' "$sid" "$PWD" > "$profile/antigravity-cli/brain/history.jsonl"
+  tmux new-session -d -s "clikae-antigravity-work" 'sleep 30'
+  run clikae
+  tmux kill-session -t "clikae-antigravity-work" 2>/dev/null || true
+  [ "$status" -eq 0 ]
+  [[ "$output" != *'""'* ]] || { echo "bare empty preview:"; echo "$output"; false; }
+  [[ "$output" == *"(no preview)"* ]] || { echo "$output"; false; }
 }

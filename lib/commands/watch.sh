@@ -1,30 +1,46 @@
 # shellcheck shell=bash
 # lib/commands/watch.sh — `clikae watch <engine> [<tank>] [--auto] [--to <t>]`
+#                          `clikae watch github [--org <o>] [--interval <d>] [--once]`
 #
 # Ambient relay: watch the current session's transcript and, when it looks like
 # the tank ran dry, hand off to the next tank — offering first (default), or
 # automatically once you've consented (--auto). Philosophy: quietly help, then
 # tell you what it did.
 #
-# ⚠️ HONEST CAVEAT (read this). An interactive CLI hitting its usage limit does
+# `github` is a second SOURCE under the same verb, not a parallel command
+# (#46) — it watches GitHub's search API instead of a transcript, and turns a
+# reply/@mention into a wake line instead of an offer to switch tanks. Its
+# flag set (--org/--interval/--once) doesn't fit the engine-watching case
+# above, so it's dispatched before the shared flag parser and implemented in
+# lib/commands/watch_github.sh (read that file's header for the wake-event
+# design — there's no `clikae go` command and no generic wake bus, so it says
+# plainly what mechanism it actually uses instead of the issue's own guess).
+# shellcheck source=./watch_github.sh
+source "$CLIKAE_LIB/commands/watch_github.sh"
+#
+# ⚠️ WHAT THIS CAN AND CANNOT SEE. An interactive CLI hitting its usage limit does
 # not exit, returns no code, and fires no hook — so the only signal we can watch
-# is what the limit writes into the transcript. The exact marker is NOT yet
-# confirmed against a real limit event (you can't force one without burning a
-# tank). So the default pattern below is a BEST GUESS. Confirm/tune it the first
-# time you actually get limited:
+# is what the limit writes into the transcript. That signal IS there for claude,
+# and the matcher is no longer a guess: checked on 2026-08-12 against every
+# occurrence in a real user's transcripts, 283 records carry the sentence, 194 are
+# genuine limit events, and the matcher fires on 194/194 while ignoring all 89
+# mentions — 10 of which are ordinary model replies discussing a limit, which text
+# alone would have called a dry tank. Pinned in tests/bats/limit.bats.
+#
+# If a vendor rewords it, or you are on an engine whose marker we do not know, the
+# override is still there:
 #     clikae watch claude --check         # does the pattern fire on this session?
 #     CLIKAE_LIMIT_PATTERN='...' clikae watch claude
-# When you learn the real marker, set $CLIKAE_LIMIT_PATTERN (or tell the project).
 
 # Limit markers, CONFIRMED against real live limits (dogfooded 2026-05-31):
-#   • claude — CONFIRMED, and it IS written to the transcript (so the tail catches
+#   · claude — CONFIRMED, and it IS written to the transcript (so the tail catches
 #       it): a real interactive limit appears as a jsonl line with
 #       "isApiErrorMessage":true and text "You've hit your session limit · resets
 #       <time> (<tz>)". (The TUI also shows "/upgrade to increase your usage limit.")
-#   • codex  — CONFIRMED: `codex exec --json` emits `{"type":"turn.failed",...}`
+#   · codex  — CONFIRMED: `codex exec --json` emits `{"type":"turn.failed",...}`
 #       + `{"type":"error","message":"You've hit your usage limit. … try again at
 #       <date>."}` and exits non-zero.
-#   • agy/Gemini — CONFIRMED: `agy -p` hitting its limit exits 0 with EMPTY
+#   · agy/Gemini — CONFIRMED: `agy -p` hitting its limit exits 0 with EMPTY
 #       stdout/stderr; the marker lands ONLY in ~/.gemini/antigravity-cli/cli.log
 #       as `agent executor error: RESOURCE_EXHAUSTED (code 429): Individual quota
 #       reached. … Resets in <Hh Mm>.` So agy can't be detected via exit code,
@@ -63,6 +79,174 @@ _watch_weekly_capture() {
   { printf '%s\n' "$phrase"; date '+captured %Y-%m-%d %H:%M' 2>/dev/null; } > "$cache" 2>/dev/null || true
 }
 
+# --- usage polling heartbeat (#132, redirected) ----------------------------
+#
+# The issue as filed assumed clikae had no non-interactive way to ask a vendor
+# "how much quota is left" — wrong for claude: lib/core/usage.sh's usage_read
+# already calls the vendor's own OAuth usage API (adapter_usage in
+# lib/adapters/claude.sh, eb58aab / #72 / #89). So this is NOT a keystroke
+# prober: it never sends a single key into any pane, live or otherwise. It is
+# a periodic HEARTBEAT bolted onto `clikae watch`'s existing tail loop — the
+# loop already sits idle on `read <&3` between transcript lines, so a timeout
+# on that same read is a free place to also refresh the usage cache, on a
+# schedule, so `clikae`'s board (home.sh's usage_board_fields) has a fresher
+# number to show than "whatever the last manual `clikae usage` happened to
+# leave behind". Nothing here computes a percentage or talks to a vendor
+# directly — usage_read remains the only thing that does either.
+#
+# Cadence: every tank gets its OWN next-poll time and its OWN backoff, kept in
+# parallel arrays (bash 3.2 — macOS's shipped bash — has no associative
+# arrays; every other per-tank memo in this codebase, e.g. home.sh's
+# _FUEL_MEMO_*, uses the same shape). A tank whose last poll came back as a
+# real reading (source vendor/transcript) polls again after the base interval
+# (CLIKAE_WATCH_USAGE_INTERVAL, default: the usage cache's own TTL — polling
+# faster than the cache refreshes buys nothing). A tank whose last poll came
+# back anything else DOUBLES its own interval, capped at
+# CLIKAE_WATCH_USAGE_MAX_BACKOFF (default 1800s/30min) — so a vendor outage
+# does not get hammered once per loop tick forever. A success resets the tank
+# straight back to the base interval. #136 carved two cases out of that
+# doubling; see the next paragraph.
+#
+# #136 REPLACES the paragraph that used to stand here ("what this does NOT try
+# to do, on purpose: distinguish a 429 from any other transport failure").
+# adapter_usage now says which kind of failure it was, so this loop stops
+# treating three different situations as one:
+#
+#   rate-limited   HTTP 429. The next poll for THAT tank is the vendor's own
+#                  `Retry-After`, clamped to [base, max] — not a doubling.
+#                  The LOWER clamp is not politeness, it is correctness:
+#                  usage_read has its own TTL cache (default 120s = the base
+#                  interval), so a poll scheduled sooner than the base would
+#                  re-read the cached rate-limited reading, learn nothing, and
+#                  reschedule off it forever. The upper clamp is the existing
+#                  CLIKAE_WATCH_USAGE_MAX_BACKOFF. No usable Retry-After (the
+#                  header absent, negative, zero, non-numeric, an HTTP-date,
+#                  or past 86400 — all already dropped by the adapter) falls
+#                  back to the doubling below, unchanged.
+#   auth           `expired-token` or `no-credentials`. Neither will start
+#                  working because we waited a little longer, so there is no
+#                  ramp to climb: the tank goes STRAIGHT to the max interval
+#                  and is marked, instead of walking a doubling sequence that
+#                  spends calls on a question already answered. The trade,
+#                  stated plainly: after a session refreshes an expired token,
+#                  this loop notices up to one max interval later (30 min by
+#                  default) rather than up to ~4 min. The board does not wait
+#                  for it — a cached "expired" reading is shown as
+#                  `expired · usage --wake <tank>` the moment it lands
+#                  (#107, lib/commands/home.sh), and `clikae usage` is always
+#                  a fresh read away.
+#   transient      everything else (no connection, a timeout, a 5xx, an
+#                  unparseable body). Doubles, capped — exactly as before.
+#
+# The per-tank class lands in _WATCH_USAGE_POLL_STATE, a fourth parallel array
+# (bash 3.2: no associative arrays, same shape as the three beside it).
+_WATCH_USAGE_POLL_TANK=(); _WATCH_USAGE_POLL_NEXT=(); _WATCH_USAGE_POLL_BACKOFF=()
+_WATCH_USAGE_POLL_STATE=()
+
+# _watch_usage_poll_interval -> the base seconds between polls of one tank.
+_watch_usage_poll_interval() {
+  local v="${CLIKAE_WATCH_USAGE_INTERVAL:-}"
+  case "$v" in ''|*[!0-9]*) v="${CLIKAE_USAGE_TTL:-120}" ;; esac
+  case "$v" in ''|*[!0-9]*) v=120 ;; esac
+  [ "$v" -ge 10 ] 2>/dev/null || v=10
+  printf '%s\n' "$v"
+}
+
+# _watch_usage_poll_max_backoff -> the ceiling a failing tank's interval never
+# grows past (seconds).
+_watch_usage_poll_max_backoff() {
+  local v="${CLIKAE_WATCH_USAGE_MAX_BACKOFF:-1800}"
+  case "$v" in ''|*[!0-9]*) v=1800 ;; esac
+  printf '%s\n' "$v"
+}
+
+# _watch_usage_poll_indexv <cli> <tank> -> $_WUPI, its slot in the parallel
+# arrays above, or -1 if this tank has never been polled by THIS process.
+_watch_usage_poll_indexv() {
+  local key="$1/$2" n="${#_WATCH_USAGE_POLL_TANK[@]}" i
+  _WUPI=-1
+  for (( i = 0; i < n; i++ )); do
+    if [ "${_WATCH_USAGE_POLL_TANK[i]}" = "$key" ]; then _WUPI=$i; return 0; fi
+  done
+}
+
+# _watch_usage_poll_one <cli> <tank> <now> — refresh one tank's usage cache
+# via the existing usage_read (never a new vendor call site), IF this tank's
+# own cadence says it's due; otherwise a no-op. usage_read has its own TTL
+# cache and is safe to call every tick — this function's whole job is to also
+# widen the gap between calls when a tank is failing, which usage_read's flat
+# TTL alone doesn't do.
+_watch_usage_poll_one() {
+  local cli="$1" tank="$2" now="$3" base max idx
+  base="$(_watch_usage_poll_interval)"; max="$(_watch_usage_poll_max_backoff)"
+  _watch_usage_poll_indexv "$cli" "$tank"; idx="$_WUPI"
+  if [ "$idx" -lt 0 ]; then
+    idx="${#_WATCH_USAGE_POLL_TANK[@]}"
+    _WATCH_USAGE_POLL_TANK[idx]="$cli/$tank"
+    _WATCH_USAGE_POLL_NEXT[idx]=0
+    _WATCH_USAGE_POLL_BACKOFF[idx]="$base"
+    _WATCH_USAGE_POLL_STATE[idx]=""
+  fi
+  [ "$now" -ge "${_WATCH_USAGE_POLL_NEXT[idx]:-0}" ] || return 0
+  local reading source reason retry facts
+  reading="$(usage_read "$cli" "$tank" 2>/dev/null)"
+  # One jq fork per due poll, same as before #136 — three facts out of it, not
+  # three calls. @tsv on three strings always yields two tabs, so `read` fills
+  # all three names even when the last two are empty.
+  facts="$(printf '%s' "$reading" | jq -r '
+    [(.source // ""), (.reason // ""),
+     (if (.retry_after|type) == "number" then (.retry_after|floor|tostring) else "" end)]
+    | @tsv' 2>/dev/null)"
+  IFS=$'\t' read -r source reason retry <<< "$facts"
+  local cur="${_WATCH_USAGE_POLL_BACKOFF[idx]:-$base}" delay state
+  case "$source" in
+    vendor|transcript)
+      state=ok; cur="$base"; delay="$base" ;;
+    *)
+      case "$reason" in
+        rate-limited)
+          state=rate-limited
+          case "$retry" in
+            ''|*[!0-9]*|??????*)
+              cur=$(( cur * 2 )); [ "$cur" -le "$max" ] || cur="$max"; delay="$cur" ;;
+            *)
+              delay="$retry"
+              [ "$delay" -ge "$base" ] || delay="$base"
+              [ "$delay" -le "$max" ] || delay="$max"
+              cur="$delay" ;;
+          esac ;;
+        expired-token|no-credentials)
+          state=auth; cur="$max"; delay="$max" ;;
+        *)
+          state=transient
+          cur=$(( cur * 2 )); [ "$cur" -le "$max" ] || cur="$max"; delay="$cur" ;;
+      esac ;;
+  esac
+  _WATCH_USAGE_POLL_BACKOFF[idx]="$cur"
+  _WATCH_USAGE_POLL_STATE[idx]="$state"
+  _WATCH_USAGE_POLL_NEXT[idx]=$(( now + delay ))
+}
+
+# _watch_usage_poll_tick — one heartbeat: refresh every KNOWN tank's usage
+# cache, each on its own cadence above. Best-effort and silent: no jq, no
+# tanks, or an engine with no adapter_usage just means nothing to do this
+# tick, same as any other quiet redraw miss on the board side.
+_watch_usage_poll_tick() {
+  command -v jq >/dev/null 2>&1 || return 0
+  declare -F usage_read >/dev/null || return 0
+  declare -F list_all_profiles >/dev/null || return 0
+  local now; now="$(date +%s 2>/dev/null || echo 0)"
+  local cli tank
+  while IFS=$'\t' read -r cli tank _; do
+    if [ -z "$cli" ] || [ -z "$tank" ]; then continue; fi
+    [ -f "$CLIKAE_LIB/adapters/$cli.sh" ] || continue
+    declare -F load_adapter >/dev/null && load_adapter "$cli" 2>/dev/null
+    declare -F adapter_usage >/dev/null || continue
+    _watch_usage_poll_one "$cli" "$tank" "$now"
+  done < <(list_all_profiles 2>/dev/null)
+  return 0
+}
+
 _watch_consent_file() { printf '%s\n' "$CLIKAE_HOME/auto-relay-consent"; }
 _watch_has_consent()  { [ -f "$(_watch_consent_file)" ]; }
 _watch_grant_consent() {
@@ -71,6 +255,17 @@ _watch_grant_consent() {
 }
 
 cmd_watch() {
+  # `github` is a source, not an engine — its own flag set (--org/--interval/
+  # --once) doesn't fit the loop below, so hand off before any of it runs.
+  # Mirrors clikae_is_target's "target-ness wins" precedence check further
+  # down: a keyword this command itself defines is resolved before ever
+  # treating the first argument as an engine name.
+  if [ "${1:-}" = "github" ]; then
+    shift
+    cmd_watch_github "$@"
+    return $?
+  fi
+
   local cli="" profile="" got_profile=0 to="" auto=0 check=0 pattern="" pattern_explicit=0
   local -a positionals=()
   while [ $# -gt 0 ]; do
@@ -79,6 +274,11 @@ cmd_watch() {
         cat <<'EOF'
 Usage: clikae watch <engine> [<tank>] [--to <target>] [--auto] [--check]
                      [--pattern <regex>]
+       clikae watch github [--org <org>] [--interval <dur>] [--once]
+
+A different source: `clikae watch github` polls GitHub's search API for
+replies/@mentions instead of watching a tank's transcript. See:
+  clikae watch github --help
 
 Watch the current directory's session and, when it looks like the tank ran dry,
 hand off to the next tank. By default it OFFERS (asks first); with --auto it
@@ -225,7 +425,7 @@ EOF
 $(transcript_tail "$transcript")
 EOF
     if [ "$found" -eq 0 ]; then
-      log_ok "No genuine limit marker found in the current session's recent tail."
+      log_pass "No genuine limit marker found in the current session's recent tail."
       log_dim "(claude requires isApiErrorMessage + model:<synthetic>; override with --pattern / \$CLIKAE_LIMIT_PATTERN)"
     fi
     return 0
@@ -248,18 +448,44 @@ EOF
   log_dim "Pattern is a best guess; if it never fires, see \`clikae watch --help\`. Ctrl-C to stop."
 
   # Tail only NEW lines; stop at the first GENUINE limit line (structured match).
-  local line=""
-  while IFS= read -r line; do
+  #
+  # 🔴 The tail is read on fd 3, NOT stdin. This loop's body asks the user
+  # questions — wake_offer's one-time "resume automatically?", _watch_do_handoff's
+  # "switch now?" / auto-consent — via confirm(), which reads STDIN. If the tail
+  # fed stdin (the naive `done < <(tail …)`), every one of those prompts would read
+  # its answer off the NEXT TRANSCRIPT LINE instead of the keyboard, and the
+  # `exec clikae handoff` would hand the tail pipe to the started engine as its
+  # stdin. Keeping the tail on fd 3 leaves stdin as the terminal for all of them.
+  # #132: the tail loop already sits idle on this read between transcript
+  # lines — a timeout on the SAME read is where the usage-polling heartbeat
+  # (above) gets its cadence, no separate timer/process needed. `read -t`
+  # returns a status > 128 on a timeout specifically (bash's own contract,
+  # not a heuristic) — never on the pipe closing (that's a plain nonzero
+  # <=128, handled the same way this loop always handled EOF: fall out).
+  local line="" _poll_interval _rc
+  _poll_interval="$(_watch_usage_poll_interval)"
+  while :; do
+    IFS= read -r -t "$_poll_interval" line <&3; _rc=$?
+    if [ "$_rc" -gt 128 ]; then
+      _watch_usage_poll_tick
+      continue
+    fi
+    [ "$_rc" -eq 0 ] || break
     # BETA: relay the vendor's verbatim weekly-usage % to the board's yellow dot,
     # independent of the dry trigger below (a weekly warning is caution, not dry).
     _watch_weekly_capture "$cli" "$profile" "$line"
     limit_line_is_real "$cli" "$line" "$pattern" "$pattern_explicit" || continue
     echo
     log_warn "Looks like $cli/$profile hit its limit."
+    # Offered BEFORE the handoff, because the two are not alternatives: carrying
+    # on elsewhere now and having this tank pick itself back up later are both
+    # things you want. Silently does nothing when there is no tmux session to
+    # type into — which is the honest answer, not a failure worth a message.
+    wake_offer "$cli" "$profile" "$(limit_reset_phrase "$line")"
     _watch_do_handoff "$cli" "$profile" "$target" "$auto"
     # _watch_do_handoff execs on success; if it returns, the user declined.
     log_dim "Staying on $cli/$profile. Still watching… (Ctrl-C to stop)"
-  done < <(tail -n0 -f "$transcript")
+  done 3< <(tail -n0 -f "$transcript")
 }
 
 # Decide + perform the handoff. Execs `clikae handoff` on go; returns if declined.
@@ -277,12 +503,15 @@ _watch_do_handoff() {
         confirm "Switch $cli/$profile → $target now?" || return 1
       fi
     fi
-    log_ok "Auto-switching: $cli/$profile → $target"
+    log_done "Auto-switching: $cli/$profile → $target"
   else
     confirm "Switch $cli/$profile → $target now?" || return 1
-    log_ok "Switching: $cli/$profile → $target"
+    log_done "Switching: $cli/$profile → $target"
   fi
 
+  # Close the watcher's tail-pipe fd (open in the caller's loop) so the engine we
+  # exec into doesn't inherit it as an extra open descriptor.
+  { exec 3<&-; } 2>/dev/null || true
   exec "$CLIKAE_ROOT/bin/clikae" handoff "$cli" "$profile" --to "$target"
 }
 
@@ -312,7 +541,7 @@ _watch_target() {
       grep -aoE "$pattern" "$logf" | sort -u | sed 's/^/  matched: /'
       return 0
     fi
-    log_ok "No limit marker found in $name's log."
+    log_pass "No limit marker found in $name's log."
     log_dim "(log: ${logf}${logf:+ — }looked for the confirmed RESOURCE_EXHAUSTED / Individual quota reached marker)"
     return 0
   fi

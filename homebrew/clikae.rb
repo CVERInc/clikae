@@ -1,10 +1,19 @@
-# Homebrew formula template for clikae.
+# Homebrew formula for clikae.
 #
-# To publish via a tap (recommended for v0.3+):
-#   1. Create a separate repo: homebrew-<tapname>  (e.g. homebrew-clikae)
-#   2. Copy this file into that repo as Formula/clikae.rb
-#   3. Update `url` to a tagged release tarball, run `brew create` for the sha256
-#   4. Users install with:  brew install CVERInc/<tapname>/clikae
+# 🔴 THIS FILE IS NOT WHAT ANYONE INSTALLS. `brew` reads
+# CVERInc/homebrew-clikae/Formula/clikae.rb — a DIFFERENT REPOSITORY. This is a
+# copy, and copies drift: it was bumped for 0.28.0, 0.28.1 and 0.28.2 while the
+# tap sat at 0.27.0, so three tagged, released, changelogged versions reached
+# nobody. The maintainer found out by noticing his own clikae was five releases
+# behind while running code that fixed his own bug reports.
+#
+# So updating this file is not releasing. Releasing is:
+#   1. tag + push        (v<x.y.z>)
+#   2. download the tarball GitHub actually SERVES, sha256 it, extract it, RUN it
+#   3. update THIS copy
+#   4. update the TAP's Formula/clikae.rb with the same url + sha256, and push it
+#
+# Step 4 is the one that ships. If you only did the others, nothing happened.
 #
 # To submit to homebrew-core (later, once project has traction): see
 # https://docs.brew.sh/Adding-Software-to-Homebrew
@@ -12,13 +21,15 @@
 class Clikae < Formula
   desc "CLI profile switcher — manage multiple accounts/configs for any CLI"
   homepage "https://github.com/CVERInc/clikae"
-  url "https://github.com/CVERInc/clikae/archive/refs/tags/v0.14.5.tar.gz"
-  sha256 "fe4032bf7e36250e22e969f9bd1c6300be283caa26855d5a197f23440c1a678b"
+  url "https://github.com/CVERInc/clikae/archive/refs/tags/v0.31.0.tar.gz"
+  sha256 "578a461371280e0447532631a85926f4bc5b993423a3e9a78a95b8f961791f01"
   license "MIT"
   head "https://github.com/CVERInc/clikae.git", branch: "main"
 
+  depends_on "jq"
+
   def install
-    libexec.install "bin", "lib"
+    libexec.install "bin", "lib", "templates"
     libexec.install "assets" if File.directory?("assets") # welcome-screen logo (logo.txt)
     (bin/"clikae").write <<~SH
       #!/usr/bin/env bash
