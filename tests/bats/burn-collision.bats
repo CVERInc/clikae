@@ -1294,3 +1294,91 @@ SHIM
   bad="$(awk -v s="$else_line" -v e="$((notrestore_line + 2))" 'NR>=s && NR<=e && /rm -f "\$grave"/{print NR}' "$burn")"
   [ -z "$bad" ] || { echo "the failed-restore branch still discards the graveyard copy -- R8-P1-1"; false; }
 }
+
+# ---- #90: --queue waits behind a running burn instead of refusing ----------
+# The holder is a real background process (its pid is what burn_tank_busy's
+# liveness + started_at check reads); the poll interval is shortened so the
+# wait is seconds, not the production 5s.
+
+_queue_holder() {   # _queue_holder <secs> -> sets QH_PID, QH_DIR
+  sleep "$1" 3>&- &
+  QH_PID=$!
+  local now; now="$(date +%s)"
+  QH_DIR="$CLIKAE_HOME/logs/burn-holder-$RANDOM"
+  mkdir -p "$QH_DIR"
+  printf '{"ok":null,"engine":"codex","tank":"T1","artifact":null,"artifact_bytes":null,"reason":null,"reset":null,"rerouted_from":[],"elapsed_s":0,"run_id":"%s","state":"running","started_at":%s,"updated_at":%s,"pid":%s,"log":null}\n' \
+    "${QH_DIR##*/}" "$now" "$now" "$QH_PID" > "$QH_DIR/status.json"
+}
+
+@test "burn-collision #90: without --queue a live holder is still refused" {
+  _stub_codex
+  clikae init codex T1
+  _queue_holder 30
+  local A="$BATS_TEST_TMPDIR/out.md"
+  run clikae burn codex T1 --artifact "$A" -- run "$A"
+  kill "$QH_PID" 2>/dev/null || true
+  [ "$status" -ne 0 ]
+  [[ "$output" == *"already has a running burn"* ]] || false
+  [[ "$output" != *"waiting behind"* ]] || false
+  [ ! -e "$A" ]
+}
+
+@test "burn-collision #90: --queue waits for the holder to finish, then runs" {
+  _stub_codex
+  clikae init codex T1
+  _queue_holder 30
+  # the holder finishes cleanly: its status goes terminal while the pid lives on
+  ( sleep 2; sed -i.bak 's/"state":"running"/"state":"done"/' "$QH_DIR/status.json" ) 3>&- &
+  local A="$BATS_TEST_TMPDIR/out.md"
+  CLIKAE_BURN_QUEUE_POLL_S=1 run clikae burn codex T1 --queue --json --artifact "$A" -- run "$A"
+  kill "$QH_PID" 2>/dev/null || true
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"waiting behind run ${QH_DIR##*/} on codex/T1, started "[0-9][0-9]:[0-9][0-9]* ]] || false
+  [ -e "$A" ]
+  local json; json="$(printf '%s\n' "$output" | grep '^{"ok"' | tail -1)"
+  [[ "$json" == *'"ok":true'* ]] || false
+  local q; q="$(printf '%s' "$json" | sed -n 's/.*"queued_for_s":\([0-9]*\).*/\1/p')"
+  [ -n "$q" ] && [ "$q" -ge 1 ]
+}
+
+@test "burn-collision #90: a holder that dies mid-wait lets the queued burn start" {
+  _stub_codex
+  clikae init codex T1
+  _queue_holder 30
+  ( sleep 2; kill "$QH_PID" ) 3>&- &
+  local A="$BATS_TEST_TMPDIR/out.md"
+  CLIKAE_BURN_QUEUE_POLL_S=1 run clikae burn codex T1 --queue --artifact "$A" -- run "$A"
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"waiting behind run"* ]] || false
+  [ -e "$A" ]
+}
+
+@test "burn-collision #90: --queue-timeout fails with its own reason and never steals the tank" {
+  _stub_codex
+  clikae init codex T1
+  _queue_holder 30
+  local A="$BATS_TEST_TMPDIR/out.md"
+  CLIKAE_BURN_QUEUE_POLL_S=1 run clikae burn codex T1 --queue --queue-timeout 2 --json --artifact "$A" -- run "$A"
+  local alive=0; kill -0 "$QH_PID" 2>/dev/null && alive=1
+  kill "$QH_PID" 2>/dev/null || true
+  [ "$status" -ne 0 ]
+  [ "$alive" -eq 1 ]
+  [ ! -e "$A" ]
+  [[ "$output" == *"queue timeout"* ]] || false
+  local json; json="$(printf '%s\n' "$output" | grep '^{"ok"' | tail -1)"
+  [[ "$json" == *'"ok":false'* ]] || false
+  [[ "$json" == *'"reason":"queue timeout"'* ]] || false
+  [[ "$json" == *'"queued_for_s":'[2-9]* ]] || false
+  # the holder's own status is untouched; ours records the timeout
+  grep -q '"state":"running"' "$QH_DIR/status.json"
+  grep -rl 'queue timeout' "$CLIKAE_HOME/logs"/burn-*/status.json >/dev/null
+}
+
+@test "burn-collision #90: --queue and --allow-active are refused together" {
+  _stub_codex
+  clikae init codex T1
+  local A="$BATS_TEST_TMPDIR/out.md"
+  run clikae burn codex T1 --queue --allow-active --artifact "$A" -- run "$A"
+  [ "$status" -ne 0 ]
+  [[ "$output" == *"contradict"* ]] || false
+}

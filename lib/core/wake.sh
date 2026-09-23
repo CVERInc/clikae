@@ -775,7 +775,16 @@ wake_watch() {
       wake_usage_refresh "$engine" "$tank"
     fi
 
-    if reset="$(limit_tank_dry "$engine" "$tank" 2>/dev/null)"; then
+    # #131: the warm /compact rides this same once-a-minute look. It has its
+    # own six guards (lib/core/compact.sh) and never types on a clock alone.
+    declare -F compact_tick >/dev/null 2>&1 && compact_tick "$engine" "$tank" "$session" >/dev/null 2>&1 || true
+
+    # This window is attached for either feature now (switch.sh). One opened
+    # ONLY for the warm /compact (wake was not on at launch) leaves the limit
+    # half alone until waking is what the person asked for.
+    if [ "${CLIKAE_WATCH_COMPACT_ONLY:-}" = 1 ] && ! wake_enabled; then
+      :
+    elif reset="$(limit_tank_dry "$engine" "$tank" 2>/dev/null)"; then
       if [ -n "$reset" ]; then
         now="$(date +%s)"
         if epoch="$(limit_reset_epoch "$reset" "$now")"; then
@@ -818,7 +827,11 @@ wake_watch() {
       fi
     fi
 
-    printf '\r\033[K%s/%s — watching for a limit' "$engine" "$tank"
+    if [ "${CLIKAE_WATCH_COMPACT_ONLY:-}" != 1 ] || wake_enabled; then
+      printf '\r\033[K%s/%s — watching for a limit' "$engine" "$tank"
+    else
+      printf '\r\033[K%s/%s — watching for a warm /compact' "$engine" "$tank"
+    fi
     # Sleep in slices, asking the cheap question between them: if the engine's
     # window closes while we wait, leave NOW rather than at the end of the minute.
     local _slept=0
@@ -836,7 +849,10 @@ wake_watch() {
 # wake_attach_watcher <session> <engine> <tank> -> put the watching window in the
 # session. Same one-per-session rule as the waiter, because it is the same window.
 wake_attach_watcher() {
-  local session="$1" engine="$2" tank="$3" bin="${CLIKAE_BIN:-clikae}"
+  local session="$1" engine="$2" tank="$3" mode="${4:-}" bin="${CLIKAE_BIN:-clikae}" pre=""
+  # mode `compact-only`: attached for the warm /compact alone (#131), so the
+  # watcher must not start nudging a limit nobody agreed to have nudged.
+  [ "$mode" = "compact-only" ] && pre="CLIKAE_WATCH_COMPACT_ONLY=1 "
   [ -n "$session" ] && [ -n "$engine" ] && [ -n "$tank" ] || return 1
   command -v tmux >/dev/null 2>&1 || return 1
   tmux has-session -t "=$session" 2>/dev/null || return 1
@@ -845,7 +861,7 @@ wake_attach_watcher() {
     return 0
   fi
   tmux new-window -d -t "=$session:" -n wake \
-    "'$bin' wake --watch '$engine' '$tank' '$session'" 2>/dev/null || return 1
+    "$pre'$bin' wake --watch '$engine' '$tank' '$session'" 2>/dev/null || return 1
   return 0
 }
 

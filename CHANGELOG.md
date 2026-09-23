@@ -15,7 +15,66 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   handoff and burn use it, `clikae doctor` reports it and flags a stale link.
   Opt out with `CLIKAE_CLAUDE_STABLE_PATH=0`. See docs/claude-on-macos.md.
 
+- **`clikae init` seeds a new tank from `$CLIKAE_HOME/template/<engine>/`, if
+  one exists (#95).** Files there (a theme, other per-tank config) are copied
+  into the new tank — never overwriting a file init already wrote — and a
+  `settings.json` in the template is MERGED (only the keys the tank doesn't
+  already have, through the same jq/`_settings_snapshot`/`_settings_write_file`
+  path `settings.sh` owns), instead of a maintainer copying those files by
+  hand into every new tank. Hooks and MCP servers stay out of this — those
+  are already fleet-wide via `clikae hooks share` / `clikae mcp share` — so
+  this only ever handles the files/keys those two verbs don't cover. Silent
+  when there's no template directory for the engine. `--no-template` now
+  skips both this and the existing claude permissions template, one flag for
+  both template steps.
+
+- **agy tanks switch accounts on Linux (#96).** On Linux agy keeps its Google
+  login in one file, `~/.gemini/antigravity-cli/antigravity-oauth-token`,
+  instead of the macOS Keychain. That file lives inside each tank dir behind
+  the `~/.gemini` symlink, so `clikae agy <tank>`, burn's auto-hop, `rename`
+  and `remove` carry it with the tank. clikae now picks the login backend by
+  `uname -s` (Keychain on macOS, unchanged; file on Linux), keeps the token
+  0600 after a switch, warns instead of landing silently on a tank with no
+  saved login, and `clikae doctor` names the active backend and which tanks
+  carry a login.
+
+- **`clikae burn --queue` waits behind a running burn on the same tank
+  instead of refusing (#90).** The default is unchanged: a second burn on a
+  busy tank is still refused (#40). `--queue` re-checks the tank under its
+  lock every 5s, never takes it from a live holder, and starts once the holder
+  finishes or dies. `--queue-timeout` bounds the wait (default `2h`); on expiry
+  the burn fails with reason `queue timeout`. Progress goes to stderr
+  ("waiting behind run <id> on <engine>/<tank>, started HH:MM"), and `--json`
+  gains `queued_for_s`.
+
+- **`clikae burn --resume-after-limit` (#36): wait out a quota limit and pick
+  the task back up.** When a tank runs dry and its reset time parses, burn
+  records the run in `~/.clikae/state/burn-<pid>.resume`, sleeps in-process
+  until reset + 2 minutes, and relaunches the same task on the same tank from
+  the same cwd with a resume note prepended to the prompt. At most 3 resumes;
+  each is logged as `[ RESUME ]`. It never reroutes while waiting (an explicit
+  `--to` still wins), `clikae home` shows the waiting burn as "resumes at
+  HH:MM", and `--json` gains a `resumed` count. Off by default.
+
+- **Warm `/compact` before the 1h prompt cache expires (#131).** The watcher
+  window in each clikae tmux session now types `/compact` into an idle claude
+  session once — after 50 minutes with no transcript writes, with an empty
+  prompt line, no turn running, and a context of at least 200K tokens (read
+  from the transcript's last `usage`; `CLIKAE_COMPACT_MIN_TOKENS`). Never while
+  typing, never on a clock alone, once per idle stretch. On by default, asked
+  once at launch, per-tank opt-out via `clikae watch compact off <engine>
+  <tank>`. Each send and the next turn's `cache_creation_input_tokens` are
+  written to `state/wake/` so the saving can be checked.
+
+
 ### Fixed
+
+- **The test suite no longer picks up an installed clikae's tmux shim.** On a
+  machine with clikae installed by brew, `command -v tmux` inside the suite
+  resolved to the previous release's shim (`…/libexec/lib/shims`), and two
+  tmux-shim tests went red in the pre-push gate for a change that never
+  touched them. `tests/helpers.bash` now strips every `/lib/shims` PATH entry
+  (`_strip_installed_shims`), covered by tests/bats/helpers-installed-shims.bats.
 
 - **tmux guard shim follow-ups (#106).** `kill-session -C` (in any spelling:
   `-C`, `-aC`, `-Ca`, `-a -C`) only clears alerts and kills nothing, so it is

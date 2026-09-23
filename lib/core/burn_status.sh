@@ -285,7 +285,10 @@ _burn_pid_matches_marker() {
 # its tank — a second burn (or the reroute walk) landing on it mid-sleep
 # would collide with the re-fire this one is about to make, exactly like the
 # `running` case #40 already guards.
+# #90: on a 0 return, _BTB_RUN_ID / _BTB_STARTED name the holder (run id and
+# its epoch started_at) so `burn --queue` can say whom it is waiting behind.
 burn_tank_busy() {
+  _BTB_RUN_ID=""; _BTB_STARTED=""
   local eng="$1" tk="$2" self_pid="${3:-}" base d f json feng ftk fpid fstarted
   base="$HOME/.clikae/logs"
   [ -d "$base" ] || return 1
@@ -317,6 +320,9 @@ burn_tank_busy() {
     kill -0 "$fpid" 2>/dev/null || continue   # stale — the writer is gone
     fstarted="$(burn_status_str "$json" started_at)"
     _burn_pid_matches_marker "$fpid" "$fstarted" || continue   # stale — a recycled pid, not the same writer
+    _BTB_RUN_ID="$(burn_status_str "$json" run_id)"
+    [ -n "$_BTB_RUN_ID" ] || _BTB_RUN_ID="${d##*/}"
+    _BTB_STARTED="$fstarted"
     return 0
   done
   return 1
@@ -343,6 +349,34 @@ burn_status_active_tanks() {
     burn_status_fieldv "$json" engine; feng="${_BSF#\"}"; feng="${feng%\"}"
     burn_status_fieldv "$json" tank;   ftk="${_BSF#\"}";  ftk="${ftk%\"}"
     printf '%s/%s\n' "$feng" "$ftk"
+  done
+  return 0
+}
+
+# burn_status_waiting_rows -> one `<engine>/<tank>\t<reset_at>` line per LIVE
+# burn whose status says `waiting-reset` (--wait-for-reset, or #36's
+# --resume-after-limit sleeping to reset + buffer). Liveness is the same pid +
+# start-marker pair burn_tank_busy trusts, so a burn killed mid-wait never
+# shows as "resumes at" forever.
+burn_status_waiting_rows() {
+  local d f json feng ftk fpid fat fstarted
+  for d in "$HOME"/.clikae/logs/burn-*; do
+    [ -d "$d" ] || continue
+    f="$d/status.json"
+    [ -f "$f" ] || continue
+    json=""
+    { IFS= read -r json < "$f"; } 2>/dev/null || [ -n "$json" ] || continue
+    burn_status_fieldv "$json" state
+    [ "$_BSF" = '"waiting-reset"' ] || continue
+    fpid="$(burn_status_str "$json" pid)"
+    case "$fpid" in ''|*[!0-9]*) continue ;; esac
+    kill -0 "$fpid" 2>/dev/null || continue
+    fstarted="$(burn_status_str "$json" started_at)"
+    _burn_pid_matches_marker "$fpid" "$fstarted" || continue
+    fat="$(burn_status_str "$json" reset_at)"
+    case "$fat" in ''|*[!0-9]*) continue ;; esac
+    feng="$(burn_status_str "$json" engine)"; ftk="$(burn_status_str "$json" tank)"
+    printf '%s/%s\t%s\n' "$feng" "$ftk" "$fat"
   done
   return 0
 }

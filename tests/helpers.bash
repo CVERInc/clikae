@@ -59,6 +59,14 @@ setup_file() {
   _clikae_refuse_concurrent_suite
 }
 
+# Drop every PATH entry that is an installed clikae's shim dir (…/lib/shims).
+# Named so helpers-installed-shims.bats can call it on a PATH it built itself.
+_strip_installed_shims() {
+  PATH="$(printf '%s' "$PATH" | tr ':' '\n' | grep -v '/lib/shims$' | paste -sd: -)"
+  export PATH
+  hash -r
+}
+
 setup() {
   TEST_HOME="$(mktemp -d "${BATS_TMPDIR:-/tmp}/clikae-test.XXXXXX")"
   export HOME="$TEST_HOME"
@@ -114,6 +122,10 @@ setup() {
   # have a background window typing into its session.
   mkdir -p "$CLIKAE_HOME" 2>/dev/null || true
   printf 'off\n' > "$CLIKAE_HOME/wake-on-reset"
+  # Same for the warm /compact (#131): on by default and asked once at launch,
+  # so an unanswered file would make every pty launch in the suite stop at the
+  # question. watch-compact.bats removes this when it tests the default.
+  printf 'off\n' > "$CLIKAE_HOME/warm-compact"
   # 🔴 Stamp the CURRENT schema so no test is surprised by a migration. Without
   # this, the first clikae in a test prints "migrated state v1 → v2" and the
   # second does not — which broke the byte-identical-alias test the day the
@@ -144,6 +156,13 @@ setup() {
   # old, and pass. It failed on CI, where nothing is installed and the variable is
   # empty — which is the honest environment, arriving late.
   export CLIKAE_LIB="$CLIKAE_TEST_ROOT/lib"
+  # Same trap one layer over: an INSTALLED clikae puts its tmux guard shim on
+  # PATH (…/libexec/lib/shims, brew) and tests take `command -v tmux` as the
+  # real tmux. On 2026-09-24 that name resolved to the 0.31.0 shim, which
+  # predates #106, and two tmux-shim tests went red in the pre-push gate while
+  # the suite under test had not changed. Strip every such entry; the shim
+  # under test is sourced from $CLIKAE_LIB/shims explicitly.
+  _strip_installed_shims
   export CLIKAE_ROOT="$CLIKAE_TEST_ROOT"
   # A test is not running inside a tank, whatever launched the suite thinks. This
   # arrives set whenever the developer runs the gate from a clikae session, and

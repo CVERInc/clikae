@@ -40,7 +40,9 @@ Usage: clikae burn <engine> <tank> --artifact <path>
                    ( --prompt-file <f> | --prompt <str> | -- <engine command...> )
                    [--add-dir <dir>]... [--to <target>] [--timeout <secs>]
                    [--no-reroute] [--allow-active] [--fresh] [--wait-for-reset <dur>]
+                   [--resume-after-limit]
                    [--permission <mode>] [--force-cockpit]
+                   [--queue [--queue-timeout <dur>]]
 
 Run a headless engine task on <tank>, verify it by the ARTIFACT it should
 produce (never the exit code — codex exec exits 0 even when it hit its limit and
@@ -99,7 +101,8 @@ Give the task in one of two ways:
                       never the exit code", and with rerouting the tank that did
                       the work is often not the one you named:
                         {ok, engine, tank, artifact, artifact_bytes, reason,
-                         reset, rerouted_from[], elapsed_s, run_id, left_behind[],
+                         reset, rerouted_from[], elapsed_s, run_id, resumed,
+                         left_behind[],
                          left_behind_truncated, left_behind_truncation{},
                          left_behind_kill_mode, left_behind_unavailable}
                       `artifact_bytes` is the artifact's own measurement, so the
@@ -116,6 +119,14 @@ Give the task in one of two ways:
                       the tank you're mid-conversation on would silently burn
                       that quota, and two burns on one tank collide on the tmux
                       session name) and tanks sharing an already-dry account.
+  --queue             (#90) if another burn is running on <tank>, wait for it
+                      to finish, then start — instead of the default refusal.
+                      Polls the tank's busy state every 5s under the same
+                      per-tank lock (never steals a live holder's run);
+                      progress goes to stderr, and --json records
+                      `queued_for_s`. Not combinable with --allow-active.
+  --queue-timeout <d> bound on the --queue wait (default 2h; e.g. 30m, 90s).
+                      On expiry the burn fails with reason `queue timeout`.
   --force-cockpit     operator override: burn the tank recorded by `clikae
                       cockpit` anyway. Without it, every launch onto the
                       cockpit — the tank you name, a --to hop, an agy walk — is
@@ -131,6 +142,14 @@ Give the task in one of two ways:
                       instant (docs/orchestration.md's limit_reset_epoch — two
                       grammars, both English), falls through to the normal
                       reroute-or-stop behaviour unchanged.
+  --resume-after-limit  (#36) when a tank runs dry with a parseable reset, wait
+                      (in this process) until reset + 2 min, then relaunch the
+                      SAME task on the SAME tank from the SAME cwd, with a
+                      RESUME NOTE prepended to the prompt. At most 3 resumes;
+                      state in ~/.clikae/state/burn-<pid>.resume, `[ RESUME ]`
+                      lines in the burn log. Never reroutes while waiting (an
+                      explicit --to still wins). Unparseable reset or cap
+                      reached -> today's reroute-or-stop. Off by default.
 
 Outcomes: artifact present -> done (exit 0); every reachable tank dry/skipped
 (in interactive use, or sharing an already-dry account) -> reason:
@@ -1062,13 +1081,14 @@ _agy_burn() {
   while :; do
     [ -d "$(_agy_slots)/$cur" ] || log_fail "No such agy tank: $cur  (create it:  clikae init agy $cur)"
     if [ "$cur" != "$(_agy_active)" ]; then
-      log_info "burn agy/$cur → switching (Keychain carry, no OAuth needed since 2026-07-05)"
+      log_info "burn agy/$cur → switching ($(_agy_login_backend) login carry, no OAuth needed since 2026-07-05)"
       _agy_assert_not_running
       local active; active="$(_agy_active)"
       [ -n "$active" ] && _agy_kc_stash "$active"
       _agy_kc_restore "$cur"
       _agy_kc_verify_restore "$cur"
       rm -f "$(_agy_link)"; ln -s "$(_agy_slots)/$cur" "$(_agy_link)"
+      _agy_file_verify "$cur"   # Linux (#96): the login is a file in the tank dir
     fi
     log_info "burn agy/$cur → agy (task: $saved_prompt)"
     _burn_status_write running null "$status_engine" "$cur" "$artifact" "" ""
@@ -2496,11 +2516,11 @@ _burn_result() {
   elif [ -n "$art" ] && [ -e "$art" ]; then
     bytes="$(_burn_size "$art")"
   fi
-  printf '{"ok":%s,"engine":%s,"tank":%s,"artifact":%s,"artifact_bytes":%s,"reason":%s,"reset":%s,"rerouted_from":[%s],"elapsed_s":%s,"run_id":%s,"left_behind":%s,%s}\n' \
+  printf '{"ok":%s,"engine":%s,"tank":%s,"artifact":%s,"artifact_bytes":%s,"reason":%s,"reset":%s,"rerouted_from":[%s],"elapsed_s":%s,"queued_for_s":%s,"run_id":%s,"resumed":%s,"left_behind":%s,%s}\n' \
     "$ok" "$(json_or_null "$eng")" "$(json_or_null "$tk")" "$(json_or_null "$art")" \
     "${bytes:-null}" "$(json_str "$reason")" "$(json_or_null "$reset")" \
-    "$(_burn_tried_json "${tried:-}")" "$burn_elapsed_s" \
-    "$(json_or_null "${run_id:-}")" "$left_behind" "$left_behind_meta" >&4
+    "$(_burn_tried_json "${tried:-}")" "$burn_elapsed_s" "${queued_for_s:-0}" \
+    "$(json_or_null "${run_id:-}")" "${resumed:-0}" "$left_behind" "$left_behind_meta" >&4
 }
 
 # `tried` accumulates "engine/tank" words as the reroute walks the reserve.
@@ -2699,6 +2719,96 @@ _burn_wait_for_reset() {
     else
       return 1   # the reset no longer resolves inside the window — give up
     fi
+  fi
+  return 0
+}
+
+# --- #36: --resume-after-limit ------------------------------------------------
+#
+# A dry tank with a parseable reset is waited out IN THIS PROCESS (no daemon —
+# the maintainer's ruling) and the same task relaunched on the same tank from
+# the same cwd, with a machine-generated note prepended to the prompt. Reset
+# parsing is limit_reset_epoch (the same parser wake's waiter uses, #142's
+# past-grace rule included: a reset already behind us floors the wait at zero),
+# and every step is written down twice: a `[ RESUME ]` line in the burn log and
+# a wake_trace event, so "what happened at 03:50" survives the terminal.
+
+# _burn_resume_max -> the attempt cap (default 3; CLIKAE_BURN_RESUME_MAX for tests).
+_burn_resume_max() {
+  local m="${CLIKAE_BURN_RESUME_MAX:-3}"
+  case "$m" in ''|*[!0-9]*) m=3 ;; esac
+  printf '%s' "$m"
+}
+
+# _burn_resume_log <message> -> `[ RESUME ] <message>` on stderr, appended to
+# this attempt's burn log, and one wake_trace event. Never fails the caller.
+_burn_resume_log() {
+  local line="[ RESUME ] $1"
+  printf '%s\n' "$line" >&2
+  if [ -n "${log_file:-}" ]; then
+    printf '%s %s\n' "$(date -u '+%Y-%m-%dT%H:%M:%SZ' 2>/dev/null)" "$line" >> "$log_file" 2>/dev/null || true
+  fi
+  if declare -F wake_trace >/dev/null 2>&1; then
+    CLIKAE_HOME="${CLIKAE_HOME:-$HOME/.clikae}" \
+      wake_trace "${cli:-}" "${cur:-}" "${burn_id:-}" "burn-resume" "$1" || true
+  fi
+  return 0
+}
+
+# _burn_resume_note <dry_at_epoch> <attempt> -> the note prepended to the prompt.
+_burn_resume_note() {
+  local t; t="$(wake_stamp "${1:-0}" 2>/dev/null || printf 'epoch %s' "${1:-0}")"
+  printf 'RESUME NOTE: previous attempt killed by quota limit at %s; this is attempt %s; start by reading the worktree state (git log/status/diff) and any existing REPORT; do not redo finished work.' "$t" "$2"
+}
+
+# _burn_resume_state_write <engine> <tank> <artifact> <reset> <target_epoch> <attempt>
+# -> $HOME/.clikae/state/<burn_id>.resume, one JSON line. burn_id is the same
+# key status.json's `run_id` carries, so the two files name each other.
+_burn_resume_state_write() {
+  local eng="$1" tk="$2" art="$3" reset="$4" at="$5" attempt="$6"
+  local f="$HOME/.clikae/state/${burn_id:-burn-$$}.resume" argv="" a pf=null
+  for a in ${burn_argv[@]+"${burn_argv[@]}"}; do
+    argv="${argv:+$argv,}$(json_str "$a")"
+  done
+  [ -n "${prompt_file:-}" ] && pf="$(json_str "$prompt_file")"
+  mkdir -p "$HOME/.clikae/state" 2>/dev/null || return 0
+  printf '{"run_id":%s,"engine":%s,"tank":%s,"cwd":%s,"argv":[%s],"artifact":%s,"prompt_file":%s,"reset":%s,"reset_at":%s,"attempt":%s,"max_attempts":%s,"pid":%s}\n' \
+    "$(json_or_null "${burn_id:-}")" "$(json_str "$eng")" "$(json_str "$tk")" "$(json_str "$PWD")" \
+    "$argv" "$(json_or_null "$art")" "$pf" "$(json_or_null "$reset")" "$at" "$attempt" \
+    "$(_burn_resume_max)" "$$" > "$f.tmp" 2>/dev/null && mv -f "$f.tmp" "$f" 2>/dev/null || true
+}
+
+# _burn_resume_after_limit <engine> <tank> <artifact> <reset-phrase> -> 0 once
+# the reset (+ buffer) has passed and the caller should relaunch; 1 when the
+# cap is spent or the phrase has no instant (caller falls back to today's path).
+# Sets `resume_dry_at` (caller's scope) to the instant the tank went dry.
+_burn_resume_after_limit() {
+  local eng="$1" tk="$2" art="$3" reset="$4" now at target remain max attempt
+  local buffer="${CLIKAE_BURN_RESUME_BUFFER_S:-120}"
+  case "$buffer" in ''|*[!0-9]*) buffer=120 ;; esac
+  max="$(_burn_resume_max)"
+  attempt=$(( ${resumed:-0} + 1 ))
+  if [ "${resumed:-0}" -ge "$max" ]; then
+    _burn_resume_log "$eng/$tk ran dry again — resume cap reached ($max); not waiting."
+    return 1
+  fi
+  now="$(date +%s 2>/dev/null || echo 0)"
+  if ! at="$(limit_reset_epoch "$reset" "$now")"; then
+    _burn_resume_log "$eng/$tk ran dry but its reset could not be parsed (\"$reset\") — falling back to the normal dry path."
+    return 1
+  fi
+  resume_dry_at="$now"
+  target=$(( at + buffer ))
+  remain=$(( target - now )); [ "$remain" -lt 0 ] && remain=0
+  _burn_resume_state_write "$eng" "$tk" "$art" "$reset" "$target" "$attempt"
+  _burn_resume_log "$eng/$tk ran dry; waiting ${remain}s until reset + ${buffer}s ($(wake_stamp "$target" 2>/dev/null)), then resume $attempt/$max."
+  _burn_status_write waiting-reset null "$eng" "$tk" "$art" "resume $attempt/$max after reset at ${reset}" "$reset" "$target"
+  sleep "$remain"
+  # One re-check, like _burn_wait_for_reset: an interrupted sleep or a
+  # suspended machine can wake early. Bounded — never a spin.
+  now="$(date +%s 2>/dev/null || echo 0)"
+  if [ "$now" -lt "$target" ]; then
+    sleep $(( target - now ))
   fi
   return 0
 }
@@ -3729,10 +3839,17 @@ _burn_truncate_utf8() {
 
 cmd_burn() {
   local cli="" tank="" artifact="" to="" timeout_s="" reroute=1 allow_active=0 fresh=0 as_json=0
+  # #90: --queue waits behind a running burn on the same tank (default: refuse).
+  local queue=0 queue_timeout_raw="" queue_timeout_s=7200
+  queued_for_s=0
   local prompt="" prompt_file="" prompt_set=0 codex_skip_git_check=0
   local burn_permission=acceptEdits permission_set=0
   local infra_retries=2 infra_delay=5 infra_attempt=0 retry_delay=5
   local wait_for_reset_raw="" wait_for_reset_s="" force_cockpit=0
+  # #36: --resume-after-limit — see _burn_resume_after_limit. `resumed` is read
+  # by _burn_result (dynamic scope) for the --json `resumed` count.
+  local resume_after_limit=0 resumed=0 base_prompt="" resume_dry_at=""
+  local -a burn_argv=("$@")
   # #74 round-2 P1-1 (round-3 P1-1: raw mode): the cwd the engine actually
   # runs in, not the cwd of THIS shell. Defaults to $PWD here (agy — the only
   # caller that ever reads this default value directly, before any reset
@@ -3771,7 +3888,10 @@ cmd_burn() {
       --codex-skip-git-check) codex_skip_git_check=1; shift ;;
       --json)       as_json=1; shift ;;
       --no-reroute) reroute=0; shift ;;
+      --resume-after-limit) resume_after_limit=1; shift ;;
       --allow-active) allow_active=1; shift ;;
+      --queue)      queue=1; shift ;;
+      --queue-timeout) shift; [ $# -gt 0 ] || log_fail "--queue-timeout needs a duration (e.g. 2h)"; queue_timeout_raw="$1"; shift ;;
       --force-cockpit) force_cockpit=1; shift ;;
       --fresh)      fresh=1; shift ;;
       --)           shift; cmd=("$@"); break ;;
@@ -3786,6 +3906,15 @@ cmd_burn() {
   if [ -n "$wait_for_reset_raw" ]; then
     wait_for_reset_s="$(_burn_parse_duration "$wait_for_reset_raw")" \
       || log_fail "--wait-for-reset: not a duration: $wait_for_reset_raw  (use e.g. 30m, 2h, 90s, or a bare integer of seconds)"
+  fi
+
+  if [ -n "$queue_timeout_raw" ]; then
+    [ "$queue" = "1" ] || log_fail "--queue-timeout only applies with --queue"
+    queue_timeout_s="$(_burn_parse_duration "$queue_timeout_raw")" \
+      || log_fail "--queue-timeout: not a duration: $queue_timeout_raw  (use e.g. 30m, 2h, 90s, or a bare integer of seconds)"
+  fi
+  if [ "$queue" = "1" ] && [ "$allow_active" = "1" ]; then
+    log_fail "--queue and --allow-active contradict each other (wait for the running burn, or run alongside it) — pick one"
   fi
 
   case "$infra_retries" in ''|*[!0-9]*) log_fail "--infra-retries must be a nonnegative integer" ;; esac
@@ -3819,6 +3948,7 @@ cmd_burn() {
     [ -r "$prompt_file" ] || log_fail "--prompt-file not readable: $prompt_file"
     prompt="$(cat "$prompt_file")"; prompt_set=1
   fi
+  base_prompt="$prompt"   # #36: a resume note is always prepended to THIS, never stacked
   if [ "$prompt_set" -eq 1 ]; then
     # Default the writable dir to the artifact's parent, so the engine can always
     # at least write the file you asked for.
@@ -3978,6 +4108,14 @@ cmd_burn() {
     # below is ever written. `cmd || rc=$?` keeps the whole statement's own
     # exit status at 0 (the assignment succeeds) so `set -e` never fires,
     # while still capturing the real code.
+    # #90 --queue: the loop below re-enters the SAME check-under-lock each
+    # poll. The lock is only ever held across one check (never across the
+    # wait), and a live holder is recognised by burn_tank_busy's own pid +
+    # started_at test — so a queued burn can never steal a running one's
+    # tank; it starts only once that check itself reports the tank free.
+    local _queue_t0=$SECONDS _queue_announced="" _queue_poll_s="${CLIKAE_BURN_QUEUE_POLL_S:-5}"
+    case "$_queue_poll_s" in ''|*[!0-9]*|0) _queue_poll_s=5 ;; esac
+    while :; do
     local _lock_acquire_rc=0
     _burn_tank_lock_acquire "$status_engine" "$tank" || _lock_acquire_rc=$?
     if [ "$_lock_acquire_rc" -eq 2 ]; then
@@ -4010,6 +4148,29 @@ cmd_burn() {
       # message now names both rather than asserting the wrong one.
       log_fail "Timed out waiting for the busy-tank lock on $status_engine/$tank — either another clikae burn is genuinely mid-check on it right now, or the previous holder died and the tank is mid self-heal (up to ~30s after a kill); try again shortly."
     fi
+    if burn_tank_busy "$status_engine" "$tank" "$$" && [ "$queue" = "1" ]; then
+      _burn_tank_lock_release "$status_engine" "$tank"
+      if [ "$((SECONDS - _queue_t0))" -ge "$queue_timeout_s" ]; then
+        trap - HUP INT TERM EXIT
+        queued_for_s=$((SECONDS - _queue_t0))
+        _burn_status_write fail false "$status_engine" "$tank" "$artifact" \
+          "queue timeout: $status_engine/$tank still busy with ${_BTB_RUN_ID:-another burn} after ${queued_for_s}s (--queue-timeout ${queue_timeout_s}s)" ""
+        _burn_result false "$status_engine" "$tank" "$artifact" "queue timeout" ""
+        log_fail "queue timeout: $status_engine/$tank is still busy with ${_BTB_RUN_ID:-another burn} after ${queued_for_s}s (--queue-timeout ${queue_timeout_s}s)."
+      fi
+      if [ "$_queue_announced" != "$_BTB_RUN_ID" ]; then
+        _queue_announced="$_BTB_RUN_ID"
+        local _queue_hhmm=""
+        case "$_BTB_STARTED" in
+          ''|*[!0-9]*) _queue_hhmm="?" ;;
+          *) _queue_hhmm="$(date -r "$_BTB_STARTED" +%H:%M 2>/dev/null || date -d "@$_BTB_STARTED" +%H:%M 2>/dev/null || printf '?')" ;;
+        esac
+        printf 'clikae: waiting behind run %s on %s/%s, started %s (--queue-timeout %ss)\n' \
+          "${_BTB_RUN_ID:-?}" "$status_engine" "$tank" "$_queue_hhmm" "$queue_timeout_s" >&2
+      fi
+      sleep "$_queue_poll_s"
+      continue
+    fi
     if burn_tank_busy "$status_engine" "$tank" "$$"; then
       _burn_tank_lock_release "$status_engine" "$tank"
       trap - HUP INT TERM EXIT
@@ -4023,6 +4184,12 @@ cmd_burn() {
       _burn_status_write fail false "$status_engine" "$tank" "$artifact" \
         "busy: $status_engine/$tank already has a running burn on it (#40)" ""
       log_fail "$status_engine/$tank already has a running burn on it (#40) — clikae wait <its run id> to block on it, or --allow-active to run anyway (they will collide on the same tmux session)."
+    fi
+    break
+    done
+    if [ -n "$_queue_announced" ]; then
+      queued_for_s=$((SECONDS - _queue_t0))
+      printf 'clikae: %s/%s is free after %ss in the queue — starting.\n' "$status_engine" "$tank" "$queued_for_s" >&2
     fi
     _burn_status_write running null "$status_engine" "$tank" "$artifact" "" ""
     _burn_tank_lock_release "$status_engine" "$tank"
@@ -4067,6 +4234,9 @@ cmd_burn() {
       # engine.
       if [ "$permission_set" -eq 1 ]; then
         log_warn "$status_engine has no equivalent for --permission $burn_permission; keeping its existing burn flags."
+      fi
+      if [ "$resume_after_limit" -eq 1 ]; then
+        log_warn "--resume-after-limit is not supported for agy yet; ignoring it (dry agy tanks keep today's behaviour)."
       fi
       _agy_burn "$tank" "$prompt" "$artifact" "$timeout_s" "$fresh" "$reroute" "$wait_for_reset_s" "$allow_active" "$_burn_launch_cwd" \
                 "${#cmd[@]}" ${cmd[@]+"${cmd[@]}"} ${add_dirs[@]+"${add_dirs[@]}"}
@@ -4219,6 +4389,9 @@ cmd_burn() {
     fi
     local run_id="${cli}-${cur}-burn-$$"
     [ "$infra_attempt" -eq 0 ] || run_id="${run_id}-retry${infra_attempt}"
+    # #36: each resumed launch gets its own log, so the dry attempt's log (and
+    # the `[ RESUME ]` lines appended to it) is not truncated by the relaunch.
+    [ "${resumed:-0}" -eq 0 ] || run_id="${run_id}-resume${resumed}"
     local log_file="$HOME/.clikae/logs/${run_id}.log"
     local stderr_file="$run_dir/${run_id}.stderr" attempt_started=$SECONDS
     local state_file="$HOME/.clikae/state/${run_id}_exit"
@@ -4759,6 +4932,29 @@ KV
       if [ -n "$wait_for_reset_s" ] && [ -n "$reset" ] \
          && _burn_wait_for_reset "$cli" "$cur" "$artifact" "$reset" "$wait_for_reset_s"; then
         log_info "$cli/$cur should be reset now — re-firing on the same tank."
+        infra_attempt=0; retry_delay="$infra_delay"
+        continue
+      fi
+
+      # #36: --resume-after-limit — wait out ANY parseable reset (no window),
+      # then relaunch the same task on the same tank from the same cwd with a
+      # resume note. Checked before the dry bookkeeping for the same reason as
+      # --wait-for-reset above: a tank we are waiting on has not been
+      # abandoned. An explicit --to wins (the operator named the next hop);
+      # otherwise nothing reroutes while waiting — reroute and resume are
+      # different intents. Unparseable reset / cap reached → today's path.
+      if [ "$resume_after_limit" -eq 1 ] && [ -z "$to" ] && [ -n "$reset" ] \
+         && _burn_resume_after_limit "$cli" "$cur" "$artifact" "$reset"; then
+        if [ "$prompt_set" -eq 1 ]; then
+          prompt="$(_burn_resume_note "$resume_dry_at" "$((resumed + 2))")"$'\n\n'"$base_prompt"
+          _burn_compose "$prompt" "${#post_cmd[@]}" "${post_cmd[@]}" -- "${add_dirs[@]}"
+          cmd=("${BURN_ARGV[@]}")
+          _burn_claude_headless_guards
+        else
+          log_warn "raw '-- <cmd...>' mode has no prompt position — relaunching the same argv without a resume note."
+        fi
+        resumed=$((resumed + 1))
+        _burn_resume_log "relaunching $cli/$cur (attempt $((resumed + 1)), resume $resumed/$(_burn_resume_max)) from $PWD"
         infra_attempt=0; retry_delay="$infra_delay"
         continue
       fi

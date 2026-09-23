@@ -97,6 +97,14 @@ _supervise_decision() {
 # this file is now one of its callers rather than its owner.
 
 
+# _switch_compact_wanted <engine> <tank> -> 0 when the warm /compact (#131)
+# would act on this tank: only claude has it, and the preference must allow it.
+_switch_compact_wanted() {
+  [ "$1" = "claude" ] || return 1
+  declare -F compact_enabled >/dev/null 2>&1 || return 1
+  compact_enabled "$1" "$2"
+}
+
 _switch_run_tmux_wrapped() {
   local engine="$1" tank="$2" d="$3"; shift 3
   local tank_id="${engine}-${tank}"
@@ -159,6 +167,8 @@ KV
   # could not work: the question would be posed by a watcher in another window,
   # where nobody would ever see it.
   wake_ask_once "$engine" "$tank"
+  # Same moment, same reasoning, for the warm /compact (#131, lib/core/compact.sh).
+  compact_ask_once "$engine" "$tank"
 
   # One resolution for both branches: which session name this id means today,
   # and whether it is already up. Sessions started before 0.28.3 are still
@@ -273,7 +283,13 @@ EOF
     if [ "$_fresh_spawn" -eq 1 ] && [ -n "$_launch_sid" ]; then
       tmux_set_session_id "$CLIKAE_TMUX_SESS" "$_launch_sid"
     fi
-    wake_enabled && wake_attach_watcher "$CLIKAE_TMUX_SESS" "$engine" "$tank"
+    # The watcher window now serves two features: waking a limited tank and the
+    # warm /compact (#131). Either one is reason enough to put it there.
+    if wake_enabled; then
+      wake_attach_watcher "$CLIKAE_TMUX_SESS" "$engine" "$tank"
+    elif _switch_compact_wanted "$engine" "$tank"; then
+      wake_attach_watcher "$CLIKAE_TMUX_SESS" "$engine" "$tank" compact-only
+    fi
     # …and give the status row a number to draw. The watcher refreshes the fuel
     # cache from then on (WAKE_USAGE_INTERVAL), but its first tick is five
     # minutes out and it only exists when wake is on — so the one-shot is fired
@@ -308,7 +324,13 @@ EOF
     # nothing and heals a session that lost its waiter — which is exactly what
     # happens when tmux_sessv renames one off the old prefix: the old waiter had
     # the old name in its command and exits when that name stops resolving.
-    wake_enabled && wake_attach_watcher "$CLIKAE_TMUX_SESS" "$engine" "$tank"
+    # The watcher window now serves two features: waking a limited tank and the
+    # warm /compact (#131). Either one is reason enough to put it there.
+    if wake_enabled; then
+      wake_attach_watcher "$CLIKAE_TMUX_SESS" "$engine" "$tank"
+    elif _switch_compact_wanted "$engine" "$tank"; then
+      wake_attach_watcher "$CLIKAE_TMUX_SESS" "$engine" "$tank" compact-only
+    fi
     # The fuel readout's one-shot, same as the branch above — but gated on
     # `started_here`, which is THIS branch's name for "we just spawned it".
     # Re-attaching to a session that is already running must not spend a vendor
