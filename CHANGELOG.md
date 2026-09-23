@@ -69,6 +69,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **The test suite no longer picks up an installed clikae's tmux shim.** On a
+  machine with clikae installed by brew, `command -v tmux` inside the suite
+  resolved to the previous release's shim (`…/libexec/lib/shims`), and two
+  tmux-shim tests went red in the pre-push gate for a change that never
+  touched them. `tests/helpers.bash` now strips every `/lib/shims` PATH entry
+  (`_strip_installed_shims`), covered by tests/bats/helpers-installed-shims.bats.
+
 - **tmux guard shim follow-ups (#106).** `kill-session -C` (in any spelling:
   `-C`, `-aC`, `-Ca`, `-a -C`) only clears alerts and kills nothing, so it is
   no longer refused. An empty `PATH` entry (leading/trailing `:` or `::`) now
