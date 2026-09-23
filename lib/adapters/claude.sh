@@ -105,13 +105,118 @@ adapter_export_env() {
   printf 'CLAUDE_CONFIG_DIR=%s\n' "$profile_dir"
 }
 
+# ── Stable executable path (#59) ─────────────────────────────────────────────
+# Claude Code installs every version under ~/.local/share/claude/versions/<v>
+# and repoints ~/.local/bin/claude. macOS TCC identifies an unsigned-bundle CLI
+# by its RESOLVED executable path (signatures are byte-identical across
+# versions), so each auto-update silently drops a Full Disk Access grant —
+# background sessions just get EPERM, with no prompt. clikae therefore launches
+# claude through a path it owns, $CLIKAE_HOME/bin/claude, kept as a HARD LINK
+# (copy when the link crosses volumes) to the current version's binary.
+# Never a symlink: TCC resolves symlinks, which would put the versioned path
+# right back. Opt out with CLIKAE_CLAUDE_STABLE_PATH=0; =1 forces it on off
+# macOS (default: on for Darwin only). Structural fix — TCC itself is untested.
+
+_claude_stable_enabled() {
+  case "${CLIKAE_CLAUDE_STABLE_PATH:-auto}" in
+    0|off|no|false) return 1 ;;
+    1|on|yes|true)  return 0 ;;
+  esac
+  [ "$(uname -s 2>/dev/null)" = "Darwin" ]
+}
+
+_claude_stable_path() { printf '%s/bin/claude\n' "${CLIKAE_HOME:-$HOME/.clikae}"; }
+
+# Resolve every symlink in <path> to the real file (no GNU readlink -f needed).
+_claude_resolve() {
+  local p="$1" d t n=0
+  while [ -L "$p" ] && [ "$n" -lt 40 ]; do
+    t="$(readlink "$p")" || return 1
+    case "$t" in /*) p="$t" ;; *) d="$(cd -P "$(dirname "$p")" 2>/dev/null && pwd)" || return 1; p="$d/$t" ;; esac
+    n=$((n + 1))
+  done
+  d="$(cd -P "$(dirname "$p")" 2>/dev/null && pwd)" || return 1
+  printf '%s/%s\n' "$d" "$(basename "$p")"
+}
+
+# The installed binary the stable path should mirror ("" if none).
+_claude_stable_source() {
+  local c; c="$(command -v claude 2>/dev/null)" || return 1
+  case "$c" in /*) ;; *) return 1 ;; esac
+  local r; r="$(_claude_resolve "$c")" || return 1
+  [ "$r" = "$(_claude_stable_path)" ] && return 1   # the stable path itself is on PATH
+  [ -f "$r" ] && [ -x "$r" ] || return 1
+  printf '%s\n' "$r"
+}
+
+# 0 when <stable> is exactly <src>: same inode (link) or same bytes (copy).
+_claude_stable_current() {
+  local stable="$1" src="$2"
+  [ -f "$stable" ] && [ -x "$stable" ] || return 1
+  [ "$(cat "$stable.source" 2>/dev/null)" = "$src" ] || return 1
+  [ "$stable" -ef "$src" ] && return 0
+  cmp -s "$stable" "$src"
+}
+
+# Print the executable to launch claude with. Refreshes the stable path when the
+# installed target changed; on any failure falls back to plain `claude`.
+_claude_launch_bin() {
+  _claude_stable_enabled || { printf 'claude\n'; return 0; }
+  local src stable tmp
+  src="$(_claude_stable_source)" || { printf 'claude\n'; return 0; }
+  stable="$(_claude_stable_path)"
+  if ! _claude_stable_current "$stable" "$src"; then
+    mkdir -p "$(dirname "$stable")" 2>/dev/null || { printf 'claude\n'; return 0; }
+    tmp="$stable.new.$$"
+    rm -f "$tmp"
+    # Hard link first; a copy when the link fails (e.g. across volumes). The
+    # rename is atomic, so a session already running the old inode is unharmed.
+    if ln "$src" "$tmp" 2>/dev/null || cp -p "$src" "$tmp" 2>/dev/null; then
+      if mv -f "$tmp" "$stable" 2>/dev/null; then
+        printf '%s\n' "$src" > "$stable.source" 2>/dev/null || true
+      else
+        rm -f "$tmp"; printf 'claude\n'; return 0
+      fi
+    else
+      rm -f "$tmp"; printf 'claude\n'; return 0
+    fi
+  fi
+  printf '%s\n' "$stable"
+}
+
+# Optional hook (burn): the executable to run instead of adapter_meta_cli_binary.
+adapter_launch_binary() { _claude_launch_bin; }
+
+# Read-only doctor lines: the stable path, the version it mirrors, and whether
+# the installed binary moved since (a stale link is the trap #59 exists for).
+_claude_stable_doctor() {
+  local stable src rec state
+  stable="$(_claude_stable_path)"
+  if ! _claude_stable_enabled; then
+    printf '  %-16s %s\n' "claude path" "stable path off (CLIKAE_CLAUDE_STABLE_PATH) — launches through PATH"
+    return 0
+  fi
+  src="$(_claude_stable_source)" || src=""
+  if [ ! -f "$stable" ]; then
+    printf '  %-16s %s\n' "claude path" "$stable — not created yet (made at the next launch)"
+    return 0
+  fi
+  rec="$(cat "$stable.source" 2>/dev/null)"
+  if [ -z "$src" ]; then state="installed claude not found on PATH"
+  elif _claude_stable_current "$stable" "$src"; then state="up to date"
+  else state="STALE — installed claude moved to $src; refreshed at the next launch"
+  fi
+  local ver="unknown"; [ -n "$rec" ] && ver="$(basename "$rec")"
+  printf '  %-16s %s\n' "claude path" "$stable → version $ver — $state"
+}
+
 # Exec the CLI with this profile's env applied.
 adapter_run() {
   local profile_dir="$1"; shift
   # Self-heal tanks created before shared-asset linking existed.
   _claude_link_shared_asset "$profile_dir" "skills"
   _claude_link_shared_asset "$profile_dir" "commands"
-  CLAUDE_CONFIG_DIR="$profile_dir" exec claude "$@"
+  CLAUDE_CONFIG_DIR="$profile_dir" exec "$(_claude_launch_bin)" "$@"
 }
 
 # Optional hook: how to run claude HEADLESS-with-write for `clikae burn`'s
@@ -209,7 +314,7 @@ adapter_ephemeral_flags() {
 # Code takes an initial prompt as a positional argument.
 adapter_start_with_prompt() {
   local profile_dir="$1" prompt="$2"; shift 2
-  CLAUDE_CONFIG_DIR="$profile_dir" exec claude "$prompt" "$@"
+  CLAUDE_CONFIG_DIR="$profile_dir" exec "$(_claude_launch_bin)" "$prompt" "$@"
 }
 
 # Optional hook: the CLI flags to RESUME a specific session by id, one per line
