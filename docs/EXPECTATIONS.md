@@ -110,6 +110,15 @@ symlink** (and moving the Google login between Keychain slots). Unlike the per-s
 `clikae claude/codex <tank>`, this is global — `clikae status` and the board both label
 it so. Reversible with `clikae agy --release`.
 
+**`clikae burn codex` refuses an `--artifact` outside its writable roots.**
+Under `workspace-write`, codex writes only under its cwd (the first `--add-dir`,
+default the artifact's parent) and `/tmp`; extra `--add-dir` values are
+read-only to it, and burn says so once on stderr. An artifact elsewhere could
+never be written, so burn stops before starting instead of timing out on
+`EPERM`. If a run still ends on a sandbox `Operation not permitted`, the
+`reason` is `sandbox refused the write`; the engine's output usually names the
+fallback path it wrote to instead.
+
 **`clikae burn agy <tank>` runs one tank at a time, never in parallel.** It does
 work (since v0.10.0 — the Keychain carry made a tank switch non-interactive, so burn
 can hop agy onto the next tank when one runs dry). But agy has ONE global login, so

@@ -71,7 +71,14 @@ it keeps `workspace-write`. This is evaluated again for each reroute destination
 Codex has no mapping for `auto`; it warns and keeps `workspace-write`.
 
 **Codex sandbox vs `--add-dir`:** the first directory becomes Codex's working
-directory; extra directories are not writable roots under `workspace-write`.
+directory; extra directories are not writable roots under `workspace-write`
+(Codex writes only under that cwd and `/tmp`). With `workspace-write` in
+effect, `burn` refuses before any lock or state file when `--artifact` lies
+outside both roots (`--json` reason: `refused: artifact outside codex writable
+roots`), and prints one stderr line when extra `--add-dir` values are given,
+saying they are read-only to the sandbox. A codex run that ends with no
+artifact and an `Operation not permitted` / `PermissionError` in its output is
+reported as `sandbox refused the write`, not as a task failure.
 A `git worktree` cannot commit under it because its gitdir lives under the main
 repository's `.git/worktrees/`, outside the writable root. Lanes that need
 commit/push/network use `--permission bypassPermissions` or a tank profile with
