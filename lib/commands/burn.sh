@@ -4433,7 +4433,16 @@ KV
         case "$_burn_resume_post_size" in ''|*[!0-9]*) _burn_resume_post_size=0 ;; esac
         [ "$_burn_resume_post_size" -gt "$_burn_resume_pre_size" ] && _burn_resume_grew=1
         if command -v fuser >/dev/null 2>&1; then
-          fuser "$_burn_found_transcript" >/dev/null 2>&1 && _burn_resume_open_elsewhere=1
+          # #105 item 2: macOS/BSD fuser's exit status is 0 whenever the file
+          # EXISTS, whether or not anything has it open — only GNU fuser's
+          # exit code doubles as the answer. Measured live (2026-09):
+          # `fuser <untouched file>` exits 0 and prints "<path>: " with no
+          # PID. Either fuser prints the PID(s) after the colon, or it
+          # doesn't; check that instead of the exit status, which works on
+          # both.
+          local _fuser_out
+          _fuser_out="$(fuser "$_burn_found_transcript" 2>/dev/null)"
+          case "$_fuser_out" in *:*[0-9]*) _burn_resume_open_elsewhere=1 ;; esac
         elif command -v lsof >/dev/null 2>&1; then
           [ -n "$(lsof -- "$_burn_found_transcript" 2>/dev/null)" ] && _burn_resume_open_elsewhere=1
         else
