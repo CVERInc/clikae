@@ -1644,30 +1644,31 @@ _seed_burn_flood_agy() {
 # without ever being listed. A source scan is enough to keep the two in step —
 # it reads the case labels of the board's key loop and the rows of the overlay,
 # and fails when a key is reachable but undocumented.
-@test "every key the board binds is listed in the ? help overlay" {
-  local home_sh="$CLIKAE_TEST_ROOT/lib/commands/home.sh"
-  [ -f "$home_sh" ]
-
-  # Rows of the overlay: _home_help_row "<keys>" "<description>"
-  local legend
+#
+# R4 review P3-5: `$labels` contains a literal `?` — unquoted word-splitting
+# here runs it through pathname expansion. On a clean cwd `?` just expands to
+# itself (a false red: `?` isn't a real _home_pick case, so it prints as
+# "missing"), but with any single-char file sitting in cwd it silently expands
+# to that filename INSTEAD and disappears from the loop — the `?` guard below
+# then never fires, and the real `?` key quietly stops being checked. Reading
+# `$labels` line-by-line (one key per grep -o match, one match per line
+# already) sidesteps word-splitting and globbing entirely.
+#
+# #105 item 3: the stray-file test below used to carry its OWN copy of this
+# scan, so reverting the fix here (back to an unquoted `for key in $labels`)
+# left that other test green — it was never exercising the code path the fix
+# actually lives in. One shared function, called by both tests, closes that.
+_home_pick_legend_missing() {
+  local home_sh="$1" legend labels key missing=""
   legend="$(grep -oE '_home_help_row "[^"]+"' "$home_sh" | sed -E 's/.*"(.*)"/\1/')"
 
   # Case labels of the board's live key loop, single-character arms only —
   # named keys (up/down/enter/esc/pgup…) are covered by the arrow/paging rows,
   # and a range like [1-9] is listed as "1-9".
-  local labels key missing=""
   labels="$(sed -n '/^_home_pick()/,/^}/p' "$home_sh" |
             grep -oE "^      '?[A-Za-z/?]'?\)" |
             tr -d "')" | tr -d ' ')"
 
-  # R4 review P3-5: `$labels` contains a literal `?` — unquoted word-splitting
-  # here runs it through pathname expansion. On a clean cwd `?` just expands
-  # to itself (a false red: `?` isn't a real _home_pick case, so it prints as
-  # "missing"), but with any single-char file sitting in cwd it silently
-  # expands to that filename INSTEAD and disappears from the loop — the `?`
-  # guard below then never fires, and the real `?` key quietly stops being
-  # checked. Reading `$labels` line-by-line (one key per grep -o match, one
-  # match per line already) sidesteps word-splitting and globbing entirely.
   while IFS= read -r key; do
     [ -n "$key" ] || continue
     # `?` opens the overlay itself — listing it inside would be noise.
@@ -1677,13 +1678,22 @@ _seed_burn_flood_agy() {
       *) missing="$missing $key" ;;
     esac
   done <<< "$labels"
+  printf '%s' "$missing"
+}
+
+@test "every key the board binds is listed in the ? help overlay" {
+  local home_sh="$CLIKAE_TEST_ROOT/lib/commands/home.sh"
+  [ -f "$home_sh" ]
+  local missing; missing="$(_home_pick_legend_missing "$home_sh")"
   [ -z "$missing" ] || { echo "keys bound but absent from the ? overlay:$missing"; false; }
 }
 
 @test "the ? overlay key-legend scan survives a stray single-char file in cwd" {
   # R4 review P3-5: pin the failure mode directly, not just the fix — an
   # unquoted `for key in $labels` would let pathname expansion swap a real
-  # label (most dangerously `?` itself) for a filename sitting in cwd.
+  # label (most dangerously `?` itself) for a filename sitting in cwd. Calls
+  # the SAME helper as the test above (#105 item 3), so a regression in that
+  # helper turns both tests red, not just this one.
   local home_sh="$CLIKAE_TEST_ROOT/lib/commands/home.sh"
   [ -f "$home_sh" ]
   local stray_dir="$TEST_HOME/stray"; mkdir -p "$stray_dir"
@@ -1691,20 +1701,7 @@ _seed_burn_flood_agy() {
   : > "$stray_dir/x"
   cd "$stray_dir"
 
-  local legend labels key missing=""
-  legend="$(grep -oE '_home_help_row "[^"]+"' "$home_sh" | sed -E 's/.*"(.*)"/\1/')"
-  labels="$(sed -n '/^_home_pick()/,/^}/p' "$home_sh" |
-            grep -oE "^      '?[A-Za-z/?]'?\)" |
-            tr -d "')" | tr -d ' ')"
-
-  while IFS= read -r key; do
-    [ -n "$key" ] || continue
-    [ "$key" = "?" ] && continue
-    case "$legend" in
-      *"$key"*) ;;
-      *) missing="$missing $key" ;;
-    esac
-  done <<< "$labels"
+  local missing; missing="$(_home_pick_legend_missing "$home_sh")"
   [ -z "$missing" ] || { echo "keys bound but absent from the ? overlay:$missing"; false; }
 }
 
