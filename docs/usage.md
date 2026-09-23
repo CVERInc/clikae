@@ -222,7 +222,7 @@ way.
 
 | Command | What it does |
 |---|---|
-| `init <engine> <tank> [--alias]` | Create the tank directory; with `--alias`, also write a shell alias. |
+| `init <engine> <tank> [--alias]` | Create the tank directory; with `--alias`, also write a shell alias. If `$CLIKAE_HOME/template/<engine>/` exists, its files are also copied into the new tank (a `settings.json` in there is MERGED — only the keys the tank doesn't already have — everything else is copied only if the tank doesn't already have that file). Silent when there's no template. `--no-template` skips this too. |
 | `init <engine> <tank> --adopt` | Mark an EXISTING directory a tank instead of creating one — refuses unless it already looks like that engine's own content. The way back for a directory that lands there after the one-time adoption sweep (below) has already closed: a restored backup, or a stray you've since confirmed is real. Never touches the directory's content; `clikae doctor` names any candidate. |
 | `remove <engine> <tank> [--force] [--keep-data]` | Remove dir + alias + `.app`. `--keep-data` keeps the directory. |
 | `rename <engine> <old> <new> [--force]` | Rename a tank (moves the dir, rewrites the alias, carries the login). |
