@@ -17,7 +17,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **tmux guard shim follow-ups (#106).** `kill-session -C` (in any spelling:
+  `-C`, `-aC`, `-Ca`, `-a -C`) only clears alerts and kills nothing, so it is
+  no longer refused. An empty `PATH` entry (leading/trailing `:` or `::`) now
+  means the current directory, as in any shell command lookup, instead of
+  being skipped. With no real tmux binary on `PATH`, the hop fallback no
+  longer re-picks the guard that just bounced the call back: hop N takes the
+  Nth script candidate, so `shim : guard : usable script` reaches the script
+  instead of failing at the hop ceiling.
 
+- **`clikae rename agy <old> <new>` repoints the tank's harness hooks instead
+  of leaving them naming the tank that no longer exists (#128).**
+  `config/hooks.json`'s hook `command` is an absolute path into the tank
+  (`agy_harness_install` bakes it in with `sed`), so a rename that only moved
+  the directory left every tool call failing on `sh: <old>/config/clikae-harness.sh:
+  No such file or directory` — and because agy's burn artifact is captured
+  stdout, that failure showed up only when someone read the artifact, never
+  in the `[ DONE ]` line. The rename now rewrites the stale path inside
+  `hooks.json` atomically (temp file + rename) right after the directory
+  move, and reports it the same way it reports the carried Keychain login.
 
 ## [0.31.0] — 2026-09-22
 
