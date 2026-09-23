@@ -105,6 +105,7 @@ _calls() { wc -l < "$BATS_TEST_TMPDIR/calls.tsv" | tr -d ' '; }
   cd "$BATS_TEST_TMPDIR/work"
   run --separate-stderr clikae burn codex T1 --artifact "$ART" --prompt "t" \
       --add-dir "$BATS_TEST_TMPDIR/work" --codex-skip-git-check --resume-after-limit --json
+  # shellcheck disable=SC2154  # $stderr is set by `run --separate-stderr`
   [ "$status" -eq 2 ] || { echo "$output $stderr"; false; }
   [ "$(_calls)" -eq 4 ] || false          # first launch + 3 resumes
   [[ "$output" == *'"resumed":3'* ]] || false
@@ -119,6 +120,7 @@ _calls() { wc -l < "$BATS_TEST_TMPDIR/calls.tsv" | tr -d ' '; }
   cd "$BATS_TEST_TMPDIR/work"
   run --separate-stderr clikae burn codex T1 --artifact "$ART" --prompt "t" \
       --add-dir "$BATS_TEST_TMPDIR/work" --codex-skip-git-check --resume-after-limit --json
+  # shellcheck disable=SC2154  # $stderr is set by `run --separate-stderr`
   [ "$status" -eq 0 ] || { echo "$output $stderr"; false; }
   [[ "$output" == *'"ok":true'* ]] || false
   [[ "$output" == *'"resumed":1'* ]] || false
@@ -165,6 +167,7 @@ _calls() { wc -l < "$BATS_TEST_TMPDIR/calls.tsv" | tr -d ' '; }
   cd "$BATS_TEST_TMPDIR/work"
   run --separate-stderr clikae burn codex T1 --artifact "$ART" --prompt "t" \
       --add-dir "$BATS_TEST_TMPDIR/work" --codex-skip-git-check --json
+  # shellcheck disable=SC2154  # $stderr is set by `run --separate-stderr`
   [ "$status" -eq 0 ] || { echo "$output $stderr"; false; }
   [[ "$stderr" == *"codex/T2"* ]] || false
   [[ "$stderr" != *"[ RESUME ]"* ]] || false
