@@ -7,6 +7,72 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **Claude launches through a stable path so macOS file-access grants survive
+  auto-updates (#59).** `$CLIKAE_HOME/bin/claude` is a hard link (copy across
+  volumes) to the installed version, refreshed at launch; `clikae claude`,
+  handoff and burn use it, `clikae doctor` reports it and flags a stale link.
+  Opt out with `CLIKAE_CLAUDE_STABLE_PATH=0`. See docs/claude-on-macos.md.
+
+### Fixed
+
+- **tmux guard shim follow-ups (#106).** `kill-session -C` (in any spelling:
+  `-C`, `-aC`, `-Ca`, `-a -C`) only clears alerts and kills nothing, so it is
+  no longer refused. An empty `PATH` entry (leading/trailing `:` or `::`) now
+  means the current directory, as in any shell command lookup, instead of
+  being skipped. With no real tmux binary on `PATH`, the hop fallback no
+  longer re-picks the guard that just bounced the call back: hop N takes the
+  Nth script candidate, so `shim : guard : usable script` reaches the script
+  instead of failing at the hop ceiling.
+
+- **`clikae rename agy <old> <new>` repoints the tank's harness hooks instead
+  of leaving them naming the tank that no longer exists (#128).**
+  `config/hooks.json`'s hook `command` is an absolute path into the tank
+  (`agy_harness_install` bakes it in with `sed`), so a rename that only moved
+  the directory left every tool call failing on `sh: <old>/config/clikae-harness.sh:
+  No such file or directory` — and because agy's burn artifact is captured
+  stdout, that failure showed up only when someone read the artifact, never
+  in the `[ DONE ]` line. The rename now rewrites the stale path inside
+  `hooks.json` atomically (temp file + rename) right after the directory
+  move, and reports it the same way it reports the carried Keychain login.
+
+- **`clikae burn codex` no longer reports a sandbox refusal as a task
+  failure (#39, #69).** Codex's `workspace-write` sandbox writes only under
+  its cwd (the first `--add-dir`) and `/tmp`. Burn now refuses up front,
+  before any lock or state file, when `--artifact` lies outside those roots
+  (naming both; `--json` reason `refused: artifact outside codex writable
+  roots`), says once on stderr that extra `--add-dir` values are read-only,
+  and classifies a no-artifact ending with an `Operation not permitted`
+  signature as `sandbox refused the write` instead of `no fresh artifact and
+  no limit`. `bypassPermissions` and tank-declared sandbox modes are not
+  refused.
+
+
+### Changed
+
+- **The cockpit guard now fails closed on unknown model ids (#103).** An
+  Agent spawn whose model id the guard cannot classify is refused outright
+  instead of being run through the build/review tripwire and allowed when
+  it did not trip. The refusal names the literal id and the one line to add
+  to `$CLIKAE_HOME/state/cockpit-models` (`checked <id>` or `exempt <id>`)
+  to admit it. Classification is now a table of shapes; Bedrock ids,
+  gateway ids that name anthropic (`openrouter/anthropic/claude-opus-4.1`),
+  `claude-3-5-sonnet-*`, bare `claude-sonnet` and `opus-4-5` are placed in
+  their tier. Refusals read `an Agent spawn on model "<id>"`, and
+  `clikae cockpit`'s "skipped" lines go to stderr in every branch.
+
+- Closed the mechanical review leftovers from #65 (live titles round-6) and
+  #105 (resume/burn PR #83 round-5): pinned `live_engine_alive`'s `#{pane_dead}`
+  half with a remain-on-exit fixture, caught up two stale tmux comments,
+  deduplicated the `?` overlay legend scan across its two tests, fixed
+  macOS/BSD `fuser`'s always-0 exit status so burn's resume-gate can actually
+  ACCEPT a resumed sid (and added the missing positive test for it) while still
+  reading GNU/PSmisc `fuser` (PIDs on stdout, label on stderr, rc 1 when free)
+  the same way, and
+  hardened codex's `-C`/`--cd` arg parsing against an omitted or explicit-empty
+  value.
+
 ## [0.31.0] — 2026-09-22
 
 ### Added

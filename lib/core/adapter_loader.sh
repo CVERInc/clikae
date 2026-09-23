@@ -195,7 +195,7 @@ load_adapter() {
            adapter_relay adapter_transcript_path adapter_handoff_extract adapter_start_with_prompt \
            adapter_account_label adapter_migrate_credentials adapter_flag_args \
            adapter_memory_dir adapter_memory_pointer_path adapter_install_hint adapter_burn_flags \
-           adapter_audit_flags adapter_usage \
+           adapter_audit_flags adapter_usage adapter_launch_binary \
            adapter_find_session adapter_session_cwd \
            adapter_resume_args adapter_session_meta adapter_list_sessions \
            adapter_session_title adapter_title_for_file adapter_recent_sids adapter_session_recap \

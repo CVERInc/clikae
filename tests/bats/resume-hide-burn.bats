@@ -8,7 +8,7 @@ _fixture() {
   mv "$CLIKAE_HOME" "$TEST_HOME/store"
   export CLIKAE_HOME="$TEST_HOME/store"
   unset CLIKAE_RESUME_ALL
-  export STUB_ARGV_LOG="$TEST_HOME/argv" STUB_ARTIFACT="$TEST_HOME/result"
+  export STUB_ARGV_LOG="$TEST_HOME/argv" STUB_ARTIFACT="$TEST_HOME/work/result"
   export STUB_SID="22222222-2222-4222-8222-222222222222"
   export HUMAN_SID="11111111-1111-4111-8111-111111111111"
   # Force direct, synchronous execution even on machines with tmux installed.
@@ -526,6 +526,105 @@ STUB
 # fighting claude's own rule ("--session-id can only be used with --continue
 # or --resume if --fork-session is also specified", verified live 2.1.267)
 # and turning a previously-working launch shape into rc=1 with no artifact. --
+
+
+# #105 item 2 (round-5 review of #83): every fixture around the triple gate
+# above is negative — rc != 0, or it didn't grow, or a concurrent human held
+# it open — and asserts only "$HUMAN_SID stays visible / nothing recorded".
+# Two live mutants (hardwiring condition 3 off, or hardwiring the whole gate
+# to reject) left resume-hide-burn.bats + burn.bats at 167/167 green, because
+# "record nothing, ever" satisfies every assertion in this file just as well
+# as the real gate does. This is the missing positive case: all three
+# conditions hold (rc==0, the resumed transcript GREW, nothing else has it
+# open), so the gate must ACCEPT and record that exact sid — not merely fail
+# to reject it.
+@test "#105 item 2: burn claude --resume <existing sid> that the triple gate ACCEPTS records that sid and hides it from resume" {
+  _fixture
+  clikae init claude T1
+  _human_claude   # $HUMAN_SID's transcript pre-exists; this run resumes it
+  cat > "$TEST_HOME/bin/claude" <<'STUB'
+#!/usr/bin/env bash
+printf '%s\n' "$@" >> "$STUB_ARGV_LOG"
+sid=""
+while [ "$#" -gt 0 ]; do
+  if [ "$1" = --resume ]; then sid="$2"; break; fi
+  shift
+done
+slug="$(printf '%s' "$PWD" | sed 's/[^A-Za-z0-9]/-/g')"
+f="$CLAUDE_CONFIG_DIR/projects/$slug/$sid.jsonl"
+# The engine itself appends to the resumed transcript (condition 2: it
+# GREW) and exits 0 (condition 1), and nothing else has it open while this
+# stub runs (condition 3) -- all three gate conditions hold.
+printf '{"type":"user","cwd":"%s","message":{"role":"user","content":"more from the burn"}}\n' "$PWD" >> "$f"
+printf 'done\n' > "$STUB_ARTIFACT"
+STUB
+  chmod +x "$TEST_HOME/bin/claude"
+  run clikae burn claude T1 --artifact "$STUB_ARTIFACT" --add-dir "$PWD" -- -p 'go' --resume "$HUMAN_SID"
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  _assert_sidecar claude T1 "$HUMAN_SID"
+  # This run's own sid is now the ONLY session on the store, and it is a
+  # recorded burn — hiding it by default leaves nothing resumable at all, a
+  # STATE (exit 1 under no tty) rather than a failure; see resume.sh.
+  run clikae resume
+  [ "$status" -eq 1 ]
+  [[ "$output" != *"$HUMAN_SID"* ]] || { echo "the accepted gate's own sid was not hidden by default: $output"; false; }
+  run clikae resume --all
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"$HUMAN_SID"* ]] || { echo "--all should still surface the recorded burn sid, labeled: $output"; false; }
+  [[ "$output" == *"[burn]"* ]] || { echo "the recorded sid did not carry the burn label under --all: $output"; false; }
+}
+
+# #105 item 2 / CI #144: fuser speaks two dialects. BSD (macOS): "<path>: 123"
+# on stdout, rc 0 even when nothing holds the file. GNU/PSmisc (Linux): "123"
+# on stdout, "<path>:" on stderr, rc 1 when nothing holds it (which aborted
+# the burn under errexit). The gate must read both the same way.
+_fuser_dialect_run() {  # <bsd|gnu> <held|free>
+  _fixture
+  clikae init claude T1
+  _human_claude
+  cat > "$TEST_HOME/bin/claude" <<'STUB'
+#!/usr/bin/env bash
+sid=""
+while [ "$#" -gt 0 ]; do
+  if [ "$1" = --resume ]; then sid="$2"; break; fi
+  shift
+done
+slug="$(printf '%s' "$PWD" | sed 's/[^A-Za-z0-9]/-/g')"
+printf '{"type":"user","cwd":"%s","message":{"role":"user","content":"more"}}\n' "$PWD" >> "$CLAUDE_CONFIG_DIR/projects/$slug/$sid.jsonl"
+printf 'done\n' > "$STUB_ARTIFACT"
+STUB
+  cat > "$TEST_HOME/bin/fuser" <<'STUB'
+#!/usr/bin/env bash
+pid=""; [ "$FUSER_STATE" = held ] && pid=" 4242"
+if [ "$FUSER_DIALECT" = bsd ]; then printf '%s:%s\n' "$1" "$pid"; exit 0; fi
+printf '%s:' "$1" >&2
+[ -n "$pid" ] || exit 1
+printf '%s\n' "$pid"
+STUB
+  chmod +x "$TEST_HOME/bin/claude" "$TEST_HOME/bin/fuser"
+  FUSER_DIALECT="$1" FUSER_STATE="$2" run clikae burn claude T1 --artifact "$STUB_ARTIFACT" --add-dir "$PWD" -- -p 'go' --resume "$HUMAN_SID"
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+}
+
+@test "#105 item 2: BSD fuser, transcript free -> the gate accepts and records the sid" {
+  _fuser_dialect_run bsd free
+  _assert_sidecar claude T1 "$HUMAN_SID"
+}
+
+@test "#105 item 2: BSD fuser, transcript held elsewhere -> the gate rejects, nothing recorded" {
+  _fuser_dialect_run bsd held
+  [ ! -e "$CLIKAE_HOME/state/burn-sessions/claude/T1" ] || { cat "$CLIKAE_HOME/state/burn-sessions/claude/T1"; false; }
+}
+
+@test "#105 item 2: GNU fuser, transcript free -> the gate accepts and records the sid" {
+  _fuser_dialect_run gnu free
+  _assert_sidecar claude T1 "$HUMAN_SID"
+}
+
+@test "#105 item 2: GNU fuser, transcript held elsewhere -> the gate rejects, nothing recorded" {
+  _fuser_dialect_run gnu held
+  [ ! -e "$CLIKAE_HOME/state/burn-sessions/claude/T1" ] || { cat "$CLIKAE_HOME/state/burn-sessions/claude/T1"; false; }
+}
 
 @test "burn claude does not clash --session-id onto a caller-supplied --resume (was rc=1)" {
   _fixture

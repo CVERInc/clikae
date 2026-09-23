@@ -140,3 +140,31 @@ These are intentionally *notes*, not roadmap items: clikae's contract is "set th
 CLI's config env var, nothing more," and both behaviours live entirely inside
 Claude Code. The only thing clikae acts on here is the opt-in keychain carry-over
 in §1.
+
+---
+
+## 3. File-access grants survive auto-updates through a stable path
+
+Claude Code installs every version under `~/.local/share/claude/versions/<version>`
+and repoints `~/.local/bin/claude` at the new one. macOS privacy controls (TCC)
+identify a command-line tool without an app bundle by its resolved executable
+path, and the signature is identical across versions, so every auto-update looks
+like a new program: a Full Disk Access grant is silently dropped, and background
+sessions just get `EPERM` (files created this session readable, older ones not).
+
+clikae launches claude through a path it owns, `$CLIKAE_HOME/bin/claude`. It is a
+**hard link** to the installed version's binary (a copy when the link would cross
+volumes; never a symlink, because TCC resolves symlinks back to the versioned
+path), refreshed at every launch when the installed version changed.
+
+**One-time grant:** System Settings → Privacy & Security → Full Disk Access → `+`,
+press `⌘⇧G`, and add `~/.clikae/bin/claude` (after the first `clikae claude <tank>`
+has created it). This is a structural fix: the grant survives updates because the
+path does not change. TCC itself is not exercised by the test suite.
+
+`clikae doctor` prints a `claude path` line with the version the stable path
+mirrors and `STALE` if the installed binary moved since (it is refreshed at the
+next launch; doctor never writes).
+
+**Opt out:** `CLIKAE_CLAUDE_STABLE_PATH=0` launches the bare `claude` from `PATH`.
+It is on by default only on macOS; `CLIKAE_CLAUDE_STABLE_PATH=1` forces it on elsewhere.

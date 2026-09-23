@@ -208,6 +208,11 @@ _agy_rename() {
   _agy_assert_not_running
   active="$(_agy_active)"
   mv "$slots/$old" "$slots/$new" || log_fail "Couldn't rename the agy tank directory."
+  # The harness's hooks.json stores an absolute path back into this tank
+  # (#128) — the mv above doesn't fix that up, so do it here.
+  if agy_harness_repoint "$slots/$old" "$slots/$new"; then
+    log_done "Repointed the tank's harness hooks (config/hooks.json) at the new path."
+  fi
   _agy_kc_rename "$old" "$new"
   soul_rename_member "antigravity" "$old" "$new"   # keep Soul membership in step
   rename_tank_state "antigravity" "$old" "$new"    # burn-order entry + dry marker

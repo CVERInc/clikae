@@ -2853,9 +2853,9 @@ _permission_argv() (
   # fail that check before ever reaching the --permission composition logic.
   local ws="$BATS_TEST_TMPDIR/workspace"; mkdir -p "$ws"; git init -q "$ws"
   local permission_argv_file="$TEST_HOME/default.argv"
-  _permission_argv codex T1 --artifact out --prompt 'build and review' --add-dir "$ws"
+  _permission_argv codex T1 --artifact "$ws/out" --prompt 'build and review' --add-dir "$ws"
   permission_argv_file="$TEST_HOME/auto.argv"
-  _permission_argv codex T1 --artifact out --permission auto --prompt 'build and review' --add-dir "$ws" 2> "$TEST_HOME/warning"
+  _permission_argv codex T1 --artifact "$ws/out" --permission auto --prompt 'build and review' --add-dir "$ws" 2> "$TEST_HOME/warning"
   cmp "$TEST_HOME/default.argv" "$TEST_HOME/auto.argv"
   [ "$(wc -l < "$TEST_HOME/warning" | tr -d ' ')" = 1 ]
   grep -F 'codex has no equivalent for --permission auto; keeping its existing burn flags.' "$TEST_HOME/warning"
@@ -2909,9 +2909,9 @@ _permission_argv() (
   # git work tree for the #66 round-1 codex git-cwd check to pass.
   local ws="$BATS_TEST_TMPDIR/workspace"; mkdir -p "$ws"; git init -q "$ws"
   local permission_argv_file="$TEST_HOME/default.argv"
-  _permission_argv codex T1 --artifact out --prompt 'build and review' --add-dir "$ws"
+  _permission_argv codex T1 --artifact "$ws/out" --prompt 'build and review' --add-dir "$ws"
   permission_argv_file="$TEST_HOME/accept.argv"
-  _permission_argv codex T1 --artifact out --permission acceptEdits --prompt 'build and review' --add-dir "$ws" 2> "$TEST_HOME/warning"
+  _permission_argv codex T1 --artifact "$ws/out" --permission acceptEdits --prompt 'build and review' --add-dir "$ws" 2> "$TEST_HOME/warning"
   cmp "$TEST_HOME/default.argv" "$TEST_HOME/accept.argv"
   [ ! -s "$TEST_HOME/warning" ]
 }
@@ -5445,4 +5445,95 @@ _codex_sandbox_argv() {
   printf '%s\0' -p review --permission-mode acceptEdits --add-dir /workspace > "$TEST_HOME/expected.argv"
   cmp "$TEST_HOME/plan.argv" "$TEST_HOME/expected.argv"
   grep -F 'claude has no equivalent for --permission plan; keeping its existing burn flags.' "$TEST_HOME/warning"
+}
+
+# --- #39/#69: codex's workspace-write sandbox writes only under its single
+# cwd (-C, the first --add-dir) and /tmp. An --artifact outside those roots is
+# refused before any state exists; extra --add-dir values get one read-only
+# notice; an EPERM ending is classified as a sandbox refusal.
+
+@test "burn #69: codex --artifact outside the writable cwd is refused early, naming both paths" {
+  _stub_codex
+  clikae init codex T1
+  mkdir -p "$BATS_TEST_TMPDIR/work"
+  # Outside /tmp on every OS: on Linux BATS_TEST_TMPDIR itself is under /tmp,
+  # which codex may write, so a sibling of the work dir is NOT refused there.
+  # Never created: the refusal fires before anything touches it.
+  local outside="/nonexistent-clikae-$$"
+  export STUB_ARGV_LOG="$BATS_TEST_TMPDIR/argv.log"
+  run clikae burn codex T1 --add-dir "$BATS_TEST_TMPDIR/work" --artifact "$outside/r.md" --prompt x
+  [ "$status" -eq 1 ]
+  [[ "$output" == *"outside codex's writable roots"* ]] || { echo "$output"; false; }
+  [[ "$output" == *"$BATS_TEST_TMPDIR/work"* ]] || false
+  [[ "$output" == *"$outside/r.md"* ]] || false
+  [ ! -e "$STUB_ARGV_LOG" ]
+  [ ! -e "$CLIKAE_HOME/logs" ] || [ -z "$(ls -A "$CLIKAE_HOME/logs")" ]
+}
+
+@test "burn #69: the early refusal carries a --json reason" {
+  _stub_codex
+  clikae init codex T1
+  mkdir -p "$BATS_TEST_TMPDIR/work"
+  # Outside /tmp on every OS: on Linux BATS_TEST_TMPDIR itself is under /tmp,
+  # which codex may write, so a sibling of the work dir is NOT refused there.
+  # Never created: the refusal fires before anything touches it.
+  local outside="/nonexistent-clikae-$$"
+  run clikae burn codex T1 --json --add-dir "$BATS_TEST_TMPDIR/work" --artifact "$outside/r.md" --prompt x
+  [ "$status" -eq 1 ]
+  [[ "$output" == *'{"ok":false,"engine":"codex","tank":"T1",'* ]] || { echo "$output"; false; }
+  [[ "$output" == *'"reason":"refused: artifact outside codex writable roots"'* ]] || false
+}
+
+@test "burn #69: extra --add-dir values get exactly one read-only notice" {
+  _stub_codex
+  clikae init codex T1
+  mkdir -p "$BATS_TEST_TMPDIR/work" "$BATS_TEST_TMPDIR/ro1" "$BATS_TEST_TMPDIR/ro2"
+  export STUB_ARTIFACT="$BATS_TEST_TMPDIR/work/r.md"
+  run clikae burn codex T1 --add-dir "$BATS_TEST_TMPDIR/work" --add-dir "$BATS_TEST_TMPDIR/ro1" --add-dir "$BATS_TEST_TMPDIR/ro2" --artifact "$STUB_ARTIFACT" --prompt x
+  [ "$status" -eq 0 ]
+  [ "$(printf '%s\n' "$output" | grep -c 'read-only to its sandbox')" -eq 1 ]
+}
+
+@test "burn #69 control: a single --add-dir prints no read-only notice" {
+  _stub_codex
+  clikae init codex T1
+  mkdir -p "$BATS_TEST_TMPDIR/work"
+  export STUB_ARTIFACT="$BATS_TEST_TMPDIR/work/r.md" STUB_ARGV_LOG="$BATS_TEST_TMPDIR/argv.log"
+  run clikae burn codex T1 --add-dir "$BATS_TEST_TMPDIR/work" --artifact "$STUB_ARTIFACT" --prompt x
+  [ "$status" -eq 0 ]
+  [[ "$output" != *'read-only to its sandbox'* ]] || false
+  grep -q -- "exec -C $BATS_TEST_TMPDIR/work -s workspace-write" "$STUB_ARGV_LOG"
+}
+
+@test "burn #69 control: an artifact under /tmp is accepted with a different cwd" {
+  _stub_codex
+  clikae init codex T1
+  mkdir -p "$BATS_TEST_TMPDIR/work"
+  local t; t="$(mktemp -d /tmp/clikae-bats.XXXXXX)"
+  export STUB_ARTIFACT="$t/r.md"
+  run clikae burn codex T1 --add-dir "$BATS_TEST_TMPDIR/work" --artifact "$STUB_ARTIFACT" --prompt x
+  rm -rf "$t"
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  [[ "$output" != *"outside codex's writable roots"* ]] || false
+}
+
+@test "burn #69 control: bypassPermissions (danger-full-access) is not refused" {
+  _stub_codex
+  clikae init codex T1
+  mkdir -p "$BATS_TEST_TMPDIR/work" "$BATS_TEST_TMPDIR/elsewhere"
+  export STUB_ARTIFACT="$BATS_TEST_TMPDIR/elsewhere/r.md"
+  run clikae burn codex T1 --permission bypassPermissions --add-dir "$BATS_TEST_TMPDIR/work" --artifact "$STUB_ARTIFACT" --prompt x
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+}
+
+@test "burn #39: a codex run ending in the sandbox EPERM signature is a sandbox refusal, not a task failure" {
+  _stub_codex_stderr81
+  export STUB_STDERR81="PermissionError: [Errno 1] Operation not permitted: 'report.md'"
+  clikae init codex T1
+  run clikae burn codex T1 --json --no-reroute --artifact "$BATS_TEST_TMPDIR/out" --prompt x
+  [ "$status" -eq 1 ]
+  [[ "$output" == *'"reason":"sandbox refused the write"'* ]] || { echo "$output"; false; }
+  [[ "$output" == *'its sandbox refused a write'* ]] || false
+  [[ "$output" != *'no fresh artifact and no limit'* ]] || false
+  [ ! -e "$CLIKAE_HOME/dry/codex/T1" ]
 }

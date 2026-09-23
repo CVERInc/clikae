@@ -102,6 +102,9 @@ setup() {
   cp "$CLIKAE_TEST_ROOT/tests/stubs/security" "$TEST_HOME/.testbin/security"
   chmod +x "$TEST_HOME/.testbin/security"
   export PATH="$TEST_HOME/.testbin:$PATH"
+  # #59: keep claude launches on the bare PATH name by default, so the suite
+  # behaves the same on macOS and Linux; claude-stable-path.bats opts back in.
+  export CLIKAE_CLAUDE_STABLE_PATH=0
   # Pin the interface language so assertions are deterministic regardless of the
   # CI/host locale. i18n itself is covered by tests/bats/i18n.bats.
   # Answer the wake question up front. Since 2026-08-13 a launch asks once, at

@@ -776,9 +776,12 @@ EOF
         #   2. its own engine process is still running — live_engine_alive
         #      (lib/core/live.sh) asks whether THIS tmux session's own
         #      window (not a `wake` watcher window that can outlive it) is
-        #      still there. A window that closed on its own (nothing here
-        #      ever sets remain-on-exit for it) cannot still be the thing
-        #      this stamp names, even when the SESSION persists past it.
+        #      still there — by name and, since R5-P3-1, by #{pane_dead}
+        #      too, so a user's own `remain-on-exit` (clikae never sets it,
+        #      but never assumes nobody did) is caught as well as a window
+        #      that closed outright. Either way it cannot still be the
+        #      thing this stamp names, even when the SESSION persists past
+        #      it.
         if ! live_engine_alive "$name"; then
           stale=1
         fi

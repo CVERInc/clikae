@@ -168,6 +168,18 @@ file (e.g. `~/.zshrc.clikae.bak.20260605-143000`). Restore the most recent backu
 cp ~/.zshrc.clikae.bak.<timestamp> ~/.zshrc
 ```
 
+## Two project folders with non-ASCII names share one Resume list
+
+Claude Code names a project's transcript directory by replacing every byte
+outside `[A-Za-z0-9]` with `-`. Two sibling folders whose names differ only in
+non-ASCII characters of the same length (`~/專案一` and `~/專案二`, for example)
+therefore land in the **same** `projects/<slug>` directory, and the home
+board's Continue list — which reads that directory — shows their sessions
+merged. clikae reports what is on disk; it cannot tell the two folders apart
+after the engine has collapsed them. The workaround is a distinguishing ASCII
+element in the folder name (`~/專案一-a`, `~/專案二-b`). Tracked upstream; see
+issue #116 for the measurement.
+
 ## Developing / running the tests
 
 clikae stays Node-free; local checks use `shellcheck` and `bats`. Run the gate —

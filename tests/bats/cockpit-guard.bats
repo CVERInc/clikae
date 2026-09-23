@@ -159,7 +159,7 @@ _guard_file() { bash "$GUARD" < "$1"; }
   [[ "$output" != *"claude/cockpit-tank"* ]] || false
 }
 
-@test "#61 round-6 P3-4: with NO state/cockpit the refusal still names the reserve" {
+@test "with no state/cockpit record, a refusal still lists every idle tank in the reserve (#61 round-6 P3-4)" {
   # `cur` was fetched inside the enrichment block's `&&` chain, so a missing
   # state/cockpit (head exits 1, and pipefail carries it) took the whole block
   # down — the operator got a refusal with no reserve and not even the "No
@@ -288,7 +288,7 @@ _P26_PLAIN='{"tool_name":"Agent","tool_input":{"model":"sonnet","prompt":"review
   run _guard "$_P26_PLAIN"
   [ "$status" -eq 2 ]
   local plain="$output"
-  [[ "$plain" == *"a sonnet-model Agent spawn whose prompt reads as a build/review lane"* ]] || false
+  [[ "$plain" == *'an Agent spawn on model "sonnet" whose prompt reads as a build/review lane'* ]] || false
   local -a names=() variants=()
   names+=("trailing space");     variants+=("$_P26_PLAIN ")
   names+=("trailing tab");       variants+=("$_P26_PLAIN"$'\t')
@@ -324,7 +324,7 @@ _P26_PLAIN='{"tool_name":"Agent","tool_input":{"model":"sonnet","prompt":"review
   # first "model" the flat scan found, and the sonnet call was allowed.
   run _guard '{"metadata":{"model":"haiku"},"tool_name":"Agent","tool_input":{"model":"sonnet","prompt":"review"}}'
   [ "$status" -eq 2 ]
-  [[ "$output" == *"a sonnet-model Agent spawn"* ]] || false
+  [[ "$output" == *'an Agent spawn on model "sonnet"'* ]] || false
 }
 
 @test "two concatenated JSON objects are malformed input, refused (#63 r5 P2-6)" {
@@ -580,12 +580,11 @@ GEN="$CLIKAE_TEST_ROOT/tests/fixtures/cockpit-guard/gen_specimen.py"
     run _guard "$(printf '{"tool_name":"Agent","tool_input":{"model":"%s","prompt":"make a worktree and implement the feature"}}' "$m")"
     [ "$status" -eq 2 ] || { echo "expected refuse for model=$m" >&2; false; }
   done
-  # A model that merely CONTAINS "sonnet" is not matched AS sonnet -- but
-  # since round 5 (P3-2) an id the guard cannot place is checked like
-  # opus/sonnet rather than waved through, and the refusal says so.
+  # A model that merely CONTAINS "sonnet" is not matched AS sonnet -- since
+  # #103 an id the guard cannot place is denied outright, and says so.
   run _guard '{"tool_name":"Agent","tool_input":{"model":"not-a-sonnet-clone","prompt":"make a worktree and implement the feature"}}'
   [ "$status" -eq 2 ]
-  [[ "$output" == *"unrecognised model id (not-a-sonnet-clone"* ]] || false
+  [[ "$output" == *'model "not-a-sonnet-clone", a shape the guard does not recognise'* ]] || false
 }
 
 @test "provider-spelled ids are placed in their family; unknown ids are checked, never silently allowed (#63 r5 P3-2)" {
@@ -603,16 +602,80 @@ GEN="$CLIKAE_TEST_ROOT/tests/fixtures/cockpit-guard/gen_specimen.py"
     [ "$status" -eq 0 ] || { echo "expected allow for $m" >&2; false; }
     [ -z "$output" ] || { echo "expected silence for $m: $output" >&2; false; }
   done
-  # unknown ids: refused on the tripwire, named as unrecognised...
+  # unknown ids: denied (#103), whatever the prompt says -- see the #103
+  # tests below for the message and the allow rule.
   for m in unexpected inherit; do
-    run _guard "$(printf '{"tool_name":"Agent","tool_input":{"model":"%s","prompt":"%s"}}' "$m" "$lane")"
+    run _guard "$(printf '{"tool_name":"Agent","tool_input":{"model":"%s","prompt":"summarize these three files"}}' "$m")"
     [ "$status" -eq 2 ] || { echo "expected refuse for $m" >&2; false; }
-    [[ "$output" == *"unrecognised model id ($m"* ]] || false
+    [[ "$output" == *"model \"$m\", a shape the guard does not recognise"* ]] || false
   done
-  # ...and allowed with a visible line when the prompt does not trip.
-  run _guard '{"tool_name":"Agent","tool_input":{"model":"unexpected","prompt":"summarize these three files"}}'
-  [ "$status" -eq 0 ]
-  [[ "$output" == *"allowed an Agent spawn with an unrecognised model id (unexpected)"* ]] || false
+}
+
+# --- #103: table-driven classification; unknown shapes fail CLOSED ---------
+
+_P103_LANE='make a worktree and implement the feature'
+_p103() { printf '{"tool_name":"Agent","tool_input":{"model":"%s","prompt":"%s"}}' "$1" "$2"; }
+
+@test "#103: the five reported shapes are classified as opus/sonnet tiers, not left unknown" {
+  local m
+  for m in us.anthropic.claude-sonnet-4-5-20250929-v1:0 openrouter/anthropic/claude-opus-4.1 \
+           claude-3-5-sonnet-20241022 claude-sonnet opus-4-5; do
+    # checked tier: a benign prompt passes silently...
+    run _guard "$(_p103 "$m" 'summarize these three files')"
+    [ "$status" -eq 0 ] || { echo "expected allow for $m: $output" >&2; false; }
+    [ -z "$output" ] || { echo "expected silence for $m: $output" >&2; false; }
+    # ...and a lane prompt refuses as that model, not as an unknown shape.
+    run _guard "$(_p103 "$m" "$_P103_LANE")"
+    [ "$status" -eq 2 ] || { echo "expected refuse for $m" >&2; false; }
+    [[ "$output" == *"whose prompt reads as a build/review lane"* ]] || { echo "$m: $output" >&2; false; }
+    [[ "$output" != *"does not recognise"* ]] || { echo "$m should be classified: $output" >&2; false; }
+  done
+}
+
+@test "#103: gateway prefixes are stripped only where they name anthropic; a slash cannot smuggle haiku" {
+  run _guard "$(_p103 anthropic/claude-sonnet-4.5 "$_P103_LANE")"
+  [ "$status" -eq 2 ]; [[ "$output" == *"build/review lane"* ]] || false
+  local m
+  for m in opus/haiku a.b/anthropic/haiku x/y/anthropic/haiku; do
+    run _guard "$(_p103 "$m" 'summarize')"
+    [ "$status" -eq 2 ] || { echo "expected refuse for $m" >&2; false; }
+    [[ "$output" == *"does not recognise"* ]] || false
+  done
+}
+
+@test "#103: an unknown shape is refused on a benign prompt, naming the literal id and the allow line" {
+  run _guard "$(_p103 'Mystery-Model-9' 'summarize these three files')"
+  [ "$status" -eq 2 ]
+  [[ "$output" == *'model "Mystery-Model-9", a shape the guard does not recognise'* ]] || false
+  [[ "$output" == *"add this line to $CLIKAE_HOME/state/cockpit-models:"* ]] || false
+  [[ "$output" == *$'\n  checked Mystery-Model-9\n'* ]] || false
+}
+
+@test "#103: the printed allow line, once added, admits the id as checked (tripwire still applies)" {
+  run _guard "$(_p103 'Mystery-Model-9' 'summarize these three files')"
+  local line; line="$(printf '%s\n' "$output" | sed -n 's/^  \(checked .*\)$/\1/p')"
+  [ "$line" = "checked Mystery-Model-9" ]
+  mkdir -p "$CLIKAE_HOME/state"
+  printf '# local additions\n%s\n' "$line" > "$CLIKAE_HOME/state/cockpit-models"
+  run _guard "$(_p103 'Mystery-Model-9' 'summarize these three files')"
+  [ "$status" -eq 0 ]; [ -z "$output" ]
+  run _guard "$(_p103 'Mystery-Model-9' "$_P103_LANE")"
+  [ "$status" -eq 2 ]; [[ "$output" == *"build/review lane"* ]] || false
+  # literal match only: a different spelling is still unknown
+  run _guard "$(_p103 'mystery-model-9' 'summarize')"
+  [ "$status" -eq 2 ]; [[ "$output" == *"does not recognise"* ]] || false
+}
+
+@test "#103: every refusal branch writes to stderr only, nothing to stdout" {
+  local p
+  for p in "$(_p103 sonnet "$_P103_LANE")" "$(_p103 unknown-x summarize)" \
+           '{"tool_name":"Agent","tool_input":{"prompt":"x"}}' 'not json'; do
+    run bash -c 'printf "%s" "$1" | bash "$2" 2>/dev/null' _ "$p" "$GUARD"
+    [ "$status" -eq 2 ] || { echo "expected refuse: $p" >&2; false; }
+    [ -z "$output" ] || { echo "stdout not empty for $p: $output" >&2; false; }
+    run bash -c 'printf "%s" "$1" | bash "$2" 2>&1 >/dev/null' _ "$p" "$GUARD"
+    [[ "$output" == *"cockpit-guard: refused"* ]] || false
+  done
 }
 
 # --- #63 P2-7: large-payload timing (re-measured for fix2's full-payload
