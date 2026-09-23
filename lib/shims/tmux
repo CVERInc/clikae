@@ -407,6 +407,10 @@ fi
 # (`a:` splits to just `a`), so one extra `:` is appended: `a:` + `:` keeps
 # its empty field, and a PATH with no trailing colon only gains a field
 # that is dropped again. Each empty field is then read as `.`.
+# 🔴 THE COLON MUST COME FROM AN EXPANSION: `for _d in $PATH:` splits only
+# the expanded part, so bash 4+/5 keeps the literal `:` glued to the last
+# entry (`/x/bin:`, never executable) — every shim call on Linux came back
+# 127. Bash 3.2 happened to split it. `_tg_walk="$PATH:"` is split whole.
 #
 # 🔴 THE FALLBACK TRIES A DIFFERENT SCRIPT EACH HOP (clikae#106). Once hops
 # >= 2 and no binary exists, the fallback used to be the FIRST script
@@ -420,9 +424,10 @@ fi
 _real_tmux=""
 _fallback_tmux=""
 _script_n=0
+_tg_walk="$PATH:"
 _ifs_save="$IFS"
 IFS=:
-for _d in $PATH:; do
+for _d in $_tg_walk; do
   IFS="$_ifs_save"
   [ -n "$_d" ] || _d=.
   if [ -n "$_d" ] && [ -x "$_d/tmux" ] && [ "$_d/tmux" -ef "$0" ]; then
