@@ -37,6 +37,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `hooks.json` atomically (temp file + rename) right after the directory
   move, and reports it the same way it reports the carried Keychain login.
 
+### Changed
+
+- **The cockpit guard now fails closed on unknown model ids (#103).** An
+  Agent spawn whose model id the guard cannot classify is refused outright
+  instead of being run through the build/review tripwire and allowed when
+  it did not trip. The refusal names the literal id and the one line to add
+  to `$CLIKAE_HOME/state/cockpit-models` (`checked <id>` or `exempt <id>`)
+  to admit it. Classification is now a table of shapes; Bedrock ids,
+  gateway ids that name anthropic (`openrouter/anthropic/claude-opus-4.1`),
+  `claude-3-5-sonnet-*`, bare `claude-sonnet` and `opus-4-5` are placed in
+  their tier. Refusals read `an Agent spawn on model "<id>"`, and
+  `clikae cockpit`'s "skipped" lines go to stderr in every branch.
+
 ## [0.31.0] — 2026-09-22
 
 ### Added

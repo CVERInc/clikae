@@ -895,3 +895,29 @@ _cockpit_make_agy_tank() {   # <tank> — a tank dir with the marker `clikae ini
   [[ "$output" == *"cockpit guard installed"* ]] || false
   [[ "$output" == *"guard goes silent if that checkout is ever removed"* ]] || false
 }
+
+# --- #103 round-3 nits --------------------------------------------------------
+
+@test "#103: installing the guard keeps settings.json's prior file mode" {
+  clikae init claude A
+  local f="$CLIKAE_HOME/profiles/claude/A/settings.json"
+  printf '{"env":{"X":"1"}}\n' > "$f"
+  chmod 600 "$f"
+  run clikae cockpit claude A
+  [ "$status" -eq 0 ]
+  _guard_installed "$f"
+  local mode
+  mode="$(stat -c %a "$f" 2>/dev/null || stat -f %Lp "$f")"
+  [ "$mode" = "600" ] || { echo "mode after install: $mode" >&2; false; }
+}
+
+@test "#103: a skipped install reports on stderr only, in the same 'skipped —' form" {
+  clikae init claude A
+  printf '{not json\n' > "$CLIKAE_HOME/profiles/claude/A/settings.json"
+  # `clikae` is a helpers function, so split the streams here rather than
+  # in a `bash -c` (which would find some other clikae on PATH).
+  clikae cockpit claude A >"$BATS_TEST_TMPDIR/out" 2>"$BATS_TEST_TMPDIR/err" || true
+  [ ! -s "$BATS_TEST_TMPDIR/out" ] || { cat "$BATS_TEST_TMPDIR/out" >&2; false; }
+  output="$(cat "$BATS_TEST_TMPDIR/err")"
+  [[ "$output" == *"claude/A: skipped — settings.json is not valid JSON"* ]] || { echo "$output" >&2; false; }
+}
