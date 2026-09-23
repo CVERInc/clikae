@@ -285,7 +285,10 @@ _burn_pid_matches_marker() {
 # its tank — a second burn (or the reroute walk) landing on it mid-sleep
 # would collide with the re-fire this one is about to make, exactly like the
 # `running` case #40 already guards.
+# #90: on a 0 return, _BTB_RUN_ID / _BTB_STARTED name the holder (run id and
+# its epoch started_at) so `burn --queue` can say whom it is waiting behind.
 burn_tank_busy() {
+  _BTB_RUN_ID=""; _BTB_STARTED=""
   local eng="$1" tk="$2" self_pid="${3:-}" base d f json feng ftk fpid fstarted
   base="$HOME/.clikae/logs"
   [ -d "$base" ] || return 1
@@ -317,6 +320,9 @@ burn_tank_busy() {
     kill -0 "$fpid" 2>/dev/null || continue   # stale — the writer is gone
     fstarted="$(burn_status_str "$json" started_at)"
     _burn_pid_matches_marker "$fpid" "$fstarted" || continue   # stale — a recycled pid, not the same writer
+    _BTB_RUN_ID="$(burn_status_str "$json" run_id)"
+    [ -n "$_BTB_RUN_ID" ] || _BTB_RUN_ID="${d##*/}"
+    _BTB_STARTED="$fstarted"
     return 0
   done
   return 1
