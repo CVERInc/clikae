@@ -360,7 +360,7 @@ _home_continue_notes() {
   return 0
 }
 
-# _home_burn_waiting_notes [extra] -> `⏳ <engine>/<tank> burn resumes at HH:MM`
+# _home_burn_waiting_notes [extra] -> `waiting: <engine>/<tank> burn resumes at HH:MM`
 # for every live burn sleeping to a vendor reset (#36). Local wall-clock time:
 # the question on the board is "when does my own clock see it move again".
 _home_burn_waiting_notes() {
@@ -372,7 +372,7 @@ _home_burn_waiting_notes() {
     [ -n "$tank" ] || continue
     hm="$(date -r "$at" '+%H:%M' 2>/dev/null || date -d "@$at" '+%H:%M' 2>/dev/null || printf '?')"
     # shellcheck disable=SC2059  # the format IS the localized string
-    printf '  %b⏳ %s%b\n' "$__C_DIM" "$(printf "${T_BURN_RESUMES_AT:-%s burn resumes at %s}" "$tank" "$hm")" "$__C_RESET"
+    printf '  %bwaiting: %s%b\n' "$__C_DIM" "$(printf "${T_BURN_RESUMES_AT:-%s burn resumes at %s}" "$tank" "$hm")" "$__C_RESET"
   done <<EOF
 $rows
 EOF

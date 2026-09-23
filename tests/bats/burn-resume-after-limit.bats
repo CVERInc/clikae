@@ -142,7 +142,7 @@ _calls() { wc -l < "$BATS_TEST_TMPDIR/calls.tsv" | tr -d ' '; }
   __C_DIM="" __C_RESET=""
   run _home_burn_waiting_notes
   [ "$status" -eq 0 ]
-  [[ "$output" == *"⏳ codex/T1 burn resumes at 19:32"* ]] || { echo "$output"; false; }
+  [[ "$output" == *"waiting: codex/T1 burn resumes at 19:32"* ]] || { echo "$output"; false; }
 }
 
 @test "resume: an explicit --to still wins over waiting" {

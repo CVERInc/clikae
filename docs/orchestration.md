@@ -845,7 +845,7 @@ itself (no daemon):
   `run_id, engine, tank, cwd, argv[], artifact, prompt_file, reset, reset_at,
   attempt, max_attempts, pid` — and sleeps until reset + 2 minutes. The status
   file says `waiting-reset` meanwhile, so the tank stays busy and `clikae home`
-  shows `⏳ <engine>/<tank> burn resumes at HH:MM`.
+  shows `waiting: <engine>/<tank> burn resumes at HH:MM`.
 - It then relaunches the SAME task on the SAME tank from the SAME cwd, with
   this prepended to the prompt: `RESUME NOTE: previous attempt killed by quota
   limit at <t>; this is attempt N; start by reading the worktree state (git
