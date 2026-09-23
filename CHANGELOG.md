@@ -67,7 +67,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   half with a remain-on-exit fixture, caught up two stale tmux comments,
   deduplicated the `?` overlay legend scan across its two tests, fixed
   macOS/BSD `fuser`'s always-0 exit status so burn's resume-gate can actually
-  ACCEPT a resumed sid (and added the missing positive test for it), and
+  ACCEPT a resumed sid (and added the missing positive test for it) while still
+  reading GNU/PSmisc `fuser` (PIDs on stdout, label on stderr, rc 1 when free)
+  the same way, and
   hardened codex's `-C`/`--cd` arg parsing against an omitted or explicit-empty
   value.
 
