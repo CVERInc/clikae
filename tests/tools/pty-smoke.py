@@ -56,6 +56,10 @@ def sandbox(tanks=(('claude', 'alpha'), ('claude', 'beta'), ('codex', 'gamma')),
     os.makedirs(os.path.join(root, '.clikae'), exist_ok=True)
     with open(os.path.join(root, '.clikae', 'wake-on-reset'), 'w') as f:
         f.write('off\n')
+    # Same for the warm /compact question (#131): on by default, asked once at
+    # launch. It stalled this harness the same way on 2026-09-24.
+    with open(os.path.join(root, '.clikae', 'warm-compact'), 'w') as f:
+        f.write('off\n')
     # 🔴 Stamp the CURRENT schema, the way tests/helpers.bash does for bats. A
     # fresh sandbox has no version file, so the first clikae runs the forward
     # migration and prints one line BEFORE the board — and this harness settles
