@@ -7,6 +7,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **`clikae init` seeds a new tank from `$CLIKAE_HOME/template/<engine>/`, if
+  one exists (#95).** Files there (a theme, other per-tank config) are copied
+  into the new tank — never overwriting a file init already wrote — and a
+  `settings.json` in the template is MERGED (only the keys the tank doesn't
+  already have, through the same jq/`_settings_snapshot`/`_settings_write_file`
+  path `settings.sh` owns), instead of a maintainer copying those files by
+  hand into every new tank. Hooks and MCP servers stay out of this — those
+  are already fleet-wide via `clikae hooks share` / `clikae mcp share` — so
+  this only ever handles the files/keys those two verbs don't cover. Silent
+  when there's no template directory for the engine. `--no-template` now
+  skips both this and the existing claude permissions template, one flag for
+  both template steps.
+
 ## [0.31.0] — 2026-09-22
 
 ### Added

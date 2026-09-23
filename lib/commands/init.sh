@@ -1,6 +1,88 @@
 # shellcheck shell=bash
 # lib/commands/init.sh — `clikae init <engine> <tank> [--alias]`
 
+# _init_merge_template_settings <engine> <tank> <dir> <template settings.json>
+# -> merge template-only TOP-LEVEL keys into the new tank's settings.json,
+# print the count of keys added, or nothing on any failure (best-effort: a
+# tank is already created by the time this runs). Never touches a key the
+# tank already has — this seeds defaults, it does not enforce them — and
+# goes through the one write path settings.sh owns (_settings_snapshot /
+# _settings_write_file) so the backup/lock/atomic-rename discipline every
+# other settings.json mutation gets is not hand-rolled a second time here.
+# A subshell: _settings_snapshot installs THIS subshell's EXIT trap for the
+# snapshot dir it creates (see its docstring in settings.sh).
+_init_merge_template_settings() (
+  local engine="$1" tank="$2" dir="$3" tmpl_file="$4" result added settings_out
+  _settings_snapshot "$dir" "$engine/$tank" >/dev/null 2>&1 || return 0
+  result="$(jq -n --slurpfile tmpl "$tmpl_file" --slurpfile cur "${_SETTINGS_SNAP:-/dev/null}" '
+    ($tmpl[0] // {}) as $t | ($cur[0] // {}) as $c |
+    if ($t | type) != "object" then error("invalid template settings.json")
+    elif ($cur | length) > 0 and ($c | type) != "object" then error("invalid settings.json")
+    else . end |
+    ($t | keys_unsorted | map(select(. as $k | ($c | has($k)) | not))) as $new |
+    {added: ($new | length),
+     settings: ($c + ($t | with_entries(select(.key as $k | $new | index($k)))))}
+  ' 2>/dev/null)" || return 0
+  added="$(printf '%s' "$result" | jq -r '.added // 0' 2>/dev/null)"
+  case "$added" in ''|0|*[!0-9]*) return 0 ;; esac
+  settings_out="$(printf '%s' "$result" | jq '.settings' 2>/dev/null)" || return 0
+  _settings_write_file "$_SETTINGS_FILE" "$settings_out" "$engine/$tank" "$_SETTINGS_SNAP" >/dev/null 2>&1 || return 0
+  printf '%s' "$added"
+)
+
+# _init_apply_template <engine> <tank> <dir> -> seed a freshly-created tank
+# from $CLIKAE_HOME/template/<engine>/ (#95), if the operator ever set one up
+# there. This is the SMALL version of #95: hooks and MCP servers are already
+# covered fleet-wide by `clikae hooks share` / `clikae mcp share` (#141) and
+# must not be duplicated here — this only ever handles per-tank FILES a
+# template directory holds (a theme, other config the engine reads straight
+# off disk) plus settings.json KEYS, which get merged rather than copied
+# because settings.json already exists by the time init gets here (the
+# permissions template and fleet_hooks_prelaunch, both above, may have
+# already written to it).
+#
+# Never overwrites anything init already wrote: every non-settings.json file
+# is copied only when the tank does not already have it at that relative
+# path; settings.json goes through _init_merge_template_settings, which only
+# adds keys the tank's settings.json is missing. Silent when there is no
+# template directory for this engine — the whole point is that a maintainer
+# who never set one up sees no new output at all.
+_init_apply_template() {
+  local engine="$1" tank="$2" dir="$3" tmpl copied=0 merged=0 names="" f rel target
+  tmpl="$CLIKAE_HOME/template/$engine"
+  [ -d "$tmpl" ] || return 0
+
+  if ! declare -F _settings_snapshot >/dev/null 2>&1; then
+    # shellcheck source=./settings.sh
+    source "$CLIKAE_LIB/commands/settings.sh"
+  fi
+
+  while IFS= read -r -d '' f; do
+    rel="${f#"$tmpl"/}"
+    if [ "$rel" = "settings.json" ]; then
+      if command -v jq >/dev/null 2>&1; then
+        local n; n="$(_init_merge_template_settings "$engine" "$tank" "$dir" "$f")"
+        case "$n" in ''|*[!0-9]*) ;; *) merged=$((merged + n)) ;; esac
+      fi
+      continue
+    fi
+    target="$dir/$rel"
+    if [ -e "$target" ] || [ -L "$target" ]; then continue; fi
+    mkdir -p "$(dirname "$target")" 2>/dev/null || continue
+    cp -p "$f" "$target" 2>/dev/null || continue
+    copied=$((copied + 1))
+    names="${names:+$names, }$rel"
+  done < <(find "$tmpl" -type f -print0 2>/dev/null)
+
+  [ "$copied" -gt 0 ] || [ "$merged" -gt 0 ] || return 0
+  local msg="Seeded from template ($engine/$tank)"
+  [ -z "$names" ] || msg="$msg: $names"
+  if [ "$merged" -gt 0 ]; then
+    msg="$msg${names:+; }settings.json +$merged key$( [ "$merged" -eq 1 ] || printf s )"
+  fi
+  log_info "$msg"
+}
+
 cmd_init() {
   local with_alias=0 cli="" profile="" no_template=0 adopt=0
   while [ $# -gt 0 ]; do
@@ -22,8 +104,10 @@ Arguments:
 Options:
   --alias        Also add a shell alias to your shell rc:
                    <engine>-<tank>   (e.g. claude-work)
-  --no-template  Skip applying the permissions template to a new claude tank.
-                 Same effect as CLIKAE_NO_PERMISSIONS_TEMPLATE=1.
+  --no-template  Skip applying the permissions template to a new claude tank
+                 (same effect as CLIKAE_NO_PERMISSIONS_TEMPLATE=1), AND skip
+                 seeding the tank from $CLIKAE_HOME/template/<engine>/, if
+                 one exists (#95) — one flag, both template steps.
   --adopt        Mark an EXISTING directory a tank instead of creating one.
                  Refuses unless the directory already looks like a <engine>
                  tank (has that engine's own config file) — the one-time
@@ -198,6 +282,16 @@ EOF
   # No-op for an engine with no hooks layout, a solo tank, an empty store, or
   # a machine without jq (lib/core/fleet_hooks.sh).
   fleet_hooks_prelaunch "$cli" "$profile" "$d"
+
+  # #95: seed a new tank from $CLIKAE_HOME/template/<engine>/, if the operator
+  # ever set one up (theme/config files it copies, settings.json keys it
+  # merges — see _init_apply_template above). Hooks and MCP servers are NOT
+  # part of this: those are already fleet-wide via `hooks share` / `mcp
+  # share` and fleet_hooks_prelaunch just above, so duplicating them here
+  # would be a second, competing writer. Same --no-template escape hatch as
+  # the permissions template; CLIKAE_NO_PERMISSIONS_TEMPLATE does not gate
+  # this (its name says permissions, on purpose).
+  [ "$no_template" -eq 1 ] || _init_apply_template "$cli" "$profile" "$d"
 
   # A new tank joins the machine's default Soul group, if one was ever set.
   # The board shows FLEET vs SOLO and nothing else, so a tank that quietly has no
