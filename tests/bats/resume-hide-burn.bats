@@ -8,7 +8,7 @@ _fixture() {
   mv "$CLIKAE_HOME" "$TEST_HOME/store"
   export CLIKAE_HOME="$TEST_HOME/store"
   unset CLIKAE_RESUME_ALL
-  export STUB_ARGV_LOG="$TEST_HOME/argv" STUB_ARTIFACT="$TEST_HOME/result"
+  export STUB_ARGV_LOG="$TEST_HOME/argv" STUB_ARTIFACT="$TEST_HOME/work/result"
   export STUB_SID="22222222-2222-4222-8222-222222222222"
   export HUMAN_SID="11111111-1111-4111-8111-111111111111"
   # Force direct, synchronous execution even on machines with tmux installed.
