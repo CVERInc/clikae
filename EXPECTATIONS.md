@@ -3,7 +3,7 @@
 A field guide to clikae behaviours that **look** like bugs but are deliberate —
 usually because a vendor's real nature leaks through clikae's uniform "tank" model.
 If something here surprised you, it's working as intended; the *why* is below.
-(For things that are actually broken, see the [CHANGELOG](https://github.com/CVERInc/clikae/blob/4e59c003e9efb75aee2bb8e41c32fbe9b0989108/CHANGELOG.md) /
+(For things that are actually broken, see the [CHANGELOG](https://github.com/CVERInc/clikae/blob/c774bc03af15e97f995211be416cda9a7506c94e/CHANGELOG.md) /
 [issues](https://github.com/CVERInc/clikae/issues).)
 
 ## Fuel gauge & limits
@@ -109,6 +109,15 @@ after-the-fact reading to take.
 symlink** (and moving the Google login between Keychain slots). Unlike the per-shell
 `clikae claude/codex <tank>`, this is global — `clikae status` and the board both label
 it so. Reversible with `clikae agy --release`.
+
+**`clikae burn codex` refuses an `--artifact` outside its writable roots.**
+Under `workspace-write`, codex writes only under its cwd (the first `--add-dir`,
+default the artifact's parent) and `/tmp`; extra `--add-dir` values are
+read-only to it, and burn says so once on stderr. An artifact elsewhere could
+never be written, so burn stops before starting instead of timing out on
+`EPERM`. If a run still ends on a sandbox `Operation not permitted`, the
+`reason` is `sandbox refused the write`; the engine's output usually names the
+fallback path it wrote to instead.
 
 **`clikae burn agy <tank>` runs one tank at a time, never in parallel.** It does
 work (since v0.10.0 — the Keychain carry made a tank switch non-interactive, so burn

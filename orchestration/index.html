@@ -103,7 +103,13 @@ current tank's <code>config.toml</code> wins: clikae omits <code>-s</code>. With
 it keeps <code>workspace-write</code>. This is evaluated again for each reroute destination.
 Codex has no mapping for <code>auto</code>; it warns and keeps <code>workspace-write</code>.</p>
 <p><strong>Codex sandbox vs <code>--add-dir</code>:</strong> the first directory becomes Codex's working
-directory; extra directories are not writable roots under <code>workspace-write</code>.
+directory; extra directories are not writable roots under <code>workspace-write</code>
+(Codex writes only under that cwd and <code>/tmp</code>). With <code>workspace-write</code> in
+effect, <code>burn</code> refuses before any lock or state file when <code>--artifact</code> lies
+outside both roots (<code>--json</code> reason: <code>refused: artifact outside codex writable roots</code>), and prints one stderr line when extra <code>--add-dir</code> values are given,
+saying they are read-only to the sandbox. A codex run that ends with no
+artifact and an <code>Operation not permitted</code> / <code>PermissionError</code> in its output is
+reported as <code>sandbox refused the write</code>, not as a task failure.
 A <code>git worktree</code> cannot commit under it because its gitdir lives under the main
 repository's <code>.git/worktrees/</code>, outside the writable root. Lanes that need
 commit/push/network use <code>--permission bypassPermissions</code> or a tank profile with

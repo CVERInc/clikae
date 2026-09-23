@@ -168,6 +168,18 @@ file (e.g. `~/.zshrc.clikae.bak.20260605-143000`). Restore the most recent backu
 cp ~/.zshrc.clikae.bak.<timestamp> ~/.zshrc
 ```
 
+## Two project folders with non-ASCII names share one Resume list
+
+Claude Code names a project's transcript directory by replacing every byte
+outside `[A-Za-z0-9]` with `-`. Two sibling folders whose names differ only in
+non-ASCII characters of the same length (`~/專案一` and `~/專案二`, for example)
+therefore land in the **same** `projects/<slug>` directory, and the home
+board's Continue list — which reads that directory — shows their sessions
+merged. clikae reports what is on disk; it cannot tell the two folders apart
+after the engine has collapsed them. The workaround is a distinguishing ASCII
+element in the folder name (`~/專案一-a`, `~/專案二-b`). Tracked upstream; see
+issue #116 for the measurement.
+
 ## Developing / running the tests
 
 clikae stays Node-free; local checks use `shellcheck` and `bats`. Run the gate —
@@ -188,6 +200,6 @@ Without `-r`, bats does not recurse into `tests/bats/adapters/` and silently ski
 every adapter test — the run still reports success, just with ~50 fewer tests than
 you think. (CI was bitten by this once.)
 
-See [HANDOFF.md](https://github.com/CVERInc/clikae/blob/4e59c003e9efb75aee2bb8e41c32fbe9b0989108/HANDOFF.md) for the full verification recipe, including an
+See [HANDOFF.md](https://github.com/CVERInc/clikae/blob/c774bc03af15e97f995211be416cda9a7506c94e/HANDOFF.md) for the full verification recipe, including an
 isolated end-to-end run that doesn't touch your real `$HOME` — and for what the
 gate cannot see (anything interactive: the board, the resume picker, `clean`).

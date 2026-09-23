@@ -414,14 +414,27 @@ exists to move that spend onto a worker tank — so the only exempt family is
 haiku. A haiku spawn is untouched regardless of <code>subagent_type</code> or prompt
 content; a fable/opus/sonnet spawn — <code>Explore</code> included — is checked against
 the prompt heuristic below exactly like any other. Provider spellings are
-placed in their family (<code>us.anthropic.claude-sonnet-4-5-v1:0</code>,
-<code>claude-sonnet-4-5@…</code>, <code>sonnet[1m]</code>); the exemption itself matches only
+placed in their family by a small table of shapes (one row per shape in
+<code>lib/hooks/cockpit-guard.sh</code>, <code>_CKPT_MODEL_TABLE</code>): Bedrock ids
+(<code>us.anthropic.claude-sonnet-4-5-v1:0</code>), gateway ids that name anthropic
+(<code>anthropic/claude-sonnet-4.5</code>, <code>openrouter/anthropic/claude-opus-4.1</code>),
+<code>claude-3-5-sonnet-…</code>, bare <code>claude-sonnet</code>, <code>opus-4-5</code>,
+<code>claude-sonnet-4-5@…</code>, <code>sonnet[1m]</code>; the exemption itself matches only
 exact, explicit prefixes (<code>haiku</code>, <code>claude-haiku-…</code>, <code>claude-3-5-haiku…</code>,
 <code>claude-3-haiku…</code>), so a lookalike such as <code>claude-opus-4-haiku</code> or
-<code>opus.anthropic.haiku</code> is checked, not exempted. A model id the guard does
-not recognise is <strong>checked like
-opus/sonnet</strong>, not waved through: a refusal names it as unrecognised, and a
-spawn that passes prints one line saying the id was unrecognised. The hook <strong>fails closed</strong>: a call it cannot read (an empty or
+<code>opus.anthropic.haiku</code> is checked, not exempted. A model id the table does
+not recognise is <strong>refused outright</strong> (fail-closed, since #103), whatever the
+prompt says. The refusal prints the literal id and the exact line that admits
+it, for example:</p>
+<pre class="shiki shiki-themes github-light github-dark-default" style="--shiki-light:#24292e;--shiki-dark:#e6edf3;--shiki-light-bg:#fff;--shiki-dark-bg:#0d1117" tabindex="0"><code><span class="line"><span>cockpit-guard: refused — an Agent spawn on model "mystery-model-9", a shape the guard does not recognise; unknown model ids are denied until an allow rule names them.</span></span>
+<span class="line"><span>To admit it (checked like opus/sonnet), add this line to ~/.clikae/state/cockpit-models:</span></span>
+<span class="line"><span>  checked mystery-model-9</span></span></code></pre>
+<p><code>$CLIKAE_HOME/state/cockpit-models</code> holds one rule per line,
+<code>&lt;checked|exempt&gt; &lt;exact model id&gt;</code> (<code>#</code> comments allowed). It lives next to
+<code>state/cockpit-allow</code> because the hook already reads that directory and is
+not told which tank it runs in; the id is compared literally, so a rule
+admits exactly the string the refusal printed. <code>checked</code> still runs the
+tripwire below; <code>exempt</code> treats the id like haiku. The hook <strong>fails closed</strong>: a call it cannot read (an empty or
 malformed payload, no tool input object, a <code>\u0000</code> escape anywhere in the
 payload) is refused with the reason, and the
 escape hatches below are checked before the payload, so that refusal can
