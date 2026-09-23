@@ -1062,13 +1062,14 @@ _agy_burn() {
   while :; do
     [ -d "$(_agy_slots)/$cur" ] || log_fail "No such agy tank: $cur  (create it:  clikae init agy $cur)"
     if [ "$cur" != "$(_agy_active)" ]; then
-      log_info "burn agy/$cur → switching (Keychain carry, no OAuth needed since 2026-07-05)"
+      log_info "burn agy/$cur → switching ($(_agy_login_backend) login carry, no OAuth needed since 2026-07-05)"
       _agy_assert_not_running
       local active; active="$(_agy_active)"
       [ -n "$active" ] && _agy_kc_stash "$active"
       _agy_kc_restore "$cur"
       _agy_kc_verify_restore "$cur"
       rm -f "$(_agy_link)"; ln -s "$(_agy_slots)/$cur" "$(_agy_link)"
+      _agy_file_verify "$cur"   # Linux (#96): the login is a file in the tank dir
     fi
     log_info "burn agy/$cur → agy (task: $saved_prompt)"
     _burn_status_write running null "$status_engine" "$cur" "$artifact" "" ""

@@ -31,6 +31,33 @@ _doctor_render_table() {
 # EXISTS. It deliberately never passes `-w`, because reading the secret is what
 # makes the Keychain prompt for access — `doctor` must never pop a dialog — and
 # because a token value has no business anywhere near a terminal. Presence only.
+# Linux twin (#96): agy's login is a file inside each tank dir, so "presence"
+# is a file test — still never the secret. Says which backend is active.
+_doctor_agy_login_file() {
+  [ "$(uname -s)" = "Linux" ] || return 0
+  if ! declare -F _agy_file_token >/dev/null 2>&1; then
+    # shellcheck source=./antigravity.sh
+    source "$CLIKAE_LIB/commands/antigravity.sh"
+  fi
+  local at_cli at_name at_path ok="" no=""
+  while IFS=$'\t' read -r at_cli at_name at_path; do
+    [ "$at_cli" = "antigravity" ] || continue
+    : "$at_path"
+    if [ -s "$(_agy_file_token "$at_name")" ]; then ok="$ok $at_name"; else no="$no $at_name"; fi
+  done <<EOF
+$(list_all_profiles 2>/dev/null || true)
+EOF
+  [ -n "$ok$no" ] || return 0
+  log_bold "agy login carry (read-only — presence only, never the secret)"
+  printf '  %-16s %s\n' "backend" "file ($(_agy_file_token_rel) in each tank dir)"
+  printf '  %-16s %s\n' "agy tanks" "carry a saved login:${ok:- (none)}"
+  if [ -n "$no" ]; then
+    printf '  %-16s %s\n' "" "no saved login:$no — burn can't auto-hop onto these"
+    log_dim  "                   (sign in once with: clikae agy <tank>)"
+  fi
+  echo ""
+}
+
 _doctor_keychain() {
   [ "$(uname -s)" = "Darwin" ] || return 0
   command -v security >/dev/null 2>&1 || return 0
@@ -74,6 +101,7 @@ _doctor_keychain() {
 $(list_all_profiles 2>/dev/null || true)
 EOF
   if [ -n "$stash_ok$stash_no" ]; then
+    printf '  %-16s %s\n' "agy backend" "keychain (clikae-agy-<tank> slots)"
     printf '  %-16s %s\n' "agy tanks" "carry a saved login:${stash_ok:- (none)}"
     if [ -n "$stash_no" ]; then
       printf '  %-16s %s\n' "" "no saved login:$stash_no — burn can't auto-hop onto these"
@@ -922,6 +950,7 @@ EOF
 
   _doctor_keychain
   ( load_adapter claude 2>/dev/null && _claude_stable_doctor ) || true
+  _doctor_agy_login_file
   # NOT inside _doctor_keychain: that one returns early off macOS, and reading a
   # log file has nothing to do with the Keychain.
   _doctor_auth_dropouts
