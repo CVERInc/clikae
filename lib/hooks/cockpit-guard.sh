@@ -31,8 +31,9 @@
 # haiku family (named, below — and ONLY haiku since #109 P3-5), any checked
 # model whose prompt
 # doesn't trip, and every OTHER tool. A model id the guard does not recognise
-# is CHECKED like opus/sonnet, never waved through (#63 round-5 P3-2, see
-# _ckpt_model_class). This is a check on MODEL, never on `subagent_type`:
+# is REFUSED outright (#103, fail-closed), naming the literal id and the one
+# allow-list line that admits it (see _CKPT_MODEL_TABLE / _ckpt_model_class).
+# This is a check on MODEL, never on `subagent_type`:
 # the guard doesn't read that field at all, so an opus/sonnet `Explore` spawn
 # is checked exactly like any other opus/sonnet spawn (#63 P3-2).
 #
@@ -265,10 +266,11 @@ model="$ck_model"
 # listing): its own failure must never turn a refusal into anything else,
 # so it is wrapped separately from the traps above.
 _ckpt_refuse() {
-  local why who="a ${1:-}-model Agent spawn"
-  [ "${3:-}" = unknown ] && who="an Agent spawn with an unrecognised model id (${1:-}, checked like opus/sonnet)"
+  local why who="an Agent spawn on model \"${1:-}\""
   if [ -z "${1:-}" ]; then
     why="the Agent tool call carried no model (a bare in-session spawn)"
+  elif [ "${2:-}" = "unknown" ]; then
+    why="an Agent spawn on model \"$1\", a shape the guard does not recognise; unknown model ids are denied until an allow rule names them"
   elif [ "${2:-}" = "long" ]; then
     why="$who whose prompt is over the 1,500-character length tripwire"
   else
@@ -276,6 +278,15 @@ _ckpt_refuse() {
   fi
   {
     printf 'cockpit-guard: refused — %s.\n' "$why"
+    if [ "${2:-}" = "unknown" ]; then
+      case "$1" in
+        *[[:space:]]*|*[[:cntrl:]]*)
+          printf 'This id contains whitespace or a control character, so no allow rule can name it.\n' ;;
+        *)
+          printf 'To admit it (checked like opus/sonnet), add this line to %s:\n' "$_CKPT_MODELS_FILE"
+          printf '  checked %s\n' "$1" ;;
+      esac
+    fi
     printf 'Dispatch it instead:\n'
     printf '  clikae burn <engine> <tank> --prompt-file <f> --artifact <path>\n'
     # shellcheck disable=SC2034  # CLIKAE_LIB/_CLIKAE_ADOPT_READONLY are read by
@@ -358,50 +369,64 @@ fi
 # not a classifier.
 _CKPT_HEURISTIC='worktree|git commit|git push|REVIEWER|adversarial review|bats |npm test|vitest|run the (full )?tests?|\bcommit\b|\bpush\b|open a pr|\breview\b|\bgrade\b|run (the )?tests|make ci'
 
-# _ckpt_model_class <model> -> "exempt", "checked" or "unknown".
+# _CKPT_MODEL_TABLE — the classifier, one row per shape: `<glob> <class>`.
+# First matching row wins; rows are matched against the NORMALISED id (see
+# _ckpt_normalise). A table rather than one regex (#103) so each shape the
+# guard knows about is one reviewable line, and adding one is a one-line diff.
+# `exempt` = haiku only (#109 P3-5); `checked` = fable/opus/sonnet tiers.
+# The exempt rows are exact, explicit prefixes (#109 P3-7): a wrong "exempt"
+# is a silent allow, so no loose glob ever sits on that side.
+_CKPT_MODEL_TABLE='
+haiku                 exempt
+haiku-[0-9]*          exempt
+claude-haiku-*        exempt
+claude-3-5-haiku      exempt
+claude-3-5-haiku-*    exempt
+claude-3-haiku        exempt
+claude-3-haiku-*      exempt
+opus                  checked
+sonnet                checked
+fable                 checked
+opusplan              checked
+opus-[0-9]*           checked
+sonnet-[0-9]*         checked
+fable-[0-9]*          checked
+claude-opus           checked
+claude-sonnet         checked
+claude-fable          checked
+claude-opus-*         checked
+claude-sonnet-*       checked
+claude-fable-*        checked
+claude-*-opus         checked
+claude-*-opus-*       checked
+claude-*-sonnet       checked
+claude-*-sonnet-*     checked
+claude-*-fable        checked
+claude-*-fable-*      checked
+'
+
+# _ckpt_normalise <model> -> the id with provider spellings removed:
+# lowercase; a `[...]` suffix (`sonnet[1m]`); a Vertex `@version`; a
+# gateway prefix that names anthropic (`anthropic/…` or ONE `<gateway>/anthropic/…`
+# segment, never "everything up to the last slash" — see #109 P3-7 below);
+# a Bedrock `<region>.anthropic.` prefix and `-v<n>[:<n>]` suffix.
 #
-# #63 round-5 P3-2: until this round, any id outside the opus/sonnet match
-# was allowed with ZERO stderr — `us.anthropic.claude-sonnet-4-5-v1:0`
-# (Bedrock), `sonnet[1m]`, `inherit`, a typo, a model family that did not
-# exist when this was written. The choice here is to CHECK unknown ids, not
-# to allow them visibly: this guard exists to protect the cockpit's budget,
-# an id it cannot place is most likely a newer (and not cheaper) model, and
-# every other unreadable input already fails closed. Refusing unknown ids
-# outright was rejected: it would block every harmless spawn the day a new
-# alias appears, which is how a guard gets deleted instead of obeyed. An
-# unknown id runs the same length tripwire and heuristic; a refusal names it
-# as unrecognised, and a pass prints one stderr line saying so.
-#
-# Provider spellings are normalised before matching: lowercase; a `[...]`
-# suffix (`sonnet[1m]`); a Vertex `@version`; a Bedrock `<region>.anthropic.`
-# prefix and `-v<n>[:<n>]` suffix.
-#
-# #109 P3-5 (operator decision, not a reviewer's call): fable is CHECKED, like
-# opus and sonnet. The guard exists to push build/review lanes out of the
-# cockpit into `clikae burn`; a fable spawn spends the cockpit's budget
-# exactly like an opus one does, so exempting it was the biggest hole in the
-# guard's own reason for existing. haiku stays exempt — it is the one family
-# cheap enough that an in-session spawn is not the thing this guard is for.
-#
-# #109 P3-7: the EXEMPTION is the only side where a loose match is dangerous
-# (a wrong "exempt" is a silent allow; a wrong "checked"/"unknown" costs at
-# worst a false refusal, and `--allow-agents` is right there). So:
-#
-#   · the Bedrock prefix strip is an EXPLICIT list of region prefixes, never
-#     the old `*anthropic.*` glob — that glob stripped to the LAST
-#     `anthropic.` anywhere in the string, so `opus.anthropic.haiku`
-#     normalised to a bare `haiku` and was waved through.
-#   · the exempt patterns are exact, explicit prefixes (`haiku`,
-#     `claude-haiku-`, `claude-3-5-haiku`, `claude-3-haiku`) — never the old
-#     `claude-*-haiku*` glob, which exempted `claude-opus-4-haiku`.
-#
-# Neither string is a real model id; both are now checked rather than exempt.
-_ckpt_model_class() {
+# #109 P3-7: the Bedrock strip is an EXPLICIT list of region prefixes, never
+# a `*anthropic.*` glob — that glob stripped to the LAST `anthropic.`, so
+# `opus.anthropic.haiku` normalised to a bare `haiku` and was waved through.
+_ckpt_normalise() {
   local m
   m="$(printf '%s' "$1" | tr '[:upper:]' '[:lower:]')"
   m="${m%%\[*}"
   m="${m%%@*}"
-  # Bedrock inference-profile prefixes, listed one by one (#109 P3-7).
+  case "$m" in
+    anthropic/*) m="${m#anthropic/}" ;;
+    */anthropic/*)
+      case "${m%%/anthropic/*}" in
+        */*|*.*|'') ;;
+        *) m="${m#*/anthropic/}" ;;
+      esac ;;
+  esac
   case "$m" in
     anthropic.*)        m="${m#anthropic.}" ;;
     us.anthropic.*)     m="${m#us.anthropic.}" ;;
@@ -413,34 +438,62 @@ _ckpt_model_class() {
     ca.anthropic.*)     m="${m#ca.anthropic.}" ;;
   esac
   case "$m" in *-v[0-9]|*-v[0-9]:[0-9]|*-v[0-9][0-9]|*-v[0-9]:[0-9][0-9]) m="${m%-v[0-9]*}" ;; esac
-  case "$m" in
-    haiku|claude-haiku-*|claude-3-5-haiku|claude-3-5-haiku-*|claude-3-haiku|claude-3-haiku-*) printf 'exempt' ;;
-    # #63 P3-1: family-prefix match — the short aliases, every
-    # `claude-opus-*`/`claude-sonnet-*`/`claude-fable-*` id (and the older
-    # `claude-3-5-sonnet-*` word order), and `opusplan` (a real value).
-    opus|sonnet|fable|opusplan|claude-opus-*|claude-sonnet-*|claude-fable-*|claude-*-opus|claude-*-opus-*|claude-*-sonnet|claude-*-sonnet-*|claude-*-fable|claude-*-fable-*) printf 'checked' ;;
-    *) printf 'unknown' ;;
-  esac
+  printf '%s' "$m"
+}
+
+# The operator's allow list (#103): $CLIKAE_HOME/state/cockpit-models, one
+# rule per line, `<class> <exact model id>` (class `checked` or `exempt`;
+# `#` comments and blank lines ignored). It sits next to state/cockpit-allow
+# because this hook already reads that directory and nothing else: the hook
+# is installed per tank but is not told WHICH tank it runs in, and a
+# settings.json key would be rewritten by every `clikae cockpit` move. The id
+# is compared LITERALLY (no normalisation), so a rule admits exactly the
+# string the refusal printed and nothing that merely resembles it.
+_CKPT_MODELS_FILE="$CLIKAE_HOME/state/cockpit-models"
+
+# _ckpt_model_class <model> -> "exempt", "checked" or "unknown".
+#
+# #103 (operator decision): an id neither the allow list nor the table can
+# place is DENIED, not checked. Rounds up to #109 ran unknown ids through the
+# tripwire and allowed them when it did not trip — a silent pass for a shape
+# nobody had reviewed. A refusal naming the shape and the one line that
+# admits it costs one deliberate edit; a silent pass costs the week.
+_ckpt_model_class() {
+  local m row pat cls rc rid
+  if [ -f "$_CKPT_MODELS_FILE" ]; then
+    while IFS= read -r row || [ -n "$row" ]; do
+      row="${row%$'\r'}"
+      case "$row" in ''|'#'*) continue ;; esac
+      rc="${row%% *}"; rid="${row#* }"
+      [ "$rid" = "$1" ] || continue
+      case "$rc" in checked|exempt) printf '%s' "$rc"; return 0 ;; esac
+    done < "$_CKPT_MODELS_FILE" 2>/dev/null
+  fi
+  m="$(_ckpt_normalise "$1")"
+  while read -r pat cls; do
+    [ -n "$pat" ] || continue
+    # shellcheck disable=SC2254  # the table row IS a glob, on purpose
+    case "$m" in $pat) printf '%s' "$cls"; return 0 ;; esac
+  done <<<"$_CKPT_MODEL_TABLE"
+  printf 'unknown'
 }
 
 model_class="$(_ckpt_model_class "$model")"
 case "$model_class" in
-  checked|unknown)
+  unknown) _ckpt_refuse "$model" unknown ;;
+  checked)
     # `ck_prompt_len` is the UNTRUNCATED decoded length (jq's codepoint
     # count), so a prompt long enough to BE the length tripwire's whole
     # reason to exist can never be the thing that defeats it.
     if [ "$ck_prompt_len" -gt 1500 ]; then
-      _ckpt_refuse "$model" long "$model_class"
+      _ckpt_refuse "$model" long
     fi
     prompt="$ck_prompt"
     # A here-string, not `printf | grep -q`: the same early-exit pipe P2-5
     # removed above (the prompt is at most 1,500 characters here, but a
     # SIGPIPE must never be able to decide this branch either).
     if grep -qiE "$_CKPT_HEURISTIC" <<<"$prompt"; then
-      _ckpt_refuse "$model" "" "$model_class"
-    fi
-    if [ "$model_class" = unknown ]; then
-      allow "cockpit-guard: allowed an Agent spawn with an unrecognised model id ($model) — it was checked like opus/sonnet and its prompt did not trip the build/review tripwire."
+      _ckpt_refuse "$model" ""
     fi
     ;;
 esac

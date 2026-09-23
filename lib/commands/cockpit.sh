@@ -203,7 +203,7 @@ _cockpit_hook_install() (
                      hooks: [{type: "command", command: $cmd, timeout: 5}],
                      _clikae: "cockpit-guard"}])) }
     ' 2>/dev/null)"; then
-    printf '%s/%s: skipped — invalid JSON in settings.json\n' "$engine" "$tank"
+    printf '%s/%s: skipped — settings.json is not valid JSON\n' "$engine" "$tank" >&2
     return 1
   fi
   changed="$(printf '%s' "$new" | jq -r .changed)"
@@ -216,7 +216,7 @@ _cockpit_hook_install() (
   # code otherwise, and `_settings_write_file` would just see an empty string.
   local settings_out
   settings_out="$(printf '%s' "$new" | jq '.settings')" || {
-    printf '%s/%s: jq failed while preparing settings.json\n' "$engine" "$tank" >&2
+    printf '%s/%s: skipped — jq failed while preparing settings.json\n' "$engine" "$tank" >&2
     return 1
   }
   _settings_write_file "$file" "$settings_out" "$engine/$tank" "$_SETTINGS_SNAP" || return 1
@@ -267,7 +267,7 @@ _cockpit_hook_remove() (
         { changed: true, settings: $out }
       end
     ' "$_SETTINGS_SNAP" 2>/dev/null)"; then
-    printf '%s/%s: skipped — invalid JSON in settings.json\n' "$engine" "$tank"
+    printf '%s/%s: skipped — settings.json is not valid JSON\n' "$engine" "$tank" >&2
     return 1
   fi
   changed="$(printf '%s' "$new" | jq -r .changed)"
@@ -278,7 +278,7 @@ _cockpit_hook_remove() (
   # #63 P2-4: see _cockpit_hook_install's matching comment.
   local settings_out
   settings_out="$(printf '%s' "$new" | jq '.settings')" || {
-    printf '%s/%s: jq failed while preparing settings.json\n' "$engine" "$tank" >&2
+    printf '%s/%s: skipped — jq failed while preparing settings.json\n' "$engine" "$tank" >&2
     return 1
   }
   _settings_write_file "$file" "$settings_out" "$engine/$tank" "$_SETTINGS_SNAP" || return 1

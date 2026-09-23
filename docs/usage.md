@@ -315,14 +315,31 @@ exists to move that spend onto a worker tank — so the only exempt family is
 haiku. A haiku spawn is untouched regardless of `subagent_type` or prompt
 content; a fable/opus/sonnet spawn — `Explore` included — is checked against
 the prompt heuristic below exactly like any other. Provider spellings are
-placed in their family (`us.anthropic.claude-sonnet-4-5-v1:0`,
-`claude-sonnet-4-5@…`, `sonnet[1m]`); the exemption itself matches only
+placed in their family by a small table of shapes (one row per shape in
+`lib/hooks/cockpit-guard.sh`, `_CKPT_MODEL_TABLE`): Bedrock ids
+(`us.anthropic.claude-sonnet-4-5-v1:0`), gateway ids that name anthropic
+(`anthropic/claude-sonnet-4.5`, `openrouter/anthropic/claude-opus-4.1`),
+`claude-3-5-sonnet-…`, bare `claude-sonnet`, `opus-4-5`,
+`claude-sonnet-4-5@…`, `sonnet[1m]`; the exemption itself matches only
 exact, explicit prefixes (`haiku`, `claude-haiku-…`, `claude-3-5-haiku…`,
 `claude-3-haiku…`), so a lookalike such as `claude-opus-4-haiku` or
-`opus.anthropic.haiku` is checked, not exempted. A model id the guard does
-not recognise is **checked like
-opus/sonnet**, not waved through: a refusal names it as unrecognised, and a
-spawn that passes prints one line saying the id was unrecognised. The hook **fails closed**: a call it cannot read (an empty or
+`opus.anthropic.haiku` is checked, not exempted. A model id the table does
+not recognise is **refused outright** (fail-closed, since #103), whatever the
+prompt says. The refusal prints the literal id and the exact line that admits
+it, for example:
+
+```
+cockpit-guard: refused — an Agent spawn on model "mystery-model-9", a shape the guard does not recognise; unknown model ids are denied until an allow rule names them.
+To admit it (checked like opus/sonnet), add this line to ~/.clikae/state/cockpit-models:
+  checked mystery-model-9
+```
+
+`$CLIKAE_HOME/state/cockpit-models` holds one rule per line,
+`<checked|exempt> <exact model id>` (`#` comments allowed). It lives next to
+`state/cockpit-allow` because the hook already reads that directory and is
+not told which tank it runs in; the id is compared literally, so a rule
+admits exactly the string the refusal printed. `checked` still runs the
+tripwire below; `exempt` treats the id like haiku. The hook **fails closed**: a call it cannot read (an empty or
 malformed payload, no tool input object, a `\u0000` escape anywhere in the
 payload) is refused with the reason, and the
 escape hatches below are checked before the payload, so that refusal can
