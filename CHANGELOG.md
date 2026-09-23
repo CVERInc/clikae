@@ -7,6 +7,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **`clikae rename agy <old> <new>` repoints the tank's harness hooks instead
+  of leaving them naming the tank that no longer exists (#128).**
+  `config/hooks.json`'s hook `command` is an absolute path into the tank
+  (`agy_harness_install` bakes it in with `sed`), so a rename that only moved
+  the directory left every tool call failing on `sh: <old>/config/clikae-harness.sh:
+  No such file or directory` — and because agy's burn artifact is captured
+  stdout, that failure showed up only when someone read the artifact, never
+  in the `[ DONE ]` line. The rename now rewrites the stale path inside
+  `hooks.json` atomically (temp file + rename) right after the directory
+  move, and reports it the same way it reports the carried Keychain login.
+
 ## [0.31.0] — 2026-09-22
 
 ### Added

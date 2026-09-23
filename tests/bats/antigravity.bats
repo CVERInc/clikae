@@ -47,6 +47,48 @@ _stub_agy() {
   [ "$(readlink "$HOME/.gemini")" = "$CLIKAE_HOME/profiles/antigravity/main" ]
 }
 
+# ── #128: hooks.json points into the tank by absolute path ─────────────────
+# agy_harness_install bakes the tank's OWN path into config/hooks.json's hook
+# `command` (it has to — agy is launched from arbitrary directories). A rename
+# moves the directory but, without this fix, leaves that string pointing at
+# the name that no longer exists — every tool call then fails on the hook
+# ("No such file or directory") while the burn still reports DONE.
+@test "rename agy: rewrites hooks.json's harness path to the new tank, no trace of the old one left" {
+  mkdir -p "$HOME/.gemini"; echo "LOGIN" > "$HOME/.gemini/auth.txt"
+  printf 'y\n' | "$CLIKAE_BIN" init agy work >/dev/null 2>&1
+  local old="$CLIKAE_HOME/profiles/antigravity/work"
+  local new="$CLIKAE_HOME/profiles/antigravity/laptop"
+  # init agy already seeds the harness into a fresh tank (agy_harness_seed).
+  [ -f "$old/config/hooks.json" ]
+  grep -qF "$old/config/clikae-harness.sh" "$old/config/hooks.json"
+
+  run clikae rename agy work laptop
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"Repointed the tank's harness hooks"* ]] || false
+
+  # No file under the new tank mentions the old path...
+  run grep -rF "$old" "$new"
+  [ "$status" -ne 0 ]
+  # ...and the hook entries point at the new path.
+  run grep -c "$new/config/clikae-harness.sh" "$new/config/hooks.json"
+  [ "$output" -eq 2 ]   # Stop hook + PreToolUse hook
+}
+
+@test "rename agy: a hooks.json with no path in it is left byte-identical (control)" {
+  mkdir -p "$HOME/.gemini"; echo "LOGIN" > "$HOME/.gemini/auth.txt"
+  printf 'y\n' | "$CLIKAE_BIN" init agy work >/dev/null 2>&1
+  local old="$CLIKAE_HOME/profiles/antigravity/work"
+  local new="$CLIKAE_HOME/profiles/antigravity/laptop"
+  mkdir -p "$old/config"
+  printf '{"their-hook":{"cmd":"echo hi"}}\n' > "$old/config/hooks.json"
+  local before; before="$(cat "$old/config/hooks.json")"
+
+  run clikae rename agy work laptop
+  [ "$status" -eq 0 ]
+  [[ "$output" != *"Repointed the tank's harness hooks"* ]] || false
+  [ "$(cat "$new/config/hooks.json")" = "$before" ]
+}
+
 @test "init agy: declined (answer N) changes nothing" {
   mkdir -p "$HOME/.gemini"
   run bash -c "printf 'n\n' | '$CLIKAE_BIN' init agy work"
