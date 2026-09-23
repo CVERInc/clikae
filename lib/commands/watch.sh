@@ -247,6 +247,64 @@ _watch_usage_poll_tick() {
   return 0
 }
 
+# _watch_compact [status|on|off] [<engine> <tank>] — the warm /compact (#131,
+# lib/core/compact.sh). `on`/`off` alone set the global answer; with a tank they
+# opt that one tank in or out. `status` (the default) shows the preference and
+# the last few things it did, from the waiter's trace.
+_watch_compact() {
+  local verb="${1:-status}" engine="${2:-}" tank="${3:-}"
+  case "$verb" in
+    -h|--help)
+      cat <<'EOF'
+Usage: clikae watch compact [status] [<engine> <tank>]
+       clikae watch compact on|off [<engine> <tank>]
+
+Warm /compact: when a claude session in tmux has been idle ~50 min (the
+prompt cache lives 1h), its prompt is empty, no turn is running, and its
+context is at least 200K tokens (CLIKAE_COMPACT_MIN_TOKENS), the session's
+watcher window types /compact once, while the cache is still warm.
+
+On by default; asked once at launch. With a tank, on/off opts just that tank
+in or out. CLIKAE_WARM_COMPACT=on|off overrides for one run.
+EOF
+      return 0 ;;
+    on|off)
+      if [ -n "$engine" ]; then
+        [ -n "$tank" ] || log_fail "Usage: clikae watch compact $verb <engine> <tank>"
+        validate_name cli "$engine"; validate_name profile "$tank"
+      fi
+      compact_pref_set "$verb" "$engine" "$tank" || log_fail "Unknown value: $verb"
+      if [ -n "$engine" ]; then
+        log_done "Warm /compact for $engine/$tank: $verb"
+      else
+        log_done "Warm /compact: $verb"
+      fi
+      return 0 ;;
+    status) ;;
+    *) log_fail "Unknown: clikae watch compact $verb (see --help)" ;;
+  esac
+  local pref; pref="$(compact_pref_get)"
+  case "$pref" in
+    unset) log_info "warm /compact: on (default — you'll be asked once at launch)" ;;
+    *)     log_info "warm /compact: $pref" ;;
+  esac
+  local f; f="$(compact_pref_file)"
+  if [ -f "$f" ] && grep -q '^off ' "$f" 2>/dev/null; then
+    log_dim "  Opted out: $(grep '^off ' "$f" | sed 's/^off //' | tr '\n' ' ')"
+  fi
+  log_dim "  Idle ${COMPACT_IDLE_SECONDS}s · context >= $(_compact_min_tokens) tokens · empty prompt · no turn running"
+  if [ -n "$engine" ] && [ -n "$tank" ]; then
+    local rows
+    if rows="$(compact_trace_recent "$engine" "$tank" 5)"; then
+      log_dim "  Recent ($engine/$tank):"
+      printf '%s\n' "$rows" | awk -F '\t' '{ printf "    %s  %-16s %s\n", $1, $3, $4 }'
+    else
+      log_dim "  Nothing done yet on $engine/$tank."
+    fi
+  fi
+  return 0
+}
+
 _watch_consent_file() { printf '%s\n' "$CLIKAE_HOME/auto-relay-consent"; }
 _watch_has_consent()  { [ -f "$(_watch_consent_file)" ]; }
 _watch_grant_consent() {
@@ -263,6 +321,13 @@ cmd_watch() {
   if [ "${1:-}" = "github" ]; then
     shift
     cmd_watch_github "$@"
+    return $?
+  fi
+  # `compact` is the warm /compact's switchboard (#131): its preference and
+  # what it did. The acting half lives in the per-session watcher window.
+  if [ "${1:-}" = "compact" ]; then
+    shift
+    _watch_compact "$@"
     return $?
   fi
 
@@ -443,6 +508,13 @@ EOF
   validate_handoff_target "$target"
 
   log_info "Watching $cli/$profile for a dry tank → next: $target"
+  # #131: what the warm /compact did on this tank lately (the watcher window
+  # acts; this is where a person reads it back).
+  local _crows
+  if declare -F compact_trace_recent >/dev/null && _crows="$(compact_trace_recent "$cli" "$profile" 3)"; then
+    log_dim "Warm /compact, recent:"
+    printf '%s\n' "$_crows" | awk -F '\t' '{ printf "  %s  %-16s %s\n", $1, $3, $4 }'
+  fi
   [ "$auto" -eq 1 ] && log_dim "Auto mode: will switch on detection." \
                     || log_dim "Will ask before switching (use --auto to switch automatically)."
   log_dim "Pattern is a best guess; if it never fires, see \`clikae watch --help\`. Ctrl-C to stop."
