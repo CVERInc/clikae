@@ -262,7 +262,7 @@ object can't give it:
   "started_at": 1757400000, "updated_at": 1757400004,
   "pid": 28186,
   "log": "/Users/…/.clikae/logs/codex-T1-burn-28186.log",  // this attempt's own capture log, or null
-  "reset_at": null          // epoch second `--wait-for-reset` is sleeping to, only during `waiting-reset`
+  "reset_at": null          // epoch second `--wait-for-reset` / `--resume-after-limit` is sleeping to, only during `waiting-reset`
 }
 ```
 
@@ -830,6 +830,40 @@ early, could mean it hasn't actually landed yet); one bounded extra wait is
 given, capped at the original `<dur>`, before falling back to the normal dry
 path. Only once a real outcome is known — the re-fire's own done/dry/fail —
 does the file go terminal.
+
+### `--resume-after-limit` (#36)
+
+`--wait-for-reset` only waits for a reset that is close. A long lane that dies
+of a 5-hour or weekly limit hours from its reset used to need a hand-written
+scheduler: wait until the reset, write a resume note, relaunch the same burn
+from the same cwd. `--resume-after-limit` does that inside the burn process
+itself (no daemon):
+
+- When the tank goes dry and its reset phrase parses (`limit_reset_epoch`, the
+  parser `wake`'s waiter uses; a reset already behind us floors the wait at
+  zero), burn writes `~/.clikae/state/burn-<pid>.resume` — one JSON line with
+  `run_id, engine, tank, cwd, argv[], artifact, prompt_file, reset, reset_at,
+  attempt, max_attempts, pid` — and sleeps until reset + 2 minutes. The status
+  file says `waiting-reset` meanwhile, so the tank stays busy and `clikae home`
+  shows `⏳ <engine>/<tank> burn resumes at HH:MM`.
+- It then relaunches the SAME task on the SAME tank from the SAME cwd, with
+  this prepended to the prompt: `RESUME NOTE: previous attempt killed by quota
+  limit at <t>; this is attempt N; start by reading the worktree state (git
+  log/status/diff) and any existing REPORT; do not redo finished work.` (Raw
+  `-- <cmd...>` mode has no prompt position; the argv is relaunched unchanged,
+  with a warning.)
+- Every step is a `[ RESUME ]` line on stderr and in the burn log (each resumed
+  launch gets its own `…-resume<N>.log`), plus a `burn-resume` event in the
+  tank's wake trace.
+- At most 3 resumes. Past the cap, or with a reset that doesn't parse, the
+  normal reroute-or-stop path runs unchanged.
+- Nothing reroutes while waiting; reroute and resume are different intents. An
+  explicit `--to` still wins: the dry tank hops there immediately.
+- `--json` carries `resumed`, the number of relaunches.
+
+Off by default: it can hold a process (and a tank) for hours, which should be
+asked for. Without the flag, a dry tank behaves exactly as before. agy burns
+ignore it for now (with a warning).
 
 ## 5. Seeing your fleet
 

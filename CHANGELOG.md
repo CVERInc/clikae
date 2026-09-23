@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **`clikae burn --resume-after-limit` (#36): wait out a quota limit and pick
+  the task back up.** When a tank runs dry and its reset time parses, burn
+  records the run in `~/.clikae/state/burn-<pid>.resume`, sleeps in-process
+  until reset + 2 minutes, and relaunches the same task on the same tank from
+  the same cwd with a resume note prepended to the prompt. At most 3 resumes;
+  each is logged as `[ RESUME ]`. It never reroutes while waiting (an explicit
+  `--to` still wins), `clikae home` shows the waiting burn as "resumes at
+  HH:MM", and `--json` gains a `resumed` count. Off by default.
+
 ## [0.31.0] — 2026-09-22
 
 ### Added

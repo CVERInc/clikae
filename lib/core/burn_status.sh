@@ -346,3 +346,31 @@ burn_status_active_tanks() {
   done
   return 0
 }
+
+# burn_status_waiting_rows -> one `<engine>/<tank>\t<reset_at>` line per LIVE
+# burn whose status says `waiting-reset` (--wait-for-reset, or #36's
+# --resume-after-limit sleeping to reset + buffer). Liveness is the same pid +
+# start-marker pair burn_tank_busy trusts, so a burn killed mid-wait never
+# shows as "resumes at" forever.
+burn_status_waiting_rows() {
+  local d f json feng ftk fpid fat fstarted
+  for d in "$HOME"/.clikae/logs/burn-*; do
+    [ -d "$d" ] || continue
+    f="$d/status.json"
+    [ -f "$f" ] || continue
+    json=""
+    { IFS= read -r json < "$f"; } 2>/dev/null || [ -n "$json" ] || continue
+    burn_status_fieldv "$json" state
+    [ "$_BSF" = '"waiting-reset"' ] || continue
+    fpid="$(burn_status_str "$json" pid)"
+    case "$fpid" in ''|*[!0-9]*) continue ;; esac
+    kill -0 "$fpid" 2>/dev/null || continue
+    fstarted="$(burn_status_str "$json" started_at)"
+    _burn_pid_matches_marker "$fpid" "$fstarted" || continue
+    fat="$(burn_status_str "$json" reset_at)"
+    case "$fat" in ''|*[!0-9]*) continue ;; esac
+    feng="$(burn_status_str "$json" engine)"; ftk="$(burn_status_str "$json" tank)"
+    printf '%s/%s\t%s\n' "$feng" "$ftk" "$fat"
+  done
+  return 0
+}

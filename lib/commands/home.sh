@@ -360,6 +360,25 @@ _home_continue_notes() {
   return 0
 }
 
+# _home_burn_waiting_notes [extra] -> `⏳ <engine>/<tank> burn resumes at HH:MM`
+# for every live burn sleeping to a vendor reset (#36). Local wall-clock time:
+# the question on the board is "when does my own clock see it move again".
+_home_burn_waiting_notes() {
+  declare -F burn_status_waiting_rows >/dev/null 2>&1 || return 0
+  local rows tank at hm
+  rows="$(burn_status_waiting_rows 2>/dev/null)" || return 0
+  [ -n "$rows" ] || return 0
+  while IFS=$'\t' read -r tank at; do
+    [ -n "$tank" ] || continue
+    hm="$(date -r "$at" '+%H:%M' 2>/dev/null || date -d "@$at" '+%H:%M' 2>/dev/null || printf '?')"
+    # shellcheck disable=SC2059  # the format IS the localized string
+    printf '  %b⏳ %s%b\n' "$__C_DIM" "$(printf "${T_BURN_RESUMES_AT:-%s burn resumes at %s}" "$tank" "$hm")" "$__C_RESET"
+  done <<EOF
+$rows
+EOF
+  return 0
+}
+
 # _home_elsewhere_row <rows-shown> -> the `resume-elsewhere␟<n>` signal row,
 # when the store holds sessions this scoped list is not showing.
 #
@@ -2321,6 +2340,7 @@ EOF
   # "N sessions hidden as burn runs; list truncated" — printed here, directly
   # under the Continue list (resume rows are the last thing _home_items emits).
   _home_continue_notes "$printed_resume"
+  _home_burn_waiting_notes
 
   if [ -n "$also" ]; then
     printf '\n  %b▸ %s%b\n' "$__C_BCYAN" "$T_ALSO_AVAILABLE" "$__C_RESET"
@@ -3374,6 +3394,7 @@ EOF
   # "N sessions hidden as burn runs; list truncated" (#34 round-2 P2-1), with
   # extra=2 for the outer indenter this block is piped through.
   _home_continue_notes "$printed_resume" 2
+  _home_burn_waiting_notes
   if [ "$printed_resume" -eq 1 ]; then
     # The footer is a full localized sentence (54 columns in en-US, longer in
     # de/fr/pt) and was printed with no width budget at all — so on a narrow
