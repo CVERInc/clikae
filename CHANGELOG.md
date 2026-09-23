@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- Closed the mechanical review leftovers from #65 (live titles round-6) and
+  #105 (resume/burn PR #83 round-5): pinned `live_engine_alive`'s pane_dead
+  half with a remain-on-exit fixture, caught up two stale tmux comments,
+  deduplicated the `?` overlay legend scan across its two tests, fixed
+  macOS/BSD `fuser`'s always-0 exit status so burn's resume-gate can actually
+  ACCEPT a resumed sid (and added the missing positive test for it), and
+  hardened codex's `-C`/`--cd` arg parsing against an omitted or explicit-empty
+  value.
+
 ## [0.31.0] — 2026-09-22
 
 ### Added
