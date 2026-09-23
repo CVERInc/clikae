@@ -54,3 +54,5 @@ weekly_scoped      the vendor's own `kind` value in the OAuth usage API's limits
 pane_dead  a tmux format variable (#{pane_dead}), not a clikae name
 cache_read_input_tokens  a field in Anthropic's API usage JSON, read from the transcript by lib/core/compact.sh (#131), not a function
 input_tokens  ditto
+queued_for_s  a field in `clikae burn --json`'s result object (#90), not a function
+resumed  a field in `clikae burn --json`'s result object (#36), not a function
