@@ -205,6 +205,36 @@ seed_rollout() {
   [ -z "$output" ]
 }
 
+# #105 item 5: two edge shapes broke the hook's own "empty means rc 1"
+# contract — codex's own -C value omitted, and an explicit empty value.
+@test "codex adapter_cwd_from_args treats -C followed by another flag as no value given" {
+  _setup_codex
+  run adapter_cwd_from_args exec -C -s workspace-write 'go'
+  [ "$status" -eq 1 ]
+  [ -z "$output" ]
+}
+
+@test "codex adapter_cwd_from_args returns rc 1 on an explicit empty -C value" {
+  _setup_codex
+  run adapter_cwd_from_args exec -C '' -s workspace-write 'go'
+  [ "$status" -eq 1 ]
+  [ -z "$output" ]
+}
+
+@test "codex adapter_cwd_from_args returns rc 1 on --cd= with nothing after the =" {
+  _setup_codex
+  run adapter_cwd_from_args exec --cd= -s workspace-write 'go'
+  [ "$status" -eq 1 ]
+  [ -z "$output" ]
+}
+
+@test "codex adapter_cwd_from_args returns rc 1 on -C= with nothing after the =" {
+  _setup_codex
+  run adapter_cwd_from_args exec -C= -s workspace-write 'go'
+  [ "$status" -eq 1 ]
+  [ -z "$output" ]
+}
+
 # --- #113 item 3: counter-specimens for recent_sids' sid-from-FILENAME fast path.
 # #93 round 2 made adapter_recent_sids take the sid from the rollout name instead
 # of reading session_meta, falling back to the read "when the name carries no

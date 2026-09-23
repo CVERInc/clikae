@@ -249,16 +249,30 @@ adapter_sid_from_args() {
 # verbatim — a value that can never equal a real cwd, so it silently never
 # matched anything either. Both are handled explicitly now, ahead of the
 # looser glob.
+#
+# #105 item 5: two more edge shapes fell through this contract's own "empty
+# (rc 1) means no override" promise. `-C -s workspace-write` (`-C`'s value
+# omitted, followed by another flag) returned the literal string "-s" as the
+# dir — codex itself has no such value and would use $PWD, so this adapter
+# must say "unknown" too, exactly like adapter_sid_from_args' sibling `-*)
+# no value given` case in claude.sh. And an explicit empty value (`-C ''`,
+# `--cd=`, `-C=`) returned rc 0 with empty output — a directory that IS ""
+# is not a real cwd either, so it must be rc 1, not a success with nothing
+# in it.
 adapter_cwd_from_args() {
-  local prev="" a
+  local prev="" a val
   for a in "$@"; do
     if [ "$prev" = "-C" ] || [ "$prev" = "--cd" ]; then
-      printf '%s' "$a"; return 0
+      case "$a" in
+        -*) : ;;                            # next token is itself a flag: no value given
+        *)  [ -n "$a" ] && { printf '%s' "$a"; return 0; }
+            return 1 ;;                      # an explicit empty value is not a real dir
+      esac
     fi
     case "$a" in
-      --cd=*) printf '%s' "${a#--cd=}"; return 0 ;;
-      -C=*)   printf '%s' "${a#-C=}";   return 0 ;;
-      -C?*)   printf '%s' "${a#-C}";    return 0 ;;
+      --cd=*) val="${a#--cd=}"; [ -n "$val" ] && { printf '%s' "$val"; return 0; }; return 1 ;;
+      -C=*)   val="${a#-C=}";   [ -n "$val" ] && { printf '%s' "$val"; return 0; }; return 1 ;;
+      -C?*)   val="${a#-C}";    [ -n "$val" ] && { printf '%s' "$val"; return 0; }; return 1 ;;
     esac
     prev="$a"
   done
