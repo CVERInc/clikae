@@ -574,6 +574,58 @@ STUB
   [[ "$output" == *"[burn]"* ]] || { echo "the recorded sid did not carry the burn label under --all: $output"; false; }
 }
 
+# #105 item 2 / CI #144: fuser speaks two dialects. BSD (macOS): "<path>: 123"
+# on stdout, rc 0 even when nothing holds the file. GNU/PSmisc (Linux): "123"
+# on stdout, "<path>:" on stderr, rc 1 when nothing holds it (which aborted
+# the burn under errexit). The gate must read both the same way.
+_fuser_dialect_run() {  # <bsd|gnu> <held|free>
+  _fixture
+  clikae init claude T1
+  _human_claude
+  cat > "$TEST_HOME/bin/claude" <<'STUB'
+#!/usr/bin/env bash
+sid=""
+while [ "$#" -gt 0 ]; do
+  if [ "$1" = --resume ]; then sid="$2"; break; fi
+  shift
+done
+slug="$(printf '%s' "$PWD" | sed 's/[^A-Za-z0-9]/-/g')"
+printf '{"type":"user","cwd":"%s","message":{"role":"user","content":"more"}}\n' "$PWD" >> "$CLAUDE_CONFIG_DIR/projects/$slug/$sid.jsonl"
+printf 'done\n' > "$STUB_ARTIFACT"
+STUB
+  cat > "$TEST_HOME/bin/fuser" <<'STUB'
+#!/usr/bin/env bash
+pid=""; [ "$FUSER_STATE" = held ] && pid=" 4242"
+if [ "$FUSER_DIALECT" = bsd ]; then printf '%s:%s\n' "$1" "$pid"; exit 0; fi
+printf '%s:' "$1" >&2
+[ -n "$pid" ] || exit 1
+printf '%s\n' "$pid"
+STUB
+  chmod +x "$TEST_HOME/bin/claude" "$TEST_HOME/bin/fuser"
+  FUSER_DIALECT="$1" FUSER_STATE="$2" run clikae burn claude T1 --artifact "$STUB_ARTIFACT" --add-dir "$PWD" -- -p 'go' --resume "$HUMAN_SID"
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+}
+
+@test "#105 item 2: BSD fuser, transcript free -> the gate accepts and records the sid" {
+  _fuser_dialect_run bsd free
+  _assert_sidecar claude T1 "$HUMAN_SID"
+}
+
+@test "#105 item 2: BSD fuser, transcript held elsewhere -> the gate rejects, nothing recorded" {
+  _fuser_dialect_run bsd held
+  [ ! -e "$CLIKAE_HOME/state/burn-sessions/claude/T1" ] || { cat "$CLIKAE_HOME/state/burn-sessions/claude/T1"; false; }
+}
+
+@test "#105 item 2: GNU fuser, transcript free -> the gate accepts and records the sid" {
+  _fuser_dialect_run gnu free
+  _assert_sidecar claude T1 "$HUMAN_SID"
+}
+
+@test "#105 item 2: GNU fuser, transcript held elsewhere -> the gate rejects, nothing recorded" {
+  _fuser_dialect_run gnu held
+  [ ! -e "$CLIKAE_HOME/state/burn-sessions/claude/T1" ] || { cat "$CLIKAE_HOME/state/burn-sessions/claude/T1"; false; }
+}
+
 @test "burn claude does not clash --session-id onto a caller-supplied --resume (was rc=1)" {
   _fixture
   clikae init claude T1

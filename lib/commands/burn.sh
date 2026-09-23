@@ -4508,11 +4508,17 @@ KV
           # exit code doubles as the answer. Measured live (2026-09):
           # `fuser <untouched file>` exits 0 and prints "<path>: " with no
           # PID. Either fuser prints the PID(s) after the colon, or it
-          # doesn't; check that instead of the exit status, which works on
-          # both.
+          # doesn't; check that instead of the exit status.
+          # GNU/PSmisc fuser is the other dialect: PIDs alone on STDOUT, the
+          # "<path>:" label on STDERR, and rc 1 when nothing holds the file
+          # (which under errexit used to abort the whole burn). So: never let
+          # its rc matter, read stdout only, strip a leading "<path>:" label
+          # if this dialect printed one, and call it held iff a digit remains
+          # (a PID; GNU may suffix access letters like "123c").
           local _fuser_out
-          _fuser_out="$(fuser "$_burn_found_transcript" 2>/dev/null)"
-          case "$_fuser_out" in *:*[0-9]*) _burn_resume_open_elsewhere=1 ;; esac
+          _fuser_out="$(fuser "$_burn_found_transcript" 2>/dev/null)" || true
+          _fuser_out="${_fuser_out#"$_burn_found_transcript":}"
+          case "$_fuser_out" in *[0-9]*) _burn_resume_open_elsewhere=1 ;; esac
         elif command -v lsof >/dev/null 2>&1; then
           [ -n "$(lsof -- "$_burn_found_transcript" 2>/dev/null)" ] && _burn_resume_open_elsewhere=1
         else

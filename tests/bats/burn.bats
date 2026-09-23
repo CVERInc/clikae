@@ -5455,13 +5455,17 @@ _codex_sandbox_argv() {
 @test "burn #69: codex --artifact outside the writable cwd is refused early, naming both paths" {
   _stub_codex
   clikae init codex T1
-  mkdir -p "$BATS_TEST_TMPDIR/work" "$BATS_TEST_TMPDIR/elsewhere"
+  mkdir -p "$BATS_TEST_TMPDIR/work"
+  # Outside /tmp on every OS: on Linux BATS_TEST_TMPDIR itself is under /tmp,
+  # which codex may write, so a sibling of the work dir is NOT refused there.
+  # Never created: the refusal fires before anything touches it.
+  local outside="/nonexistent-clikae-$$"
   export STUB_ARGV_LOG="$BATS_TEST_TMPDIR/argv.log"
-  run clikae burn codex T1 --add-dir "$BATS_TEST_TMPDIR/work" --artifact "$BATS_TEST_TMPDIR/elsewhere/r.md" --prompt x
+  run clikae burn codex T1 --add-dir "$BATS_TEST_TMPDIR/work" --artifact "$outside/r.md" --prompt x
   [ "$status" -eq 1 ]
   [[ "$output" == *"outside codex's writable roots"* ]] || { echo "$output"; false; }
   [[ "$output" == *"$BATS_TEST_TMPDIR/work"* ]] || false
-  [[ "$output" == *"$BATS_TEST_TMPDIR/elsewhere/r.md"* ]] || false
+  [[ "$output" == *"$outside/r.md"* ]] || false
   [ ! -e "$STUB_ARGV_LOG" ]
   [ ! -e "$CLIKAE_HOME/logs" ] || [ -z "$(ls -A "$CLIKAE_HOME/logs")" ]
 }
@@ -5469,8 +5473,12 @@ _codex_sandbox_argv() {
 @test "burn #69: the early refusal carries a --json reason" {
   _stub_codex
   clikae init codex T1
-  mkdir -p "$BATS_TEST_TMPDIR/work" "$BATS_TEST_TMPDIR/elsewhere"
-  run clikae burn codex T1 --json --add-dir "$BATS_TEST_TMPDIR/work" --artifact "$BATS_TEST_TMPDIR/elsewhere/r.md" --prompt x
+  mkdir -p "$BATS_TEST_TMPDIR/work"
+  # Outside /tmp on every OS: on Linux BATS_TEST_TMPDIR itself is under /tmp,
+  # which codex may write, so a sibling of the work dir is NOT refused there.
+  # Never created: the refusal fires before anything touches it.
+  local outside="/nonexistent-clikae-$$"
+  run clikae burn codex T1 --json --add-dir "$BATS_TEST_TMPDIR/work" --artifact "$outside/r.md" --prompt x
   [ "$status" -eq 1 ]
   [[ "$output" == *'{"ok":false,"engine":"codex","tank":"T1",'* ]] || { echo "$output"; false; }
   [[ "$output" == *'"reason":"refused: artifact outside codex writable roots"'* ]] || false
