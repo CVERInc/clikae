@@ -921,6 +921,7 @@ EOF
   fi
 
   _doctor_keychain
+  ( load_adapter claude 2>/dev/null && _claude_stable_doctor ) || true
   # NOT inside _doctor_keychain: that one returns early off macOS, and reading a
   # log file has nothing to do with the Keychain.
   _doctor_auth_dropouts

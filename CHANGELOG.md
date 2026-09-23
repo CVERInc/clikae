@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **Claude launches through a stable path so macOS file-access grants survive
+  auto-updates (#59).** `$CLIKAE_HOME/bin/claude` is a hard link (copy across
+  volumes) to the installed version, refreshed at launch; `clikae claude`,
+  handoff and burn use it, `clikae doctor` reports it and flags a stale link.
+  Opt out with `CLIKAE_CLAUDE_STABLE_PATH=0`. See docs/claude-on-macos.md.
+
 ## [0.31.0] — 2026-09-22
 
 ### Added

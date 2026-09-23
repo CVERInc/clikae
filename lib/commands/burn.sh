@@ -4015,6 +4015,9 @@ cmd_burn() {
     _burn_status_write fail false "$cli" "$tank" "$artifact" "'$binary' is not on PATH" ""
     log_fail "'$binary' is not on PATH."
   fi
+  # #59: an adapter may launch through a path of its own (claude's stable,
+  # TCC-safe path) instead of the bare PATH name.
+  declare -F adapter_launch_binary >/dev/null && binary="$(adapter_launch_binary)"
   local dir; dir="$(profile_dir "$cli" "$tank")"   # dynamic scope for adapter_burn_flags
   local envvar; envvar="$(adapter_meta_env_var 2>/dev/null || true)"   # for the in-use guard
   if [ "$prompt_set" -eq 1 ]; then
@@ -4830,6 +4833,7 @@ KV
       cli="$nx_cli"; load_adapter "$cli"; binary="$(adapter_meta_cli_binary)"
       envvar="$(adapter_meta_env_var 2>/dev/null || true)"   # in-use guard tracks the new engine's var
       command -v "$binary" >/dev/null 2>&1 || log_fail "Reroute engine '$binary' is not on PATH."
+      declare -F adapter_launch_binary >/dev/null && binary="$(adapter_launch_binary)"
       if [ "$prompt_set" -eq 1 ]; then
         # Regenerate the headless flags for the NEW engine — a cross-engine reroute
         # of a --prompt task is sound (codex's flags differ from claude's, and the
