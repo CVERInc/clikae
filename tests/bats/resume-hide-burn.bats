@@ -527,6 +527,53 @@ STUB
 # or --resume if --fork-session is also specified", verified live 2.1.267)
 # and turning a previously-working launch shape into rc=1 with no artifact. --
 
+
+# #105 item 2 (round-5 review of #83): every fixture around the triple gate
+# above is negative — rc != 0, or it didn't grow, or a concurrent human held
+# it open — and asserts only "$HUMAN_SID stays visible / nothing recorded".
+# Two live mutants (hardwiring condition 3 off, or hardwiring the whole gate
+# to reject) left resume-hide-burn.bats + burn.bats at 167/167 green, because
+# "record nothing, ever" satisfies every assertion in this file just as well
+# as the real gate does. This is the missing positive case: all three
+# conditions hold (rc==0, the resumed transcript GREW, nothing else has it
+# open), so the gate must ACCEPT and record that exact sid — not merely fail
+# to reject it.
+@test "#105 item 2: burn claude --resume <existing sid> that the triple gate ACCEPTS records that sid and hides it from resume" {
+  _fixture
+  clikae init claude T1
+  _human_claude   # $HUMAN_SID's transcript pre-exists; this run resumes it
+  cat > "$TEST_HOME/bin/claude" <<'STUB'
+#!/usr/bin/env bash
+printf '%s\n' "$@" >> "$STUB_ARGV_LOG"
+sid=""
+while [ "$#" -gt 0 ]; do
+  if [ "$1" = --resume ]; then sid="$2"; break; fi
+  shift
+done
+slug="$(printf '%s' "$PWD" | sed 's/[^A-Za-z0-9]/-/g')"
+f="$CLAUDE_CONFIG_DIR/projects/$slug/$sid.jsonl"
+# The engine itself appends to the resumed transcript (condition 2: it
+# GREW) and exits 0 (condition 1), and nothing else has it open while this
+# stub runs (condition 3) -- all three gate conditions hold.
+printf '{"type":"user","cwd":"%s","message":{"role":"user","content":"more from the burn"}}\n' "$PWD" >> "$f"
+printf 'done\n' > "$STUB_ARTIFACT"
+STUB
+  chmod +x "$TEST_HOME/bin/claude"
+  run clikae burn claude T1 --artifact "$STUB_ARTIFACT" --add-dir "$PWD" -- -p 'go' --resume "$HUMAN_SID"
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  _assert_sidecar claude T1 "$HUMAN_SID"
+  # This run's own sid is now the ONLY session on the store, and it is a
+  # recorded burn — hiding it by default leaves nothing resumable at all, a
+  # STATE (exit 1 under no tty) rather than a failure; see resume.sh.
+  run clikae resume
+  [ "$status" -eq 1 ]
+  [[ "$output" != *"$HUMAN_SID"* ]] || { echo "the accepted gate's own sid was not hidden by default: $output"; false; }
+  run clikae resume --all
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"$HUMAN_SID"* ]] || { echo "--all should still surface the recorded burn sid, labeled: $output"; false; }
+  [[ "$output" == *"[burn]"* ]] || { echo "the recorded sid did not carry the burn label under --all: $output"; false; }
+}
+
 @test "burn claude does not clash --session-id onto a caller-supplied --resume (was rc=1)" {
   _fixture
   clikae init claude T1

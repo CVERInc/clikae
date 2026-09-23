@@ -508,6 +508,37 @@ _tmux_conf_base_index() { printf 'set -g base-index %s\n' "$1" > "$HOME/.tmux.co
   [[ "$block" == *'?'* ]] || { echo "a stamp whose engine window is gone was NOT marked on a base-index 1 server:"; echo "$output"; false; }
 }
 
+@test "live: a stamped session whose engine pane is dead (remain-on-exit) is marked stale" {
+  # R6-P3-1: live_engine_alive's pane_dead half (lib/core/live.sh's awk
+  # `$NF == 0`) had no test of its own — reverting it to ignore $NF entirely
+  # left live.bats fully green. A user who turns on `remain-on-exit` (not
+  # something clikae sets, but not assumable to be unset either — R5-P3-1)
+  # gets a window that lingers after its process exits: the window's NAME
+  # and EXISTENCE are unchanged, only #{pane_dead} flips. Same shape as
+  # R5-P3-2: a real behaviour with nothing pinning it down.
+  command -v tmux >/dev/null 2>&1 || skip "tmux not installed"
+  printf 'set -g remain-on-exit on\n' > "$HOME/.tmux.conf"
+  clikae init claude "$(_tank)"
+  local dir
+  dir="$CLIKAE_HOME/profiles/claude/$(_tank)"
+  _claude_transcript "$dir" sidA "My own work" 202001010000
+  tmux new-session -d -s "$(_csess)" 'true'  # exits immediately; pane stays because of remain-on-exit
+  tmux set-option -t "=$(_csess):" @clikae_session_id sidA
+  local dead=""
+  for _ in 1 2 3 4 5 6 7 8 9 10; do
+    dead="$(tmux list-panes -t "=$(_csess):" -F '#{pane_dead}' 2>/dev/null)"
+    [ "$dead" = "1" ] && break
+    sleep 0.2
+  done
+  [ "$dead" = "1" ] || { echo "fixture assumption broken — pane never went dead: $dead"; false; }
+
+  run clikae
+  [ "$status" -eq 0 ]
+  local block; block="$(_live_block "$output")"
+  [[ "$block" == *'"My own work'* ]] || { echo "the stamp's own title should still resolve — the transcript is real:"; echo "$output"; false; }
+  [[ "$block" == *'?'* ]] || { echo "a stamp whose engine pane is dead was NOT marked stale:"; echo "$output"; false; }
+}
+
 @test "live: an exactly-identified row is not marked stale on an explicit base-index 0 tmux server (R4-P2-1)" {
   # Symmetry with the base-index 1 case above: an EXPLICIT `base-index 0` in
   # the user's own ~/.tmux.conf (not just tmux's unconfigured default) must
