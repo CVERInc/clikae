@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **`clikae burn --queue` waits behind a running burn on the same tank
+  instead of refusing (#90).** The default is unchanged: a second burn on a
+  busy tank is still refused (#40). `--queue` re-checks the tank under its
+  lock every 5s, never takes it from a live holder, and starts once the holder
+  finishes or dies. `--queue-timeout` bounds the wait (default `2h`); on expiry
+  the burn fails with reason `queue timeout`. Progress goes to stderr
+  ("waiting behind run <id> on <engine>/<tank>, started HH:MM"), and `--json`
+  gains `queued_for_s`.
+
 ## [0.31.0] — 2026-09-22
 
 ### Added

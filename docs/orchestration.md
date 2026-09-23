@@ -806,6 +806,24 @@ subsequent real `clikae clean` run — self-healing was already true, and
 is now reachable in practice, not just in principle, because R10-P1-1
 means `clean` actually runs while it matters most (R10-P3-7).
 
+### Queueing behind a running burn instead of refusing (#90)
+
+The #40 refusal stays the default: it is a safety guard, and a burn that
+silently waited would hide the collision it exists to report. `--queue` opts
+into waiting instead. The queued burn re-runs the exact #40 check under the
+per-tank lock on every poll (every 5s) and releases the lock between polls, so
+it never holds the tank across the wait and never takes it from a live holder:
+it starts only once `burn_tank_busy`'s own pid + `started_at` check reports
+the tank free (the holder finished, or died). The wait is bounded by
+`--queue-timeout` (default `2h`; any `--wait-for-reset` duration form). On
+expiry the burn fails with the reason `queue timeout` and leaves the holder
+untouched. Progress goes to stderr, once per holder:
+
+    clikae: waiting behind run burn-… on codex/T1, started 14:05 (--queue-timeout 7200s)
+
+`--json` records how long the burn waited as `queued_for_s` (0 when it never
+queued). `--queue` with `--allow-active` is refused as contradictory.
+
 ### `--wait-for-reset` (#38)
 
 A tank that runs dry minutes before its own reset used to just Stop (under

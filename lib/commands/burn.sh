@@ -41,6 +41,7 @@ Usage: clikae burn <engine> <tank> --artifact <path>
                    [--add-dir <dir>]... [--to <target>] [--timeout <secs>]
                    [--no-reroute] [--allow-active] [--fresh] [--wait-for-reset <dur>]
                    [--permission <mode>] [--force-cockpit]
+                   [--queue [--queue-timeout <dur>]]
 
 Run a headless engine task on <tank>, verify it by the ARTIFACT it should
 produce (never the exit code — codex exec exits 0 even when it hit its limit and
@@ -116,6 +117,14 @@ Give the task in one of two ways:
                       the tank you're mid-conversation on would silently burn
                       that quota, and two burns on one tank collide on the tmux
                       session name) and tanks sharing an already-dry account.
+  --queue             (#90) if another burn is running on <tank>, wait for it
+                      to finish, then start — instead of the default refusal.
+                      Polls the tank's busy state every 5s under the same
+                      per-tank lock (never steals a live holder's run);
+                      progress goes to stderr, and --json records
+                      `queued_for_s`. Not combinable with --allow-active.
+  --queue-timeout <d> bound on the --queue wait (default 2h; e.g. 30m, 90s).
+                      On expiry the burn fails with reason `queue timeout`.
   --force-cockpit     operator override: burn the tank recorded by `clikae
                       cockpit` anyway. Without it, every launch onto the
                       cockpit — the tank you name, a --to hop, an agy walk — is
@@ -2496,10 +2505,10 @@ _burn_result() {
   elif [ -n "$art" ] && [ -e "$art" ]; then
     bytes="$(_burn_size "$art")"
   fi
-  printf '{"ok":%s,"engine":%s,"tank":%s,"artifact":%s,"artifact_bytes":%s,"reason":%s,"reset":%s,"rerouted_from":[%s],"elapsed_s":%s,"run_id":%s,"left_behind":%s,%s}\n' \
+  printf '{"ok":%s,"engine":%s,"tank":%s,"artifact":%s,"artifact_bytes":%s,"reason":%s,"reset":%s,"rerouted_from":[%s],"elapsed_s":%s,"queued_for_s":%s,"run_id":%s,"left_behind":%s,%s}\n' \
     "$ok" "$(json_or_null "$eng")" "$(json_or_null "$tk")" "$(json_or_null "$art")" \
     "${bytes:-null}" "$(json_str "$reason")" "$(json_or_null "$reset")" \
-    "$(_burn_tried_json "${tried:-}")" "$burn_elapsed_s" \
+    "$(_burn_tried_json "${tried:-}")" "$burn_elapsed_s" "${queued_for_s:-0}" \
     "$(json_or_null "${run_id:-}")" "$left_behind" "$left_behind_meta" >&4
 }
 
@@ -3663,6 +3672,9 @@ _burn_truncate_utf8() {
 
 cmd_burn() {
   local cli="" tank="" artifact="" to="" timeout_s="" reroute=1 allow_active=0 fresh=0 as_json=0
+  # #90: --queue waits behind a running burn on the same tank (default: refuse).
+  local queue=0 queue_timeout_raw="" queue_timeout_s=7200
+  queued_for_s=0
   local prompt="" prompt_file="" prompt_set=0 codex_skip_git_check=0
   local burn_permission=acceptEdits permission_set=0
   local infra_retries=2 infra_delay=5 infra_attempt=0 retry_delay=5
@@ -3706,6 +3718,8 @@ cmd_burn() {
       --json)       as_json=1; shift ;;
       --no-reroute) reroute=0; shift ;;
       --allow-active) allow_active=1; shift ;;
+      --queue)      queue=1; shift ;;
+      --queue-timeout) shift; [ $# -gt 0 ] || log_fail "--queue-timeout needs a duration (e.g. 2h)"; queue_timeout_raw="$1"; shift ;;
       --force-cockpit) force_cockpit=1; shift ;;
       --fresh)      fresh=1; shift ;;
       --)           shift; cmd=("$@"); break ;;
@@ -3720,6 +3734,15 @@ cmd_burn() {
   if [ -n "$wait_for_reset_raw" ]; then
     wait_for_reset_s="$(_burn_parse_duration "$wait_for_reset_raw")" \
       || log_fail "--wait-for-reset: not a duration: $wait_for_reset_raw  (use e.g. 30m, 2h, 90s, or a bare integer of seconds)"
+  fi
+
+  if [ -n "$queue_timeout_raw" ]; then
+    [ "$queue" = "1" ] || log_fail "--queue-timeout only applies with --queue"
+    queue_timeout_s="$(_burn_parse_duration "$queue_timeout_raw")" \
+      || log_fail "--queue-timeout: not a duration: $queue_timeout_raw  (use e.g. 30m, 2h, 90s, or a bare integer of seconds)"
+  fi
+  if [ "$queue" = "1" ] && [ "$allow_active" = "1" ]; then
+    log_fail "--queue and --allow-active contradict each other (wait for the running burn, or run alongside it) — pick one"
   fi
 
   case "$infra_retries" in ''|*[!0-9]*) log_fail "--infra-retries must be a nonnegative integer" ;; esac
@@ -3911,6 +3934,14 @@ cmd_burn() {
     # below is ever written. `cmd || rc=$?` keeps the whole statement's own
     # exit status at 0 (the assignment succeeds) so `set -e` never fires,
     # while still capturing the real code.
+    # #90 --queue: the loop below re-enters the SAME check-under-lock each
+    # poll. The lock is only ever held across one check (never across the
+    # wait), and a live holder is recognised by burn_tank_busy's own pid +
+    # started_at test — so a queued burn can never steal a running one's
+    # tank; it starts only once that check itself reports the tank free.
+    local _queue_t0=$SECONDS _queue_announced="" _queue_poll_s="${CLIKAE_BURN_QUEUE_POLL_S:-5}"
+    case "$_queue_poll_s" in ''|*[!0-9]*|0) _queue_poll_s=5 ;; esac
+    while :; do
     local _lock_acquire_rc=0
     _burn_tank_lock_acquire "$status_engine" "$tank" || _lock_acquire_rc=$?
     if [ "$_lock_acquire_rc" -eq 2 ]; then
@@ -3943,6 +3974,29 @@ cmd_burn() {
       # message now names both rather than asserting the wrong one.
       log_fail "Timed out waiting for the busy-tank lock on $status_engine/$tank — either another clikae burn is genuinely mid-check on it right now, or the previous holder died and the tank is mid self-heal (up to ~30s after a kill); try again shortly."
     fi
+    if burn_tank_busy "$status_engine" "$tank" "$$" && [ "$queue" = "1" ]; then
+      _burn_tank_lock_release "$status_engine" "$tank"
+      if [ "$((SECONDS - _queue_t0))" -ge "$queue_timeout_s" ]; then
+        trap - HUP INT TERM EXIT
+        queued_for_s=$((SECONDS - _queue_t0))
+        _burn_status_write fail false "$status_engine" "$tank" "$artifact" \
+          "queue timeout: $status_engine/$tank still busy with ${_BTB_RUN_ID:-another burn} after ${queued_for_s}s (--queue-timeout ${queue_timeout_s}s)" ""
+        _burn_result false "$status_engine" "$tank" "$artifact" "queue timeout" ""
+        log_fail "queue timeout: $status_engine/$tank is still busy with ${_BTB_RUN_ID:-another burn} after ${queued_for_s}s (--queue-timeout ${queue_timeout_s}s)."
+      fi
+      if [ "$_queue_announced" != "$_BTB_RUN_ID" ]; then
+        _queue_announced="$_BTB_RUN_ID"
+        local _queue_hhmm=""
+        case "$_BTB_STARTED" in
+          ''|*[!0-9]*) _queue_hhmm="?" ;;
+          *) _queue_hhmm="$(date -r "$_BTB_STARTED" +%H:%M 2>/dev/null || date -d "@$_BTB_STARTED" +%H:%M 2>/dev/null || printf '?')" ;;
+        esac
+        printf 'clikae: waiting behind run %s on %s/%s, started %s (--queue-timeout %ss)\n' \
+          "${_BTB_RUN_ID:-?}" "$status_engine" "$tank" "$_queue_hhmm" "$queue_timeout_s" >&2
+      fi
+      sleep "$_queue_poll_s"
+      continue
+    fi
     if burn_tank_busy "$status_engine" "$tank" "$$"; then
       _burn_tank_lock_release "$status_engine" "$tank"
       trap - HUP INT TERM EXIT
@@ -3956,6 +4010,12 @@ cmd_burn() {
       _burn_status_write fail false "$status_engine" "$tank" "$artifact" \
         "busy: $status_engine/$tank already has a running burn on it (#40)" ""
       log_fail "$status_engine/$tank already has a running burn on it (#40) — clikae wait <its run id> to block on it, or --allow-active to run anyway (they will collide on the same tmux session)."
+    fi
+    break
+    done
+    if [ -n "$_queue_announced" ]; then
+      queued_for_s=$((SECONDS - _queue_t0))
+      printf 'clikae: %s/%s is free after %ss in the queue — starting.\n' "$status_engine" "$tank" "$queued_for_s" >&2
     fi
     _burn_status_write running null "$status_engine" "$tank" "$artifact" "" ""
     _burn_tank_lock_release "$status_engine" "$tank"
