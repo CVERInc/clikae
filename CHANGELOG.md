@@ -7,6 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **agy tanks switch accounts on Linux (#96).** On Linux agy keeps its Google
+  login in one file, `~/.gemini/antigravity-cli/antigravity-oauth-token`,
+  instead of the macOS Keychain. That file lives inside each tank dir behind
+  the `~/.gemini` symlink, so `clikae agy <tank>`, burn's auto-hop, `rename`
+  and `remove` carry it with the tank. clikae now picks the login backend by
+  `uname -s` (Keychain on macOS, unchanged; file on Linux), keeps the token
+  0600 after a switch, warns instead of landing silently on a tank with no
+  saved login, and `clikae doctor` names the active backend and which tanks
+  carry a login.
+
 ## [0.31.0] — 2026-09-22
 
 ### Added

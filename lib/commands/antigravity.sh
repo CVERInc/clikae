@@ -72,14 +72,49 @@ _agy_active() {
 # entirely). It's back now with the actual fix for that: _agy_kc_verify_restore
 # below refuses to proceed silently if the restore didn't verifiably take, and
 # tests/bats/antigravity_keychain_real.bats exercises the real `security`
-# binary end to end. macOS-only; on Linux agy stores its login in files inside
-# ~/.gemini, which the dir swap already isolates, so these are no-ops.
+# binary end to end. macOS-only (the "keychain" backend below).
+#
+# Linux (the "file" backend, #96): agy has no Keychain there; on a headless host
+# (no keyring daemon) its Google login is ONE file,
+#   ~/.gemini/antigravity-cli/antigravity-oauth-token   (0600, refreshed on use)
+# — measured on a Linux host running agy 1.2.9. That path is INSIDE ~/.gemini,
+# which clikae already turns into a symlink to the active tank dir, so the file
+# at <tank>/antigravity-cli/antigravity-oauth-token IS that tank's saved login
+# slot: a switch "stashes" the outgoing login by simply leaving it in the tank
+# it was refreshed in, and "restores" the incoming one by repointing the link.
+# Nothing is copied, so there is no second copy of the secret to drift or leak.
+# What the file backend adds is the part the Keychain path has _verify for:
+# naming a tank that has NO saved login (agy would stop at a sign-in prompt,
+# which a headless burn can't answer) instead of landing on it silently, and
+# keeping the token 0600. Rename and remove carry it with the tank dir.
+_agy_login_backend() {
+  case "$(uname -s 2>/dev/null)" in
+    Darwin) if command -v security >/dev/null 2>&1; then printf 'keychain\n'; else printf 'none\n'; fi ;;
+    Linux)  printf 'file\n' ;;
+    *)      printf 'none\n' ;;
+  esac
+}
+_agy_file_token_rel() { printf 'antigravity-cli/antigravity-oauth-token\n'; }
+_agy_file_token()     { printf '%s/%s\n' "$(_agy_slots)/$1" "$(_agy_file_token_rel)"; }
+
+# File backend, after a switch to <tank>: report a missing login (never crash),
+# and keep an existing one owner-only.
+_agy_file_verify() {
+  [ "$(_agy_login_backend)" = "file" ] || return 0
+  local tok; tok="$(_agy_file_token "$1")"
+  if [ -s "$tok" ]; then
+    chmod 600 "$tok" 2>/dev/null || true
+  else
+    log_warn "agy tank '$1' has no saved login ($(_agy_file_token_rel) is missing) — agy will ask you to sign in. Do it once from a real terminal: clikae agy $1"
+  fi
+  return 0
+}
+
 _agy_kc_canon_service() { printf 'gemini\n'; }
 _agy_kc_account()       { printf 'antigravity\n'; }
 _agy_kc_tank_service()  { printf 'clikae-agy-%s\n' "$1"; }
 _agy_kc_available() {
-  case "$OSTYPE" in darwin*) ;; *) return 1 ;; esac
-  command -v security >/dev/null 2>&1
+  [ "$(_agy_login_backend)" = "keychain" ]
 }
 
 # A trailing keychain-file argument for `security` (verified against the real
@@ -234,6 +269,9 @@ _agy_takeover() {
     refuses to proceed if it doesn't match, rather than silently landing you on
     the wrong account). A tank with no prior login logs out cleanly instead, so
     agy asks for a fresh OAuth pick.
+  · On Linux, agy's login is one file inside ~/.gemini (antigravity-cli/
+    antigravity-oauth-token, 0600), so it lives in each tank dir and moves with
+    the symlink; clikae warns when a tank has no saved login yet.
   · It is GLOBAL: only one agy tank is active at a time across ALL terminals
     (the login is one global Keychain entry). Don't run two tanks at once.
   · Swapping while agy is running can corrupt that session.
@@ -325,6 +363,7 @@ _agy_switch() {
     _agy_kc_verify_restore "$name"
     rm -f "$link"
     ln -s "$slots/$name" "$link"
+    _agy_file_verify "$name"
     log_done "agy is now on tank: $name"
     log_dim "agy is global — switched all terminals to $name."
   fi
@@ -434,7 +473,8 @@ Usage: clikae agy [tank] [-- args...]    switch agy to <tank> and run it
 Antigravity (agy) keeps its login as one global Keychain entry, so clikae can't
 switch the account per-shell like other engines. Instead it swaps ~/.gemini between
 tank dirs via a symlink AND carries each tank's login with it (macOS Keychain,
-verified on every switch — never a silent landing on the wrong account) — a
+verified on every switch — never a silent landing on the wrong account; on Linux
+the login is an oauth-token file inside each tank dir, 0600) — a
 GLOBAL power mode: one agy tank is active at a time across ALL terminals. The
 first `init agy` asks before taking over ~/.gemini; it's reversible with
 `clikae agy --release`.
