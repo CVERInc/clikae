@@ -111,6 +111,10 @@ setup() {
   # have a background window typing into its session.
   mkdir -p "$CLIKAE_HOME" 2>/dev/null || true
   printf 'off\n' > "$CLIKAE_HOME/wake-on-reset"
+  # Same for the warm /compact (#131): on by default and asked once at launch,
+  # so an unanswered file would make every pty launch in the suite stop at the
+  # question. watch-compact.bats removes this when it tests the default.
+  printf 'off\n' > "$CLIKAE_HOME/warm-compact"
   # 🔴 Stamp the CURRENT schema so no test is surprised by a migration. Without
   # this, the first clikae in a test prints "migrated state v1 → v2" and the
   # second does not — which broke the byte-identical-alias test the day the

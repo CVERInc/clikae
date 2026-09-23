@@ -96,6 +96,8 @@ source "$CLIKAE_LIB/core/live.sh"
 source "$CLIKAE_LIB/core/agy_harness.sh"
 # shellcheck source=../lib/core/wake.sh
 source "$CLIKAE_LIB/core/wake.sh"
+# shellcheck source=../lib/core/compact.sh
+source "$CLIKAE_LIB/core/compact.sh"
 # shellcheck source=../lib/core/session_carry.sh
 source "$CLIKAE_LIB/core/session_carry.sh"
 # shellcheck source=../lib/core/proc.sh

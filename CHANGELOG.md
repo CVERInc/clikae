@@ -7,6 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **Warm `/compact` before the 1h prompt cache expires (#131).** The watcher
+  window in each clikae tmux session now types `/compact` into an idle claude
+  session once — after 50 minutes with no transcript writes, with an empty
+  prompt line, no turn running, and a context of at least 200K tokens (read
+  from the transcript's last `usage`; `CLIKAE_COMPACT_MIN_TOKENS`). Never while
+  typing, never on a clock alone, once per idle stretch. On by default, asked
+  once at launch, per-tank opt-out via `clikae watch compact off <engine>
+  <tank>`. Each send and the next turn's `cache_creation_input_tokens` are
+  written to `state/wake/` so the saving can be checked.
+
 ## [0.31.0] — 2026-09-22
 
 ### Added
