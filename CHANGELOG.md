@@ -16,8 +16,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   stock drag-selection took the gesture and the screen could not be scrolled
   at all, and with it on, it scrolled. The cost falls on desktops: a mouse
   drag inside tmux now scrolls instead of selecting, and text is selected
-  with the terminal's own modifier-drag (Option-drag, or Shift-drag on most
-  Linux terminals), which bypasses tmux mouse mode. The answer is saved in
+  with the terminal's own modifier-drag (Option-drag in Terminal.app and iTerm2,
+  Shift-drag in Ghostty and most Linux terminals), which bypasses tmux mouse mode. The answer is saved in
   `$CLIKAE_HOME/touch-drag` (absent means on) and every launch writes it to
   the server with plain `set-option -g` rather than `-o`, so a server an
   earlier launch left at `off` picks up the new default on the next session

@@ -200,7 +200,7 @@ drag-selection and the screen could not be scrolled at all; with it on,
 scrolling worked. clikae is used from phones, e-ink tablets and ssh first, so
 the default follows them. On a desktop, a mouse drag inside tmux now scrolls;
 select text with your terminal's own modifier-drag instead (Option-drag in
-Terminal.app and iTerm2, Shift-drag in most Linux terminals), which bypasses
+Terminal.app and iTerm2, Shift-drag in Ghostty and most Linux terminals), which bypasses
 tmux's mouse mode entirely.
 
 To opt out, and get tmux's stock drag-selection back:
