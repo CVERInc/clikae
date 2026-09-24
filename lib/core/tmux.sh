@@ -647,9 +647,18 @@ tmux_spawn_session() {
   # whose shell command exited 1 ran `copy-mode -M` against the real press
   # (tmux 3.4, a client driven with raw SGR bytes).
   #
-  # OFF BY DEFAULT for the same reason, on #108's tap-zone precedent: a gesture
-  # that today reaches the program or the selection has to be asked for
-  # (`set -g @clikae_touch_drag on`). @clikae_touch_scroll remains the master
+  # ON BY DEFAULT since 2026-09-25 (the maintainer's ruling). It shipped OFF
+  # first, on #108's tap-zone precedent, to keep desktop drag-selection. Then
+  # it was measured on an iPhone (a-Shell -> ssh -> tmux 3.7b): a finger flick
+  # is MouseDown + MouseDrag... + MouseDragEnd with NO MouseUp, so with the
+  # option off tmux's stock drag-selection wins and the screen cannot be
+  # scrolled AT ALL; with it on, scrolling works. The cockpit is phone /
+  # PineNote / ssh first, so the trade was accepted: on a desktop, a mouse drag
+  # inside tmux now scrolls, and text is selected with the terminal's native
+  # modifier (Option/Shift-drag), which bypasses tmux mouse mode. `off` is the
+  # opt-out and still means stock tmux exactly (the helper declines). The
+  # answer persists in $CLIKAE_HOME/touch-drag (lib/core/touch_pref.sh,
+  # `clikae touch drag on|off`). @clikae_touch_scroll remains the master
   # switch over both halves.
   #
   # 🔴 EVERY FORMAT ARGUMENT IS QUOTED HERE AND NOT ABOVE. `#{pane_mode}`
@@ -696,7 +705,18 @@ tmux_spawn_session() {
     tmux set-option -og @clikae_touch_scroll_lines 2 2>/dev/null || true
     tmux set-option -og @clikae_touch_pages off 2>/dev/null || true
     tmux set-option -og @clikae_touch_pages_rows 3 2>/dev/null || true
-    tmux set-option -og @clikae_touch_drag off 2>/dev/null || true
+    # @clikae_touch_drag is the one default NOT written with `-o`: it is the
+    # projection of a saved preference ($CLIKAE_HOME/touch-drag, absent = on),
+    # so every launch writes it outright. With `-o` a server that an earlier
+    # launch left at `off` keeps `off` forever — the maintainer's live server
+    # still held `off` from a 0.31.0 launch after the default changed, the same
+    # "set once per server, never again" trap the bind-keys fell into on
+    # 2026-09-24. To keep it off, say so: `clikae touch drag off`.
+    if ! declare -F touch_drag_pref_get >/dev/null 2>&1; then
+      # shellcheck source=touch_pref.sh
+      . "${BASH_SOURCE[0]%/*}/touch_pref.sh"
+    fi
+    tmux set-option -g @clikae_touch_drag "$(touch_drag_pref_get)" 2>/dev/null || true
     # Bindings: rewritten on EVERY launch, and a failure is said out loud.
     # Only when a server is up: with none there is nothing to bind, and the
     # spawn above already failed loudly (stubbed tmux in tests has no server).

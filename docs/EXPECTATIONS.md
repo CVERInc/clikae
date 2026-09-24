@@ -417,10 +417,13 @@ found a flick sends motion events and no `MouseUp1Pane` at all, which is what
 `@clikae_touch_drag` exists for. Read it as the standing warning it is —
 "inherited from an earlier measurement" is not the same claim as "measured".
 
-Drag-to-scroll (`@clikae_touch_drag`, off by default) is the one touch feature
+Drag-to-scroll (`@clikae_touch_drag`, on by default since 2026-09-25) is the one touch feature
 whose *input* was measured on a physical iPhone. Its **output** was not: every
 assertion about what then happens — the history scrolling, the wheel bytes
 reaching an alternate-screen application, `off` still selecting text — comes
 from a real tmux 3.4 server on Linux, three of them from a real client driven
-with synthetic SGR bytes. Nobody has yet watched the finished feature under a
-thumb.
+with synthetic SGR bytes. On 2026-09-25 the finished feature was watched under
+a thumb for the first time (iPhone, a-Shell → ssh → tmux 3.7b): with it off, a
+flick was drag-selection and nothing scrolled; with it on, the screen scrolled.
+That observation is why it is now on by default. It was a person looking, not
+a recorded measurement of distance or speed.

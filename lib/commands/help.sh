@@ -64,6 +64,8 @@ Use & inspect:
   app <engine> <tank>              generate a macOS launcher .app
   alias <engine> <tank>            write a shell alias for the tank
   lang [<locale>]                  interface language (bare `clikae lang` lists them)
+  touch drag [status|on|off]       finger drag scrolls tmux (default on; off gives
+                                   drag-selection back)
   tanks                            list all tanks (with the logged-in account)
   status [engine]                  which tank each engine is on (+ recent carries)
   usage [engine] [tank]            vendor usage window(s): used% and reset time

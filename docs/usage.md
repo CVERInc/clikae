@@ -170,7 +170,7 @@ scroll, a tap inside a band is a page, everything else is left alone. Turning
 paging on therefore cannot cost you a swipe, and `@clikae_touch_scroll off`
 does not turn paging off — the two options gate independently.
 
-#### Drag to scroll live (off by default)
+#### Drag to scroll live (on by default)
 
 Everything above translates a press/release **pair**. Not every touch terminal
 sends one. Measured on a real iPhone (a-Shell → ssh → tmux 3.4, 2026-09-16,
@@ -185,21 +185,39 @@ So on that device the swipe translation above never fired, and tmux's own
 `MouseDrag1Pane → copy-mode -M` won instead: the gesture ended in *"copied N
 chars to tmux buffer"* rather than scrolling.
 
-With `set -g @clikae_touch_drag on`, that motion is translated as it arrives —
-the history follows your finger rather than jumping when you let go — at the
-same `@clikae_touch_scroll_lines` speed. Moving **down** the glass reveals
-**older** output, the way every touch surface works. Letting go at the newest
-line returns the pane to the live view.
+With `@clikae_touch_drag` on (the default), that motion is translated as it
+arrives — the history follows your finger rather than jumping when you let go —
+at the same `@clikae_touch_scroll_lines` speed. Moving **down** the glass
+reveals **older** output, the way every touch surface works. Letting go at the
+newest line returns the pane to the live view.
 
-**It is off by default, and that default matters more than the others.**
-`MouseDrag1Pane` on a pane with no mouse-tracking program is how you select
-text with a mouse or trackpad, and a finger's drag and a trackpad's drag are
-*the same tmux events* — there is no signal that could tell them apart. So this
-option would cost every desktop its text selection to give the phones their
-scrolling. With it off, the six drag bindings hand the key straight back to
-tmux and you get stock behaviour, drag-selection included. Only
-`on`/`1`/`yes`/`true` (any case) turn it on; `@clikae_touch_scroll off` turns
-it off along with everything else.
+**It is on by default since 2026-09-25, and that costs desktops something.**
+It first shipped off: `MouseDrag1Pane` on a pane with no mouse-tracking program
+is how you select text with a mouse or trackpad, and a finger's drag and a
+trackpad's drag are *the same tmux events*. Then it was measured again on an
+iPhone (a-Shell → ssh → tmux 3.7b): with it off, a flick produced tmux's
+drag-selection and the screen could not be scrolled at all; with it on,
+scrolling worked. clikae is used from phones, e-ink tablets and ssh first, so
+the default follows them. On a desktop, a mouse drag inside tmux now scrolls;
+select text with your terminal's own modifier-drag instead (Option-drag in
+Terminal.app and iTerm2, Shift-drag in Ghostty and most Linux terminals), which bypasses
+tmux's mouse mode entirely.
+
+To opt out, and get tmux's stock drag-selection back:
+
+```
+clikae touch drag off      # saved in ~/.clikae/touch-drag, applied to the running server
+clikae touch drag on       # back to the default
+clikae touch               # what is saved, and what the running server uses
+```
+
+The saved answer is written to the server at every clikae launch (a plain
+`set -g`, not `-o`), so a `tmux set -g @clikae_touch_drag off` typed by hand
+lasts only until the next clikae session is created; use the verb to make it
+stick. With it off, the six drag bindings hand the key straight back to tmux
+and you get stock behaviour, drag-selection included. An unset option and
+`on`/`1`/`yes`/`true` (any case) mean on; `off` and any other value mean off;
+`@clikae_touch_scroll off` turns it off along with everything else.
 
 Two things you do **not** need it for, on a-Shell specifically:
 

@@ -48,3 +48,76 @@ _kill_probes() {
   _kill_probes
   [ "$output" = "7" ] || { echo "operator value overwritten: $output"; false; }
 }
+
+# ─── @clikae_touch_drag: ON by default, and a launch writes the saved answer ──
+# (2026-09-25). Unlike the four `-o` defaults above, the drag option is the
+# projection of $CLIKAE_HOME/touch-drag and every launch writes it outright:
+# the maintainer's live server still held `off` from a 0.31.0 launch after the
+# default changed, and `-o` would have kept it there forever.
+
+_src_pref() {
+  # shellcheck source=/dev/null
+  . "$CLIKAE_TEST_ROOT/lib/core/touch_pref.sh"
+}
+
+@test "touch drag pref: absent means on; set writes the first bare line; get reads it back" {
+  _src_pref
+  rm -f "$CLIKAE_HOME/touch-drag"
+  [ "$(touch_drag_pref_raw)" = "unset" ]
+  [ "$(touch_drag_pref_get)" = "on" ]
+  touch_drag_pref_set off
+  [ "$(head -n 1 "$CLIKAE_HOME/touch-drag")" = "off" ]
+  [ "$(touch_drag_pref_get)" = "off" ]
+  touch_drag_pref_set on
+  [ "$(touch_drag_pref_get)" = "on" ]
+  [ "$(grep -c . "$CLIKAE_HOME/touch-drag")" = "1" ]
+  run touch_drag_pref_set maybe
+  [ "$status" -ne 0 ]
+  printf 'garbage\n' > "$CLIKAE_HOME/touch-drag"
+  [ "$(touch_drag_pref_get)" = "on" ]
+}
+
+@test "touch drag: a launch sets ON over a live server an earlier launch left at off" {
+  command -v tmux >/dev/null 2>&1 || skip "tmux not installed"
+  _src_tmux
+  rm -f "$CLIKAE_HOME/touch-drag"
+  tmux_spawn_session --session rebindA -- 'sleep 30'
+  tmux set-option -g @clikae_touch_drag off
+  tmux_spawn_session --session rebindB -- 'sleep 30'
+  run tmux show-options -gv @clikae_touch_drag
+  _kill_probes
+  [ "$output" = "on" ] || { echo "a stale off survived the launch: $output"; false; }
+}
+
+@test "touch drag: a saved off makes the launch set off" {
+  command -v tmux >/dev/null 2>&1 || skip "tmux not installed"
+  _src_tmux
+  printf 'off\n' > "$CLIKAE_HOME/touch-drag"
+  tmux_spawn_session --session rebindA -- 'sleep 30'
+  run tmux show-options -gv @clikae_touch_drag
+  _kill_probes
+  [ "$output" = "off" ] || { echo "expected off, got: $output"; false; }
+}
+
+@test "touch drag verb: on/off writes the file and changes the live server; status shows both" {
+  command -v tmux >/dev/null 2>&1 || skip "tmux not installed"
+  _src_tmux
+  rm -f "$CLIKAE_HOME/touch-drag"
+  tmux_spawn_session --session rebindA -- 'sleep 30'
+  run "$CLIKAE_TEST_ROOT/bin/clikae" touch drag off
+  local off_out="$output" off_rc="$status" file live
+  file="$(head -n 1 "$CLIKAE_HOME/touch-drag" 2>/dev/null)"
+  live="$(tmux show-options -gv @clikae_touch_drag)"
+  run "$CLIKAE_TEST_ROOT/bin/clikae" touch
+  local st="$output"
+  run "$CLIKAE_TEST_ROOT/bin/clikae" touch drag on
+  local live_on; live_on="$(tmux show-options -gv @clikae_touch_drag)"
+  _kill_probes
+  [ "$off_rc" -eq 0 ] || { echo "rc=$off_rc: $off_out"; false; }
+  [[ "$off_out" == *"touch drag: off"* ]] || { echo "$off_out"; false; }
+  [ "$file" = "off" ] || { echo "file: $file"; false; }
+  [ "$live" = "off" ] || { echo "live: $live"; false; }
+  [[ "$st" == *"touch drag: off"* ]] && [[ "$st" == *"running tmux server: off"* ]] || { echo "$st"; false; }
+  [ "$live_on" = "on" ] || { echo "live after on: $live_on"; false; }
+  [ "$(head -n 1 "$CLIKAE_HOME/touch-drag")" = "on" ]
+}

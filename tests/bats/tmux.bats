@@ -96,12 +96,12 @@ release() {
     [[ "$output" == *"<bind-key><-T><$table><MouseDown1Pane><set-option -p -t = -F @clikae_touch_y \"#{mouse_y}\"; set-option -p -t = -F @clikae_touch_h \"#{pane_height}\"; select-pane -t =>"* ]] || false
     [[ "$output" == *"<bind-key><-T><$table><MouseUp1Pane><run-shell><bash '$CLIKAE_HOME/runtime/lib/core/touch_scroll.sh' #{mouse_y} #{pane_id} #{pane_mode}>"* ]] || false
   done
-  # #108 second half: the drag stream. `@clikae_touch_drag` rides the same `-og`
-  # chain and ships OFF — MouseDrag1Pane's stock meaning on a pane with no
-  # mouse-tracking program is mouse drag-SELECTION, and a-Shell's drag and a
-  # trackpad's drag are the same tmux events, so there is no runtime signal
-  # that could tell them apart and the gesture has to be asked for.
-  [[ "$output" == *'<set-option><-og><@clikae_touch_drag><off>'* ]] || false
+  # #108 second half: the drag stream. `@clikae_touch_drag` ships ON since
+  # 2026-09-25 (a phone flick sends no MouseUp, so off meant no scrolling at
+  # all) and is written with plain `-g`, NOT `-og`: it projects the saved
+  # preference, and `-o` would freeze whatever an earlier launch left.
+  [[ "$output" == *'<set-option><-g><@clikae_touch_drag><on>'$'\n'* ]] || false
+  [[ "$output" != *'<-og><@clikae_touch_drag>'* ]] || false
   # 🔴 if-shell, NOT run-shell, and the third argument is what makes `off` mean
   # stock tmux: run-shell throws the exit status away, so a binding built on it
   # could only ever CONSUME the key. The else-branch is tmux's own command for
@@ -148,6 +148,18 @@ release() {
   [[ "$output" != *'@clikae_touch_pages'* ]] || false
   [[ "$output" != *'@clikae_touch_drag'* ]] || false
   [[ "$output" != *'<bind-key>'* ]] || false
+}
+
+@test "touch: a saved \`off\` in \$CLIKAE_HOME/touch-drag makes the launch write off" {
+  printf 'off\n' > "$CLIKAE_HOME/touch-drag"
+  # shellcheck source=/dev/null
+  source "$TOUCH_ROOT/lib/core/tmux.sh"
+  _tmux_ssh_agent_link() { return 1; }
+  tmux_server_born_note() { :; }
+  run tmux_spawn_session --session clikae-test -- 'echo test'
+  [ "$status" -eq 0 ]
+  run cat "$TOUCH_LOG"
+  [[ "$output" == *'<set-option><-g><@clikae_touch_drag><off>'$'\n'* ]] || false
 }
 
 @test "touch: finger up enters copy-mode and scrolls eight lines" {

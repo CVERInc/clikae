@@ -254,25 +254,27 @@ pages_on=0
 case "$(_touch_fold "$(_touch_opt @clikae_touch_pages)")" in
   on|1|yes|true) pages_on=1 ;;
 esac
-# 🔴 DRAG TRANSLATION SHIPS OFF, AND NOT OUT OF TIMIDITY. The drag bindings
-# take `MouseDrag1Pane`, whose stock meaning on a pane with no mouse-tracking
-# program is MOUSE DRAG-SELECTION — the way every desktop user of this tool
-# selects text with a trackpad. Turning that into scrolling by default would
-# remove a working feature from every Mac to add one to the phones, and unlike
-# #88's MouseUp translation (which forwards the click first and so costs
-# nothing) there is no runtime signal that separates a finger from a trackpad:
-# a-Shell's drag and a trackpad's drag are the SAME tmux events. So it follows
-# #108's tap-zone precedent exactly — a gesture that currently reaches the
-# program or the selection has to be asked for:
+# DRAG TRANSLATION IS ON BY DEFAULT (2026-09-25). The drag bindings take
+# `MouseDrag1Pane`, whose stock meaning on a pane with no mouse-tracking
+# program is mouse drag-SELECTION, and a-Shell's drag and a trackpad's drag are
+# the SAME tmux events, so no runtime signal separates a finger from a
+# trackpad. It first shipped OFF for that reason. Measured on an iPhone
+# (a-Shell -> ssh -> tmux 3.7b), a flick sends no MouseUp at all, so with it
+# off the phone could not scroll; the cockpit is phone / ssh first, and on a
+# desktop the terminal's Option/Shift-drag still selects. So an unset or
+# unreadable option means ON here, matching the launch default; only an
+# explicit `off` (clikae touch drag off) declines to stock tmux:
 #
-#   tmux set -g @clikae_touch_drag on
+#   clikae touch drag off     (or: tmux set -g @clikae_touch_drag off)
 #
 # `@clikae_touch_scroll` stays the master switch over both: turning touch
 # scrolling off turns drag translation off with it, because a user who said
 # "stop translating my touches" meant all of them.
+# Empty (unset, or tmux unreadable) is ON; the on-words are ON; anything
+# else, including a typo, declines to stock tmux, as it did before.
 drag_on=0
 case "$(_touch_fold "$(_touch_opt @clikae_touch_drag)")" in
-  on|1|yes|true) drag_on=1 ;;
+  ''|on|1|yes|true) drag_on=1 ;;
 esac
 case "$phase" in
   drag|end)
