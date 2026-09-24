@@ -2941,7 +2941,7 @@ _permission_argv() (
 
   cmp "$TEST_HOME/default.log" "$TEST_HOME/accept.log"
   cmp "$TEST_HOME/default.log" "$TEST_HOME/auto.log"
-  [ "$(wc -l < "$TEST_HOME/accept.err" | tr -d ' ')" = 1 ]
+  [ "$(wc -l < "$TEST_HOME/accept.err" | tr -d ' ')" = 1 ] || { echo "stderr was:"; cat "$TEST_HOME/accept.err"; false; }
   [ "$(wc -l < "$TEST_HOME/auto.err" | tr -d ' ')" = 1 ]
   grep -F 'clikae does not map --permission for grok' "$TEST_HOME/accept.err"
   grep -F 'clikae does not map --permission for grok' "$TEST_HOME/auto.err"
@@ -3014,7 +3014,7 @@ _permission_argv() (
     >/dev/null 2>"$E"
   [ -f "$A" ]
   [ "$(grep -o -- '--permission-mode' "$L" | wc -l | tr -d ' ')" = 2 ]
-  [ "$(wc -l < "$E" | tr -d ' ')" = 1 ]
+  [ "$(wc -l < "$E" | tr -d ' ')" = 1 ] || { echo "stderr was:"; cat "$E"; false; }
   grep -F 'raw argv after -- includes --permission-mode or --dangerously-skip-permissions' "$E"
 }
 
