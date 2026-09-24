@@ -62,6 +62,19 @@ runtime_lib() {
 # installed lib/. Idempotent: a matching VERSION and a present tree is a no-op.
 # Never fatal to the caller: on any failure it returns 1 and leaves whatever
 # was there in place.
+# _runtime_src_newer <src-lib> <stamp> -> 0 when any file under src is newer
+# than the stamp. Bash's -nt over the tree's two levels (lib/* and lib/*/*,
+# no symlinks), deliberately not `find -newer`: tests stub find on PATH to
+# time the left-behind scan, and this check must never run through that.
+_runtime_src_newer() {
+  local f
+  for f in "$1"/* "$1"/*/*; do
+    [ -f "$f" ] || continue
+    [ "$f" -nt "$2" ] && return 0
+  done
+  return 1
+}
+
 runtime_sync() {
   _runtime_enabled || return 0
   local dir src stamp tree tmp link new old
@@ -71,7 +84,7 @@ runtime_sync() {
   [ -d "$src" ] || return 1
   if [ -f "$dir/VERSION" ] && [ -d "$dir/lib/core" ] && [ -d "$dir/lib/shims" ] &&
      [ "$(cat "$dir/VERSION" 2>/dev/null)" = "$stamp" ] &&
-     [ -z "$(find "$src" -type f -newer "$dir/VERSION" -print -quit 2>/dev/null)" ]; then
+     ! _runtime_src_newer "$src" "$dir/VERSION"; then
     # Same version, same source, and nothing in the source is newer than the
     # copy: a dev checkout that edits lib/ without bumping the version would
     # otherwise keep running the stale copy, and the sessions it launches would
