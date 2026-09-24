@@ -2,6 +2,15 @@
 # Stub-only: never load the shared helpers that create/clean up tmux servers.
 
 setup() {
+  # This file does not load the shared helpers, so pin the homes itself:
+  # tmux_spawn_session runs runtime_sync, which copies lib/ under
+  # $CLIKAE_HOME/runtime. Unpinned, that landed in the runner's REAL
+  # ~/.clikae/runtime (seen on 2026-09-24), and on a CI runner with no
+  # CLIKAE_HOME the binding assertions expanded to a different path than
+  # the code used.
+  export HOME="$BATS_TEST_TMPDIR/home"
+  export CLIKAE_HOME="$HOME/.clikae"
+  mkdir -p "$CLIKAE_HOME"
   export TOUCH_ROOT="$BATS_TEST_DIRNAME/../.."
   export CLIKAE_LIB="$TOUCH_ROOT/lib"
   export TOUCH_LOG="$BATS_TEST_TMPDIR/tmux.log"
