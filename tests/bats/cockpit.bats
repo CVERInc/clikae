@@ -887,18 +887,21 @@ _cockpit_make_agy_tank() {   # <tank> — a tank dir with the marker `clikae ini
   [[ "$output" == *"Tank does not exist: antigravity/nosuch"* ]] || { echo "$output" >&2; false; }
 }
 
-@test "installing from a git checkout warns that the guard's path is not stable (#63 P3-12)" {
-  # This test environment (CLIKAE_LIB pointing at the checkout/worktree this
-  # suite runs from) IS the shape the warning exists for -- a real install
-  # (install.sh, Homebrew) never ships a .git alongside lib/, so the warning
-  # is silent there. See tests/fixtures/cockpit-guard/ for the same
-  # distinction on the payload side.
-  [ -e "$CLIKAE_LIB/../.git" ]   # sanity: this test's own premise holds
+@test "installing from a git checkout no longer warns: the hook names the runtime copy, which outlives the checkout (#63 P3-12, #146)" {
+  [ -e "$CLIKAE_LIB/../.git" ]   # sanity: this suite runs from a checkout
   clikae init claude L
   run clikae cockpit claude L
   [ "$status" -eq 0 ]
   [[ "$output" == *"cockpit guard installed"* ]] || false
-  [[ "$output" == *"guard goes silent if that checkout is ever removed"* ]] || false
+  [[ "$output" != *"goes silent"* ]] || { echo "warned although the hook path is the runtime copy: $output"; false; }
+}
+
+@test "with the stable runtime off, installing from a git checkout still warns (#63 P3-12)" {
+  [ -e "$CLIKAE_LIB/../.git" ]
+  clikae init claude L
+  CLIKAE_RUNTIME_STABLE=0 run clikae cockpit claude L
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"CLIKAE_RUNTIME_STABLE=0 and installing from a git checkout"* ]] || { echo "no warning: $output"; false; }
 }
 
 # --- #103 round-3 nits --------------------------------------------------------
