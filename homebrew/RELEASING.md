@@ -108,6 +108,10 @@ releases that already exist rather than invented here:
 
 ## Notes / gotchas
 
+- Since #146, live clikae sessions survive a `brew upgrade`: anything tmux or
+  an engine runs later points at `$CLIKAE_HOME/runtime/lib`, not the Cellar.
+  Sessions started by an older version still point at the old Cellar;
+  `clikae doctor` names them.
 - Always commit the version bump BEFORE creating the tag, or the tarball's
   embedded `CLIKAE_VERSION` will not match the tag (the sheersweep v0.3.1
   release was burned by exactly this — see homebrew-release-tag-discipline).

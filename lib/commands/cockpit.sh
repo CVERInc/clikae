@@ -179,7 +179,10 @@ _cockpit_hook_install() (
   _settings_snapshot "$(profile_dir "$engine" "$tank")" "$engine/$tank" || return 1
   file="$_SETTINGS_FILE"
   input="${_SETTINGS_SNAP:-/dev/null}"
-  if ! new="$(jq -n --arg cmd "$CLIKAE_LIB/hooks/cockpit-guard.sh" --slurpfile current "$input" '
+  # clikae#146: the engine runs this hook for the tank's whole life, across
+  # upgrades — spell the stable copy, synced here.
+  runtime_sync || true
+  if ! new="$(jq -n --arg cmd "$(runtime_lib)/hooks/cockpit-guard.sh" --slurpfile current "$input" '
       def valid: type == "object";
       if ($current | length) > 1 or (($current | length) == 1 and ($current[0] | valid | not))
         then error("invalid settings") else . end |
@@ -220,16 +223,15 @@ _cockpit_hook_install() (
     return 1
   }
   _settings_write_file "$file" "$settings_out" "$engine/$tank" "$_SETTINGS_SNAP" || return 1
-  # #63 P3-12: the hook command written above is $CLIKAE_LIB's OWN resolved
-  # path (bin/clikae's `__resolve_self`) — for a real install (install.sh,
-  # Homebrew) that's a stable location, but running `clikae` straight out of
-  # a git checkout or worktree bakes THAT checkout's path in instead. Remove
-  # or garbage-collect the checkout later and the guard goes permanently,
-  # silently silent (command not found -> non-2 exit -> fail-open) with
-  # nothing — not even `clikae doctor` — ever noticing. One line at install
-  # time beats nothing noticing at all.
-  if [ -e "$CLIKAE_LIB/../.git" ]; then
-    printf '%s/%s: warning — installing from a git checkout (%s); the guard goes silent if that checkout is ever removed. A real install (install.sh or Homebrew) keeps a stable path.\n' \
+  # #63 P3-12, revised by #146: the hook command written above names
+  # $CLIKAE_HOME/runtime/lib, a copy that outlives both a removed checkout and
+  # a `brew upgrade` (which deletes the old Cellar -- the path this comment
+  # once called stable). Only with the stable runtime switched off does the
+  # hook bake this checkout's own path in, and then removing the checkout
+  # leaves the guard silently fail-open (command not found -> non-2 exit),
+  # so that case still gets its one line at install time.
+  if ! _runtime_enabled && [ -e "$CLIKAE_LIB/../.git" ]; then
+    printf '%s/%s: warning -- CLIKAE_RUNTIME_STABLE=0 and installing from a git checkout (%s); the guard goes silent if that checkout is ever removed.\n' \
       "$engine" "$tank" "$CLIKAE_LIB" >&2
   fi
   printf '%s/%s: cockpit guard installed\n' "$engine" "$tank"

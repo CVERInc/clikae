@@ -78,6 +78,11 @@ CLIKAE_SESS_PREFIX_LEGACY="ck-"
 #
 # Prefix, not an exact name: the waiter renames its own window to carry the
 # countdown (`wake 9m`), so matching `wake` exactly stops working seconds in.
+# The stable lib/ copy for anything tmux runs later (clikae#146).
+# shellcheck source=./runtime.sh
+declare -F runtime_lib >/dev/null 2>&1 ||
+  source "${CLIKAE_LIB:-$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)}/core/runtime.sh"
+
 tmux_sess_has_engine() {
   command -v tmux >/dev/null 2>&1 || return 1
   tmux list-windows -t "=$1:" -F '#{window_name}' 2>/dev/null \
@@ -307,7 +312,14 @@ tmux_spawn_session() {
   # Also mutate THIS process's own $PATH, idempotently: harmless, and it
   # means every tmux call this function goes on to make (including the
   # chain below) already resolves `tmux` through the guard too.
-  local _shim_dir="$CLIKAE_LIB/shims"
+  #
+  # THE SHIM DIR IS THE STABLE COPY, NOT $CLIKAE_LIB (clikae#146). On a
+  # brew install $CLIKAE_LIB is inside the versioned Cellar, which `brew
+  # upgrade` deletes; this PATH lives as long as the pane, so it names
+  # $CLIKAE_HOME/runtime/lib/shims (lib/core/runtime.sh), synced just above.
+  runtime_sync || true
+  local _shim_dir
+  _shim_dir="$(runtime_lib)/shims"
   case "$PATH" in
     "$_shim_dir:"*) : ;;
     *) PATH="$_shim_dir:$PATH" ;;
@@ -654,7 +666,9 @@ tmux_spawn_session() {
   # does, so the two agree.
   local touch_helper touch_base touch_drag touch_end
   local bind_drag_root bind_drag_copy bind_end_copy
-  touch_base="bash $(_switch_shquote "${CLIKAE_LIB:-$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)}/core/touch_scroll.sh")"
+  # Server-global and outliving this version: spelled through the stable copy
+  # (clikae#146 — a Cellar path here exited 127 on every touch after an upgrade).
+  touch_base="bash $(_switch_shquote "$(runtime_lib)/core/touch_scroll.sh")"
   touch_helper="$touch_base #{mouse_y} #{pane_id} #{pane_mode}"
   touch_drag="$touch_base '#{mouse_y}' '#{pane_id}' '#{pane_mode}' drag '#{mouse_x}'"
   touch_end="$touch_base '#{mouse_y}' '#{pane_id}' '#{pane_mode}' end '#{mouse_x}'"
@@ -1404,7 +1418,10 @@ tmux_status_render() {
 tmux_status_line() {
   local session="$1" engine="$2" tank="$3" lib host cmd
   command -v tmux >/dev/null 2>&1 || return 0
-  lib="${CLIKAE_LIB:-$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)}"
+  # `#()` runs this every status-interval for the session's whole life, so it
+  # names the stable copy, not the versioned install (clikae#146).
+  runtime_sync || true
+  lib="$(runtime_lib)"
   host="${CLIKAE_HOST:-}"
   if [ -z "$host" ] && [ -n "${SSH_CONNECTION:-}${SSH_TTY:-}" ]; then
     host="$(uname -n 2>/dev/null || true)"

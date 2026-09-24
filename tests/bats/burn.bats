@@ -759,7 +759,7 @@ STUB
   chmod +x "$BATS_TEST_TMPDIR/bin/codex"
   local caller_path="$PATH"
   case "$caller_path" in
-    "$CLIKAE_LIB/shims:"*) caller_path="${caller_path#"$CLIKAE_LIB/shims:"}" ;;
+    "$CLIKAE_HOME/runtime/lib/shims:"*) caller_path="${caller_path#"$CLIKAE_HOME/runtime/lib/shims:"}" ;;
   esac
   export PATH="$BATS_TEST_TMPDIR/bin:$caller_path"
 
@@ -768,7 +768,7 @@ STUB
   [ -f "$A" ]
   run cat "$A"
   case "$output" in
-    "$CLIKAE_LIB/shims:"*) : ;;
+    "$CLIKAE_HOME/runtime/lib/shims:"*) : ;;
     *) echo "engine process PATH: $output"; false ;;
   esac
 }
