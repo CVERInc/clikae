@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.33.1] — 2026-09-24
+
 ### Fixed
 
 - **The touch-scroll bindings are rewritten on every launch, not only on a
