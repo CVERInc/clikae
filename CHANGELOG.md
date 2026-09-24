@@ -7,6 +7,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **The touch-scroll bindings are rewritten on every launch, not only on a
+  server's first.** They sat in one `\;` command list behind five
+  `set-option -o` defaults; `-o` fails with "already set" on any launch after
+  the first and tmux stops the list at the first error, so the bind-keys
+  silently never ran again, and `2>/dev/null || true` hid it. Found when a
+  0.33.0 launch left the live server's nine bindings still naming a 0.31.0
+  directory that `brew upgrade` had deleted, which is also why creating a
+  new session did not repair a phone's scrolling after 0.33.0. The defaults
+  are now one call each (an operator's own value still survives), the
+  bindings are their own call, and a failure is logged instead of swallowed.
+  tests/bats/touch-rebind.bats plants a binding to a vanished directory and
+  asserts a second launch replaces it; it fails on the previous code.
+
 ## [0.33.0] — 2026-09-24
 
 ### Fixed

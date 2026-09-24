@@ -687,24 +687,34 @@ tmux_spawn_session() {
   # written first, silenced by `2>/dev/null || true`. Skip the whole chain
   # below the floor instead of gambling on write order.
   if _tmux_touch_scroll_floor_met; then
-    tmux set-option -og @clikae_touch_scroll on \
-      \; set-option -og @clikae_touch_scroll_lines 2 \
-      \; set-option -og @clikae_touch_pages off \
-      \; set-option -og @clikae_touch_pages_rows 3 \
-      \; set-option -og @clikae_touch_drag off \
-      \; bind-key -T root MouseDown1Pane 'set-option -p -t = -F @clikae_touch_y "#{mouse_y}"; set-option -p -t = -F @clikae_touch_h "#{pane_height}"; select-pane -t =; send-keys -M' \
-      \; bind-key -T root MouseUp1Pane "send-keys -M; run-shell \"$touch_helper\"" \
-      \; bind-key -T copy-mode MouseDown1Pane 'set-option -p -t = -F @clikae_touch_y "#{mouse_y}"; set-option -p -t = -F @clikae_touch_h "#{pane_height}"; select-pane -t =' \
-      \; bind-key -T copy-mode MouseUp1Pane run-shell "$touch_helper" \
-      \; bind-key -T copy-mode-vi MouseDown1Pane 'set-option -p -t = -F @clikae_touch_y "#{mouse_y}"; set-option -p -t = -F @clikae_touch_h "#{pane_height}"; select-pane -t =' \
-      \; bind-key -T copy-mode-vi MouseUp1Pane run-shell "$touch_helper" \
-      \; bind-key -T root MouseDrag1Pane "$bind_drag_root" \
-      \; bind-key -T root MouseDragEnd1Pane "if-shell \"$touch_end\" ''" \
-      \; bind-key -T copy-mode MouseDrag1Pane "$bind_drag_copy" \
-      \; bind-key -T copy-mode MouseDragEnd1Pane "$bind_end_copy" \
-      \; bind-key -T copy-mode-vi MouseDrag1Pane "$bind_drag_copy" \
-      \; bind-key -T copy-mode-vi MouseDragEnd1Pane "$bind_end_copy" \
-      2>/dev/null || true
+    # Defaults first, one `set-option -o` per call. tmux stops a `\;` list at
+    # the first error and `-o` errors "already set" on every launch after the
+    # server's first, so with the bindings in the SAME list they silently never
+    # ran again (2026-09-24: nine bindings still named a deleted 0.31.0 dir
+    # after a 0.33.0 launch). An operator's own value survives, as before.
+    tmux set-option -og @clikae_touch_scroll on 2>/dev/null || true
+    tmux set-option -og @clikae_touch_scroll_lines 2 2>/dev/null || true
+    tmux set-option -og @clikae_touch_pages off 2>/dev/null || true
+    tmux set-option -og @clikae_touch_pages_rows 3 2>/dev/null || true
+    tmux set-option -og @clikae_touch_drag off 2>/dev/null || true
+    # Bindings: rewritten on EVERY launch, and a failure is said out loud.
+    # Only when a server is up: with none there is nothing to bind, and the
+    # spawn above already failed loudly (stubbed tmux in tests has no server).
+    local _bind_err
+    if tmux_server_running && ! _bind_err="$(tmux       \; bind-key -T root MouseDown1Pane 'set-option -p -t = -F @clikae_touch_y "#{mouse_y}"; set-option -p -t = -F @clikae_touch_h "#{pane_height}"; select-pane -t =; send-keys -M' \
+      \;       \; bind-key -T root MouseUp1Pane "send-keys -M; run-shell \"$touch_helper\"" \
+      \;       \; bind-key -T copy-mode MouseDown1Pane 'set-option -p -t = -F @clikae_touch_y "#{mouse_y}"; set-option -p -t = -F @clikae_touch_h "#{pane_height}"; select-pane -t =' \
+      \;       \; bind-key -T copy-mode MouseUp1Pane run-shell "$touch_helper" \
+      \;       \; bind-key -T copy-mode-vi MouseDown1Pane 'set-option -p -t = -F @clikae_touch_y "#{mouse_y}"; set-option -p -t = -F @clikae_touch_h "#{pane_height}"; select-pane -t =' \
+      \;       \; bind-key -T copy-mode-vi MouseUp1Pane run-shell "$touch_helper" \
+      \;       \; bind-key -T root MouseDrag1Pane "$bind_drag_root" \
+      \;       \; bind-key -T root MouseDragEnd1Pane "if-shell \"$touch_end\" ''" \
+      \;       \; bind-key -T copy-mode MouseDrag1Pane "$bind_drag_copy" \
+      \;       \; bind-key -T copy-mode MouseDragEnd1Pane "$bind_end_copy" \
+      \;       \; bind-key -T copy-mode-vi MouseDrag1Pane "$bind_drag_copy" \
+      \;       \; bind-key -T copy-mode-vi MouseDragEnd1Pane "$bind_end_copy" 2>&1 >/dev/null)"; then
+      log_warn "touch-scroll bindings not installed: ${_bind_err:-unknown error}"
+    fi
   fi
   tmux set-option -s set-clipboard on 2>/dev/null || true
 

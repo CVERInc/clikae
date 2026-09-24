@@ -68,11 +68,17 @@ release() {
   # mouse on stands alone now — not chained with the touch-scroll bindings, so
   # it still installs even below the touch-scroll version floor.
   [[ "$output" == *'<set-option><-g><mouse><on>'* ]] || false
-  [[ "$output" == *'<set-option><-og><@clikae_touch_scroll><on><;><set-option><-og><@clikae_touch_scroll_lines><2>'* ]] || false
+  # Each default is its own `set-option -og` call, NOT one `\;` chain: `-o`
+  # errors "already set" on every launch after the server's first and tmux
+  # stops a chain at the first error, which kept the bind-keys below from ever
+  # running again (found 2026-09-24; tests/bats/touch-rebind.bats keeps it).
+  [[ "$output" == *'<set-option><-og><@clikae_touch_scroll><on>'$'\n'* ]] || false
+  [[ "$output" == *'<set-option><-og><@clikae_touch_scroll_lines><2>'$'\n'* ]] || false
   # #108: paging ships OFF (it re-purposes a click that reaches the program),
-  # with a 3-row band — and rides the SAME `-og` chain, so a human's existing
-  # setting survives a later launch exactly like the touch-scroll pair's does.
-  [[ "$output" == *'<set-option><-og><@clikae_touch_pages><off><;><set-option><-og><@clikae_touch_pages_rows><3>'* ]] || false
+  # with a 3-row band — same `-og`, so a human's existing setting survives a
+  # later launch exactly like the touch-scroll pair's does.
+  [[ "$output" == *'<set-option><-og><@clikae_touch_pages><off>'$'\n'* ]] || false
+  [[ "$output" == *'<set-option><-og><@clikae_touch_pages_rows><3>'$'\n'* ]] || false
   # The press records BOTH halves of the geometry the band is measured against
   # (#108): the row, and the pane height AT PRESS TIME.
   [[ "$output" == *'<bind-key><-T><root><MouseDown1Pane><set-option -p -t = -F @clikae_touch_y "#{mouse_y}"; set-option -p -t = -F @clikae_touch_h "#{pane_height}"; select-pane -t =; send-keys -M>'* ]] || false
