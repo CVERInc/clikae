@@ -50,6 +50,19 @@ RT() { printf '%s/runtime/lib' "$CLIKAE_HOME"; }
   [ -e "$(RT)/probe" ]
 }
 
+@test "runtime_sync: a source file newer than the copy re-copies at the same version (dev checkout)" {
+  _src_rt
+  cp -R "$CLIKAE_TEST_ROOT/lib" "$BATS_TEST_TMPDIR/srclib"
+  export CLIKAE_LIB="$BATS_TEST_TMPDIR/srclib"
+  CLIKAE_VERSION=9.9.1 runtime_sync
+  : > "$(RT)/probe"
+  sleep 1.1
+  printf '# edited\n' >> "$CLIKAE_LIB/core/touch_scroll.sh"
+  CLIKAE_VERSION=9.9.1 runtime_sync
+  [ ! -e "$(RT)/probe" ] || { echo "stale copy kept after a source edit"; false; }
+  grep -q '^# edited$' "$(RT)/core/touch_scroll.sh"
+}
+
 @test "runtime_sync: a different version re-copies, and keeps the previous tree for a hook mid-run" {
   _src_rt
   CLIKAE_VERSION=9.9.1 runtime_sync

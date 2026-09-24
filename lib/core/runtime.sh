@@ -70,7 +70,12 @@ runtime_sync() {
   stamp="$(_runtime_stamp)"
   [ -d "$src" ] || return 1
   if [ -f "$dir/VERSION" ] && [ -d "$dir/lib/core" ] && [ -d "$dir/lib/shims" ] &&
-     [ "$(cat "$dir/VERSION" 2>/dev/null)" = "$stamp" ]; then
+     [ "$(cat "$dir/VERSION" 2>/dev/null)" = "$stamp" ] &&
+     [ -z "$(find "$src" -type f -newer "$dir/VERSION" -print -quit 2>/dev/null)" ]; then
+    # Same version, same source, and nothing in the source is newer than the
+    # copy: a dev checkout that edits lib/ without bumping the version would
+    # otherwise keep running the stale copy, and the sessions it launches would
+    # be testing last week's shim.
     return 0
   fi
   mkdir -p "$dir/trees" 2>/dev/null || return 1

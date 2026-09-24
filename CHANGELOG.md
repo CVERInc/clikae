@@ -17,7 +17,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `/opt/homebrew/Cellar/clikae/0.31.0/libexec/lib/core/touch_scroll.sh` and
   returned 127, and the live server still held nine bindings naming 0.31.0.
   These now name `$CLIKAE_HOME/runtime/lib`, a complete copy of the installed
-  `lib/` refreshed atomically at each launch when the version changes, the
+  `lib/` refreshed atomically at each launch when the version changes or the
+  source is newer, the
   same idea as #59's stable Claude path. `clikae doctor` names the cause for
   sessions started before this fix ("installed version moved (dir ... is
   gone)"): reattaching does not repair either, restarting the session repairs
