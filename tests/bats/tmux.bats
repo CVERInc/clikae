@@ -79,7 +79,7 @@ release() {
   local table
   for table in copy-mode copy-mode-vi; do
     [[ "$output" == *"<bind-key><-T><$table><MouseDown1Pane><set-option -p -t = -F @clikae_touch_y \"#{mouse_y}\"; set-option -p -t = -F @clikae_touch_h \"#{pane_height}\"; select-pane -t =>"* ]] || false
-    [[ "$output" == *"<bind-key><-T><$table><MouseUp1Pane><run-shell><bash '"*"/core/touch_scroll.sh' #{mouse_y} #{pane_id} #{pane_mode}>"* ]] || false
+    [[ "$output" == *"<bind-key><-T><$table><MouseUp1Pane><run-shell><bash '$CLIKAE_HOME/runtime/lib/core/touch_scroll.sh' #{mouse_y} #{pane_id} #{pane_mode}>"* ]] || false
   done
   # #108 second half: the drag stream. `@clikae_touch_drag` rides the same `-og`
   # chain and ships OFF — MouseDrag1Pane's stock meaning on a pane with no

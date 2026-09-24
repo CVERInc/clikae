@@ -7,6 +7,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **Live sessions survive a `brew upgrade` (#146).** Everything clikae tells
+  tmux or an engine to run later (the tmux guard's shim dir on the pane PATH
+  and in `clikae burn`'s launcher, the touch-scroll bindings, the status row,
+  a cockpit tank's PreToolUse hook) was spelled with the versioned install
+  path, which the upgrade deletes: touch scrolling ran
+  `/opt/homebrew/Cellar/clikae/0.31.0/libexec/lib/core/touch_scroll.sh` and
+  returned 127, and the live server still held nine bindings naming 0.31.0.
+  These now name `$CLIKAE_HOME/runtime/lib`, a complete copy of the installed
+  `lib/` refreshed atomically at each launch when the version changes, the
+  same idea as #59's stable Claude path. `clikae doctor` names the cause for
+  sessions started before this fix ("installed version moved (dir ... is
+  gone)"): reattaching does not repair either, restarting the session repairs
+  its PATH, and creating any new clikae session re-writes the server-wide
+  bindings. Opt out with `CLIKAE_RUNTIME_STABLE=0`.
+
 ## [0.32.0] — 2026-09-24
 
 ### Added

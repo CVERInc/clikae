@@ -4524,10 +4524,15 @@ _NS_EOF
       # engine this wrapper goes on to exec ever sees it. Re-prepend AFTER
       # the restore, idempotently, so the engine's PATH always has the guard
       # first regardless of what the caller's own PATH looked like.
+      # clikae#146: the stable copy, not the versioned install — this script
+      # runs after a `brew upgrade` may already have removed $CLIKAE_LIB.
+      runtime_sync || true
+      local _burn_shims
+      _burn_shims="$(runtime_lib)/shims"
       {
         printf 'case "$PATH" in\n'
-        printf '  %q:*) : ;;\n' "$CLIKAE_LIB/shims"
-        printf '  *) PATH=%q":$PATH"; export PATH ;;\n' "$CLIKAE_LIB/shims"
+        printf '  %q:*) : ;;\n' "$_burn_shims"
+        printf '  *) PATH=%q":$PATH"; export PATH ;;\n' "$_burn_shims"
         printf 'esac\n'
       } >> "$wrapper_script"
 

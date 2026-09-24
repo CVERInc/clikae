@@ -9,6 +9,12 @@
 
 # Render the scan rows (on stdin) as an aligned table. Plain cells (no colour):
 # escape codes count toward printf's field width and break alignment.
+# clikae#146: runtime_lib / runtime_doctor. bin/clikae gets it through
+# tmux.sh; a caller that sources this file alone gets it here.
+# shellcheck source=../core/runtime.sh
+declare -F runtime_lib >/dev/null 2>&1 ||
+  source "${CLIKAE_LIB:-$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)}/core/runtime.sh"
+
 _doctor_render_table() {
   printf '%b%-12s %-11s %-9s %s%b\n' "$__C_BOLD" "ENGINE" "INSTALLED" "TANKS" "LOGGED IN" "$__C_RESET"
   local cli installed binary strategy count label inst
@@ -382,9 +388,13 @@ _doctor_tmux_guard() {
   # different $CLIKAE_LIB, and this only ever matches its OWN. A known,
   # narrow blind spot — not fixed here — rather than a claim this covers
   # every install on the machine.
-  local shim_dir="$CLIKAE_LIB/shims"
+  #
+  # clikae#146: sessions spawned since the stable runtime copy put
+  # $CLIKAE_HOME/runtime/lib/shims first instead; both count as "guard first".
+  local shim_dir="$CLIKAE_LIB/shims" rt_shim_dir first
+  rt_shim_dir="$(runtime_lib)/shims"
   local sess created attached pane_line pid start_command pane_path
-  local missing="" unknown="" missing_via_fallback=0
+  local missing="" unknown="" moved="" missing_via_fallback=0
   while IFS=$'\t' read -r sess created attached; do
     [ -n "$sess" ] || continue
     : "$created" "$attached"
@@ -435,8 +445,20 @@ _doctor_tmux_guard() {
       continue
     fi
     pane_path="$__DOCTOR_PANE_PATH"
+    # NAME THE CAUSE (clikae#146): a first entry that is a clikae shim dir
+    # which no longer exists is an upgrade that moved the install out from
+    # under a live session, not a session that never had the guard.
+    first="${pane_path%%:*}"
+    case "$first" in
+      */lib/shims)
+        if [ ! -d "$first" ]; then
+          moved="$moved$sess"$'\t'"$first"$'\n'
+          continue
+        fi
+        ;;
+    esac
     case "$pane_path" in
-      "$shim_dir:"*|"$shim_dir") continue ;;
+      "$shim_dir:"*|"$shim_dir"|"$rt_shim_dir:"*|"$rt_shim_dir") continue ;;
       *)
         missing="$missing $sess"
         [ "$__DOCTOR_PANE_PATH_METHOD" = "spawn command" ] && missing_via_fallback=1
@@ -452,10 +474,51 @@ EOF
       log_dim "                   (checked via the pane's spawn command — this machine's \`ps\` can't read another process's live environment)"
     fi
   fi
+  if [ -n "$moved" ]; then
+    local m_sess m_dir
+    while IFS=$'\t' read -r m_sess m_dir; do
+      [ -n "$m_sess" ] || continue
+      printf '  %-16s %s\n' "tmux guard" "$m_sess: installed version moved (dir $m_dir is gone); restart the session"
+    done <<EOF
+$moved
+EOF
+    log_dim "                   (reattaching does not repair it: a pane's PATH is fixed when the session is created)"
+  fi
   if [ -n "$unknown" ]; then
     printf '  %-16s %s\n' "tmux guard" "unknown, could not verify:$unknown"
     log_dim "                   (couldn't read that session's pane process — it may have just ended, or its environment isn't readable by this user)"
   fi
+  return 0
+}
+
+# _doctor_tmux_bindings -> say something ONLY when a server-global key binding
+# runs a script from a directory that no longer exists (clikae#146).
+#
+# The touch-scroll bindings are written server-wide at session CREATION with a
+# full path. Before the stable runtime copy that path was the versioned
+# install, so after `brew upgrade` every touch ran a deleted script and exited
+# 127 (measured: nine bindings naming Cellar/clikae/0.31.0 on a live server).
+# Silent when every referenced directory exists.
+_doctor_tmux_bindings() {
+  command -v tmux >/dev/null 2>&1 || return 0
+  local keys p d gone="" n
+  keys="$(tmux list-keys 2>/dev/null)" || return 0
+  [ -n "$keys" ] || return 0
+  while IFS= read -r p; do
+    [ -n "$p" ] || continue
+    p="${p#\'}"; p="${p%\'}"
+    d="$(dirname "$p")"
+    [ -d "$d" ] && continue
+    case " $gone " in *" $d "*) : ;; *) gone="$gone $d" ;; esac
+  done <<EOF
+$(printf '%s\n' "$keys" | grep -oE "'/[^' ]+\.sh'" | sort -u)
+EOF
+  [ -n "$gone" ] || return 0
+  for d in $gone; do
+    n="$(printf '%s\n' "$keys" | grep -cF "'$d/" || true)"
+    printf '  %-16s %s\n' "tmux bindings" "installed version moved (dir $d is gone); $n binding(s) still run from it"
+  done
+  log_dim "                   (creating any new clikae session re-writes them for the whole server; reattaching does not repair them)"
   return 0
 }
 
@@ -905,6 +968,7 @@ EOF
   else
     printf '  %-16s %s\n' "jq"         "not found — clikae cockpit cannot install its guard, and an installed guard refuses every Agent spawn"
   fi
+  runtime_doctor
   echo ""
 
   # Trailing newline matters: $(...) strips it, and a final line with no newline
@@ -915,6 +979,7 @@ EOF
   _doctor_stray_dirs
   _doctor_legacy_prefix
   _doctor_tmux_guard
+  _doctor_tmux_bindings
   _doctor_memory
   _doctor_wake
   _doctor_cockpit

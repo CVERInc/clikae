@@ -179,7 +179,10 @@ _cockpit_hook_install() (
   _settings_snapshot "$(profile_dir "$engine" "$tank")" "$engine/$tank" || return 1
   file="$_SETTINGS_FILE"
   input="${_SETTINGS_SNAP:-/dev/null}"
-  if ! new="$(jq -n --arg cmd "$CLIKAE_LIB/hooks/cockpit-guard.sh" --slurpfile current "$input" '
+  # clikae#146: the engine runs this hook for the tank's whole life, across
+  # upgrades — spell the stable copy, synced here.
+  runtime_sync || true
+  if ! new="$(jq -n --arg cmd "$(runtime_lib)/hooks/cockpit-guard.sh" --slurpfile current "$input" '
       def valid: type == "object";
       if ($current | length) > 1 or (($current | length) == 1 and ($current[0] | valid | not))
         then error("invalid settings") else . end |

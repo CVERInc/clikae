@@ -235,7 +235,7 @@ EOF
   tmux kill-session -t '=pathprobe97' 2>/dev/null || true
   [ "$status" -eq 0 ] || { echo "$output"; false; }
   case "$output" in
-    "PATH=$CLIKAE_LIB/shims:"*) : ;;
+    "PATH=$CLIKAE_HOME/runtime/lib/shims:"*) : ;;
     *) echo "got: $output"; false ;;
   esac
 }
@@ -243,13 +243,13 @@ EOF
 @test "launch: spawning from an already-shimmed PATH does not grow the -e table" {
   command -v tmux >/dev/null 2>&1 || skip "tmux not installed"
   _src_tmux
-  PATH="$CLIKAE_LIB/shims:$PATH"
+  PATH="$CLIKAE_HOME/runtime/lib/shims:$PATH"
   tmux_spawn_session --session pathprobe97b -- 'sleep 30'
   run tmux show-environment -t '=pathprobe97b' PATH
   tmux kill-session -t '=pathprobe97b' 2>/dev/null || true
   [ "$status" -eq 0 ] || { echo "$output"; false; }
   local count
-  count="$(printf '%s' "$output" | grep -o "$CLIKAE_LIB/shims" | wc -l | tr -d ' ')"
+  count="$(printf '%s' "$output" | grep -o "$CLIKAE_HOME/runtime/lib/shims" | wc -l | tr -d ' ')"
   [ "$count" -eq 1 ] || { echo "shim dir appears $count times in: $output"; false; }
 }
 
@@ -277,7 +277,7 @@ EOF
   local pane_path
   pane_path="$(printf '%s\n' "$output" | sed -n 's/^PATH=//p')"
   case "$pane_path" in
-    "$CLIKAE_LIB/shims:"*) : ;;
+    "$CLIKAE_HOME/runtime/lib/shims:"*) : ;;
     *) echo "pane process PATH: $pane_path"; false ;;
   esac
 }
@@ -294,7 +294,7 @@ EOF
   tmux kill-session -t '=pathchildprobe97' 2>/dev/null || true
   [ -s "$outfile" ] || { echo "the nested child never wrote its PATH"; false; }
   case "$(cat "$outfile")" in
-    "$CLIKAE_LIB/shims:"*) : ;;
+    "$CLIKAE_HOME/runtime/lib/shims:"*) : ;;
     *) echo "child PATH: $(cat "$outfile")"; false ;;
   esac
 }

@@ -31,7 +31,7 @@ _guard_installed() {
   run clikae cockpit
   [ "$output" = "cockpit: claude/L" ]
   # the marker command points at the real guard script, shell-quoted (r5 P3-1)
-  jq -e --arg want "'$CLIKAE_LIB/hooks/cockpit-guard.sh'" \
+  jq -e --arg want "'$CLIKAE_HOME/runtime/lib/hooks/cockpit-guard.sh'" \
     '(.hooks.PreToolUse[] | select(._clikae == "cockpit-guard") | .hooks[0].command) == $want' \
     "$CLIKAE_HOME/profiles/claude/L/settings.json" >/dev/null
 }
@@ -42,6 +42,11 @@ _guard_installed() {
   # so every spawn would have been allowed.
   local prefix="$BATS_TEST_TMPDIR/install with space/it's here"
   mkdir -p "$prefix"
+  # clikae#146: the stored command names the runtime copy under $CLIKAE_HOME,
+  # not the install, so the space and the quote have to be in CLIKAE_HOME
+  # for this to keep testing the quoting.
+  cp -R "$CLIKAE_HOME" "$prefix/home"
+  export CLIKAE_HOME="$prefix/home"
   cp -R "$CLIKAE_TEST_ROOT/bin" "$CLIKAE_TEST_ROOT/lib" "$prefix/"
   clikae init claude L
   run "$prefix/bin/clikae" cockpit claude L
@@ -57,11 +62,11 @@ _guard_installed() {
   clikae init claude L
   clikae cockpit claude L
   local f="$CLIKAE_HOME/profiles/claude/L/settings.json"
-  jq --arg c "$CLIKAE_LIB/hooks/cockpit-guard.sh" '(.hooks.PreToolUse[] | select(._clikae == "cockpit-guard") | .hooks[0].command) = $c' "$f" > "$f.new" && mv "$f.new" "$f"
+  jq --arg c "$CLIKAE_HOME/runtime/lib/hooks/cockpit-guard.sh" '(.hooks.PreToolUse[] | select(._clikae == "cockpit-guard") | .hooks[0].command) = $c' "$f" > "$f.new" && mv "$f.new" "$f"
   run clikae cockpit claude L
   [ "$status" -eq 0 ]
   [[ "$output" == *"cockpit guard installed"* ]] || false
-  [ "$(jq -r '.hooks.PreToolUse[] | select(._clikae == "cockpit-guard") | .hooks[0].command' "$f")" = "'$CLIKAE_LIB/hooks/cockpit-guard.sh'" ]
+  [ "$(jq -r '.hooks.PreToolUse[] | select(._clikae == "cockpit-guard") | .hooks[0].command' "$f")" = "'$CLIKAE_HOME/runtime/lib/hooks/cockpit-guard.sh'" ]
 }
 
 @test "marking the SAME tank twice is idempotent and says unchanged" {
