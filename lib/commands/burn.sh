@@ -4289,6 +4289,11 @@ cmd_burn() {
     log_warn "artifact already exists: $artifact — judging success by a timestamp change (use --fresh for a clean slate)."
   fi
   local art_pre; art_pre="$(_clikae_mtime "$artifact")"   # 0 when absent
+  # clikae#146: refresh the stable runtime copy BEFORE the task clock starts.
+  # It is clikae's own preparation, not the task's elapsed time; on the
+  # Ubuntu CI runner a first-launch copy inside the window pushed elapsed_s
+  # (whole seconds) to 2 where the test allows under 2.
+  runtime_sync || true
   local t0=$SECONDS
 
   local cur="$tank" tried="" dried_accts="" reset out rc
@@ -4526,7 +4531,7 @@ _NS_EOF
       # first regardless of what the caller's own PATH looked like.
       # clikae#146: the stable copy, not the versioned install — this script
       # runs after a `brew upgrade` may already have removed $CLIKAE_LIB.
-      runtime_sync || true
+      # (runtime_sync already ran before the task clock started, above.)
       local _burn_shims
       _burn_shims="$(runtime_lib)/shims"
       {
