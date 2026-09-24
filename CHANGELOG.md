@@ -7,6 +7,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- **Drag-to-scroll (`@clikae_touch_drag`) is now on by default (#108).**
+  Measured on an iPhone through a-Shell, ssh and tmux 3.7b on 2026-09-25: a
+  finger flick arrives as `MouseDown1Pane`, then `MouseDrag1Pane` rows, then
+  `MouseDragEnd1Pane`, with no `MouseUp1Pane`; with the option off, tmux's
+  stock drag-selection took the gesture and the screen could not be scrolled
+  at all, and with it on, it scrolled. The cost falls on desktops: a mouse
+  drag inside tmux now scrolls instead of selecting, and text is selected
+  with the terminal's own modifier-drag (Option-drag, or Shift-drag on most
+  Linux terminals), which bypasses tmux mouse mode. The answer is saved in
+  `$CLIKAE_HOME/touch-drag` (absent means on) and every launch writes it to
+  the server with plain `set-option -g` rather than `-o`, so a server an
+  earlier launch left at `off` picks up the new default on the next session
+  creation. To opt out, `clikae touch drag off`; the new `clikae touch drag
+  [status|on|off]` verb saves the answer and applies it to the running
+  server without a relaunch, and `clikae touch` shows both.
+
 ## [0.33.1] — 2026-09-24
 
 ### Fixed

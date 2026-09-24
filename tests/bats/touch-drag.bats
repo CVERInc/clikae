@@ -341,7 +341,18 @@ _pos()  { _t display-message -p -t "$CK_PANE" '#{scroll_position}'; }
 
 # ─── the gates ───────────────────────────────────────────────────────────────
 
-@test "drag (real tmux): @clikae_touch_drag ships OFF, and off means DECLINE, not no-op" {
+@test "drag (real tmux): unset @clikae_touch_drag means ON (the shipped default)" {
+  command -v tmux >/dev/null 2>&1 || skip "tmux not installed"
+  _server 24
+  _t set-option -gu @clikae_touch_drag 2>/dev/null || true
+  _press 10
+  local drag_rc=0
+  _phase 12 '' drag || drag_rc=$?
+  _cleanup
+  [ "$drag_rc" -eq 0 ] || { echo "drag declined with the option unset (rc=$drag_rc)"; false; }
+}
+
+@test "drag (real tmux): off still means DECLINE, not no-op" {
   command -v tmux >/dev/null 2>&1 || skip "tmux not installed"
   _server 24
   _t set-option -g @clikae_touch_drag off
@@ -376,7 +387,8 @@ _pos()  { _t display-message -p -t "$CK_PANE" '#{scroll_position}'; }
   command -v tmux >/dev/null 2>&1 || skip "tmux not installed"
   _server 24
   local word rc
-  for word in on ON On 1 yes YES true TRUE; do
+  # '' is ON since 2026-09-25: an empty read is the unset default.
+  for word in on ON On 1 yes YES true TRUE ''; do
     _t set-option -g @clikae_touch_drag "$word"
     _t set-option -pu -t "$CK_PANE" @clikae_touch_y
     _press 10
@@ -385,7 +397,7 @@ _pos()  { _t display-message -p -t "$CK_PANE" '#{scroll_position}'; }
     [ "$rc" -eq 0 ] || { _cleanup; echo "'$word' did not turn it on"; false; }
     _t send-keys -t "$CK_PANE" -X cancel 2>/dev/null || true
   done
-  for word in off OFF 0 no NO false '' garbage; do
+  for word in off OFF 0 no NO false garbage; do
     _t set-option -g @clikae_touch_drag "$word"
     _press 10
     rc=0
@@ -536,10 +548,11 @@ _flick() {
 @test "drag (client): with @clikae_touch_drag OFF a drag is stock tmux — it still selects and copies" {
   command -v tmux >/dev/null 2>&1 || skip "tmux not installed"
   _install 'sh -c "seq 1 400; sleep 300"' || { _cleanup; false; }
-  # off is what the installer writes; saying so here is the assertion that it
-  # keeps being what the installer writes.
-  [ "$(_t show-options -gqv @clikae_touch_drag)" = "off" ] \
-    || { _cleanup; echo "the shipped default is no longer off"; false; }
+  # ON is what the installer writes (2026-09-25); saying so here is the
+  # assertion that it keeps being what the installer writes. Then opt out.
+  [ "$(_t show-options -gqv @clikae_touch_drag)" = "on" ] \
+    || { _cleanup; echo "the shipped default is no longer on"; false; }
+  _t set-option -g @clikae_touch_drag off
   _client
   _t delete-buffer 2>/dev/null || true
 
