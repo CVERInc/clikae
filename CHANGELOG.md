@@ -7,6 +7,40 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- **A usage cell is never blank (#149).** A tank with no current reading now
+  shows the last one that had numbers, its age, and one word for why:
+  `expired`, `no-probe` or `no-signal` (board: `weekly 85% · 5h ago ·
+  expired`). A failed read no longer overwrites the last good numbers in the
+  cache. `clikae usage --json` adds `gap`, `last_window_pct`,
+  `last_weekly_pct`, `last_at`, `last_age_sec` and `dry_marked_at` to a
+  reading with no numbers; existing fields are unchanged. The plain form ends
+  with a one-line summary on stderr (`claude 85/96/87(Fable 100)/?? · codex
+  100 · agy used 3h ago`).
+- **agy is on the board and in `clikae usage` with what can be known**:
+  `no-signal · last used 2h ago`, from the tank's own log directory, instead
+  of an empty green row.
+- **A binding per-model limit is shown.** When the vendor's `models[]` has a
+  row above the tank's weekly number, the board note and the summary name it
+  (`weekly 87% · Fable 100%`), and a row at 100% turns a green dot yellow.
+  No model name is built in.
+
+### Added
+
+- **codex tanks idle for over a week get a live reading** from `codex
+  app-server`'s `account/rateLimits/read` (no turn is spent), used only when
+  the rollout store has none. `CLIKAE_CODEX_USAGE_PROBE=0` turns it off.
+
+### Fixed
+
+- **A claude tank could stay dry on the board for days** after its limit
+  reset, printing a stale date such as `resets Sep 20, 11pm` over a fresh 96%
+  reading. The reset parser only knew `resets Sep 20 at 11pm`; the comma form
+  never resolved to an instant, so it never read as passed. Both forms parse
+  now, and a usage reading taken after the reset instant counts as recovery
+  evidence, so the board draws the number.
+
 ## [0.34.0] — 2026-09-25
 
 ### Changed

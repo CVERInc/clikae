@@ -56,3 +56,10 @@ cache_read_input_tokens  a field in Anthropic's API usage JSON, read from the tr
 input_tokens  ditto
 queued_for_s  a field in `clikae burn --json`'s result object (#90), not a function
 resumed  a field in `clikae burn --json`'s result object (#36), not a function
+# --- #149: `clikae usage --json` fields on a reading with no numbers ---
+last_window_pct    a JSON field name in `clikae usage --json` (#149)
+last_weekly_pct    a JSON field name in `clikae usage --json` (#149)
+last_at            a JSON field name in `clikae usage --json` (#149)
+last_age_sec       a JSON field name in `clikae usage --json` (#149)
+dry_marked_at      a JSON field name in `clikae usage --json` (#149)
+last_used_at       a JSON field name in `clikae usage --json` (#149)

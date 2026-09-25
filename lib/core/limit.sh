@@ -689,6 +689,12 @@ _limit_tank_dry_self() {
   now="$(date +%s)"; anchor="$now"
   [ "$stamp" != "$raw" ] && anchor="$(_limit_iso_epoch "$stamp" "$now")"
   if at="$(limit_reset_epoch "$reset" "$anchor")" && [ "$at" -lt "$now" ]; then
+    # #149: a usage reading with numbers taken AFTER the reset instant is the
+    # vendor's own word on the window since then — recovery evidence as good
+    # as a successful turn, so the tank is not dry and not unverified: the
+    # board draws that reading (the tuna row: a fresh 96% under a stale
+    # limit). A reading from before the reset proves nothing and is ignored.
+    _limit_read_after "$1" "$2" "$at" && return 1
     printf '%s' "$LIMIT_RESET_UNVERIFIED"
   else
     # Preserve the store's existing TTL for evidence whose reset did not expire.
@@ -698,6 +704,21 @@ _limit_tank_dry_self() {
     esac
     printf '%s' "$reset"
   fi
+}
+
+# _limit_read_after <engine> <tank> <epoch> -> 0 when the tank's usage cache
+# holds a vendor/transcript reading with at least one number whose own
+# `cached_at` is at or after <epoch>. Fork-free: one `read` of the one-line
+# cache file (the same technique the board's expired check uses).
+_limit_read_after() {
+  local f="${CLIKAE_HOME:-$HOME/.clikae}/state/usage/$1/$2.json" line ca
+  [ -f "$f" ] || return 1
+  IFS= read -r line < "$f" || [ -n "$line" ] || return 1
+  case "$line" in *'"source":"vendor"'*|*'"source":"transcript"'*) ;; *) return 1 ;; esac
+  case "$line" in *'"window_pct":null,"weekly_pct":null'*) return 1 ;; esac
+  case "$line" in *'"cached_at":'*) ;; *) return 1 ;; esac
+  ca="${line##*\"cached_at\":}"; ca="${ca%%[!0-9]*}"
+  [ -n "$ca" ] && [ "$ca" -ge "$3" ]
 }
 
 # _limit_tank_account <engine> <tank> -> this tank's account label (e.g. the
@@ -1086,13 +1107,18 @@ limit_reset_epoch() {
 
   [ -n "$tz" ] || return 1
 
-  local re_dated='[Rr]esets[[:space:]]+([A-Z][a-z][a-z])[[:space:]]+([0-9]{1,2})[[:space:]]+at[[:space:]]+([0-9]{1,2})(:([0-9]{2}))?(am|pm|AM|PM)'
+  # #149: claude writes the dated form two ways — "resets Sep 20 at 11pm" and
+  # "resets Sep 20, 11pm". Only the first was known, so the comma form never
+  # resolved to an instant, never read as passed, and a claude tank (which by
+  # design never consults dry_store's TTL) stayed dry on the board for days,
+  # printing a five-day-old date over a fresh 96% reading.
+  local re_dated='[Rr]esets[[:space:]]+([A-Z][a-z][a-z])[[:space:]]+([0-9]{1,2})(,[[:space:]]*|[[:space:]]+at[[:space:]]+)([0-9]{1,2})(:([0-9]{2}))?(am|pm|AM|PM)'
   local re_plain='[Rr]esets[[:space:]]+([0-9]{1,2})(:([0-9]{2}))?(am|pm|AM|PM)'
 
   local mon="" day="" hr="" min="" mer=""
   if [[ "$phrase" =~ $re_dated ]]; then
     mon="${BASH_REMATCH[1]}"; day="${BASH_REMATCH[2]}"
-    hr="${BASH_REMATCH[3]}";  min="${BASH_REMATCH[5]}"; mer="${BASH_REMATCH[6]}"
+    hr="${BASH_REMATCH[4]}";  min="${BASH_REMATCH[6]}"; mer="${BASH_REMATCH[7]}"
   elif [[ "$phrase" =~ $re_plain ]]; then
     hr="${BASH_REMATCH[1]}";  min="${BASH_REMATCH[3]}"; mer="${BASH_REMATCH[4]}"
   else

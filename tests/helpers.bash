@@ -213,6 +213,10 @@ setup() {
   # invocation; pty-smoke set a variable name that does not exist.) One export,
   # once, for every test.
   export CLIKAE_NO_UPDATE_CHECK=1
+  # #149: codex's live usage probe (`codex app-server` account/rateLimits/read)
+  # reaches the vendor. Off for every test; a test that exercises it stubs
+  # `codex` on PATH and sets this back to 1.
+  export CLIKAE_CODEX_USAGE_PROBE=0
   RC_FILE="$TEST_HOME/.zshrc"
   # A pty, portably. `script -q /dev/null cmd args` is the BSD form and util-linux
 # rejects it outright ("unexpected number of arguments"), which is how this file

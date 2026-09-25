@@ -112,7 +112,7 @@ usage_read() (
        '(.scanned_at // .cached_at) as $s
         | (if .source == "expired" and $authttl < $ttl then $authttl else $ttl end) as $t
         | $s <= $now and ($now - $s < $t)' "$cache" >/dev/null 2>&1; then
-    jq -c 'del(.cached_at, .scanned_at)' "$cache"; return
+    _usage_public "$engine" "$tank" "$now" < "$cache"; return
   fi
   reading=""
   if [ -f "$CLIKAE_LIB/adapters/$engine.sh" ]; then
@@ -205,15 +205,98 @@ usage_read() (
     then . + {retry_after:$retry} else . end |
     if .source == "vendor" and ($models|length) > 0 then . + {models:$models} else . end
     end')" || { reading="$(usage_unknown)"; event_epoch=""; }
+  # #149: a reading with no numbers never overwrites the last one that had
+  # them. The previous cache's numbers (or the `last_good` it already carried
+  # forward) ride along as `last_good: {window_pct, weekly_pct, at}`, `at`
+  # being that reading's own `cached_at` — so `clikae usage` and the board
+  # can print "weekly 85%, 5h ago" beside the reason instead of a blank.
+  local prev="{}" record
+  [ -f "$cache" ] && prev="$(jq -c 'if type == "object" then . else {} end' "$cache" 2>/dev/null)"
+  [ -n "$prev" ] || prev="{}"
+  record="$(printf '%s' "$reading" | jq -c --argjson now "$now" --arg ev "$event_epoch" --argjson prev "$prev" '
+    def num: type == "number";
+    . + {cached_at:(if $ev == "" then $now else ($ev|tonumber) end), scanned_at:$now} |
+    if (.window_pct == null and .weekly_pct == null) then
+      (if (($prev.window_pct|num) or ($prev.weekly_pct|num)) and ($prev.cached_at|num)
+       then {window_pct:$prev.window_pct, weekly_pct:$prev.weekly_pct, at:$prev.cached_at}
+       elif ($prev.last_good|type) == "object" then $prev.last_good
+       else null end) as $lg |
+      if $lg != null then . + {last_good:$lg} else . end
+    else . end' 2>/dev/null)" || record=""
   umask 077
-  if mkdir -p "${cache%/*}" && tmp="$(mktemp "$cache.XXXXXX")"; then
-    if printf '%s' "$reading" | jq -c --argjson now "$now" --arg ev "$event_epoch" \
-         '. + {cached_at:(if $ev == "" then $now else ($ev|tonumber) end), scanned_at:$now}' > "$tmp"; then
+  if [ -n "$record" ] && mkdir -p "${cache%/*}" && tmp="$(mktemp "$cache.XXXXXX")"; then
+    if printf '%s\n' "$record" > "$tmp"; then
       mv -f "$tmp" "$cache"
     else rm -f "$tmp"; fi
   fi
-  printf '%s\n' "$reading"
+  if [ -n "$record" ]; then
+    printf '%s\n' "$record" | _usage_public "$engine" "$tank" "$now"
+  else
+    printf '%s\n' "$reading"
+  fi
 )
+
+# _usage_mtime <file> -> epoch mtime, or nothing. GNU's `stat -c` first: on a
+# GNU box `stat -f` means --file-system, so the BSD form may only ever be the
+# fallback (see _clikae_statv in profile_store.sh for that history).
+_usage_mtime() {
+  stat -c %Y "$1" 2>/dev/null || stat -f %m "$1" 2>/dev/null
+}
+
+# usage_agy_last_used <tank> -> epoch of the newest file in that agy tank's own
+# log directory (<tank>/antigravity-cli/log/ — agy writes one cli-*.log per
+# launch and appends while it runs), or nothing. The only per-tank trace of
+# agy activity on disk: agy has one global login and no usage signal at all.
+usage_agy_last_used() {
+  local d newest
+  d="$(profile_dir antigravity "$1" 2>/dev/null)/antigravity-cli/log"
+  [ -d "$d" ] || return 1
+  newest="$(ls -t "$d" 2>/dev/null | head -n 1)"
+  [ -n "$newest" ] || return 1
+  _usage_mtime "$d/$newest"
+}
+
+# _usage_public <engine> <tank> <now>  (record on stdin) -> the public reading.
+# Strips the cache's own bookkeeping (cached_at, scanned_at, last_good) and,
+# on a reading with no numbers ONLY (#149), adds:
+#   gap              one word: why there is no number. "expired" (the token
+#                    lapsed — a session or --wake refreshes it), "no-probe"
+#                    (clikae has nothing it can ask for this tank: codex with
+#                    no rollout reading and its live probe off or absent),
+#                    "no-signal" (asked and got nothing usable, or — agy — the
+#                    engine exposes no usage signal at all).
+#   last_window_pct, last_weekly_pct, last_at, last_age_sec
+#                    the last reading that HAD numbers, its epoch and age in
+#                    seconds; all null when there never was one.
+#   dry_marked_at    epoch of this tank's dry_store marker (the last burn that
+#                    hit a limit), or null.
+#   last_used_at     antigravity only: usage_agy_last_used, or null.
+# A reading with numbers is returned unchanged (minus the bookkeeping).
+_usage_public() {
+  local engine="$1" tank="$2" now="$3" dry_at="" used_at="" _t
+  if [ -f "$CLIKAE_HOME/dry/$engine/$tank" ]; then
+    IFS=$'\t' read -r dry_at _t < "$CLIKAE_HOME/dry/$engine/$tank" || true
+    case "$dry_at" in ''|*[!0-9]*) dry_at="" ;; esac
+  fi
+  [ "$engine" != antigravity ] || used_at="$(usage_agy_last_used "$tank")" || used_at=""
+  jq -c --arg engine "$engine" --argjson now "$now" --arg dry "$dry_at" --arg used "$used_at" '
+    . as $r | del(.cached_at, .scanned_at, .last_good) |
+    if (.window_pct == null and .weekly_pct == null) then
+      . + {gap:(if .source == "expired" then "expired"
+                elif $engine == "antigravity" then "no-signal"
+                elif $engine == "codex" and (.reason == null) then "no-probe"
+                else "no-signal" end),
+           last_window_pct:($r.last_good.window_pct // null),
+           last_weekly_pct:($r.last_good.weekly_pct // null),
+           last_at:($r.last_good.at // null),
+           last_age_sec:(if ($r.last_good.at|type) == "number"
+                         then ([$now - $r.last_good.at, 0]|max) else null end),
+           dry_marked_at:(if $dry == "" then null else ($dry|tonumber) end)}
+      | if $engine == "antigravity"
+        then . + {last_used_at:(if $used == "" then null else ($used|tonumber) end)}
+        else . end
+    else . end'
+}
 
 # --- who writes this cache, and who honours what (P2-1, round-2 review) ---
 #
@@ -452,10 +535,22 @@ usage_board_fields() {
   [ -n "$now" ] || now="$(date +%s)"
   jq -er --argjson now "$now" "$_USAGE_NORM_STAMP_JQ"'
     select(.source == "vendor" or .source == "transcript") |
-    select(.window_pct != null and .weekly_pct != null) |
-    (if (.window_resets_at|expired) then 0 else .window_pct end) as $w |
-    (if (.weekly_resets_at|expired) then 0 else .weekly_pct end) as $k |
-    [$w,$k,([$w,$k]|max),.cached_at] | @tsv' "$cache" 2>/dev/null
+    select(.window_pct != null or .weekly_pct != null) |
+    # #149: one axis may be absent (a codex free plan has a single 30-day
+    # window, read as weekly). "-" marks it — never 0, and never an empty
+    # field: tab is IFS whitespace, so the reader would collapse it.
+    (if .window_pct == null then "-" elif (.window_resets_at|expired) then 0 else .window_pct end) as $w |
+    (if .weekly_pct == null then "-" elif (.weekly_resets_at|expired) then 0 else .weekly_pct end) as $k |
+    # #149: the vendor'"'"'s own per-model rows that BIND — a row whose pct is
+    # higher than the tank-level weekly — go in a 5th column as
+    # "<name>:<pct>" joined by ",", else "-". Driven entirely by `models[]`
+    # (no model name is known here): the all-models number can read 87%
+    # while one model is at 100% (measured on a real tank), and the board
+    # says so instead of looking healthy. A row below the tank value, or no
+    # `models[]` at all, adds nothing.
+    ([(.models // [])[] | select(.pct > ($k | numbers // -1)) | select((.resets_at|expired) | not)
+      | "\(.name):\(.pct)"] | join(",")) as $bind |
+    [$w,$k,([$w,$k]|map(numbers)|max),.cached_at,(if $bind == "" then "-" else $bind end)] | @tsv' "$cache" 2>/dev/null
 }
 
 # Board reads, fresh only (within the TTL): never do network I/O during a
