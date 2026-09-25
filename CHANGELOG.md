@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.35.0] — 2026-09-25
+
 ### Changed
 
 - **A usage cell is never blank (#149).** A tank with no current reading now
