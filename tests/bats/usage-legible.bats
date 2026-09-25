@@ -242,6 +242,7 @@ _goby_cache() { # <weekly> <models-json-array-or-empty>
   _claude_fixture
   clikae init codex marlin >/dev/null 2>&1
   _agy_tank ray 202609201200
+  _agy_tank anthias 202609181200
   run --separate-stderr clikae usage --fresh
   [ "$status" -eq 0 ]
   # shellcheck disable=SC2154  # $stderr is set by `run --separate-stderr`
@@ -249,9 +250,10 @@ _goby_cache() { # <weekly> <models-json-array-or-empty>
   # shellcheck disable=SC2154  # $stderr is set by `run --separate-stderr`
   last="$(printf '%s\n' "$stderr" | tail -n 1)"
   # Engines in listing order; one token each here.
-  [[ "$last" =~ ^agy\ used\ [0-9]+d\ ago\ ·\ claude\ 92\ ·\ codex\ \?\?$ ]] || { echo "summary: $last"; false; }
+  # agy: one "last used ... ago" around every tank's age, not the phrase per tank.
+  [[ "$last" =~ ^agy\ last\ used\ [0-9]+d/[0-9]+d\ ago\ ·\ claude\ 92\ ·\ codex\ \?\?$ ]] || { echo "summary: $last"; false; }
   # stdout stays one line per tank.
-  [ "$(printf '%s\n' "$output" | wc -l | tr -d ' ')" = 3 ]
+  [ "$(printf '%s\n' "$output" | wc -l | tr -d ' ')" = 4 ]
   run --separate-stderr clikae usage --json
   [[ "$stderr" != *"codex ??"* ]] || false
   # A spent per-model row is named beside the tank's number.

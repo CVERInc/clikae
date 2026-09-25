@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- **`clikae usage`'s summary line names agy's idle time once.** With several
+  agy tanks it printed `agy used 60d ago/used 0m ago/used 42d ago`; it now
+  prints `agy last used 60d/0m/42d ago`.
+
 ## [0.35.0] — 2026-09-25
 
 ### Changed

@@ -69,7 +69,7 @@ _usage_summary_add() {
     elif (.window_pct|r) != null then (.window_pct|r) + $sp
     elif (.last_used_at|type) == "number" then
       ($now - .last_used_at) as $d |
-      "used " + (if $d < 3600 then "\($d/60|floor)m" elif $d < 86400 then "\($d/3600|floor)h" else "\($d/86400|floor)d" end) + " ago"
+      "@" + (if $d < 3600 then "\($d/60|floor)m" elif $d < 86400 then "\($d/3600|floor)h" else "\($d/86400|floor)d" end)
     elif .gap == "no-signal" and has("last_used_at") then "no-signal"
     elif (.last_weekly_pct|r) != null then (.last_weekly_pct|r) + "?"
     elif (.last_window_pct|r) != null then (.last_window_pct|r) + "?"
@@ -86,7 +86,13 @@ _usage_summary_print() {
   [ -n "$_USAGE_SUM_ENGINES" ] || return 0
   for e in $_USAGE_SUM_ENGINES; do
     var="_USAGE_SUM_$(printf '%s' "$e" | tr -c 'A-Za-z0-9' '_')"
-    line="${line:+$line · }$e ${!var}"
+    local v="${!var}"
+    # agy tokens are ages marked "@": one "last used ... ago" around all of
+    # them reads better than the phrase repeated per tank.
+    case "$v" in
+      *@*) v="last used ${v//@/} ago" ;;
+    esac
+    line="${line:+$line · }$e $v"
   done
   printf '%s\n' "$line" >&2
 }
