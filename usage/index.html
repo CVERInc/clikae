@@ -165,7 +165,7 @@ word above), <code>last_window_pct</code>, <code>last_weekly_pct</code>, <code>l
 epoch of the tank's last dry marker, or null), and for agy <code>last_used_at</code>.
 Every existing field is unchanged. The plain form ends with one summary line
 on stderr, one token per tank grouped by engine, e.g.
-<code>claude 85/96/87(Fable 100)/85? · codex 100 · agy used 3h ago</code>, where <code>85?</code> is
+<code>claude 85/96/87(Fable 100)/85? · codex 100 · agy last used 3h/2d ago</code>, where <code>85?</code> is
 a last-known number and <code>??</code> means there never was one.</p>
 <p>It degrades rather than breaks. With no tmux installed, no terminal (a pipe, CI),
 or a <code>TERM</code> tmux cannot draw on, clikae runs the engine directly instead — same

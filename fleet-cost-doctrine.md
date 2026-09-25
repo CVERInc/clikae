@@ -96,7 +96,7 @@
 
 - `/usage` 的 `Prompt cache (main)`：命中率、miss 次數、最近一次 miss 的原因。
 - 狀態列 `current_usage.cache_read_input_tokens` vs `cache_creation_input_tokens`：write 連續偏高＝前綴在變。
-- 每週重跑 [`tools/tank-cost.py`](https://github.com/CVERInc/clikae/blob/0a8e2ab34f4e37d4a920443cf724ce7f679cd397/scripts/tank-cost.py)、[`tools/tank-agents.py`](https://github.com/CVERInc/clikae/blob/0a8e2ab34f4e37d4a920443cf724ce7f679cd397/scripts/tank-agents.py)（讀 `~/.clikae/profiles/claude/*/projects/**/*.jsonl`），看三個數：快取讀取佔比、subagent 中位步數、座艙自己幹活的呼叫數。目標：subagent 中位數從 96 往 40 走。
+- 每週重跑 [`tools/tank-cost.py`](https://github.com/CVERInc/clikae/blob/d4480ff34a818f140eaa79b7d585002f55ef7a65/scripts/tank-cost.py)、[`tools/tank-agents.py`](https://github.com/CVERInc/clikae/blob/d4480ff34a818f140eaa79b7d585002f55ef7a65/scripts/tank-agents.py)（讀 `~/.clikae/profiles/claude/*/projects/**/*.jsonl`），看三個數：快取讀取佔比、subagent 中位步數、座艙自己幹活的呼叫數。目標：subagent 中位數從 96 往 40 走。
 
 ## 未驗證
 

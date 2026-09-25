@@ -112,7 +112,7 @@ word above), `last_window_pct`, `last_weekly_pct`, `last_at` (epoch) and
 epoch of the tank's last dry marker, or null), and for agy `last_used_at`.
 Every existing field is unchanged. The plain form ends with one summary line
 on stderr, one token per tank grouped by engine, e.g.
-`claude 85/96/87(Fable 100)/85? · codex 100 · agy used 3h ago`, where `85?` is
+`claude 85/96/87(Fable 100)/85? · codex 100 · agy last used 3h/2d ago`, where `85?` is
 a last-known number and `??` means there never was one.
 
 It degrades rather than breaks. With no tmux installed, no terminal (a pipe, CI),
