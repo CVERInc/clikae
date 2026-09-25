@@ -252,7 +252,12 @@ Two things you do **not** need it for, on a-Shell specifically:
 
 * **Selecting text** — a-Shell's own long-press selection works whether tmux's
   mouse mode is on or off, so nothing is lost by giving `MouseDrag1Pane` to
-  scrolling on a phone.
+  scrolling on a phone. One limit, and it is iOS's, not tmux's: the long-press
+  menu (Select / Copy) closes itself within a second while the program in the
+  pane is redrawing, so select while Claude Code is idle. Measured on 2026-09-25
+  (a-Shell, ssh, tmux 3.7b), blinded, four trials: tmux copy-mode does not
+  help, and neither does pausing the status row's refresh; an idle pane keeps
+  the menu every time.
 * **Two-finger swipes** — a-Shell consumes those itself and sends arrow keys;
   they never reach tmux.
 
