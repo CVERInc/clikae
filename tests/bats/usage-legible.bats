@@ -245,7 +245,9 @@ _goby_cache() { # <weekly> <models-json-array-or-empty>
   run --separate-stderr clikae usage --fresh
   [ "$status" -eq 0 ]
   # shellcheck disable=SC2154  # $stderr is set by `run --separate-stderr`
-  local last; last="$(printf '%s\n' "$stderr" | tail -n 1)"
+  local last
+  # shellcheck disable=SC2154  # $stderr is set by `run --separate-stderr`
+  last="$(printf '%s\n' "$stderr" | tail -n 1)"
   # Engines in listing order; one token each here.
   [[ "$last" =~ ^agy\ used\ [0-9]+d\ ago\ ·\ claude\ 92\ ·\ codex\ \?\?$ ]] || { echo "summary: $last"; false; }
   # stdout stays one line per tank.
