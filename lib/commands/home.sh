@@ -1499,7 +1499,9 @@ _home_fuel_dotv_compute() {
     # 4th field (peak = max(window,weekly)) is the OLD single-axis reading;
     # the dot no longer uses it — window and weekly are judged separately
     # below — so it is read and discarded, not carried into an unused local.
-    IFS=$'\t' read -r up uw _ cached_at <<< "$usage_fields"
+    local spent=""
+    IFS=$'\t' read -r up uw _ cached_at spent <<< "$usage_fields"
+    [ "$spent" != - ] || spent=""
     # P3-7 (round-6 review): a `cached_at` in the FUTURE (host clock skew)
     # counts as AGE 0. This clamp is one half of a rule usage_cache_peek
     # (lib/core/usage.sh) now shares — it used to REJECT that same reading
@@ -1510,7 +1512,10 @@ _home_fuel_dotv_compute() {
     age=$(( now - cached_at )); [ "$age" -ge 0 ] || age=0
     if [ "$age" -lt 86400 ]; then
       ttl="${CLIKAE_USAGE_TTL:-120}"; case "$ttl" in ''|*[!0-9]*) ttl=120 ;; esac
-      _FNOTE="window ${up}% · weekly ${uw}%"
+      # #149: an axis the vendor does not report reads "-" (never 0).
+      if [ "$up" = - ]; then _FNOTE="weekly ${uw}%"; up=0
+      elif [ "$uw" = - ]; then _FNOTE="window ${up}%"; uw=0
+      else _FNOTE="window ${up}% · weekly ${uw}%"; fi
       # 🔴 The `declare -F` is on THIS line on purpose. `_human_age` lives in
       # lib/core/duration.sh and 20+ test files source home.sh on its own, so
       # tests/bats/home.bats ("every _human_age call in home.sh is guarded by
@@ -1522,6 +1527,18 @@ _home_fuel_dotv_compute() {
       # as the other two call sites; errexit exempts every command in an
       # `&&` list but the last, so a missing function is a no-op, not a death.
       declare -F _human_age >/dev/null 2>&1 && [ "$age" -ge "$ttl" ] && _FNOTE="$_FNOTE · $(_human_age "$cached_at" "$now")"
+      # #149: a binding per-model row (vendor-named, pct above the tank's
+      # weekly) rides in the note as "<name> <pct>%". One at 100% or more
+      # turns a tank that would otherwise read green yellow: it can run, but
+      # not every model an operator may ask for.
+      local _bind_rest="$spent" _bind_one _bind_pct _bind_spent=0
+      while [ -n "$_bind_rest" ]; do
+        _bind_one="${_bind_rest%%,*}"
+        [ "$_bind_one" != "$_bind_rest" ] && _bind_rest="${_bind_rest#*,}" || _bind_rest=""
+        _FNOTE="$_FNOTE · ${_bind_one%:*} ${_bind_one##*:}%"
+        _bind_pct="${_bind_one##*:}"; _bind_pct="${_bind_pct%%.*}"
+        case "$_bind_pct" in ''|*[!0-9]*) ;; *) [ "$_bind_pct" -lt 100 ] || _bind_spent=1 ;; esac
+      done
       # Judged separately, not by peak = max(window,weekly) — see the
       # constants' own header just above _home_weekly_pathv. A full window
       # costs a couple of hours; a full week costs days, so weekly's own
@@ -1530,6 +1547,8 @@ _home_fuel_dotv_compute() {
       if [ "$up" -ge "$_FUEL_RED_WINDOW_PCT" ] || [ "$uw" -ge "$_FUEL_RED_WEEKLY_PCT" ]; then
         _FDOT="${__C_RED}○$__C_RESET"
       elif [ "$uw" -ge "$_FUEL_YELLOW_WEEKLY_PCT" ] || [ "$up" -ge "$_FUEL_YELLOW_WINDOW_PCT" ]; then
+        _FDOT="${__C_YELLOW}◐$__C_RESET"
+      elif [ "$_bind_spent" = 1 ]; then
         _FDOT="${__C_YELLOW}◐$__C_RESET"
       else
         _FDOT="${__C_GREEN}●$__C_RESET"
@@ -1559,15 +1578,60 @@ _home_fuel_dotv_compute() {
         _uca="${_uline##*\"cached_at\":}"; _uca="${_uca%%[!0-9]*}"
         if [ -n "$_uca" ] && [ $(( now - _uca )) -lt 86400 ] && declare -F usage_expired_board_notev >/dev/null 2>&1; then
           usage_expired_board_notev "$profile"
-          _FDOT="${__C_DIM}·$__C_RESET"; _FNOTE="$_UEH"; return 0
+          _FDOT="${__C_DIM}·$__C_RESET"; _FNOTE="$_UEH"
+          # #149: the last number it had, with its age, beats the remedy
+          # alone — the full remedy sentence is `clikae usage`'s.
+          _home_last_goodv "$_uline" "$now" && _FNOTE="$_LGN · expired"
+          return 0
+        fi ;;
+      *'"source":"unknown"'*'"last_good":'*)
+        # #149: no number now, but one on record — say it, aged, with the
+        # reason word, instead of a blank or a bare dot.
+        if _home_last_goodv "$_uline" "$now"; then
+          _FDOT="${__C_DIM}·$__C_RESET"
+          if [ "$cli" = codex ]; then _FNOTE="$_LGN · no-probe"; else _FNOTE="$_LGN · no-signal"; fi
+          return 0
         fi ;;
     esac
+  fi
+  # #149: agy has one global login and no usage signal. Say so, with the one
+  # real trace there is — when this tank last wrote its own log — rather than
+  # an empty green row that reads as "known to be fine".
+  if [ "$cli" = antigravity ] && declare -F usage_agy_last_used >/dev/null 2>&1; then
+    local _agy_at _agy_age=""
+    _FNOTE="no-signal · never used"
+    if _agy_at="$(usage_agy_last_used "$profile")" && [ -n "$_agy_at" ]; then
+      _FNOTE="no-signal · last used"
+      declare -F _human_agev >/dev/null 2>&1 && _human_agev _agy_age "$_agy_at" "$now" && _FNOTE="$_FNOTE $_agy_age"
+    fi
+    _FDOT="${__C_DIM}·$__C_RESET"; return 0
   fi
   if [ "$cli" = codex ] && _home_codex_status_readv "$profile"; then
     _FDOT="$_CODEX_DOT"; _FNOTE="$_CODEX_NOTE"; return 0
   fi
   if limit_engine_detectable "$cli"; then _FDOT="${__C_GREEN}●$__C_RESET"; return 0; fi
   _FDOT="${__C_DIM}·$__C_RESET"
+}
+
+# _home_last_goodv <cache-line> <now> -> $_LGN = "weekly 85% · 5h ago" from the
+# cache's `last_good` object (#149), rc=1 when there is none or it is over 7
+# days old. Fork-free apart from _human_age: the object's key order is fixed
+# by usage_read's own writer (window_pct, weekly_pct, at).
+_home_last_goodv() {
+  local lg w k at
+  _LGN=""
+  case "$1" in *'"last_good":{'*) ;; *) return 1 ;; esac
+  lg="${1#*\"last_good\":\{}"; lg="${lg%%\}*}"
+  w="${lg#*\"window_pct\":}"; w="${w%%[,\}]*}"
+  k="${lg#*\"weekly_pct\":}"; k="${k%%[,\}]*}"
+  at="${lg#*\"at\":}"; at="${at%%[!0-9]*}"
+  [ -n "$at" ] && [ $(( $2 - at )) -lt 604800 ] || return 1
+  if [ "$k" != null ] && [ -n "$k" ]; then _LGN="weekly ${k}%"
+  elif [ "$w" != null ] && [ -n "$w" ]; then _LGN="window ${w}%"
+  else return 1; fi
+  local _lg_age=""
+  declare -F _human_agev >/dev/null 2>&1 && _human_agev _lg_age "$at" "$2" && _LGN="$_LGN · $_lg_age"
+  return 0
 }
 
 # _home_chunk <word> <width> -> the word cut into space-separated chunks, each at

@@ -1617,12 +1617,12 @@ _usage107_calls() { if [ -f "$USAGE_CALLS" ]; then wc -l < "$USAGE_CALLS" | tr -
   echo "$output" | jq -e '.source == "unknown" and .reason == "unparseable"' || { echo "garbage got: $output"; false; }
 }
 
-@test "#107: --json shape of an expired reading is exactly the reading keys plus engine, tank and reason" {
+@test "#107/#149: --json shape of an expired reading is exactly the reading keys plus engine, tank, reason and the #149 gap fields" {
   usage_fixture
   _usage107_creds rt-stub-value
   USAGE_HTTP=401 run --separate-stderr clikae usage claude work --json
   [ "$status" -eq 0 ]
-  echo "$output" | jq -e '(keys | sort) == (["engine","tank","window_pct","weekly_pct","window_resets_at","weekly_resets_at","source","reason"] | sort)' \
+  echo "$output" | jq -e '(keys | sort) == (["engine","tank","window_pct","weekly_pct","window_resets_at","weekly_resets_at","source","reason","gap","last_window_pct","last_weekly_pct","last_at","last_age_sec","dry_marked_at"] | sort)' \
     || { echo "got: $output"; false; }
   [ "$(printf '%s\n' "$output" | wc -l | tr -d ' ')" = 1 ]
   # --json never carries the human hint; the plain form puts it on stderr, so
@@ -1861,14 +1861,16 @@ STUB
     || { echo "models got: $output"; false; }
   # Not the surface breakdown: "Claude Code" is a surface row, never a model.
   echo "$output" | jq -e '[.models[].name] | index("Claude Code") == null' || { echo "surface leaked: $output"; false; }
-  # The board is unchanged: usage_board_fields still answers with the
-  # ALL-MODELS pair and its age, four columns, no per-model anything. clikae
-  # has no per-tank model to pick the relevant row with (`--model` is a
-  # pass-through argument on burn/relay, not a property of a tank).
+  # The board's numbers stay the ALL-MODELS pair and its age. clikae has no
+  # per-tank model to pick the relevant row with (`--model` is a pass-through
+  # argument on burn/relay, not a property of a tank). #149 adds ONE per-model
+  # fact as a 5th column: the names of rows already at 100%, else "-" — here
+  # Fable is at 11%, so "-".
   source "$CLIKAE_TEST_ROOT/lib/core/usage.sh"
   run usage_board_fields claude work
   [ "$status" -eq 0 ]
-  [ "$(printf '%s' "$output" | awk -F'\t' '{print NF}')" = 4 ]
+  [ "$(printf '%s' "$output" | awk -F'\t' '{print NF}')" = 5 ]
+  [ "$(printf '%s' "$output" | cut -f5)" = "-" ]
   [ "$(printf '%s' "$output" | cut -f1)" = "9.0" ]
   [ "$(printf '%s' "$output" | cut -f2)" = "14.0" ]
 }

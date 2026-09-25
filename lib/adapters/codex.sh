@@ -778,7 +778,9 @@ adapter_all_transcripts() {
 # stamped as freshly read.
 adapter_usage() {
   local fields pu _pw pr su _sw sr ts
-  fields="$(_limit_codex_rate_limits "$1" 2>/dev/null)" || return 1
+  if ! fields="$(_limit_codex_rate_limits "$1" 2>/dev/null)"; then
+    _codex_usage_probe "$1"; return
+  fi
   IFS=$'\037' read -r pu _pw pr su _sw sr ts <<< "$fields"
   jq -cn --arg pu "$pu" --arg su "$su" --arg pr "$pr" --arg sr "$sr" --arg ts "$ts" '
     def pct: try tonumber catch null;
@@ -787,4 +789,59 @@ adapter_usage() {
     {window_pct:($pu|pct),weekly_pct:($su|pct),
      window_resets_at:($pr|stamp),weekly_resets_at:($sr|stamp),source:"transcript",
      event_epoch:(if $ts == "" then null else ($ts|norm_stamp|try fromdateiso8601 catch null) end)}'
+}
+
+# #149: the per-tank LIVE reading codex itself exposes. `codex app-server`
+# (0.154, experimental) answers the JSON-RPC request `account/rateLimits/read`
+# with the same primary/secondary windows a rollout's `rate_limits` carries,
+# for the login under CODEX_HOME — no turn is spent, no model is called.
+# Consulted only when the rollout store holds no reading (a tank idle for 7
+# days), so a busy tank still pays nothing. Bounded twice: the stdin writer
+# gives up after ~10s, and the process itself is capped by
+# _CODEX_USAGE_PROBE_SEC. stdin has to stay open until the answer is written
+# — app-server exits without replying the moment stdin closes (measured).
+# CLIKAE_CODEX_USAGE_PROBE=0 turns it off (the test suite's default: no test
+# may reach a vendor). Each window lands in the slot its own duration names:
+# up to 6h is the session window, anything longer is the weekly slot (a free
+# plan's single 30-day window reads as weekly, with window_pct null).
+# Nothing from the response but four numbers is ever printed; on any failure
+# the caller sees rc=1 and a fixed reason word, never the process's output.
+_CODEX_USAGE_PROBE_SEC=15
+_codex_usage_probe() {
+  local dir="$1" out tbin="" rc=0
+  [ "${CLIKAE_CODEX_USAGE_PROBE:-1}" != 0 ] || return 1
+  command -v codex >/dev/null 2>&1 || return 1
+  [ -d "$dir" ] || return 1
+  out="$(mktemp "${TMPDIR:-/tmp}/clikae-codex-usage.XXXXXX")" || return 1
+  declare -F _burn_timeout_bin >/dev/null && tbin="$(_burn_timeout_bin 2>/dev/null)"
+  {
+    printf '%s\n' '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"clientInfo":{"name":"clikae","version":"0"}}}' \
+      '{"jsonrpc":"2.0","method":"initialized"}' \
+      '{"jsonrpc":"2.0","id":2,"method":"account/rateLimits/read"}'
+    local i=0
+    while [ "$i" -lt 100 ] && ! grep -q '"id":2' "$out" 2>/dev/null; do sleep 0.1; i=$((i + 1)); done
+  } | case "$tbin" in
+        timeout|gtimeout) CODEX_HOME="$dir" "$tbin" "$_CODEX_USAGE_PROBE_SEC" codex app-server ;;
+        perl) CODEX_HOME="$dir" perl -e 'alarm shift; exec @ARGV or exit 127' "$_CODEX_USAGE_PROBE_SEC" codex app-server ;;
+        *) CODEX_HOME="$dir" codex app-server ;;
+      esac > "$out" 2>/dev/null || rc=$?
+  : "$rc"
+  local reading
+  reading="$(jq -c 'select(type == "object" and .id == 2) | .result.rateLimits // empty |
+    def slot($w): [.primary, .secondary][] | select(type == "object")
+      | select((.windowDurationMins|type) == "number")
+      | select(if $w == "window" then .windowDurationMins <= 360 else .windowDurationMins > 360 end);
+    def at: if type == "number" then todateiso8601 else null end;
+    ([slot("window")][0]) as $w | ([slot("weekly")][0]) as $k |
+    select($w != null or $k != null) |
+    {window_pct:($w.usedPercent // null), weekly_pct:($k.usedPercent // null),
+     window_resets_at:(($w.resetsAt // null)|at), weekly_resets_at:(($k.resetsAt // null)|at),
+     source:"vendor"}' "$out" 2>/dev/null | head -n 1)"
+  local answered=0
+  grep -q '"id":2' "$out" 2>/dev/null && answered=1
+  rm -f "$out"
+  if [ -n "$reading" ]; then printf '%s\n' "$reading"; return 0; fi
+  if [ "$answered" = 1 ]; then printf '%s\n' '{"reason":"unparseable"}'
+  else printf '%s\n' '{"reason":"network"}'; fi
+  return 1
 }

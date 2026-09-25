@@ -46,6 +46,51 @@ _usage_print() {
   fi
 }
 
+# #149: the one-line summary under the per-tank lines, e.g.
+#   claude 85/96/87(Fable 100)/85? · codex 100 · agy used 3h ago
+# A "(name pct)" suffix is a vendor per-model row (from the reading's own
+# `models[]`, never a name clikae knows) whose pct is above the tank's weekly.
+# One token per tank, engines in the order their tanks were listed: the
+# weekly percentage (the window's when a vendor reports no weekly), a
+# last-known number marked "?" when there is no current one, "??" when there
+# never was one. agy has no number at all, so its token is when a tank of it
+# last ran. Human output only, on stderr: stdout stays one "<engine>/<tank>
+# <reading>" line per tank for anything parsing it; --json never has it.
+_USAGE_SUM_ENGINES=""
+_usage_summary_add() {
+  local e="$1" tok var
+  [ "$e" != antigravity ] || e=agy
+  tok="$(printf '%s' "$2" | jq -r --argjson now "$(date +%s)" '
+    def r: if type == "number" then (. + 0.5 | floor | tostring) else null end;
+    (.weekly_pct | numbers // -1) as $wk |
+    ([(.models // [])[] | select(.pct > $wk) | "\(.name) \(.pct|r)"] | join(",")) as $bind |
+    (if $bind == "" then "" else "(" + $bind + ")" end) as $sp |
+    if (.weekly_pct|r) != null then (.weekly_pct|r) + $sp
+    elif (.window_pct|r) != null then (.window_pct|r) + $sp
+    elif (.last_used_at|type) == "number" then
+      ($now - .last_used_at) as $d |
+      "used " + (if $d < 3600 then "\($d/60|floor)m" elif $d < 86400 then "\($d/3600|floor)h" else "\($d/86400|floor)d" end) + " ago"
+    elif .gap == "no-signal" and has("last_used_at") then "no-signal"
+    elif (.last_weekly_pct|r) != null then (.last_weekly_pct|r) + "?"
+    elif (.last_window_pct|r) != null then (.last_window_pct|r) + "?"
+    else "??" end' 2>/dev/null)" || tok="??"
+  [ -n "$tok" ] || tok="??"
+  var="_USAGE_SUM_$(printf '%s' "$e" | tr -c 'A-Za-z0-9' '_')"
+  case " $_USAGE_SUM_ENGINES " in
+    *" $e "*) printf -v "$var" '%s/%s' "${!var}" "$tok" ;;
+    *) _USAGE_SUM_ENGINES="${_USAGE_SUM_ENGINES:+$_USAGE_SUM_ENGINES }$e"; printf -v "$var" '%s' "$tok" ;;
+  esac
+}
+_usage_summary_print() {
+  local e var line=""
+  [ -n "$_USAGE_SUM_ENGINES" ] || return 0
+  for e in $_USAGE_SUM_ENGINES; do
+    var="_USAGE_SUM_$(printf '%s' "$e" | tr -c 'A-Za-z0-9' '_')"
+    line="${line:+$line · }$e ${!var}"
+  done
+  printf '%s\n' "$line" >&2
+}
+
 cmd_usage() {
   local engine="" tank="" json=0 fresh=0 e t _path reading found=0
   local wake="" wake_set=0 force_cockpit=0
@@ -157,6 +202,7 @@ HELP
     fi
     reading="$(usage_read "$e" "$t" "$fresh")"
     _usage_print "$e" "$t" "$reading" "$json"
+    [ "$json" = 1 ] || _usage_summary_add "$e" "$reading"
   done <<EOF_PROFILES
 $(list_all_profiles)
 EOF_PROFILES
@@ -173,5 +219,6 @@ EOF_PROFILES
     _usage_wake "${wake_matches%%/*}" "$tank" "$force_cockpit" "$json"
     return
   fi
+  [ "$json" = 1 ] || _usage_summary_print
   [ "$found" = 1 ] || [ -z "$engine" ]
 }
