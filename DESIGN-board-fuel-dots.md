@@ -259,10 +259,16 @@ own `Retry-After` header in whole seconds, and only when that header was in
 instead of doubling its own backoff. A VENDOR reading may carry `models`
 (#137): the per-model weekly rows the vendor sends in `limits[]` as entries
 with kind `weekly_scoped`, normalized to `{name, pct, resets_at}`. Nothing on
-the board reads them — the dot stays on the all-models number, because
+the board picks among them — the dot stays on the all-models number, because
 choosing the relevant per-model row would require knowing which model a tank
 runs and a tank carries no such property (`--model` is an argument to
-`burn`/`relay`). They are reported by `clikae usage` only.
+`burn`/`relay`). #149 reads them for one thing only: a row whose pct is above
+the tank's weekly number is the binding limit, so the note names it
+(`weekly 87% · Fable 100%`, the name being the vendor's), and a row at 100%
+turns a green dot yellow. A row at or below the tank value, or no `models[]`,
+adds nothing. A reading with no numbers shows the last one that had them,
+aged, with a reason word (`expired`, `no-probe`, `no-signal`); see
+docs/usage.md.
 On the board an expired reading under 24h old draws the no-reading `·` with
 the note `expired · usage --wake <tank>` (the word lives in the note, not the
 dot — no emoji on any delivery surface, so the note carries a word and costs

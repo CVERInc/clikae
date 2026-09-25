@@ -86,6 +86,35 @@ readings — closing the session ends it. What you see when there is no number:
 Reading it costs nothing: the row never calls a vendor, it only draws what is
 already on disk. `clikae usage <engine> <tank>` fills the same reading by hand.
 
+**When a tank has no number (#149).** Neither the board nor `clikae usage`
+prints a blank. A cell with no current reading shows the last one that had
+numbers and how old it is, plus one word for why there is no new one:
+
+| word | what it means | what to do |
+|---|---|---|
+| `expired` | the access token lapsed (or the token on this machine is a stale copy; clikae cannot tell which) | start a session on that tank, or `clikae usage --wake <tank>` on the machine that holds its login |
+| `no-probe` | clikae has nothing it can ask: codex with no rollout reading in the last 7 days and its live probe off or unavailable | use the aged number, or check the vendor's page |
+| `no-signal` | a probe was asked and answered nothing usable, or the engine exposes no usage at all (agy) | use the aged number, or fill it in by hand |
+
+On the board that reads `weekly 85% · 5h ago · expired`. An agy tank reads
+`no-signal · last used 2h ago`: agy has one global login and no usage signal,
+so the one real trace is when that tank last wrote its own log
+(`<tank>/antigravity-cli/log/`). codex tanks idle for over a week are read
+live through `codex app-server`'s `account/rateLimits/read`, which costs no
+turn (`CLIKAE_CODEX_USAGE_PROBE=0` turns that off). When the vendor reports
+a per-model weekly row above the tank's own weekly number, the board and the
+summary name it, e.g. `weekly 87% · Fable 100%`; the model names come from the
+vendor, never from clikae.
+
+`clikae usage --json` adds, on a reading with no numbers only: `gap` (the
+word above), `last_window_pct`, `last_weekly_pct`, `last_at` (epoch) and
+`last_age_sec` (null when there never was a reading), `dry_marked_at` (the
+epoch of the tank's last dry marker, or null), and for agy `last_used_at`.
+Every existing field is unchanged. The plain form ends with one summary line
+on stderr, one token per tank grouped by engine, e.g.
+`claude 85/96/87(Fable 100)/85? · codex 100 · agy used 3h ago`, where `85?` is
+a last-known number and `??` means there never was one.
+
 It degrades rather than breaks. With no tmux installed, no terminal (a pipe, CI),
 or a `TERM` tmux cannot draw on, clikae runs the engine directly instead — same
 command, same result, just no persistence. `clikae burn` behaves the same way.
