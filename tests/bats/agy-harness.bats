@@ -345,6 +345,18 @@ MEASURE_MSG="changed something and have not measured it since"
   [ -z "$output" ]
 }
 
+@test "rule1: a build is neither — save_page then build_preview is still unmeasured" {
+  # A build produces the result; it does not measure it. Only a probe after
+  # the build counts.
+  _pre c '{"name":"call_mcp_tool","args":{"ServerName":"site","ToolName":"save_page","Arguments":{}}}'
+  _pre c '{"name":"call_mcp_tool","args":{"ServerName":"site","ToolName":"build_preview","Arguments":{}}}'
+  run _stop c
+  [[ "$output" == *"$MEASURE_MSG"* ]] || false
+  _pre c '{"name":"call_mcp_tool","args":{"ServerName":"site","ToolName":"inspect_page","Arguments":{}}}'
+  run _stop c
+  [ -z "$output" ]
+}
+
 @test "rule1: shell commands — a redirect or write verb mutates, a test run or read observes" {
   _pre c '{"name":"run_command","args":{"CommandLine":"echo hi > out.txt"}}'
   grep -q "^mutating.*out.txt" "$BATS_TEST_TMPDIR/state/c.calls"

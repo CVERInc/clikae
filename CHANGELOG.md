@@ -15,7 +15,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   classified by an editable table in the script as mutating (file edits,
   write-type shell commands, MCP writes such as `save_page` / `set_theme` /
   `patch_page` / `publish_site`) or observing (reads, test runs,
-  `inspect_page` / `probe_render`, screenshots), and a turn that changed
+  `inspect_page` / `probe_render`, screenshots; a build such as
+  `build_preview` is neither, since producing a result is not measuring it),
+  and a turn that changed
   something with no measurement after the last change is blocked with one
   fixed sentence. PreToolUse records the ledger interactively too, not only
   under dispatch. The English patterns stay as a secondary signal for the

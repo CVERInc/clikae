@@ -1055,7 +1055,9 @@ Chinese exactly as it works in English.
 small table at the top of the script, as *mutating* (file edits, write-type
 shell commands such as `git commit` or a `>` redirect, MCP writes such as
 `save_page` / `set_theme` / `patch_page` / `publish_site`) or *observing* (file
-reads, test runs, `inspect_page` / `probe_render`, screenshots). When the turn
+reads, test runs, `inspect_page` / `probe_render`, screenshots). A build
+(`build_preview` / `build_status`) is neither: it produces the result, it does
+not measure it, so "edit → build → done" is still blocked. When the turn
 ends, if something was mutated and no observing call happened after the last
 mutation, the stop is blocked with one fixed sentence:
 

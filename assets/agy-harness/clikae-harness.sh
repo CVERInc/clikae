@@ -89,10 +89,14 @@ GATE_NAME="${CK_HARNESS_GATE_NAME:-.clikae-gate}"
 # Shell commands are matched on the FIRST WORD of each pipeline segment (`git`
 # is refined by its subcommand: git commit/push/… mutate, git diff/log/… do
 # not); a `>` / `>>` redirect to a file is also a mutation.
+# `build_preview` / `build_status` are deliberately in NEITHER bucket: a build
+# produces the result, it does not measure it. Counting a build as observing
+# would let "edit → build → declare done" pass, which is exactly the failure
+# this rule exists to catch.
 CK_MUTATING_TOOLS="${CK_MUTATING_TOOLS:-write_to_file replace_file_content multi_replace_file_content edit_file delete_file}"
 CK_OBSERVING_TOOLS="${CK_OBSERVING_TOOLS:-view_file view_file_outline read_url_content browser_screenshot capture_screenshot}"
 CK_MUTATING_MCP="${CK_MUTATING_MCP:-save_page set_theme patch_page publish_site create_page delete_page update_page write_file}"
-CK_OBSERVING_MCP="${CK_OBSERVING_MCP:-inspect_page probe_render build_preview build_status diff_versions get_page screenshot take_screenshot read_file}"
+CK_OBSERVING_MCP="${CK_OBSERVING_MCP:-inspect_page probe_render diff_versions get_page screenshot take_screenshot read_file}"
 CK_MUTATING_CMDS="${CK_MUTATING_CMDS:-rm mv cp mkdir rmdir touch chmod chown ln tee sed patch install dd truncate}"
 CK_MUTATING_GIT="${CK_MUTATING_GIT:-commit push pull merge rebase reset checkout switch restore stash apply cherry-pick add rm mv tag}"
 CK_OBSERVING_CMDS="${CK_OBSERVING_CMDS:-cat head tail less grep rg diff ls find stat wc test bats pytest jest make npm npx pnpm yarn cargo go bun bash sh python python3 node curl wget shellcheck jq git}"
