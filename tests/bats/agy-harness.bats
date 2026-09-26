@@ -143,20 +143,20 @@ _run_stop() {  # stdin: payload
 }
 
 @test "harness: a dispatched agent may not edit the ruler" {
-  run bash -c "printf '%s' '{\"toolCall\":{\"name\":\"write_file\",\"args\":{\"path\":\"/repo/tests/foo.bats\"}}}' | CLIKAE_DISPATCH=1 bash '$(HARNESS)' PreToolUse"
+  run bash -c "printf '%s' '{\"toolCall\":{\"name\":\"write_file\",\"args\":{\"path\":\"/repo/tests/foo.bats\"}}}' | CK_HARNESS_STATE='$BATS_TEST_TMPDIR/state' CLIKAE_DISPATCH=1 bash '$(HARNESS)' PreToolUse"
   [[ "$output" == *deny* ]] || false
 }
 
 @test "harness: interactively YOU may edit your own tests" {
   # Friction belongs on how dangerous the action is, not on who is doing it.
-  run bash -c "printf '%s' '{\"toolCall\":{\"name\":\"write_file\",\"args\":{\"path\":\"/repo/tests/foo.bats\"}}}' | bash '$(HARNESS)' PreToolUse"
+  run bash -c "printf '%s' '{\"toolCall\":{\"name\":\"write_file\",\"args\":{\"path\":\"/repo/tests/foo.bats\"}}}' | CK_HARNESS_STATE='$BATS_TEST_TMPDIR/state' bash '$(HARNESS)' PreToolUse"
   [[ "$output" == *allow* ]] || false
 }
 
 @test "harness: an unparseable tool call is allowed, not blocked" {
   # Fail open: a harness that blocks work it cannot read is worse than one that
   # misses an edit.
-  run bash -c "printf '%s' 'not json at all' | CLIKAE_DISPATCH=1 bash '$(HARNESS)' PreToolUse"
+  run bash -c "printf '%s' 'not json at all' | CK_HARNESS_STATE='$BATS_TEST_TMPDIR/state' CLIKAE_DISPATCH=1 bash '$(HARNESS)' PreToolUse"
   [[ "$output" == *allow* ]] || false
 }
 
