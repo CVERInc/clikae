@@ -9,6 +9,12 @@ run_command        ditto
 search_web         ditto
 write_to_file      ditto
 list_dir           ditto
+save_page          an MCP write tool named in the agy harness classification table (#152), not ours
+set_theme          ditto
+patch_page         ditto
+publish_site       ditto
+inspect_page       an MCP observing tool named in the agy harness classification table (#152), not ours
+probe_render       ditto
 # --- our own data, not our own code ---
 away_summary       a JSON field name in the board's live-row payload
 session_summary    a JSON field name
