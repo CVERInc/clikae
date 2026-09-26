@@ -9,6 +9,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **The agy harness judges actions, not words (#152).** Its Stop rule used to
+  match English claim phrases, so a session in any other language got no
+  harness at all. It now reads the sequence of tool calls: every call is
+  classified by an editable table in the script as mutating (file edits,
+  write-type shell commands, MCP writes such as `save_page` / `set_theme` /
+  `patch_page` / `publish_site`) or observing (reads, test runs,
+  `inspect_page` / `probe_render`, screenshots), and a turn that changed
+  something with no measurement after the last change is blocked with one
+  fixed sentence. PreToolUse records the ledger interactively too, not only
+  under dispatch. The English patterns stay as a secondary signal for the
+  no-tool-call case. The header and docs now state what the harness does not
+  cover, and `clikae doctor` names a tank whose harness copy differs from the
+  shipped template.
+
 - **`clikae usage`'s summary line names agy's idle time once.** With several
   agy tanks it printed `agy used 60d ago/used 0m ago/used 42d ago`; it now
   prints `agy last used 60d/0m/42d ago`.

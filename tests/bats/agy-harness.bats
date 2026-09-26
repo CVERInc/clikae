@@ -261,3 +261,109 @@ _run_stop() {  # stdin: payload
   [ ! -e "$st/old-conversation" ]
   [ -e "$st/fresh-conversation" ]
 }
+
+# ── rule 1: changed, not measured ──────────────────────────────────────────
+# These never write a reply text at all: the rule reads the ledger PreToolUse
+# leaves behind, so a transcript is deliberately absent (`/no/such/file`).
+_pre() {  # _pre <conversation> <toolCall JSON>   — records one call in the ledger
+  printf '{"conversationId":"%s","toolCall":%s}' "$1" "$2" \
+    | CK_HARNESS_STATE="$BATS_TEST_TMPDIR/state" bash "$(HARNESS)" PreToolUse >/dev/null
+}
+_stop() {  # _stop <conversation> [env…]  — the Stop hook with no transcript
+  printf '{"conversationId":"%s","transcriptPath":"/no/such/file","workspacePaths":["%s"]}' "$1" "$BATS_TEST_TMPDIR" \
+    | env "${@:2}" CK_HARNESS_STATE="$BATS_TEST_TMPDIR/state" bash "$(HARNESS)" Stop
+}
+EDIT='{"name":"write_to_file","args":{"TargetFile":"/repo/a.py","CodeContent":"x"}}'
+READ='{"name":"view_file","args":{"AbsolutePath":"/repo/a.py"}}'
+TEST='{"name":"run_command","args":{"CommandLine":"make test"}}'
+MEASURE_MSG="changed something and have not measured it since"
+
+@test "rule1: edit then stop is blocked with the fixed sentence" {
+  _pre c "$EDIT"
+  run _stop c
+  [[ "$output" == *'"decision": "continue"'* ]] || false
+  [[ "$output" == *"$MEASURE_MSG"* ]] || false
+}
+
+@test "rule1: edit then read then stop is allowed" {
+  _pre c "$EDIT"; _pre c "$READ"
+  run _stop c
+  [ -z "$output" ]
+}
+
+@test "rule1: a read-only turn is allowed" {
+  _pre c "$READ"; _pre c "$TEST"
+  run _stop c
+  [ -z "$output" ]
+}
+
+@test "rule1: two edits then one measurement is allowed" {
+  _pre c "$EDIT"; _pre c "$EDIT"; _pre c "$TEST"
+  run _stop c
+  [ -z "$output" ]
+}
+
+@test "rule1: measurement then edit is blocked — order is what counts" {
+  _pre c "$TEST"; _pre c "$EDIT"
+  run _stop c
+  [[ "$output" == *"$MEASURE_MSG"* ]] || false
+}
+
+@test "rule1: the counter caps the block" {
+  _pre c "$EDIT"
+  run _stop c
+  [[ "$output" == *"continue"* ]] || false
+  run _stop c                                  # interactive cap is 1
+  [[ "$output" != *"continue"* ]] || false
+  [ ! -e "$BATS_TEST_TMPDIR/state/c.calls" ]  # the turn is over; ledger cleared
+}
+
+@test "rule1: a non-English final message changes nothing — the rule never reads text" {
+  local t="$BATS_TEST_TMPDIR/t.jsonl"
+  _transcript "$t" "我已經驗證過了，一切正常，所有測試都通過。" 0
+  _pre "conv-$BATS_TEST_NUMBER" "$EDIT"          # _payload's conversation id
+  run bash -c "printf %s '$(_payload "$t")' | CK_HARNESS_STATE='$BATS_TEST_TMPDIR/state' bash '$(HARNESS)' Stop"
+  [[ "$output" == *"$MEASURE_MSG"* ]] || false
+  [[ "$output" != *"ZERO commands"* ]] || false   # the English pattern stays silent
+}
+
+@test "rule1: it records interactively too, not only under dispatch" {
+  # The recording must not depend on CLIKAE_DISPATCH; _pre above never sets it.
+  _pre c "$EDIT"
+  [ -s "$BATS_TEST_TMPDIR/state/c.calls" ]
+  grep -q '^mutating' "$BATS_TEST_TMPDIR/state/c.calls"
+}
+
+@test "rule1: MCP writes count as changes and MCP probes as measurements" {
+  # An MCP-only session has no workspace and no transcript; the ledger is all
+  # there is, and it is enough.
+  _pre c '{"name":"call_mcp_tool","args":{"ServerName":"site","ToolName":"save_page","Arguments":{}}}'
+  run _stop c
+  [[ "$output" == *"$MEASURE_MSG"* ]] || false
+  _pre c '{"name":"call_mcp_tool","args":{"ServerName":"site","ToolName":"inspect_page","Arguments":{}}}'
+  run _stop c
+  [ -z "$output" ]
+}
+
+@test "rule1: shell commands — a redirect or write verb mutates, a test run or read observes" {
+  _pre c '{"name":"run_command","args":{"CommandLine":"echo hi > out.txt"}}'
+  grep -q "^mutating.*out.txt" "$BATS_TEST_TMPDIR/state/c.calls"
+  _pre c '{"name":"run_command","args":{"CommandLine":"git commit -m x"}}'
+  grep -q "^mutating.*git commit" "$BATS_TEST_TMPDIR/state/c.calls"
+  _pre c '{"name":"run_command","args":{"CommandLine":"git diff 2>&1 | head"}}'
+  grep -q "^observing.*git diff" "$BATS_TEST_TMPDIR/state/c.calls"
+  _pre c '{"name":"run_command","args":{"CommandLine":"npm test >/dev/null 2>&1"}}'
+  grep -q "^observing.*npm test" "$BATS_TEST_TMPDIR/state/c.calls"
+}
+
+@test "rule1: a tool the table does not know is neither, and does not block" {
+  _pre c '{"name":"some_new_tool","args":{}}'
+  run _stop c
+  [ -z "$output" ]
+}
+
+@test "rule1: the ledger is per conversation" {
+  _pre a "$EDIT"
+  run _stop b
+  [ -z "$output" ]
+}

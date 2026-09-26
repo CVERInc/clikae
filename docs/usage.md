@@ -1047,29 +1047,39 @@ No tmux installed means no section at all, rather than an empty heading.
 ## The agy harness — a claim has to arrive with a receipt
 
 A new agy tank comes with a small restraint installed, in `<tank>/config/`. It
-does not change how agy talks. It stops one specific thing:
+does not change how agy talks. It judges **actions, not words**: the sequence
+of tool calls the hooks already see, never the reply's text — so it works in
+Chinese exactly as it works in English.
+
+**The rule: changed, not measured.** Every tool call is classified once, by a
+small table at the top of the script, as *mutating* (file edits, write-type
+shell commands such as `git commit` or a `>` redirect, MCP writes such as
+`save_page` / `set_theme` / `patch_page` / `publish_site`) or *observing* (file
+reads, test runs, `inspect_page` / `probe_render`, screenshots). When the turn
+ends, if something was mutated and no observing call happened after the last
+mutation, the stop is blocked with one fixed sentence:
 
 ```
-"I verified everything works and all tests pass."     ← in a session that ran
-                                                        zero commands
+You changed something and have not measured it since. Measure it and show
+what the measurement printed.
 ```
 
-That reply is now blocked once. agy is handed the contradiction, re-enters the
-loop, and has to answer it. Measured on a real run, same tank, same prompt, the
-only difference being whether the harness was there:
+That targets the failure actually seen in a long real session (edit → declare
+done), in any language, at no cost. An unknown tool name counts as neither, so
+the rule fails towards silence, never towards nagging.
 
-```
-with     I verified everything works and all tests pass.
-         I did not actually run any commands or verify any tests; I simply
-         output the requested phrase.
-without  I verified everything works and all tests pass.
-```
+**The older English check stays as a secondary signal.** "I verified everything
+works" in a session that ran zero commands is still blocked once — it catches a
+claim made without any tool call at all, which the structural rule cannot see.
+Its patterns are English; a reply in another language simply skips it.
 
-**The threshold is ZERO, not "enough".** "You didn't test enough" is an argument
-about taste that nobody can settle; "you said you verified it and this session
-never ran a single command" is not an argument. Zero is also the only threshold
-that can never punish real work — a session that did something never trips it,
-and an ordinary answer that claims nothing is left alone.
+**What it does not cover — plainly.** It cannot tell whether the measurement
+was the *right* one: reading the file back after an edit satisfies it, and so
+does running the wrong test. That fix lives in the tools, not the harness — a
+mutating tool should return its own verification, so measuring is part of
+changing. The project gate (below) needs a workspace, so an MCP-only session
+(editing a hosted site, no repo open) gets the structural rule but no gate.
+And blocking is not compliance (see below).
 
 **Your project's own gate, if you write one.** Put an executable `.clikae-gate`
 at the root of a repo and the harness runs it before letting a session finish,
@@ -1077,12 +1087,13 @@ handing back its output. clikae cannot know what "done" means in your project �
 that file is where you say so. No gate means no project check, and it says that
 rather than implying coverage it doesn't have.
 
-**Dispatched versus you.** Sitting at the keyboard, it interrupts once and then
-gets out of your way; a headless run (`-p`) is held longer, because nobody is
-there to notice. Either way there is a cap: a gate that can never pass must not
-be able to hold a session forever. And the rule against editing tests or CI
-applies only to a dispatched agent — interactively those are *your* tests, and
-friction belongs on how dangerous an action is, not on who is doing it.
+**Dispatched versus you.** The call ledger is recorded in both modes. Sitting at
+the keyboard, it interrupts once and then gets out of your way; a headless run
+(`-p`) is held longer, because nobody is there to notice. Either way there is a
+cap: a gate that can never pass must not be able to hold a session forever. The
+rule against editing tests or CI applies only to a dispatched agent —
+interactively those are *your* tests, and friction belongs on how dangerous an
+action is, not on who is doing it.
 
 **Blocking is not compliance.** Measured on two real tanks with the same prompt:
 one came back and said plainly *"I did not actually run any commands"*; the other
@@ -1091,9 +1102,12 @@ printed was still the original claim. What the harness guarantees is that the
 claim gets **challenged** — not that the answer is good. After the cap, the final
 sentence on screen can still be the unsupported one. Read the reply.
 
-**It's yours.** The script is copied into your tank, not linked, so editing it is
-how you make it stricter. Delete `<tank>/config/hooks.json` (or the script next
-to it) and agy behaves exactly as it did before — clikae never puts it back.
+**It's yours.** The script is copied into your tank, not linked, so editing it
+(the table included) is how you make it stricter. Delete `<tank>/config/hooks.json`
+(or the script next to it) and agy behaves exactly as it did before — clikae
+never puts it back. `clikae doctor` names a tank whose copy differs from the
+template clikae ships, so you can see when yours is older (or tuned); it never
+rewrites it.
 
 ## Waiting out a limit instead of switching — `clikae wake`
 

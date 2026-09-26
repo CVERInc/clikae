@@ -64,6 +64,30 @@ EOF
   echo ""
 }
 
+# _doctor_agy_harness -> say something ONLY when a tank's harness copy differs
+# from the template clikae ships (#152). The copy is the tank's own by design
+# (edited on purpose, or simply older than the template), so this is a hint
+# and never a rewrite: it names the tank and the diff command, nothing else.
+_doctor_agy_harness() {
+  local src="$CLIKAE_ROOT/assets/agy-harness/clikae-harness.sh" name dir copy stale=""
+  [ -f "$src" ] || return 0
+  while IFS= read -r name; do
+    [ -n "$name" ] || continue
+    dir="$(profile_dir antigravity "$name")"
+    copy="$(agy_harness_script "$dir")"
+    [ -f "$copy" ] || continue             # deleted on purpose — not stale, off
+    cmp -s "$src" "$copy" || stale="$stale $name"
+  done <<EOF2
+$(tanks_for_engine antigravity)
+EOF2
+  [ -n "$stale" ] || return 0
+  log_bold "agy harness (each tank keeps its own copy)"
+  printf '  %-16s %s\n' "differs" "from the shipped template:$stale"
+  log_dim  "                   (edited by you, or older than clikae — compare with:"
+  log_dim  "                    diff $src <tank>/config/clikae-harness.sh )"
+  echo ""
+}
+
 _doctor_keychain() {
   [ "$(uname -s)" = "Darwin" ] || return 0
   command -v security >/dev/null 2>&1 || return 0
@@ -1016,6 +1040,7 @@ EOF
   _doctor_keychain
   ( load_adapter claude 2>/dev/null && _claude_stable_doctor ) || true
   _doctor_agy_login_file
+  _doctor_agy_harness
   # NOT inside _doctor_keychain: that one returns early off macOS, and reading a
   # log file has nothing to do with the Keychain.
   _doctor_auth_dropouts
