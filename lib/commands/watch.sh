@@ -200,7 +200,7 @@ _watch_usage_poll_one() {
   IFS=$'\t' read -r source reason retry <<< "$facts"
   local cur="${_WATCH_USAGE_POLL_BACKOFF[idx]:-$base}" delay state
   case "$source" in
-    vendor|transcript)
+    vendor|transcript|quota-api)
       state=ok; cur="$base"; delay="$base" ;;
     *)
       case "$reason" in

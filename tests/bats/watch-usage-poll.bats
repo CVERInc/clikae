@@ -301,3 +301,14 @@ _poll136_creds() {
   _quiet _watch_usage_poll_one claude srv 1020
   [ "${_WATCH_USAGE_POLL_BACKOFF[$_WUPI]}" = 40 ]
 }
+
+@test "#151: a quota-api reading (agy) is a success — backoff stays at base, not a transient failure" {
+  _boot
+  # The one thing under test is how the poll layer classifies the reading's
+  # source, so the reading itself is handed in rather than fetched.
+  usage_read() { printf '%s\n' '{"window_pct":75,"weekly_pct":40,"window_resets_at":null,"weekly_resets_at":null,"source":"quota-api"}'; }
+  local base; base="$(_watch_usage_poll_interval)"
+  _quiet _watch_usage_poll_one antigravity pike 1000 || true
+  _watch_usage_poll_indexv antigravity pike
+  [ "${_WATCH_USAGE_POLL_BACKOFF[$_WUPI]}" = "$base" ] || false
+}

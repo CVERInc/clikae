@@ -28,9 +28,11 @@ agy_fixture() {
 config="$(cat)"
 printf '%s\n' "$@" >> "$AGY_LOG"
 env >> "$AGY_LOG"
-[[ "$config" == *'Authorization: Bearer stub-agy-secret151'* ]] || exit 2
+# Record EVERY call before judging it: a call made without the token must
+# still show up in AGY_CALLS, or "makes no call" could never go red.
 url=""; for a in "$@"; do case "$a" in https://*) url="$a" ;; esac; done
 printf '%s\n' "${url##*:}" >> "$AGY_CALLS"
+[[ "$config" == *'Authorization: Bearer stub-agy-secret151'* ]] || exit 2
 [ "${AGY_FAIL:-0}" = 0 ] || exit 22
 case "$url" in
   *:loadCodeAssist) printf '{"cloudaicompanionProject":"stub-project-1"}' ;;
