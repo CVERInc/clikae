@@ -888,7 +888,7 @@ limit_log_resetsv() {
     _llr_s="$(limit_reset_phrase_secs "$_llr_p")" || _llr_s=0
     if [ "$_llr_s" -gt "$LIMIT_AGY_WEEKLY_MIN_SEC" ]; then _LLR_WEEKLY="$_llr_p"
     else _LLR_WINDOW="$_llr_p"; fi
-  done < <(grep -aoE 'Resets in [0-9hdms]+' "$1" 2>/dev/null || true)
+  done < <(grep -aoE 'Resets in [0-9]+[dhms]( ?[0-9]+[dhms])*' "$1" 2>/dev/null || true)
   return 0
 }
 
@@ -898,6 +898,8 @@ limit_log_resetsv() {
 limit_reset_phrase_secs() {
   local rest="${1#Resets in }" total=0 n u
   [ "$rest" != "$1" ] || return 1
+  rest="${rest// /}"   # "1d 2h" reads as "1d2h"; Go's own durations carry no spaces
+  local whole="$rest"
   while [[ "$rest" =~ ^([0-9]{1,9})([dhms])(.*)$ ]]; do
     n=$((10#${BASH_REMATCH[1]})); u="${BASH_REMATCH[2]}"; rest="${BASH_REMATCH[3]}"
     case "$u" in
@@ -907,7 +909,7 @@ limit_reset_phrase_secs() {
       s) total=$((total + n)) ;;
     esac
   done
-  [ -z "$rest" ] && [ "$rest" != "${1#Resets in }" ] || return 1
+  [ -z "$rest" ] && [ -n "$whole" ] || return 1
   printf '%s\n' "$total"
 }
 

@@ -65,3 +65,12 @@ _two_bucket_log() {
   limit_log_resetsv "$f"
   [ "$_LLR_WEEKLY" = "Resets in 24h0m1s" ] || false
 }
+
+@test "limit_log_resetsv: a spaced '1d 2h' is read whole, so it is weekly (not truncated to 1d)" {
+  _src_limit
+  local f="$BATS_TEST_TMPDIR/cli.log"
+  printf '%s\n' 'Individual quota reached. Resets in 1d 2h.' > "$f"
+  limit_log_resetsv "$f"
+  [ "$_LLR_WEEKLY" = "Resets in 1d 2h" ] || false
+  [ -z "$_LLR_WINDOW" ] || false
+}
