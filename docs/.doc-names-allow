@@ -69,3 +69,5 @@ last_at            a JSON field name in `clikae usage --json` (#149)
 last_age_sec       a JSON field name in `clikae usage --json` (#149)
 dry_marked_at      a JSON field name in `clikae usage --json` (#149)
 last_used_at       a JSON field name in `clikae usage --json` (#149)
+build_preview      an MCP build tool named in the agy harness classification table (#152) as neither observing nor mutating, not ours
+build_status       ditto
