@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **An agy weekly wall is no longer recorded as a few-hour one (#151).** agy's
+  429 sentence names one of two resets: a 2-5 h rolling window or a ~143 h
+  weekly bucket. The dry check kept only the last "Resets in", so a window
+  line after a weekly one made the tank look usable again in hours. Each
+  phrase is now classified by its own length (more than 24 h is weekly), the
+  last of each bucket is kept, and the weekly one is the reset that counts.
+
 ## [0.37.0] — 2026-09-27
 
 ### Changed
