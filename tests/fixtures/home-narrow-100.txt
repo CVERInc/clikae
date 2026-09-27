@@ -1,0 +1,14 @@
+
+  clikae  · ↑↓/Tab move · ⏎ open · [ ] reorder · / filter · ? help · q quit
+
+    ▸ Tanks
+    ❯ ◐ busy    claude   busy.person@example-c…  window 44% · weekly 20% · Fable 100%
+      ○ dry     claude   dry.person@example-co…  resets @PHRASE@ (Asia/Tokyo)
+      ● work    claude   work.person@example-c…
+      · cheap   codex    -
+
+    ▸ Resume — in ~/w
+      ● work    claude   "支払い照合パイプラインを段階的に書き直す計画"
+      ● work    claude   "Refactor the payment reconciliation pipeline"
+      1 more in this store — see: clikae resume (any directory)
+      3 sessions total · Press [R] to see all / search

@@ -425,7 +425,11 @@ _home_continue_notes() {
   case "$_el" in ''|*[!0-9]*) _el=0 ;; esac
   { [ "$_th" -gt 0 ] || [ "$_el" -gt 0 ]; } || return 0
   if [ "${1:-0}" -ne 1 ]; then
-    printf '  %b▸ %s%b\n' "$__C_BCYAN" "$(_home_continue_heading)" "$__C_RESET"
+    # #155: on the narrow interactive board (extra > 0 = inside its 2-column
+    # indenter) a section header takes no lead of its own — one indent, not two.
+    local _hl="  "
+    _home_narrowv; [ "$_HOME_NARROW" = 1 ] && [ "${2:-0}" -gt 0 ] && _hl=""
+    printf '%s%b▸ %s%b\n' "$_hl" "$__C_BCYAN" "$(_home_continue_heading)" "$__C_RESET"
   fi
   if [ "$_th" -gt 0 ]; then
     # shellcheck disable=SC2059  # the format IS the localized string
@@ -2256,6 +2260,142 @@ _home_cols() {
   printf '%s' "$cols"
 }
 
+# ── #155: below 60 columns, the SAME board, laid out by subtraction ─────────
+#
+# Measured at 46 columns (a-Shell on an upright iPhone): every tank row carried
+# the full account email — the widest field and the least useful one, since the
+# tank name already says whose account it is; a dry tank's status repeated its
+# timezone and wrapped mid-token onto a continuation line at column 3 while the
+# row sat at 6; the footer cut its own key hint ("Press [R] to see a…"); and the
+# nested 4 + 6 indent spent a sixth of the screen before any content.
+#
+# Below _HOME_NARROW_BELOW the board keeps the same sections, order, cursor and
+# keys. Only the layout changes, and only by subtraction and alignment:
+#   1. the email is hidden on tank rows (not moved anywhere else);
+#   2. reset times read relative (⟳6h, ⟳3d) and a status is ONE line, cut at
+#      its end, never wrapped mid-token;
+#   3. one 2-column indent, and continuation lines sit under the name column;
+#   4. key hints wrap onto as many lines as they need and are never cut;
+#   5. resume titles take the full remaining width.
+# At _HOME_NARROW_BELOW and up nothing here runs: the wide board is
+# byte-identical to what it was (tests/bats/home-narrow.bats pins both).
+# The width comes from _home_cols, the one width source — never a second read.
+_HOME_NARROW_BELOW=60
+
+# _home_narrowv — sets $_HOME_NARROW to 1 below 60 columns, else 0.
+_home_narrowv() {
+  local _c; _c="$(_home_cols)"
+  if [ "$_c" -lt "$_HOME_NARROW_BELOW" ]; then _HOME_NARROW=1; else _HOME_NARROW=0; fi
+}
+
+# _home_relv <seconds> — a duration as the narrow board's relative reset:
+# "45m", "6h", "3d", into $_REL. A reset already due reads "0m" rather than a
+# negative number; it is the vendor's instant, not ours to reinterpret.
+_home_relv() {
+  local s="$1"
+  [ "$s" -gt 0 ] || { _REL="0m"; return 0; }
+  if   [ "$s" -lt 3600 ];  then _REL="$(( (s + 59) / 60 ))m"
+  elif [ "$s" -lt 86400 ]; then _REL="$(( (s + 1800) / 3600 ))h"
+  else                          _REL="$(( (s + 43200) / 86400 ))d"; fi
+}
+
+# _home_status_narrowv <note> — the narrow board's form of a tank's status, into
+# $_SNOTE: every " · "-separated segment that is a vendor reset phrase the
+# limit parser understands ("resets Sep 28 at 5pm (Asia/Tokyo)", "try again at
+# 9:00 PM") becomes "⟳<relative>", which is also what drops the timezone the
+# wide board repeats under every tank. A segment the parser cannot resolve is
+# kept verbatim — a guessed instant is worse than a long one — and the caller
+# cuts the result at its end. `now` is the frame's own (_home_fuel_dotv's memo),
+# so every row of one frame counts from the same instant.
+_home_status_narrowv() {
+  local note="$1" rest seg out="" now ep
+  _SNOTE="$note"
+  declare -F limit_reset_epoch >/dev/null 2>&1 || return 0
+  case "$note" in *[Rr]esets\ *|*[Tt]ry\ again\ at\ *) ;; *) return 0 ;; esac
+  now="${_FUEL_MEMO_NOW:-}"
+  [ -n "$now" ] || now="$(date +%s 2>/dev/null || echo 0)"
+  rest="${note//  · / · }"          # dry_seen_suffix's "  · seen …" joins as one
+  while [ -n "$rest" ]; do
+    seg="${rest%% · *}"
+    if [ "$seg" = "$rest" ]; then rest=""; else rest="${rest#* · }"; fi
+    case "$seg" in
+      [Rr]esets\ *|[Tt]ry\ again\ at\ *)
+        if ep="$(limit_reset_epoch "$seg" "$now" 2>/dev/null)" && [ -n "$ep" ]; then
+          _home_relv $(( ep - now )); seg="⟳$_REL"
+        fi ;;
+    esac
+    out="${out:+$out · }$seg"
+  done
+  _SNOTE="$out"
+}
+
+# _home_tank_narrow <head> <name-field> <engine> <note> <name-col>
+# One narrow tank row: <head> is everything left of the name, already styled
+# ("❯ ● " on the interactive board, "  ● " on the static one), <name-field> the
+# padded (and possibly bold) name, <name-col> the ABSOLUTE column the name
+# starts at — 6 on the interactive board (its outer 2-column indenter included),
+# 4 on the static one. No account column (rule 1). The status rides on the row
+# when it fits there whole; otherwise it gets its own line under the name column
+# (rule 3), cut at its end (rule 2). One column is always left free: a line
+# that fills the last column leaves the cursor in the pending-wrap state, where
+# the interactive frame's erase-to-end-of-line eats the final character.
+_home_tank_narrow() {
+  local head="$1" nmf="$2" eng="$3" note="$4" ncol="$5" cols en
+  cols="$(_home_cols)"
+  _home_truncv "$eng" 8; en="$_TRUNC"
+  if [ -z "$note" ]; then
+    printf '%s%s %b%s%b\n' "$head" "$nmf" "$__C_DIM" "$en" "$__C_RESET"
+    return 0
+  fi
+  _home_status_narrowv "$note"
+  _dwv "$_SNOTE"
+  if [ $(( ncol + 7 + 1 + 8 + 2 + _DW_W )) -lt "$cols" ]; then
+    _home_lpadv "$en" 8
+    printf '%s%s %b%s%b  %b%s%b\n' "$head" "$nmf" "$__C_DIM" "$_LPAD" "$__C_RESET" \
+      "$__C_YELLOW" "$_SNOTE" "$__C_RESET"
+  else
+    printf '%s%s %b%s%b\n' "$head" "$nmf" "$__C_DIM" "$en" "$__C_RESET"
+    _home_truncv "$_SNOTE" $(( cols - ncol - 1 ))
+    printf '    %b%s%b\n' "$__C_YELLOW" "$_TRUNC" "$__C_RESET"
+  fi
+}
+
+# _home_status_line <text> <name-col> — a dim status sentence on its own line
+# under the name column, cut at its end to what is left (rules 2 and 3).
+_home_status_line() {
+  local cols; cols="$(_home_cols)"
+  _home_status_narrowv "$1"
+  _home_truncv "$_SNOTE" $(( cols - $2 - 1 ))
+  printf '    %b%s%b\n' "$__C_DIM" "$_TRUNC" "$__C_RESET"
+}
+
+# _home_wrap_items <prefix> <hang> <color> <reset> <extra> <item>...
+# The narrow keybar (rule 4): whole items ("· ⏎ open") are packed onto lines,
+# so a key is never separated from what it does. Each packed line goes through
+# _home_wrap_prefixed, which is also the fallback when ONE item is wider than a
+# whole line — the only case in which an item's words are split, and even then
+# nothing is cut.
+_home_wrap_items() {
+  local prefix="$1" hang="$2" color="$3" reset="$4" extra="$5"; shift 5
+  local cols avail pad line="" it lead
+  cols="$(_home_cols)"
+  avail=$(( cols - hang - extra - 1 ))
+  pad="$(printf '%*s' "$hang" '')"
+  lead="$prefix"
+  for it in "$@"; do
+    if [ -z "$line" ]; then line="$it"; continue; fi
+    _dwv "$line $it"
+    if [ "$_DW_W" -le "$avail" ]; then
+      line="$line $it"
+    else
+      _home_wrap_prefixed "$line" "$lead" "$hang" "$color" "$reset" "$extra"
+      lead="$pad"; line="$it"
+    fi
+  done
+  [ -n "$line" ] && _home_wrap_prefixed "$line" "$lead" "$hang" "$color" "$reset" "$extra"
+  return 0
+}
+
 # _home_size -> "<cols>x<rows>" from ONE stty call. Used by the picker's wait to
 # notice a resize; two calls to _home_cols/_home_rows would fork twice a second
 # for the life of an idle board. Empty when there is no controlling terminal —
@@ -2308,6 +2448,9 @@ _home_row_budget() {
 _home_row_geom() {
   local overhead="$1" min="$2" cols
   cols="$(_home_cols)"
+  # #155 rule 5: below 60 columns a title takes the full remaining width, so the
+  # engine is always the column that goes — the tank row above already says it.
+  [ "$cols" -lt "$_HOME_NARROW_BELOW" ] && min="$cols"
   if [ $(( cols - overhead )) -lt "$min" ]; then
     _RG_ENG=""
     overhead=$(( overhead - 9 ))
@@ -2409,7 +2552,12 @@ EOF
   # quotes = 25). No extra column for the "…" — _home_trunc keeps its ellipsis
   # INSIDE the budget it's given. Computed ONCE (the chrome is identical on
   # every resume row) rather than per row.
-  _home_row_geom 25 20; local _resume_title_budget="$_RG_TITLE"
+  # #155: below 60 columns a row takes ONE 2-column lead, not four, so the name
+  # column moves from 6 to 4 and the title budget grows by the same two (rule 5).
+  local _sl="    " _alead="    " _ahang=19
+  _home_narrowv
+  if [ "$_HOME_NARROW" = 1 ]; then _sl="  "; _alead="  "; _ahang=17; fi
+  _home_row_geom $(( 21 + ${#_sl} )) 20; local _resume_title_budget="$_RG_TITLE"
   _home_live_dup_keysv "$items"   # see _home_live_dup_suffixv — dup-name badging
   while IFS=$'\037' read -r kind cli profile label alias active note; do
     [ -n "$kind" ] || continue
@@ -2432,7 +2580,7 @@ EOF
         # below uses): a Live title can carry a trailing guess marker that
         # must survive truncation — see R1-P2-3.
         local _ttl; _home_live_ttlv "$label" "$_resume_title_budget"; _ttl="$_TRUNC"
-        printf '    %b %s%s %b%b"%s"%b\n' "$rdot" "$(_home_lpad "$(_home_trunc "$profile" 7)" 7)" "$_LIVE_SUFFIX" \
+        printf '%s%b %s%s %b%b"%s"%b\n' "$_sl" "$rdot" "$(_home_lpad "$(_home_trunc "$profile" 7)" 7)" "$_LIVE_SUFFIX" \
           "$(_home_row_eng "$cli")" \
           "$__C_DIM" "$_ttl" "$__C_RESET"
         ;;
@@ -2446,10 +2594,14 @@ EOF
         local _rnm _ren; _home_truncv "$profile" 7; _home_lpadv "$_TRUNC" 7; _rnm="$_LPAD"
         _home_row_engv "$cli"; _ren="$_RENG"
         local _ttl; _home_truncv "$label" "$_resume_title_budget"; _ttl="$_TRUNC"
-        printf '    %b %s %b%b"%s"%b\n' "$rdot" "$_rnm" "$_ren" "$__C_DIM" "$_ttl" "$__C_RESET"
+        printf '%s%b %s %b%b"%s"%b\n' "$_sl" "$rdot" "$_rnm" "$_ren" "$__C_DIM" "$_ttl" "$__C_RESET"
         # recap (carried in the alias field): word-wrapped with a hanging indent so
         # long recaps align under their first word instead of spilling to column 0.
-        [ -n "$alias" ] && _home_wrap_prefixed "$alias" "        -> " 11 "$__C_DIM" "$__C_RESET"
+        # Narrow (#155): the arrow sits under the name column, 4.
+        if [ -n "$alias" ]; then
+          if [ "$_HOME_NARROW" = 1 ]; then _home_wrap_prefixed "$alias" "    -> " 7 "$__C_DIM" "$__C_RESET"
+          else _home_wrap_prefixed "$alias" "        -> " 11 "$__C_DIM" "$__C_RESET"; fi
+        fi
         ;;
       tank)
         # Two sections in burn order: fleet tanks under "Tanks", solo (out-of-the-
@@ -2481,8 +2633,12 @@ EOF
         if [ -n "$_reset" ]; then _tail="$(printf '%b%s%b' "$__C_YELLOW" "$_reset" "$__C_RESET")"; _sep="  "; fi
         _home_tank_fieldsv "$profile" "$_eng" "${label:--}" "$_tail"
         _nm="$_TF_NM"; _en="$_TF_EN"; _ac="$_TF_AC"
-        printf '    %b %s %b%s%b %b%s%b%s%s\n' \
-          "$_dot" "$_nm" "$__C_DIM" "$_en" "$__C_RESET" "$__C_DIM" "$_ac" "$__C_RESET" "$_sep" "$_tail"
+        if [ "$_HOME_NARROW" = 1 ]; then
+          _home_tank_narrow "$(printf '  %b ' "$_dot")" "$_nm" "$_eng" "$_reset" 4
+        else
+          printf '    %b %s %b%s%b %b%s%b%s%s\n' \
+            "$_dot" "$_nm" "$__C_DIM" "$_en" "$__C_RESET" "$__C_DIM" "$_ac" "$__C_RESET" "$_sep" "$_tail"
+        fi
         ;;
       target)
         # A single-account launch target (e.g. agy) lives under "Also available",
@@ -2496,16 +2652,16 @@ EOF
         if _treset="$(_home_is_dry "$dry" "$cli" "$profile")"; then
           _tnote="$note  ${_treset:-over quota}"
           also="$also$(_home_wrap_prefixed "$_tnote" \
-            "$(printf '    %b●%b %-12s ' "$__C_RED" "$__C_RESET" "$cli")" 19 "$__C_DIM" "$__C_RESET")"$'\n'
+            "$(printf '%s%b●%b %-12s ' "$_alead" "$__C_RED" "$__C_RESET" "$cli")" "$_ahang" "$__C_DIM" "$__C_RESET")"$'\n'
           any_dry=1
         else
           also="$also$(_home_wrap_prefixed "$note" \
-            "$(printf '    %b·%b %-12s ' "$__C_DIM" "$__C_RESET" "$cli")" 19 "$__C_DIM" "$__C_RESET")"$'\n'
+            "$(printf '%s%b·%b %-12s ' "$_alead" "$__C_DIM" "$__C_RESET" "$cli")" "$_ahang" "$__C_DIM" "$__C_RESET")"$'\n'
         fi
         ;;
       agent)
         also="$also$(_home_wrap_prefixed "$note" \
-          "$(printf '    %b·%b %-12s ' "$__C_DIM" "$__C_RESET" "$cli")" 19 "$__C_DIM" "$__C_RESET")"$'\n'
+          "$(printf '%s%b·%b %-12s ' "$_alead" "$__C_DIM" "$__C_RESET" "$cli")" "$_ahang" "$__C_DIM" "$__C_RESET")"$'\n'
         ;;
     esac
   done <<EOF
@@ -2525,8 +2681,15 @@ EOF
   _home_soulless_note
 
   if [ -n "$any_dry" ]; then
-    printf '  %b! %s%b — %s\n' \
-      "$__C_YELLOW" "$T_OVER_QUOTA" "$__C_RESET" "$T_OVER_QUOTA_HINT"
+    if [ "$_HOME_NARROW" = 1 ]; then
+      # #155 rule 4: this line ends in a command to type ("clikae to") and was
+      # printed raw — 69 columns in en-US. Below 60 it wraps; nothing is cut.
+      _home_wrap_prefixed "$T_OVER_QUOTA — $T_OVER_QUOTA_HINT" \
+        "$(printf '  %b!%b ' "$__C_YELLOW" "$__C_RESET")" 4 "" ""
+    else
+      printf '  %b! %s%b — %s\n' \
+        "$__C_YELLOW" "$T_OVER_QUOTA" "$__C_RESET" "$T_OVER_QUOTA_HINT"
+    fi
   fi
 
   if [ -n "$launch_cli" ]; then
@@ -3320,7 +3483,15 @@ _home_pick_draw_body() {
   # the `| while … printf '  %s'` indenter, and the selected row carries the `❯ `
   # mark — 2 columns each. Measured: with 25 the interactive rows came out
   # exactly 2 columns wider than the static ones at every width.
-  _home_row_geom 27 20; local _resume_title_budget="$_RG_TITLE"
+  #
+  # #155: below 60 columns the rows drop their own 2-column lead (the indenter's
+  # is the only indent left), so the chrome is 25 and the title keeps the two.
+  local _ld="  " _ahang=19
+  # An Also-available row hangs its sentence under the sentence, as it does
+  # wide: _home_wrap_prefixed budgets the first line by the hang, so the hang
+  # must equal the prefix's own width (19 wide, 17 without the row lead).
+  _home_narrowv; [ "$_HOME_NARROW" = 1 ] && { _ld=""; _ahang=17; }
+  _home_row_geom $(( 25 + ${#_ld} )) 20; local _resume_title_budget="$_RG_TITLE"
   _home_live_dup_keysv "$items"   # see _home_live_dup_suffixv — dup-name badging
   printf '\033[H\033[K\n'   # home + one blank top-margin line
   # Repaint the whole frame, clearing each line to end-of-line (\033[K) so a row
@@ -3367,7 +3538,21 @@ _home_pick_draw_body() {
   local _kbpfx _kbind
   printf -v _kbpfx '%b%s%b  ' "$__C_BOLD" "$T_WORDMARK" "$__C_RESET"
   _dwidthv "$T_WORDMARK"; _kbind=$(( _DW_W + 2 ))
-  _home_wrap_prefixed "$_keybar" "$_kbpfx" "$_kbind" "$__C_DIM" "$__C_RESET" 2
+  if [ "$_HOME_NARROW" = 1 ]; then
+    # #155 rule 4: the same keys, packed whole — "? help" never splits across
+    # two lines, which a word wrap does to it as soon as the bar is two lines.
+    local -a _kitems
+    if [ -n "$filter" ]; then
+      _kitems=("· $T_FILTER_PROMPT$(_home_trunc "$filter" 20)" "· esc $T_K_FILTER" "· q $T_K_QUIT")
+    else
+      _kitems=("· ↑↓/Tab $T_K_MOVE" "· ⏎ $T_K_OPEN")
+      [ -n "$_kctx" ] && _kitems+=("${_kctx# }")
+      _kitems+=("· / $T_K_FILTER" "· ? $T_K_HELP" "· q $T_K_QUIT")
+    fi
+    _home_wrap_items "$_kbpfx" "$_kbind" "$__C_DIM" "$__C_RESET" 2 "${_kitems[@]}"
+  else
+    _home_wrap_prefixed "$_keybar" "$_kbpfx" "$_kbind" "$__C_DIM" "$__C_RESET" 2
+  fi
   # Wrapped, not printf'd raw: 38 columns in en-US and wider in de-DE/pt-BR, and
   # it was the one row of the INTERACTIVE frame that still ran off a narrow
   # terminal after the 2026-08-16 sweep.
@@ -3379,7 +3564,7 @@ _home_pick_draw_body() {
   autonomy_getv                              # asked once, not once per mention
   if [ "$_AUTONOMY" != "ask" ]; then
     _home_wrap_prefixed "$T_K_AUTO: $_AUTONOMY · [A] change (BETA, claude+codex)" \
-      "  " 2 "$__C_DIM" "$__C_RESET"
+      "$_ld" "${#_ld}" "$__C_DIM" "$__C_RESET" $(( 2 - ${#_ld} ))
   fi
   printf '\n'
   while IFS=$'\037' read -r kind cli profile label alias active note; do
@@ -3397,7 +3582,7 @@ _home_pick_draw_body() {
         # should not have to learn a second layout for the same kind of thing.
         if [ "$printed_live" -eq 0 ]; then
           printed_live=1
-          printf '  %b▸ %s%b\n' "$__C_BCYAN" "$T_LIVE" "$__C_RESET"
+          printf '%s%b▸ %s%b\n' "$_ld" "$__C_BCYAN" "$T_LIVE" "$__C_RESET"
         fi
         local _lat _lage _lwake
         IFS=$'\036' read -r _lat _lage _lwake <<LIVEACT
@@ -3417,7 +3602,7 @@ LIVEACT
         # must survive truncation — see R1-P2-3.
         local _ttl; _home_live_ttlv "$label" "$_resume_title_budget"; _ttl="$_TRUNC"
         if [ "$idx" -eq "$sel" ]; then
-          printf '  %b %b %b%s%b %b%b"%s"%b\n' "$mark" "$ldot" "$__C_BOLD" "$_lnm" "$__C_RESET" "$_len" "$__C_DIM" "$_ttl" "$__C_RESET"
+          printf '%s%b %b %b%s%b %b%b"%s"%b\n' "$_ld" "$mark" "$ldot" "$__C_BOLD" "$_lnm" "$__C_RESET" "$_len" "$__C_DIM" "$_ttl" "$__C_RESET"
           # The second line is where time lives, in a whole sentence. When the
           # tank is limited the vendor's own words go here verbatim — they
           # already use the family's `·` — and clikae's promise, if any, follows
@@ -3440,6 +3625,16 @@ LIVEACT
           _lphrase="$(_home_is_dry "$dry" "$cli" "$profile" 2>/dev/null || true)"
           [ -n "$_lphrase" ] && _lhard=1
           [ -n "$_lphrase" ] || [ "$_FNOTE" != "${LIMIT_RESET_UNVERIFIED:-reset passed · unverified}" ] || _lphrase="$_FNOTE"
+          if [ "$_HOME_NARROW" = 1 ]; then
+            # #155: status lines under the name column, one line each, cut at
+            # the end; the Enter hint wraps and is never cut.
+            [ -z "$_lphrase" ] || _home_status_line "$_lphrase" 6
+            if [ -n "$_lwake" ]; then
+              _home_status_line "-> $T_LIVE_RESUMING $_lwake" 6
+            elif [ "$_lhard" -eq 0 ]; then
+              _home_wrap_prefixed "$_lage · $T_LIVE_ENTER" "    " 4 "$__C_DIM" "$__C_RESET" 2
+            fi
+          else
           if [ -n "$_lphrase" ]; then
             printf '        %b%s%b\n' "$__C_DIM" "$_lphrase" "$__C_RESET"
           fi
@@ -3448,8 +3643,9 @@ LIVEACT
           elif [ "$_lhard" -eq 0 ]; then
             printf '        %b%s · %s%b\n' "$__C_DIM" "$_lage" "$T_LIVE_ENTER" "$__C_RESET"
           fi
+          fi
         else
-          printf '  %b %b %s %b%b"%s"%b\n' "$mark" "$ldot" "$_lnm" "$_len" "$__C_DIM" "$_ttl" "$__C_RESET"
+          printf '%s%b %b %s %b%b"%s"%b\n' "$_ld" "$mark" "$ldot" "$_lnm" "$_len" "$__C_DIM" "$_ttl" "$__C_RESET"
         fi
         ;;
       resume)
@@ -3457,7 +3653,7 @@ LIVEACT
         if [ "$printed_resume" -eq 0 ]; then
           printed_resume=1
           if [ -n "$cur_cli" ] || [ "$printed_also" -gt 0 ]; then printf '\n'; fi
-          printf '  %b▸ %s%b\n' "$__C_BCYAN" "$(_home_continue_heading)" "$__C_RESET"
+          printf '%s%b▸ %s%b\n' "$_ld" "$__C_BCYAN" "$(_home_continue_heading)" "$__C_RESET"
         fi
         # active field is "<flag> <age>": flag 1 = this session is on the tank you're
         # using now (●), else ○. Age is the hover fallback when there's no recap.
@@ -3468,15 +3664,19 @@ LIVEACT
         _home_row_engv "$cli"; _ren="$_RENG"
         local _ttl; _home_truncv "$label" "$_resume_title_budget"; _ttl="$_TRUNC"
         if [ "$idx" -eq "$sel" ]; then
-          printf '  %b %b %b%s%b %b%b"%s"%b\n' "$mark" "$rdot" "$__C_BOLD" "$_rnm" "$__C_RESET" "$_ren" "$__C_DIM" "$_ttl" "$__C_RESET"
-          if [ -n "$alias" ]; then
+          printf '%s%b %b %b%s%b %b%b"%s"%b\n' "$_ld" "$mark" "$rdot" "$__C_BOLD" "$_rnm" "$__C_RESET" "$_ren" "$__C_DIM" "$_ttl" "$__C_RESET"
+          if [ "$_HOME_NARROW" = 1 ]; then
+            # #155: under the name column; the Enter hint wraps, never cut.
+            if [ -n "$alias" ]; then _home_wrap_prefixed "$alias" "    -> " 7 "$__C_DIM" "$__C_RESET" 2
+            else _home_wrap_prefixed "$rage · $T_ENTER_RESUME" "    " 4 "$__C_DIM" "$__C_RESET" 2; fi
+          elif [ -n "$alias" ]; then
             # recap, wrapped with a hanging indent. extra=2 for the wrapper's `  ` prefix.
             _home_wrap_prefixed "$alias" "        -> " 11 "$__C_DIM" "$__C_RESET" 2
           else
             printf '        %b%s · %s%b\n' "$__C_DIM" "$rage" "$T_ENTER_RESUME" "$__C_RESET"
           fi
         else
-          printf '  %b %b %s %b%b"%s"%b\n' "$mark" "$rdot" "$_rnm" "$_ren" "$__C_DIM" "$_ttl" "$__C_RESET"
+          printf '%s%b %b %s %b%b"%s"%b\n' "$_ld" "$mark" "$rdot" "$_rnm" "$_ren" "$__C_DIM" "$_ttl" "$__C_RESET"
         fi
         ;;
       tank)
@@ -3486,9 +3686,9 @@ LIVEACT
         # the current-section marker ("fleet"/"solo"); other cases test it for "any
         # tank printed yet".
         if tank_is_solo "$cli" "$profile"; then
-          if [ "$cur_cli" != "solo" ]; then printf '\n  %b▸ %s%b\n' "$__C_BCYAN" "$T_SOLO_SECTION" "$__C_RESET"; cur_cli="solo"; fi
+          if [ "$cur_cli" != "solo" ]; then printf '\n%s%b▸ %s%b\n' "$_ld" "$__C_BCYAN" "$T_SOLO_SECTION" "$__C_RESET"; cur_cli="solo"; fi
         elif [ "$cur_cli" != "fleet" ]; then
-          printf '  %b▸ %s%b\n' "$__C_BCYAN" "$T_TANKS" "$__C_RESET"; cur_cli="fleet"
+          printf '%s%b▸ %s%b\n' "$_ld" "$__C_BCYAN" "$T_TANKS" "$__C_RESET"; cur_cli="fleet"
         fi
         local _eng; _eng="$cli"; [ "$_eng" = "antigravity" ] && _eng="agy"
         # P3-2 (round-2 review): this used to call the ECHOING _home_fuel_dot
@@ -3511,7 +3711,11 @@ LIVEACT
         if [ -n "$_reset" ]; then _tail="$(printf '%b%s%b' "$__C_YELLOW" "$_reset" "$__C_RESET")"; _sep="  "; fi
         _home_tank_fieldsv "$profile" "$_eng" "${label:--}" "$_tail"
         _nm="$_TF_NM"; _en="$_TF_EN"; _ac="$_TF_AC"
-        if [ "$idx" -eq "$sel" ]; then
+        if [ "$_HOME_NARROW" = 1 ]; then
+          # #155: no account column; the status on the row or under the name.
+          if [ "$idx" -eq "$sel" ]; then _nm="$__C_BOLD$_nm$__C_RESET"; fi
+          _home_tank_narrow "$(printf '%b %b ' "$mark" "$dot")" "$(printf '%b' "$_nm")" "$_eng" "$_reset" 6
+        elif [ "$idx" -eq "$sel" ]; then
           printf '  %b %b %b%s%b %b%s%b %b%s%b%s%s\n' \
             "$mark" "$dot" "$__C_BOLD" "$_nm" "$__C_RESET" "$__C_DIM" "$_en" "$__C_RESET" "$__C_DIM" "$_ac" "$__C_RESET" "$_sep" "$_tail"
         else
@@ -3525,7 +3729,7 @@ LIVEACT
         if [ "$printed_also" -eq 0 ]; then
           printed_also=1
           [ -n "$cur_cli" ] && printf '\n'
-          printf '  %b▸ %s%b\n' "$__C_BCYAN" "$T_ALSO_AVAILABLE" "$__C_RESET"
+          printf '%s%b▸ %s%b\n' "$_ld" "$__C_BCYAN" "$T_ALSO_AVAILABLE" "$__C_RESET"
         fi
         if _reset="$(_home_is_dry "$dry" "$cli" "$profile")"; then tdot="${__C_RED}●${__C_RESET}"
         else tdot="${__C_DIM}·${__C_RESET}"; _reset=""; fi
@@ -3535,24 +3739,24 @@ LIVEACT
         _line="$note"; [ -n "$_reset" ] && _line="$note $_reset"
         if [ "$idx" -eq "$sel" ]; then
           _home_wrap_prefixed "$_line" \
-            "$(printf '  %b %b %b%-12s%b ' "$mark" "$tdot" "$__C_BOLD" "$cli" "$__C_RESET")" 19 "$__C_DIM" "$__C_RESET" 2
+            "$(printf '%s%b %b %b%-12s%b ' "$_ld" "$mark" "$tdot" "$__C_BOLD" "$cli" "$__C_RESET")" "$_ahang" "$__C_DIM" "$__C_RESET" 2
         else
           _home_wrap_prefixed "$_line" \
-            "$(printf '  %b %b %-12s ' "$mark" "$tdot" "$cli")" 19 "$__C_DIM" "$__C_RESET" 2
+            "$(printf '%s%b %b %-12s ' "$_ld" "$mark" "$tdot" "$cli")" "$_ahang" "$__C_DIM" "$__C_RESET" 2
         fi
         ;;
       agent)
         if [ "$printed_also" -eq 0 ]; then
           printed_also=1
           [ -n "$cur_cli" ] && printf '\n'
-          printf '  %b▸ %s%b\n' "$__C_BCYAN" "$T_ALSO_AVAILABLE" "$__C_RESET"
+          printf '%s%b▸ %s%b\n' "$_ld" "$__C_BCYAN" "$T_ALSO_AVAILABLE" "$__C_RESET"
         fi
         if [ "$idx" -eq "$sel" ]; then
           _home_wrap_prefixed "$note" \
-            "$(printf '  %b %b· %-12s ' "$mark" "$__C_BOLD" "$cli")" 19 "$__C_BOLD" "$__C_RESET" 2
+            "$(printf '%s%b %b· %-12s ' "$_ld" "$mark" "$__C_BOLD" "$cli")" "$_ahang" "$__C_BOLD" "$__C_RESET" 2
         else
           _home_wrap_prefixed "$note" \
-            "$(printf '  %b · %-12s ' "$mark" "$cli")" 19 "$__C_DIM" "$__C_RESET" 2
+            "$(printf '%s%b · %-12s ' "$_ld" "$mark" "$cli")" "$_ahang" "$__C_DIM" "$__C_RESET" 2
         fi
         ;;
     esac
@@ -3580,8 +3784,14 @@ EOF
     total_s="$(_home_total_sessions)"
     # shellcheck disable=SC2059  # the format IS the localized string
     _foot="$(printf "$T_RESUME_FOOTER" "$total_s")"
-    _fw="$(_home_row_budget "$(_home_cols)" 6 12)"
-    printf '    %b%s%b\n' "$__C_DIM" "$(_home_trunc "$_foot" "$_fw")" "$__C_RESET"
+    if [ "$_HOME_NARROW" = 1 ]; then
+      # #155 rule 4: "Press [R] to see all / search" is a key hint, and a hint
+      # is never cut — below 60 columns it wraps under its own indent instead.
+      _home_wrap_prefixed "$_foot" "    " 4 "$__C_DIM" "$__C_RESET" 2
+    else
+      _fw="$(_home_row_budget "$(_home_cols)" 6 12)"
+      printf '    %b%s%b\n' "$__C_DIM" "$(_home_trunc "$_foot" "$_fw")" "$__C_RESET"
+    fi
   fi
   } | while IFS= read -r _line || [ -n "$_line" ]; do printf '  %s\033[K\n' "$_line"; done
   printf '\033[J'   # erase any leftover lines from a previous, taller frame
