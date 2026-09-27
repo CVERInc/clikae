@@ -121,7 +121,9 @@ per tank, adding "engine"/"tank" to the reading; the plain form prints
 
 Reading fields: window_pct, weekly_pct (0-100, or null), window_resets_at,
 weekly_resets_at (ISO instants, or null), source. source is "vendor" (a
-live call answered), "transcript" (read from evidence the engine already
+live call answered), "quota-api" (agy: its own retrieveUserQuotaSummary
+answered; each bucket is window or weekly by its own reset distance),
+"transcript" (read from evidence the engine already
 wrote locally — no live process invoked; currently Codex), "expired" (the
 login is fine but its access token has lapsed — see --wake), or "unknown"
 (no usable reading).

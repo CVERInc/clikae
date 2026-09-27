@@ -714,7 +714,7 @@ _limit_read_after() {
   local f="${CLIKAE_HOME:-$HOME/.clikae}/state/usage/$1/$2.json" line ca
   [ -f "$f" ] || return 1
   IFS= read -r line < "$f" || [ -n "$line" ] || return 1
-  case "$line" in *'"source":"vendor"'*|*'"source":"transcript"'*) ;; *) return 1 ;; esac
+  case "$line" in *'"source":"vendor"'*|*'"source":"transcript"'*|*'"source":"quota-api"'*) ;; *) return 1 ;; esac
   case "$line" in *'"window_pct":null,"weekly_pct":null'*) return 1 ;; esac
   case "$line" in *'"cached_at":'*) ;; *) return 1 ;; esac
   ca="${line##*\"cached_at\":}"; ca="${ca%%[!0-9]*}"

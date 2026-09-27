@@ -94,12 +94,18 @@ numbers and how old it is, plus one word for why there is no new one:
 |---|---|---|
 | `expired` | the access token lapsed (or the token on this machine is a stale copy; clikae cannot tell which) | start a session on that tank, or `clikae usage --wake <tank>` on the machine that holds its login |
 | `no-probe` | clikae has nothing it can ask: codex with no rollout reading in the last 7 days and its live probe off or unavailable | use the aged number, or check the vendor's page |
-| `no-signal` | a probe was asked and answered nothing usable, or the engine exposes no usage at all (agy) | use the aged number, or fill it in by hand |
+| `no-signal` | a probe was asked and answered nothing usable, or (agy) there was no live access token to ask with | use the aged number, or fill it in by hand |
 
-On the board that reads `weekly 85% · 5h ago · expired`. An agy tank reads
-`no-signal · last used 2h ago`: agy has one global login and no usage signal,
-so the one real trace is when that tank last wrote its own log
-(`<tank>/antigravity-cli/log/`). codex tanks idle for over a week are read
+On the board that reads `weekly 85% · 5h ago · expired`. An agy tank whose
+saved access token is still live (Linux file backend; the token lives an hour
+and only agy refreshes it) is read through agy's own
+`v1internal:retrieveUserQuotaSummary`, `source:"quota-api"`: each quota bucket
+is the window or the weekly one by its own reset distance (more than 24 h away
+is weekly), and the most spent bucket of each is that number. Otherwise it
+reads `no-signal · last used 2h ago`, the one real trace being when that tank
+last wrote its own log (`<tank>/antigravity-cli/log/`). A 429's "Resets in"
+is split the same way: a weekly reset is kept even when a window line follows
+it, so a weekly wall is never recorded as a few-hour one. codex tanks idle for over a week are read
 live through `codex app-server`'s `account/rateLimits/read`, which costs no
 turn (`CLIKAE_CODEX_USAGE_PROBE=0` turns that off). When the vendor reports
 a per-model weekly row above the tank's own weekly number, the board and the

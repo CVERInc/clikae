@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **`clikae usage agy` reads a number (#151).** A tank whose saved access
+  token is still live (Linux file backend) is measured through agy's own
+  `v1internal:retrieveUserQuotaSummary`: `window_pct`/`weekly_pct`/resets in
+  the same shape as the claude rows, `source:"quota-api"`, each quota bucket
+  sorted into window or weekly by its own reset distance, every bucket under
+  `models`. Same TTL as claude. No live token, or any refusal, keeps today's
+  `no-signal` row; the token never leaves the call.
+
 ### Fixed
 
 - **An agy weekly wall is no longer recorded as a few-hour one (#151).** agy's
