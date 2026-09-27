@@ -1175,41 +1175,58 @@ so clikae correctly takes its no-tmux path and you will not see the section.</p>
 <p>No tmux installed means no section at all, rather than an empty heading.</p>
 <h2 id="the-agy-harness--a-claim-has-to-arrive-with-a-receipt">The agy harness — a claim has to arrive with a receipt</h2>
 <p>A new agy tank comes with a small restraint installed, in <code>&lt;tank&gt;/config/</code>. It
-does not change how agy talks. It stops one specific thing:</p>
-<pre class="shiki shiki-themes github-light github-dark-default" style="--shiki-light:#24292e;--shiki-dark:#e6edf3;--shiki-light-bg:#fff;--shiki-dark-bg:#0d1117" tabindex="0"><code><span class="line"><span>"I verified everything works and all tests pass."     ← in a session that ran</span></span>
-<span class="line"><span>                                                        zero commands</span></span></code></pre>
-<p>That reply is now blocked once. agy is handed the contradiction, re-enters the
-loop, and has to answer it. Measured on a real run, same tank, same prompt, the
-only difference being whether the harness was there:</p>
-<pre class="shiki shiki-themes github-light github-dark-default" style="--shiki-light:#24292e;--shiki-dark:#e6edf3;--shiki-light-bg:#fff;--shiki-dark-bg:#0d1117" tabindex="0"><code><span class="line"><span>with     I verified everything works and all tests pass.</span></span>
-<span class="line"><span>         I did not actually run any commands or verify any tests; I simply</span></span>
-<span class="line"><span>         output the requested phrase.</span></span>
-<span class="line"><span>without  I verified everything works and all tests pass.</span></span></code></pre>
-<p><strong>The threshold is ZERO, not &quot;enough&quot;.</strong> &quot;You didn't test enough&quot; is an argument
-about taste that nobody can settle; &quot;you said you verified it and this session
-never ran a single command&quot; is not an argument. Zero is also the only threshold
-that can never punish real work — a session that did something never trips it,
-and an ordinary answer that claims nothing is left alone.</p>
+does not change how agy talks. It judges <strong>actions, not words</strong>: the sequence
+of tool calls the hooks already see, never the reply's text — so it works in
+Chinese exactly as it works in English.</p>
+<p><strong>The rule: changed, not measured.</strong> Every tool call is classified once, by a
+small table at the top of the script, as <em>mutating</em> (file edits, write-type
+shell commands such as <code>git commit</code> or a <code>&gt;</code> redirect, MCP writes such as
+<code>save_page</code> / <code>set_theme</code> / <code>patch_page</code> / <code>publish_site</code>) or <em>observing</em> (file
+reads, test runs, <code>inspect_page</code> / <code>probe_render</code>, screenshots). A build
+(<code>build_preview</code> / <code>build_status</code>) is neither: it produces the result, it does
+not measure it, so &quot;edit → build → done&quot; is still blocked. When the turn
+ends, if something was mutated and no observing call happened after the last
+mutation, the stop is blocked with one fixed sentence:</p>
+<pre class="shiki shiki-themes github-light github-dark-default" style="--shiki-light:#24292e;--shiki-dark:#e6edf3;--shiki-light-bg:#fff;--shiki-dark-bg:#0d1117" tabindex="0"><code><span class="line"><span>You changed something and have not measured it since. Measure it and show</span></span>
+<span class="line"><span>what the measurement printed.</span></span></code></pre>
+<p>That targets the failure actually seen in a long real session (edit → declare
+done), in any language, at no cost. An unknown tool name counts as neither, so
+the rule fails towards silence, never towards nagging.</p>
+<p><strong>The older English check stays as a secondary signal.</strong> &quot;I verified everything
+works&quot; in a session that ran zero commands is still blocked once — it catches a
+claim made without any tool call at all, which the structural rule cannot see.
+Its patterns are English; a reply in another language simply skips it.</p>
+<p><strong>What it does not cover — plainly.</strong> It cannot tell whether the measurement
+was the <em>right</em> one: reading the file back after an edit satisfies it, and so
+does running the wrong test. That fix lives in the tools, not the harness — a
+mutating tool should return its own verification, so measuring is part of
+changing. The project gate (below) needs a workspace, so an MCP-only session
+(editing a hosted site, no repo open) gets the structural rule but no gate.
+And blocking is not compliance (see below).</p>
 <p><strong>Your project's own gate, if you write one.</strong> Put an executable <code>.clikae-gate</code>
 at the root of a repo and the harness runs it before letting a session finish,
 handing back its output. clikae cannot know what &quot;done&quot; means in your project —
 that file is where you say so. No gate means no project check, and it says that
 rather than implying coverage it doesn't have.</p>
-<p><strong>Dispatched versus you.</strong> Sitting at the keyboard, it interrupts once and then
-gets out of your way; a headless run (<code>-p</code>) is held longer, because nobody is
-there to notice. Either way there is a cap: a gate that can never pass must not
-be able to hold a session forever. And the rule against editing tests or CI
-applies only to a dispatched agent — interactively those are <em>your</em> tests, and
-friction belongs on how dangerous an action is, not on who is doing it.</p>
+<p><strong>Dispatched versus you.</strong> The call ledger is recorded in both modes. Sitting at
+the keyboard, it interrupts once and then gets out of your way; a headless run
+(<code>-p</code>) is held longer, because nobody is there to notice. Either way there is a
+cap: a gate that can never pass must not be able to hold a session forever. The
+rule against editing tests or CI applies only to a dispatched agent —
+interactively those are <em>your</em> tests, and friction belongs on how dangerous an
+action is, not on who is doing it.</p>
 <p><strong>Blocking is not compliance.</strong> Measured on two real tanks with the same prompt:
 one came back and said plainly <em>&quot;I did not actually run any commands&quot;</em>; the other
 was blocked just the same, went off and did something else, and the last line
 printed was still the original claim. What the harness guarantees is that the
 claim gets <strong>challenged</strong> — not that the answer is good. After the cap, the final
 sentence on screen can still be the unsupported one. Read the reply.</p>
-<p><strong>It's yours.</strong> The script is copied into your tank, not linked, so editing it is
-how you make it stricter. Delete <code>&lt;tank&gt;/config/hooks.json</code> (or the script next
-to it) and agy behaves exactly as it did before — clikae never puts it back.</p>
+<p><strong>It's yours.</strong> The script is copied into your tank, not linked, so editing it
+(the table included) is how you make it stricter. Delete <code>&lt;tank&gt;/config/hooks.json</code>
+(or the script next to it) and agy behaves exactly as it did before — clikae
+never puts it back. <code>clikae doctor</code> names a tank whose copy differs from the
+template clikae ships, so you can see when yours is older (or tuned); it never
+rewrites it.</p>
 <h2 id="waiting-out-a-limit-instead-of-switching--clikae-wake">Waiting out a limit instead of switching — <code>clikae wake</code></h2>
 <p><code>clikae to</code> and <code>clikae watch</code> answer &quot;the tank is dry, where do I go next&quot;.
 <code>clikae wake</code> answers the other question: <strong>what if I don't want to go anywhere.</strong></p>

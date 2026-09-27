@@ -3,7 +3,7 @@
 A narrative history of clikae, from the first commit through a deliberate park, the
 v0.6 that earned its way out of it, and the stretch after — where a tank stopped
 being a fuel tank and the front page finally said so.
-For the precise, per-release record see [CHANGELOG.md](https://github.com/CVERInc/clikae/blob/d4480ff34a818f140eaa79b7d585002f55ef7a65/CHANGELOG.md) — this is
+For the precise, per-release record see [CHANGELOG.md](https://github.com/CVERInc/clikae/blob/7e527958ae04a4fbb6b604c0232b239eb001c68d/CHANGELOG.md) — this is
 the story around it: the itch, the wrong turns, and the lessons that made each
 version what it is. Dates are the real tag dates (JST); claims map to the
 changelog. Nothing here is roadmap or aspiration — only what actually shipped.
