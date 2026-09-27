@@ -293,6 +293,44 @@ STUB
   [ ! -e "$CLIKAE_HOME/state/burn-sessions/antigravity/default" ] && [ ! -e "$CLIKAE_HOME/state/burn-sessions/agy/default" ]
 }
 
+# #153: an agy burn whose agent spawns subagents creates one conversation per
+# subagent as well. They used to make "more than one new transcript" and so
+# the lane's own conversation was never recorded — and stayed on the board.
+# The subagents say what they are in their own metadata, and are set aside
+# before the count; the lane's conversation is then the one left.
+@test "#153: agy burn records its own conversation even when its agent spawned subagents" {
+  _fixture
+  load 'helpers/agy_blob'
+  mkdir -p "$HOME/.gemini"
+  printf 'y\n' | "$CLIKAE_BIN" init agy default >/dev/null 2>&1
+  local sub1="aaaaaaaa-0000-4000-8000-00000000000a" sub2="aaaaaaaa-0000-4000-8000-00000000000b"
+  local hx_main hx_s1 hx_s2
+  hx_main="$(agy_blob_human "$STUB_SID")"
+  hx_s1="$(agy_blob_subagent "$sub1" "$STUB_SID" self 200)"
+  hx_s2="$(agy_blob_subagent "$sub2" "$STUB_SID" research 200)"
+  cat > "$TEST_HOME/bin/agy" <<STUB
+#!/usr/bin/env bash
+printf '%s\n' "\$@" >> "$STUB_ARGV_LOG"
+while [ "\$#" -gt 0 ]; do
+  if [ "\$1" = --log-file ]; then : > "\$2"; break; fi
+  shift
+done
+base="\$HOME/.gemini/antigravity-cli"
+mkdir -p "\$base/conversations"
+for pair in "$STUB_SID:$hx_main" "$sub1:$hx_s1" "$sub2:$hx_s2"; do
+  sid="\${pair%%:*}"; hx="\${pair#*:}"
+  mkdir -p "\$base/brain/\$sid/.system_generated/logs"
+  printf '{"content":"conversation %s"}\n' "\$sid" > "\$base/brain/\$sid/.system_generated/logs/transcript.jsonl"
+  printf '{"conversation_id":"%s","workspace":"%s"}\n' "\$sid" "\$PWD" >> "\$base/brain/history.jsonl"
+  sqlite3 "\$base/conversations/\$sid.db" "CREATE TABLE trajectory_metadata_blob(id TEXT, data BLOB); INSERT INTO trajectory_metadata_blob VALUES('main', X'\$hx');"
+done
+printf 'done\n' > "$STUB_ARTIFACT"
+STUB
+  chmod +x "$TEST_HOME/bin/agy"
+  _burn agy default
+  _assert_sidecar antigravity default "$STUB_SID"
+}
+
 @test "codex burn writes no sidecar line when the run produces zero transcripts" {
   _fixture
   clikae init codex T1

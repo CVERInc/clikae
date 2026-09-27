@@ -142,6 +142,130 @@ _agy_cwd_uncached() {
   printf '%s\n' "$cwd"
 }
 
+# Optional hook (#153): is this conversation one a human opened, or one agy
+# spawned on its own? Prints `interactive`, `headless` or `unknown` (rc 0 / 1
+# / 2 — rc 2 is never cached by reading_cache_run, so an answer that could not
+# be read is asked again next render). The board lists only non-headless rows.
+#
+# 🔴 STRUCTURE, NEVER TEXT. A subagent's first message is its parent's whole
+# brief, wrapped in <SYSTEM_MESSAGE>; matching that wording is exactly the
+# "judge words" trap. The signal is agy's own per-conversation metadata:
+# conversations/<id>.db, table trajectory_metadata_blob, row id='main', a
+# protobuf blob. Measured on a real tank (chromis, 2026-09-27; one human
+# conversation, one `self` subagent, one built-in `research` subagent):
+#
+#   human    (587 B)  top-level 1, 2, 3, 6 (its own id), 7, 15, 18
+#   self     (43 KB)  1, 2, 3, 4, 5, 6, 7, 8, 10, 17, 18
+#   research (22 KB)  same shape as self
+#
+#   4 = AgentConfig (4.1 = agent name string, 4.8 description, 4.7 config)
+#   5 = parent conversation id
+#
+# So a conversation is a subagent when EITHER holds, and both are checked:
+#   - top-level field 5 is present and is not this conversation's own id, or
+#   - top-level field 4 is present and its field 1 is a length-delimited
+#     string (an agent's name — any agent's, so a built-in agent agy ships
+#     tomorrow is caught without a new string in this file).
+# Neither → an ordinary conversation. A human's and a `clikae burn`'s look the
+# same here (both small, both only a workspace); burns are hidden by #74's
+# sidecar instead. 18 ('default-cli-project') is on BOTH kinds and is not a
+# signal. `parent_references` is empty in practice and is not read.
+#
+# Read-only, twice over: the db is in WAL mode, so the newest pages may live
+# only in <id>.db-wal, and even `sqlite3 -readonly` opens the -wal/-shm
+# siblings read-write. Both files are copied to a private temp dir and the
+# COPY is opened; agy's own files are never opened by sqlite at all.
+adapter_session_mode() {
+  local dir="$1" sid="$2" db
+  db="$dir/antigravity-cli/conversations/$sid.db"
+  if [ -z "$sid" ] || [ ! -f "$db" ]; then printf 'unknown'; return 2; fi
+  if declare -F reading_cache_run >/dev/null; then
+    reading_cache_run antigravity-mode "$db" _antigravity_mode_uncached "$db" "$sid"
+  else
+    _antigravity_mode_uncached "$db" "$sid"
+  fi
+}
+
+_antigravity_mode_uncached() {
+  local db="$1" sid="$2" tmp hex=""
+  command -v sqlite3 >/dev/null 2>&1 || { printf 'unknown'; return 2; }
+  tmp="$(mktemp -d "${TMPDIR:-/tmp}/clikae-agy-mode.XXXXXX" 2>/dev/null)" || { printf 'unknown'; return 2; }
+  if cp "$db" "$tmp/c.db" 2>/dev/null; then
+    [ -f "$db-wal" ] && cp "$db-wal" "$tmp/c.db-wal" 2>/dev/null
+    hex="$(sqlite3 "$tmp/c.db" "SELECT hex(data) FROM trajectory_metadata_blob WHERE id = 'main' LIMIT 1;" 2>/dev/null)" || hex=""
+  fi
+  rm -rf "$tmp"
+  _agy_blob_mode "$hex" "$sid"
+}
+
+# _agy_pb_varint <hex> <pos> -> _PB_V (value), _PB_P (next pos, in hex chars);
+# rc 1 past the end. <hex> is upper-case, two chars per byte.
+_agy_pb_varint() {
+  local h="$1" p="$2" v=0 s=0 b
+  while :; do
+    [ $((p + 2)) -le ${#h} ] || return 1
+    b=$((16#${h:p:2})); p=$((p + 2))
+    v=$(( v | ((b & 127) << s) )); s=$((s + 7))
+    [ "$b" -lt 128 ] && break
+    [ "$s" -le 56 ] || return 1
+  done
+  _PB_V=$v; _PB_P=$p
+}
+
+# _agy_pb_find <hex> <field> -> _PB_W (wire type) and, for a length-delimited
+# field, _PB_HEX (its payload); rc 1 when absent, rc 2 on a malformed message.
+# Top level of <hex> only — payloads are skipped by length, never parsed.
+_agy_pb_find() {
+  local h="$1" want="$2" p=0 k f w n
+  while [ "$p" -lt ${#h} ]; do
+    _agy_pb_varint "$h" "$p" || return 2
+    k=$_PB_V; p=$_PB_P; f=$((k >> 3)); w=$((k & 7))
+    case "$w" in
+      0) _agy_pb_varint "$h" "$p" || return 2; p=$_PB_P; n=-1 ;;
+      1) n=8 ;;
+      2) _agy_pb_varint "$h" "$p" || return 2; p=$_PB_P; n=$_PB_V ;;
+      5) n=4 ;;
+      *) return 2 ;;
+    esac
+    if [ "$n" -ge 0 ]; then
+      [ $((p + n * 2)) -le ${#h} ] || return 2
+      if [ "$f" -eq "$want" ]; then _PB_W=$w; _PB_HEX="${h:p:n*2}"; return 0; fi
+      p=$((p + n * 2))
+    elif [ "$f" -eq "$want" ]; then
+      _PB_W=$w; _PB_HEX=""; return 0
+    fi
+  done
+  return 1
+}
+
+# _agy_blob_mode <hex> <own-id> -> interactive|headless|unknown (rc 0/1/2).
+# Split out of the db read so the rule is testable on hand-built bytes.
+_agy_blob_mode() {
+  local LC_ALL=C
+  local h="$1" sid="$2" own="" i c rc
+  case "$h" in ''|*[!0-9A-Fa-f]*) printf 'unknown'; return 2 ;; esac
+  [ $(( ${#h} % 2 )) -eq 0 ] || { printf 'unknown'; return 2; }
+  h="$(printf '%s' "$h" | tr 'a-f' 'A-F')"
+  for (( i = 0; i < ${#sid}; i++ )); do
+    c="${sid:i:1}"; own="$own$(printf '%02X' "'$c")"
+  done
+  # Signal 1: a parent id that is not this conversation's own.
+  _agy_pb_find "$h" 5; rc=$?
+  if [ "$rc" -eq 0 ] && [ "$_PB_W" = 2 ] && [ -n "$_PB_HEX" ] && [ "$_PB_HEX" != "$own" ]; then
+    printf 'headless'; return 1
+  fi
+  [ "$rc" -eq 2 ] && { printf 'unknown'; return 2; }
+  # Signal 2: an AgentConfig whose field 1 (the agent's name) is a string.
+  _agy_pb_find "$h" 4; rc=$?
+  if [ "$rc" -eq 0 ] && [ "$_PB_W" = 2 ]; then
+    if _agy_pb_find "$_PB_HEX" 1 && [ "$_PB_W" = 2 ] && [ -n "$_PB_HEX" ]; then
+      printf 'headless'; return 1
+    fi
+  fi
+  [ "$rc" -eq 2 ] && { printf 'unknown'; return 2; }
+  printf 'interactive'; return 0
+}
+
 adapter_session_title() {
   local dir="$1" sid="$2"
   [ -n "$sid" ] || return 0

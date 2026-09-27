@@ -656,6 +656,26 @@ EOF
   done
 }
 
+# Optional hook (#153): interactive / headless / unknown — see
+# antigravity.sh's twin for the contract. The signal is session_meta's own
+# "originator" (first line of the rollout, already read by _codex_meta_field
+# and cached): "codex_exec" is `codex exec` — headless, what `clikae burn`
+# and `conduct` run — and "codex-tui" is the interactive TUI. Both values are
+# from real rollouts already cited in this repo (lib/core/limit.sh's codex
+# limit reader; tests/bats/limit-codex-status.bats). Anything else, or no
+# originator at all, is `unknown` and stays on the board.
+adapter_session_mode() {
+  local dir="$1" sid="$2" f o
+  f="$(_codex_find_rollout "$dir" "$sid")"
+  if [ -z "$sid" ] || [ -z "$f" ] || [ ! -f "$f" ]; then printf 'unknown'; return 2; fi
+  o="$(_codex_meta_field "$f" originator 2>/dev/null || true)"
+  case "$o" in
+    codex_exec) printf 'headless';    return 1 ;;
+    codex-tui)  printf 'interactive'; return 0 ;;
+  esac
+  printf 'unknown'; return 0
+}
+
 # A session's title for the board: codex records the user's prompt as an event_msg
 # with payload.type "user_message" carrying "message". Take the first, flatten
 # escapes/whitespace (no jq). Empty → the board shows the age instead.

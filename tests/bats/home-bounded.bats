@@ -302,7 +302,10 @@ _board_shims() {
   f="$dir/projects/$(_claude_project_slug "$PWD")/session-0.jsonl"
   touch -t 203001010000 "$f"
   printf '{}\n' > "${f%/*}/agent-new.jsonl"
-  CLIKAE_HOME_RECENT_MAX=2 board_state_refresh claude "$dir"
+  # MODE_SCAN=0: this pins "the entry's own cap bounds the answer". #153 widens
+  # that cap by CLIKAE_HOME_MODE_SCAN for an engine that can say "headless"
+  # (claude can), which is a different property, tested in home-headless.bats.
+  CLIKAE_HOME_RECENT_MAX=2 CLIKAE_HOME_MODE_SCAN=0 board_state_refresh claude "$dir"
   local _CLIKAE_BOARD=1
   run adapter_recent_sids "$dir" 10
   [ "$status" -eq 0 ]

@@ -7,6 +7,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **The home board no longer lists agy subagent conversations, and no title
+  can flood it (#153).** A tank whose agent spawns subagents filled the
+  Continue list with them, each titled with the parent's entire injected brief;
+  on one machine the list's payload reached 1.2 MB and the board looked hung,
+  and the conversation the human actually opened was pushed off it. The board
+  now lists only sessions a person opened, decided by what each engine records
+  about a session rather than its text: agy's conversation metadata (a parent
+  conversation id, or an agent configuration — built-in agents included), claude's
+  `entrypoint` (`sdk-cli` is headless), codex's `originator` (`codex_exec` is
+  headless). agy's database is read from a private copy of the `.db` and its
+  `-wal`, never opened in place. A session whose kind cannot be read stays on
+  the board with a shorter title, and every title is now one line of bounded
+  width before it is drawn. `clikae burn` on agy also records its own
+  conversation when the agent spawned subagents during the run; before, the
+  extra conversations made the run unattributable and nothing was recorded.
+
 ### Changed
 
 - **The agy harness judges actions, not words (#152).** Its Stop rule used to
