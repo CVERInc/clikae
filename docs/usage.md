@@ -100,8 +100,9 @@ On the board that reads `weekly 85% · 5h ago · expired`. An agy tank whose
 saved access token is still live (Linux file backend; the token lives an hour
 and only agy refreshes it) is read through agy's own
 `v1internal:retrieveUserQuotaSummary`, `source:"quota-api"`: each quota bucket
-is the window or the weekly one by its own reset distance (more than 24 h away
-is weekly), and the most spent bucket of each is that number. Otherwise it
+is the window or the weekly one by its own `window` name (`5h` / `weekly`), and
+the most spent enabled bucket of each, across agy's model groups (Gemini;
+Claude and GPT), is that number; every group's rows are under `models`. Otherwise it
 reads `no-signal · last used 2h ago`, the one real trace being when that tank
 last wrote its own log (`<tank>/antigravity-cli/log/`). A 429's "Resets in"
 is split the same way: a weekly reset is kept even when a window line follows

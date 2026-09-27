@@ -22,8 +22,8 @@ agy_fixture() {
     '{token:{access_token:"stub-agy-secret151",token_type:"Bearer",refresh_token:"stub-agy-refresh151",expiry:$exp},auth_method:"oauth"}' \
     > "$d/antigravity-cli/antigravity-oauth-token"
   export AGY_CALLS="$TEST_HOME/agy-calls" AGY_LOG="$TEST_HOME/agy-curl.log"
-  export AGY_WIN_RESET AGY_WK_RESET
-  AGY_WIN_RESET="$(_iso 9000)"; AGY_WK_RESET="$(_iso 500000)"
+  export AGY_WIN_RESET AGY_WK_RESET AGY_3P_RESET
+  AGY_WIN_RESET="$(_iso 9000)"; AGY_WK_RESET="$(_iso 500000)"; AGY_3P_RESET="$(_iso 72000)"
   cat > "$TEST_HOME/.testbin/curl" <<'STUB'
 config="$(cat)"
 printf '%s\n' "$@" >> "$AGY_LOG"
@@ -33,32 +33,45 @@ env >> "$AGY_LOG"
 url=""; for a in "$@"; do case "$a" in https://*) url="$a" ;; esac; done
 printf '%s\n' "${url##*:}" >> "$AGY_CALLS"
 [[ "$config" == *'Authorization: Bearer stub-agy-secret151'* ]] || exit 2
+# Measured on the real endpoint: a User-Agent that is not agy's gets 403, and
+# loadCodeAssist names no project unless the caller says it is ANTIGRAVITY.
+[[ "$config" == *'User-Agent: antigravity'* ]] || exit 22
 [ "${AGY_FAIL:-0}" = 0 ] || exit 22
 case "$url" in
-  *:loadCodeAssist) printf '{"cloudaicompanionProject":"stub-project-1"}' ;;
+  *:loadCodeAssist)
+    case "$*" in
+      *'"ideType":"ANTIGRAVITY"'*) printf '{"cloudaicompanionProject":"stub-project-1","currentTier":{"id":"free-tier"}}' ;;
+      *) printf '{"allowedTiers":[{"id":"standard-tier"}],"ineligibleTiers":[{"tierId":"free-tier","reasonCode":"UNSUPPORTED_CLIENT"}]}' ;;
+    esac ;;
   *:retrieveUserQuotaSummary)
-    printf '{"groups":[{"displayName":"Gemini","buckets":[
-      {"bucketId":"a","displayName":"Gemini Pro","remainingFraction":0.25,"resetTime":"%s"},
-      {"bucketId":"b","displayName":"Gemini Flash","remainingFraction":0.9,"resetTime":"%s"},
-      {"bucketId":"c","displayName":"Weekly","remainingFraction":0.6,"resetTime":"%s"},
-      {"bucketId":"d","displayName":"Off","disabled":true,"remainingFraction":0,"resetTime":"%s"}]}]}' \
-      "$AGY_WIN_RESET" "$AGY_WIN_RESET" "$AGY_WK_RESET" "$AGY_WK_RESET" ;;
+    case "$*" in *'"project":"stub-project-1"'*) ;; *) exit 22 ;; esac
+    # The real body's shape (2026-09-27), values made up. 3p-weekly resets in
+    # 20 h and is still weekly: `window` decides, not the reset distance.
+    printf '{"groups":[
+      {"displayName":"Gemini Models","description":"Models within this group: Gemini Flash, Gemini Pro","buckets":[
+        {"bucketId":"gemini-weekly","displayName":"Weekly Limit Remaining","window":"weekly","remainingFraction":0.6,"resetTime":"%s"},
+        {"bucketId":"gemini-5h","displayName":"Five Hour Limit Remaining","window":"5h","remainingFraction":0.25,"resetTime":"%s"}]},
+      {"displayName":"Claude and GPT models","description":"Models within this group: Claude Opus","buckets":[
+        {"bucketId":"3p-weekly","displayName":"Weekly Limit Remaining","window":"weekly","remainingFraction":0.1,"resetTime":"%s"},
+        {"bucketId":"3p-5h","displayName":"Five Hour Limit Remaining","window":"5h","disabled":true,"remainingFraction":1,"resetTime":"%s"}]}]}' \
+      "$AGY_WK_RESET" "$AGY_WIN_RESET" "$AGY_3P_RESET" "$AGY_WIN_RESET" ;;
   *) exit 22 ;;
 esac
 STUB
   chmod +x "$TEST_HOME/.testbin/curl"
 }
 
-@test "agy usage: quota buckets become window/weekly by reset distance, source quota-api" {
+@test "agy usage: quota buckets become window/weekly by their own window name, source quota-api" {
   agy_fixture
   run clikae usage agy pike --json
   [ "$status" -eq 0 ]
   printf '%s\n' "$output" > "$TEST_HOME/out.log"
-  echo "$output" | jq -e --arg w "$AGY_WIN_RESET" --arg k "$AGY_WK_RESET" '
+  echo "$output" | jq -e --arg w "$AGY_WIN_RESET" --arg k "$AGY_3P_RESET" '
     .engine == "antigravity" and .source == "quota-api"
-    and .window_pct == 75 and .weekly_pct == 40
+    and .window_pct == 75 and .weekly_pct == 90
     and .window_resets_at == $w and .weekly_resets_at == $k
-    and (has("gap") | not) and (.models | length) == 3'
+    and (has("gap") | not)
+    and ([.models[].name] == ["Gemini Models weekly","Gemini Models 5h","Claude and GPT models weekly"])'
   # the project loadCodeAssist named is the one the quota call asked about
   grep -q 'stub-project-1' "$AGY_LOG"
   [ "$(tr '\n' ' ' < "$AGY_CALLS")" = "loadCodeAssist retrieveUserQuotaSummary " ] || false

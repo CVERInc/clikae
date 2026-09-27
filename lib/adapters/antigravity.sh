@@ -608,7 +608,35 @@ adapter_recent_sids() {
 # refreshes it), and `clikae usage --wake` is a claude-shaped remedy — calling
 # it "expired" would put a wrong instruction on most agy rows.
 # The token lives in this subshell and curl's stdin only, never argv/env/disk.
+# MEASURED 2026-09-27 on a real tank: both calls must look like agy's own.
+# loadCodeAssist with ideType IDE_UNSPECIFIED answers 200 but names no project
+# (the free tier comes back ineligible, UNSUPPORTED_CLIENT); with ideType
+# ANTIGRAVITY it names one. retrieveUserQuotaSummary answers 403 "You do not
+# have a valid license of this product" unless the User-Agent starts with
+# "antigravity" (a curl User-Agent: 403, "antigravity": 200). The real body:
+#   groups: "Gemini Models"         buckets gemini-weekly (window "weekly"),
+#                                           gemini-5h     (window "5h")
+#           "Claude and GPT models" buckets 3p-weekly, 3p-5h (may be disabled)
+# `window` names the bucket, so it decides the class; reset distance is only
+# the fallback for a window string this does not know. (A weekly bucket's
+# reset can be under 24 h away near the end of its week — measured 59 h on
+# one — so distance alone would misfile it.) Each class's number is its most
+# spent enabled bucket across all groups, the same all-models rule the claude
+# row's dot uses; the per-group rows ride along in `models`.
 _AGY_USAGE_BASE="${CLIKAE_AGY_USAGE_BASE:-https://daily-cloudcode-pa.googleapis.com}"
+
+# _agy_usage_platform -> the ClientMetadata.Platform value for this host.
+_agy_usage_platform() {
+  local os arch
+  os="$(uname -s 2>/dev/null)"; arch="$(uname -m 2>/dev/null)"
+  case "$os/$arch" in
+    Darwin/arm64)          printf 'DARWIN_ARM64' ;;
+    Darwin/*)              printf 'DARWIN_AMD64' ;;
+    Linux/aarch64|Linux/arm64) printf 'LINUX_ARM64' ;;
+    Linux/*)               printf 'LINUX_AMD64' ;;
+    *)                     printf 'PLATFORM_UNSPECIFIED' ;;
+  esac
+}
 _AGY_USAGE_MAX_BYTES=65536
 
 # _agy_usage_post <token> <method> <json body> -> the body on stdout, rc 0 on a
@@ -616,7 +644,7 @@ _AGY_USAGE_MAX_BYTES=65536
 _agy_usage_post() {
   local out
   out="$(
-    printf 'header = "Authorization: Bearer %s"\n' "$1" |
+    printf 'header = "Authorization: Bearer %s"\nheader = "User-Agent: antigravity"\n' "$1" |
       curl -q -s -K - --fail --connect-timeout 3 --max-time 8 \
         --max-filesize "$_AGY_USAGE_MAX_BYTES" \
         -X POST -H 'Content-Type: application/json' --data "$3" \
@@ -644,7 +672,7 @@ adapter_usage() (
     "$tokf" 2>/dev/null)" || { token=""; exit 1; }
   case "$token" in *[!a-zA-Z0-9._~+/-]*) token=""; exit 1 ;; esac
   project="$(_agy_usage_post "$token" loadCodeAssist \
-      '{"metadata":{"ideType":"IDE_UNSPECIFIED","platform":"PLATFORM_UNSPECIFIED","pluginType":"GEMINI"}}' |
+      "{\"metadata\":{\"ideType\":\"ANTIGRAVITY\",\"platform\":\"$(_agy_usage_platform)\",\"pluginType\":\"GEMINI\"}}" |
     jq -r '.cloudaicompanionProject | if type == "string" then .
            elif type == "object" then (.id // empty) else empty end' 2>/dev/null)" || project=""
   case "$project" in *[!a-zA-Z0-9._:-]*) project="" ;; esac
@@ -654,16 +682,21 @@ adapter_usage() (
   token=""
   printf '%s' "$body" | jq -ce -s --argjson now "$now" --argjson weekly "${LIMIT_AGY_WEEKLY_MIN_SEC:-86400}" '
     if (length != 1) or ((.[0]|type) != "object") then empty else .[0] end |
-    [ ((.buckets // [])[]?), ((.groups // [])[]? | (.buckets // [])[]?) ] |
+    [ ((.buckets // [])[]? | {g: "", b: .}),
+      ((.groups // [])[]? | (.displayName // "") as $g | (.buckets // [])[]? | {g: $g, b: .}) ] |
+    map(select((.b|type) == "object") | .g as $g | .b + {group: ($g|tostring)}) |
     map(select(type == "object" and .disabled != true and
                (.remainingFraction|type) == "number" and
                .remainingFraction >= 0 and .remainingFraction <= 1) |
         (.resetTime | if type == "string" then
            (sub("\\.[0-9]+"; "") | try fromdateiso8601 catch null) else null end) as $r |
-        {name: ((.displayName // .bucketId // "") | tostring | .[0:40]),
+        {name: ((if .group != "" then "\(.group) \(.window // .bucketId // "")"
+                 else (.displayName // .bucketId // "") end) | tostring | .[0:40]),
          pct: (((1 - .remainingFraction) * 1000 | round) / 10),
          resets_at: (if $r == null then null else .resetTime end),
-         class: (if $r != null and ($r - $now) > $weekly then "weekly" else "window" end)}) |
+         class: (if .window == "weekly" then "weekly"
+                 elif (.window|type) == "string" and (.window|test("^[0-9]+[hm]$")) then "window"
+                 elif $r != null and ($r - $now) > $weekly then "weekly" else "window" end)}) |
     select(length > 0) |
     (map(select(.class == "window")) | max_by(.pct)) as $w |
     (map(select(.class == "weekly")) | max_by(.pct)) as $k |
