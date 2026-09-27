@@ -7,6 +7,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- **Below 60 columns the home board is the same board, laid out by
+  subtraction (#155).** Measured at 46 columns (a phone held upright): every
+  tank row carried its account email and wrapped, a dry tank's status repeated
+  its timezone and landed at column 0 behind an orphaned `…`, the footer cut
+  its own key hint (`Press [R] to see all…`) and the keybar split `[ ]` from
+  `reorder`. Under 60 columns the board keeps the same sections, order,
+  cursor and keys, and only drops or re-aligns: the email is hidden on tank
+  rows; reset times read relative (`⟳6h`, `⟳3d`) and a status is one line cut
+  at its end, beside the row when it fits and under the name column when it
+  does not; the board uses one 2-column indent and every continuation line
+  sits under the name column; key hints (the keybar, the resume footer, the
+  static board's over-quota line) wrap whole and are never cut; resume titles
+  take the full remaining width. At 60 columns and up the board is
+  byte-identical to before, pinned by a 100-column golden rendered on a real
+  tmux pane (`tests/bats/home-narrow.bats`).
+
 ## [0.36.0] — 2026-09-27
 
 ### Fixed
