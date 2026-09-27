@@ -154,6 +154,11 @@ implementation to read.</p>
 <td>claude, codex, grok</td>
 </tr>
 <tr>
+<td><code>adapter_session_mode &lt;dir&gt; &lt;sid&gt;</code></td>
+<td>Prints <code>interactive</code>, <code>headless</code> or <code>unknown</code> (rc 0 / 1 / 2) for one session, from a <strong>structural</strong> field the engine itself writes — never from the transcript's text. The board's Continue list drops <code>headless</code> rows before it cuts the list, and lists <code>unknown</code> ones with a shorter title. Undefined means every row is listed as before. Cache the read (<code>reading_cache_run</code>); rc 2 is not cached, so a session that could not be read is asked again.</td>
+<td>claude, codex, antigravity</td>
+</tr>
+<tr>
 <td><code>adapter_transcript_is_resumable &lt;path&gt;</code></td>
 <td>Say NO to a transcript your engine writes that is not a conversation anyone reopens — claude's <code>agent-&lt;id&gt;.jsonl</code> subagent (sidechain) logs are the shipped case. Undefined means everything counts, which is the right answer for most engines. It narrows only the LISTS and the COUNTS (picker, prefix resolution, board, totals); finding a session by id and <code>clikae clean</code>'s disk scan deliberately ignore it, because an unlistable file is still bytes.</td>
 <td>claude</td>
