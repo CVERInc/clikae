@@ -866,7 +866,7 @@ _seed_burn_flood_agy() {
     sid="019e0000-0000-7000-8000-00000000000$i"
     f="$sdir/rollout-2026-06-03T09-00-0$i-$sid.jsonl"
     {
-      printf '{"timestamp":"2026-06-03T01:00:00.000Z","type":"session_meta","payload":{"id":"%s","cwd":"%s","originator":"codex_exec"}}\n' "$sid" "$work"
+      printf '{"timestamp":"2026-06-03T01:00:00.000Z","type":"session_meta","payload":{"id":"%s","cwd":"%s","originator":"codex-tui"}}\n' "$sid" "$work"
       printf '{"type":"event_msg","payload":{"type":"user_message","message":"HUMAN-%s session"}}\n' "$i"
     } > "$f"
     touch -t "20200101000$i" "$f"
@@ -1916,7 +1916,7 @@ _seed_bulk_codex() {   # <tank> <humans> <burns>  (in $TEST_HOME/work)
     printf -v sid '019e0000-0000-7000-8000-%012d' "$i"
     f="$sdir/rollout-2026-06-03T09-00-00-$sid.jsonl"
     {
-      printf '{"timestamp":"2026-06-03T01:00:00.000Z","type":"session_meta","payload":{"id":"%s","cwd":"%s","originator":"codex_exec"}}\n' "$sid" "$work"
+      printf '{"timestamp":"2026-06-03T01:00:00.000Z","type":"session_meta","payload":{"id":"%s","cwd":"%s","originator":"codex-tui"}}\n' "$sid" "$work"
       printf '{"type":"event_msg","payload":{"type":"user_message","message":"HUMAN-%04d session"}}\n' "$i"
     } > "$f"
     touch -t 202001010000 "$f"
@@ -2042,7 +2042,7 @@ _seed_bulk_codex() {   # <tank> <humans> <burns>  (in $TEST_HOME/work)
   local sdir="$CLIKAE_HOME/profiles/codex/a/sessions/2026/06/03"; mkdir -p "$sdir"
   local body="019e0000-0000-7000-8000-0000000b0d13" bogus="notauuid-zzzz-zzzz-zzzz-zzzzzzzzzzzz"
   {
-    printf '{"timestamp":"2026-06-03T01:00:00.000Z","type":"session_meta","payload":{"id":"%s","cwd":"%s","originator":"codex_exec"}}\n' "$body" "$work"
+    printf '{"timestamp":"2026-06-03T01:00:00.000Z","type":"session_meta","payload":{"id":"%s","cwd":"%s","originator":"codex-tui"}}\n' "$body" "$work"
     printf '{"type":"event_msg","payload":{"type":"user_message","message":"HUMAN-ODDNAME session"}}\n'
   } > "$sdir/rollout-2026-06-03T09-00-00-$bogus.jsonl"
   cd "$work"

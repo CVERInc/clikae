@@ -689,6 +689,44 @@ adapter_session_title() {
   adapter_title_for_file "$dir/projects/$(_claude_project_slug "$PWD")/$sid.jsonl"
 }
 
+# Optional hook (#153): interactive / headless / unknown for the board's
+# Continue list — see antigravity.sh's twin for the contract (prints the word;
+# rc 0 / 1 / 2). The signal is the transcript's own "entrypoint" field, never
+# its text: "cli" is the interactive TUI, "sdk-cli" is print/SDK mode (every
+# `claude -p`, which is what `clikae burn` runs). Measured on a real tank
+# (tuna, newest 80 transcripts, 2026-09-27): cli 6, sdk-cli 38, the rest carry
+# no entrypoint near the head at all (older builds) — those are `unknown`, and
+# the board still lists them, with a shorter title. Any other value is
+# `unknown` too: only the two values that were actually measured decide.
+#
+# Bounded: one builtin read of the first CLIKAE_MODE_HEAD_BYTES (64 KiB) — no
+# fork, no whole-file scan — and cached per transcript size+mtime.
+adapter_session_mode() {
+  local dir="$1" sid="$2" f
+  f="$dir/projects/$(_claude_project_slug "$PWD")/$sid.jsonl"
+  if [ -z "$sid" ] || [ ! -f "$f" ]; then printf 'unknown'; return 2; fi
+  if declare -F reading_cache_run >/dev/null; then
+    reading_cache_run claude-mode "$f" _claude_mode_uncached "$f"
+  else
+    _claude_mode_uncached "$f"
+  fi
+}
+
+_claude_mode_uncached() {
+  local LC_ALL=C
+  local chunk="" re='"entrypoint": ?"([^"]*)"'
+  IFS= read -r -d '' -n "${CLIKAE_MODE_HEAD_BYTES:-65536}" chunk < "$1" 2>/dev/null || true
+  if [[ "$chunk" =~ $re ]]; then
+    case "${BASH_REMATCH[1]}" in
+      cli)     printf 'interactive'; return 0 ;;
+      sdk-cli) printf 'headless';    return 1 ;;
+    esac
+  fi
+  # rc 0 on purpose: the head of a transcript that did not say is only ever
+  # appended to, and reading_cache_run re-reads it the moment it grows.
+  printf 'unknown'; return 0
+}
+
 # Optional hook: title straight from a transcript FILE. The resume picker and
 # `resume cleanup` list sessions across ALL projects, so deriving the path from
 # $PWD (what adapter_session_title above does, correctly, for the board's

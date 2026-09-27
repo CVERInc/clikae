@@ -162,6 +162,86 @@ CLIKAE_HOME_RECENT_MAX="${CLIKAE_HOME_RECENT_MAX:-10}"
 # cost ~+85 ms on a 1,000-rollout tank; measured again after it, see the PR.
 CLIKAE_HOME_RECENT_SCAN_MAX="${CLIKAE_HOME_RECENT_SCAN_MAX:-${CLIKAE_BURN_SIDECAR_CAP:-2000}}"
 
+# #153: the board lists only sessions a human opened. How many EXTRA candidates
+# one tank may be asked for so that headless rows (agy subagents, `claude -p`,
+# `codex exec`) cannot eat the list the way burn rows once did (#34): measured
+# on a real agy tank, 35 of the newest 40 conversations were subagents. Only
+# tanks whose adapter defines adapter_session_mode are widened, and each
+# candidate's mode is read lazily — newest first, stopping at
+# CLIKAE_HOME_RECENT_MAX survivors — and cached per file.
+CLIKAE_HOME_MODE_SCAN="${CLIKAE_HOME_MODE_SCAN:-100}"
+# #153: every title on the board is ONE line of at most this many display
+# columns before it ever reaches the renderer — and a row whose mode could not
+# be read at all gets the shorter cap. The renderer truncates again to the
+# terminal's width; this is the second fuse, so a 100 KB injected brief never
+# travels through the items stream, the per-keypress redraw or a `read` loop.
+CLIKAE_HOME_TITLE_MAX="${CLIKAE_HOME_TITLE_MAX:-120}"
+CLIKAE_HOME_TITLE_UNKNOWN_MAX="${CLIKAE_HOME_TITLE_UNKNOWN_MAX:-60}"
+
+# _home_title_linev <title> <maxcols> -> $_TRUNC: <title> as one line (every
+# control byte, newline and the \037 field separator included, becomes a
+# space; runs of spaces collapse) cut to <maxcols> display columns with "…".
+# The byte pre-cut comes first so a megabyte title costs the same as a short
+# one: no display column is narrower than a quarter of its bytes, so cutting
+# at 4*max+4 bytes can never shorten what the column cut would keep.
+_home_title_linev() {
+  local LC_ALL=C
+  local s="$1" n="$2" cap cut=0
+  case "$n" in ''|*[!0-9]*) n=120 ;; esac
+  [ "$n" -ge 2 ] || n=2
+  cap=$(( n * 4 + 4 ))
+  if [ "${#s}" -gt "$cap" ]; then
+    s="${s:0:$cap}"; cut=1
+    # never end on half a UTF-8 character: find the last lead byte in the
+    # final four and drop it with its tail if the sequence it opens is short.
+    local i b need
+    for (( i = ${#s} - 1; i >= 0 && i >= ${#s} - 4; i-- )); do
+      printf -v b '%d' "'${s:i:1}"; [ "$b" -lt 0 ] && b=$(( b + 256 ))
+      [ "$b" -lt 128 ] && break
+      [ "$b" -lt 192 ] && continue
+      need=2; [ "$b" -ge 224 ] && need=3; [ "$b" -ge 240 ] && need=4
+      [ $(( ${#s} - i )) -lt "$need" ] && s="${s:0:i}"
+      break
+    done
+  fi
+  s="${s//[$'\001'-$'\037'$'\177']/ }"
+  while [[ "$s" == *"  "* ]]; do s="${s//  / }"; done
+  s="${s# }"; s="${s% }"
+  _home_truncv "$s" "$n"
+  if [ "$cut" -eq 1 ] && [[ "$_TRUNC" != *"…" ]]; then
+    _home_truncv "$s" $(( n - 1 )); _TRUNC="${_TRUNC%…}…"
+  fi
+}
+
+# _home_interactive_rows <dir> <rows> <burn-sids-file> <want>
+# -> <rows> ("<mt>\037<sid>[\037<mark>]", newest first) minus every row whose
+# adapter says `headless`, each surviving row with its mode appended as a
+# fourth field. Burn sids (#74) are passed through untouched — the caller's
+# own filter drops them — but they do not count toward <want>, so both rules
+# are ONE "list only what a human opened" rule with one budget. Stops reading
+# modes once <want> survivors are found; later rows are dropped unread.
+_home_interactive_rows() {
+  local dir="$1" rows="$2" bf="$3" want="$4" burn mt sid mark mode kept=0
+  # One awk pass flags the burn rows (the same membership read the caller's
+  # own filter uses), so the loop below never forks per row to ask.
+  rows="$(printf '%s\n' "$rows" | LC_ALL=C awk -F $'\037' -v f="$bf" '
+    BEGIN { if (f != "") while ((getline line < f) > 0) skip[line] = 1 }
+    NF >= 2 && $2 != "" { print (($2 in skip) ? "B" : "-") FS $0 }' 2>/dev/null)"
+  while IFS=$'\037' read -r burn mt sid mark; do
+    [ -n "$sid" ] || continue
+    if [ "$burn" = B ]; then
+      printf '%s\037%s\037%s\037\n' "$mt" "$sid" "$mark"; continue
+    fi
+    [ "$kept" -lt "$want" ] || break
+    mode="$(adapter_session_mode "$dir" "$sid" 2>/dev/null || true)"
+    [ "$mode" = headless ] && continue
+    printf '%s\037%s\037%s\037%s\n' "$mt" "$sid" "$mark" "${mode:-unknown}"
+    kept=$((kept + 1))
+  done <<ROWS
+$rows
+ROWS
+}
+
 # _burn_sids_file -> writes every currently-recorded burn sid (deduped, one
 # per line — the first tab field of each well-formed
 # state/burn-sessions/<engine>/<tank> line) to a fresh temp file and prints
@@ -407,7 +487,7 @@ _home_elsewhere_row() {
 _home_recent_rows() {
   local name proot tdir tank rows sid mt acc="" _proots _rowmark _rank
   local _burn_sids_f="" _hidden=0 _ask="$CLIKAE_HOME_RECENT_MAX"
-  local _clamped=0 _got=0 _kept=0 _trunc=0
+  local _clamped=0 _got=0 _kept=0 _trunc=0 _hasmode=0 _rowmode
   # 🔴 #34 round-1 P2-1: read the burn sidecar BEFORE the tank walk, because how
   # many rows each adapter has to be asked for depends on it. The filter below
   # always ran before the rank+cut (as its comment promised), but every adapter
@@ -489,16 +569,32 @@ _home_recent_rows() {
         fi
         if [ "$_ask" -lt "$CLIKAE_HOME_RECENT_MAX" ]; then _ask="$CLIKAE_HOME_RECENT_MAX"; fi
       fi
+      # #153: an engine that can say "headless" gets a wider ask, bounded by
+      # the same ceiling — see CLIKAE_HOME_MODE_SCAN.
+      _hasmode=0
+      if declare -F adapter_session_mode >/dev/null 2>&1; then
+        _hasmode=1
+        _ask=$((_ask + CLIKAE_HOME_MODE_SCAN))
+        [ "$_ask" -gt "$CLIKAE_HOME_RECENT_SCAN_MAX" ] && _ask="$CLIKAE_HOME_RECENT_SCAN_MAX"
+      fi
       # CHEAP: just epoch-mtime + sid per recent session (no content reads).
       rows="$( load_adapter "$name" >/dev/null 2>&1 && adapter_recent_sids "${tdir%/}" "$_ask" 2>/dev/null || true )"
       [ -n "$rows" ] || continue
+      # Counted BEFORE the headless filter below: "did the adapter fill the
+      # ask to the brim" is a question about what it returned, not about what
+      # survived — asked after, it could never be true and the truncation
+      # note below would go silent on every engine that has the hook.
+      _got="$(printf '%s\n' "$rows" | LC_ALL=C grep -c . 2>/dev/null || true)"
+      case "$_got" in ''|*[!0-9]*) _got=0 ;; esac
+      if [ "$_hasmode" -eq 1 ]; then
+        rows="$(_home_interactive_rows "${tdir%/}" "$rows" "$_burn_sids_f" "$CLIKAE_HOME_RECENT_MAX")"
+        [ -n "$rows" ] || continue
+      fi
       # Clamped AND the adapter filled the ask to the brim => there may be rows
       # it never got to mention. If what survives the filter is still short of
       # N, the Continue list IS truncated: record it so the renderer can SAY so,
       # instead of drawing a short list that reads as a complete one.
       if [ "$_clamped" -eq 1 ]; then
-        _got="$(printf '%s\n' "$rows" | LC_ALL=C grep -c . 2>/dev/null || true)"
-        case "$_got" in ''|*[!0-9]*) _got=0 ;; esac
         if [ "$_got" -ge "$_ask" ]; then
           _kept="$(printf '%s\n' "$rows" | LC_ALL=C awk -F $'\037' -v f="$_burn_sids_f" '
             BEGIN { while ((getline line < f) > 0) skip[line] = 1 }
@@ -515,10 +611,10 @@ _home_recent_rows() {
       # the board by a courtesy row — measured: 15 fallback rows buried the one
       # claude session that was actually recorded here. Adapters that emit two
       # fields are scoped by construction and always rank 0.
-      while IFS=$'\037' read -r mt sid _rowmark; do
+      while IFS=$'\037' read -r mt sid _rowmark _rowmode; do
         [ -n "$sid" ] || continue
         _rank=0; [ -n "$_rowmark" ] && _rank=1
-        acc="$acc$_rank"$'\037'"$mt"$'\037'"$name"$'\037'"$tank"$'\037'"$sid"$'\n'
+        acc="$acc$_rank"$'\037'"$mt"$'\037'"$name"$'\037'"$tank"$'\037'"$sid"$'\037'"$_rowmode"$'\n'
       done <<INNER
 $rows
 INNER
@@ -588,7 +684,7 @@ EOF
   case "$_shown" in ''|*[!0-9]*) _shown=0 ;; esac
   _home_elsewhere_row "$_shown"
   printf '%s\n' "$_top" \
-    | while IFS=$'\037' read -r _rank mt engine tank sid; do
+    | while IFS=$'\037' read -r _rank mt engine tank sid _rowmode; do
         [ -n "$sid" ] || continue
         local dir title recap age now _d aflag _act
         dir="$(profile_dir "$engine" "$tank")"
@@ -598,6 +694,14 @@ EOF
         else
           title="$(adapter_session_meta "$dir" "$sid" 2>/dev/null | cut -d$'\037' -f4 || true)"
         fi
+        # #153: one line, bounded — shorter still when this row's mode could
+        # not be read (a transcript that never said whether a human opened it).
+        if [ "$_rowmode" = unknown ]; then
+          _home_title_linev "$title" "$CLIKAE_HOME_TITLE_UNKNOWN_MAX"
+        else
+          _home_title_linev "$title" "$CLIKAE_HOME_TITLE_MAX"
+        fi
+        title="$_TRUNC"
         recap="$(adapter_session_recap "$dir" "$sid" 2>/dev/null || true)"
         # Human age (epoch mtime -> "5m / 3h / 2d"), the hover detail when a session
         # has no recap, so the expand is always visible. Guarded like tmux.sh's
@@ -908,6 +1012,10 @@ EOF
     # length class docs/usage.md's own Live example uses). Each "live)" render
     # site strips the sentinel, truncates the CLEAN title, then appends "?"
     # after — see _home_truncv's call sites.
+    # #153: one line, bounded, BEFORE the guess sentinel is appended below.
+    if [ -n "$title" ]; then
+      _home_title_linev "$title" "$CLIKAE_HOME_TITLE_MAX"; title="$_TRUNC"
+    fi
     mark=0
     if [ -n "$title" ]; then
       if [ "$stale" -eq 1 ]; then

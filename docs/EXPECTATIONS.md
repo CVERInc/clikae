@@ -269,6 +269,29 @@ in `state/burn-sessions/<engine>/<tank>`, keyed by engine id for every engine
 (agy's is `antigravity/`). A store an older clikae wrote under `agy/` is moved
 there by the next command you run (merged line by line if both exist).
 
+**The Resume rows are sessions a person opened — nothing an engine ran on its
+own (#153).** agy subagent conversations, `claude -p` / SDK runs and `codex
+exec` runs are left off the board, whoever started them. What decides is what
+the engine itself recorded about the session, never what its first message
+says: for agy, the conversation's own metadata names a parent conversation or
+carries an agent configuration (the `self` subagent and built-in agents such
+as `research` alike); for claude, the transcript's `entrypoint` (`cli` is the
+terminal UI, `sdk-cli` is print/SDK mode); for codex, the rollout's
+`originator` (`codex-tui` versus `codex_exec`). A human's agy conversation and
+a `clikae burn`'s look the same in agy's metadata, so agy burns are hidden the
+way every engine's are, by the burn record above. A session whose kind cannot
+be read at all — no metadata, an older transcript that never recorded it — is
+still listed, with its title cut shorter. Like burns, these are skipped
+*before* the list is cut, so the board asks each tank for up to
+`CLIKAE_HOME_MODE_SCAN` (default 100) more candidates than it shows; a tank
+with more than that many subagents newer than its newest human conversation
+can still come up short. `clikae resume` is unchanged and still lists them.
+
+Every title on the board is one line — newlines, tabs and control characters
+become spaces — and at most `CLIKAE_HOME_TITLE_MAX` (120) columns
+(`CLIKAE_HOME_TITLE_UNKNOWN_MAX`, 60, for a session whose kind is unknown)
+before the row is drawn and cut again to fit the terminal.
+
 **`--ephemeral` only works on claude.** It needs an engine whose long-term-memory
 layout clikae knows how to stash to a throwaway; today that's claude. codex and grok
 join the Soul through a *pointer* note instead of a real memory dir, so there is

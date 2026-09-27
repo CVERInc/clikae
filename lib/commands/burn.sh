@@ -1164,6 +1164,26 @@ _agy_burn() {
       # run's own session cannot be told apart from someone else's concurrent
       # one, and recording ANY of them risks hiding a human's conversation —
       # "never hide what is not proven" outranks "always record something".
+      #
+      # #153: a burn whose agent spawns subagents creates one conversation per
+      # subagent too — and with them, more than one "new" transcript, so the
+      # lane's own conversation used to go unrecorded and stay on the board.
+      # A subagent says so in its own metadata (adapter_session_mode, the
+      # same structural read the board uses), so it is set aside FIRST and
+      # the count below is over what is left. Only a positive `headless` is
+      # set aside: an unreadable one still counts, which can only make this
+      # record nothing — never the wrong sid.
+      if [ "${#_agy_new[@]}" -gt 1 ] && declare -F adapter_session_mode >/dev/null 2>&1 \
+          && declare -F adapter_sid_canonical >/dev/null 2>&1; then
+        local -a _agy_top=()
+        local _agy_tf _agy_tsid
+        for _agy_tf in "${_agy_new[@]}"; do
+          _agy_tsid="$(adapter_sid_canonical "$_agy_tf" 2>/dev/null || true)"
+          [ "$(adapter_session_mode "$(_agy_slots)/$cur" "$_agy_tsid" 2>/dev/null || true)" = headless ] && continue
+          _agy_top+=("$_agy_tf")
+        done
+        if [ "${#_agy_top[@]}" -ge 1 ]; then _agy_new=("${_agy_top[@]}"); fi
+      fi
       case "${#_agy_new[@]}" in
         0) : ;;
         1)

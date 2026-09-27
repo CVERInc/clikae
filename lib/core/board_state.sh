@@ -1280,6 +1280,14 @@ board_state_refresh() (
     [ "$_n_ask" -le "$_n_ceil" ] || _n_ask="$_n_ceil"
     [ "$_n_ask" -ge "$n" ] || _n_ask="$n"
   fi
+  # #153: _home_recent_rows widens the ask for an engine whose adapter can say
+  # "headless" (CLIKAE_HOME_MODE_SCAN, lib/commands/home.sh), so the entry is
+  # built at the same widened cap — otherwise the snapshot answers the wide
+  # ask with N rows and a tank whose newest N are all subagents shows nothing.
+  if declare -F adapter_session_mode >/dev/null 2>&1; then
+    _n_ask=$((_n_ask + ${CLIKAE_HOME_MODE_SCAN:-100}))
+    [ "$_n_ask" -le "$_n_ceil" ] || _n_ask="$_n_ceil"
+  fi
   n="$_n_ask"
 
   # A file's rate-limit reading is independent of its sid/scope. `window` is
