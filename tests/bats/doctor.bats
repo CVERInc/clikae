@@ -833,3 +833,19 @@ _fleet_jq_only() { command -v jq >/dev/null 2>&1 || skip "the fleet config check
   run jq -r '.hooks // "none"' "$t"
   [ "$output" = "none" ]
 }
+
+@test "doctor: names an agy tank whose harness copy differs from the template, and only then" {
+  # #152 — the copy is the tank's own, so this is a hint, never a rewrite.
+  local root="$CLIKAE_HOME/profiles/antigravity" src="$CLIKAE_TEST_ROOT/assets/agy-harness/clikae-harness.sh"
+  mkdir -p "$root/fresh/config" "$root/tuned/config" "$root/stripped"
+  for t in fresh tuned stripped; do printf 'antigravity\n' > "$root/$t/.clikae-tank"; done
+  cp "$src" "$root/fresh/config/clikae-harness.sh"
+  { cat "$src"; printf '# my own rule\n'; } > "$root/tuned/config/clikae-harness.sh"
+  run clikae doctor
+  [ "$status" -eq 0 ]
+  local line; line="$(printf '%s\n' "$output" | grep 'from the shipped template')"
+  [ "$line" = "  differs          from the shipped template: tuned" ]   # not fresh, not stripped
+  rm -rf "$root/tuned"
+  run clikae doctor
+  [[ "$output" != *"agy harness"* ]] || false     # silent when every copy matches
+}
