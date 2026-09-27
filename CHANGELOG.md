@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.37.0] — 2026-09-27
+
 ### Changed
 
 - **Below 60 columns the home board is the same board, laid out by
