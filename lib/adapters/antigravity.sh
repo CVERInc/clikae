@@ -618,11 +618,14 @@ adapter_recent_sids() {
 #                                           gemini-5h     (window "5h")
 #           "Claude and GPT models" buckets 3p-weekly, 3p-5h (may be disabled)
 # `window` names the bucket, so it decides the class; reset distance is only
-# the fallback for a window string this does not know. (A weekly bucket's
-# reset can be under 24 h away near the end of its week — measured 59 h on
-# one — so distance alone would misfile it.) Each class's number is its most
-# spent enabled bucket across all groups, the same all-models rule the claude
-# row's dot uses; the per-group rows ride along in `models`.
+# the fallback for a window string this does not know. (Distance alone would
+# misfile a weekly bucket in the last day of its week, when its reset is under
+# 24 h away; the one measured tank had its two weekly resets 59 h and 108 h out.)
+# The two groups are SEPARATE quotas: Claude spent to 100% while Gemini has
+# room is a usable tank for Gemini work, and the reverse. So each group gets its
+# own numbers under `groups`, and the top-level window/weekly are ONE group's:
+# `headline_group`, the one the work will spend (CLIKAE_AGY_USAGE_MODEL, set by
+# burn from the model it passes agy; Gemini, agy's default, when there is none).
 _AGY_USAGE_BASE="${CLIKAE_AGY_USAGE_BASE:-https://daily-cloudcode-pa.googleapis.com}"
 
 # _agy_usage_platform -> the ClientMetadata.Platform value for this host.
@@ -680,28 +683,66 @@ adapter_usage() (
     "$(jq -cn --arg p "$project" 'if $p == "" then {} else {project:$p} end')")" ||
     { token=""; exit 1; }
   token=""
-  printf '%s' "$body" | jq -ce -s --argjson now "$now" --argjson weekly "${LIMIT_AGY_WEEKLY_MIN_SEC:-86400}" '
+  local hint=""
+  hint="$(_agy_usage_group_hint "${CLIKAE_AGY_USAGE_MODEL:-}")"
+  printf '%s' "$body" | jq -ce -s --argjson now "$now" --argjson weekly "${LIMIT_AGY_WEEKLY_MIN_SEC:-86400}" \
+    --arg hint "$hint" '
+    def secs: if type == "string" then (sub("\\.[0-9]+"; "") | try fromdateiso8601 catch null) else null end;
+    # A bucket names its own window; only a string this does not know falls
+    # back to the reset distance. "<N>h" is hours: 5h is the window, 168h/120h
+    # (anything of 24 h or more) is weekly.
+    def klass($r):
+      if .window == "weekly" then "weekly"
+      elif (.window|type) == "string" and (.window|test("^[0-9]{1,6}h$")) then
+        (if (.window[:-1]|tonumber) >= 24 then "weekly" else "window" end)
+      elif (.window|type) == "string" and (.window|test("^[0-9]{1,6}m$")) then "window"
+      elif $r != null and ($r - $now) > $weekly then "weekly" else "window" end;
+    # The group key: bucketId prefix ("gemini-5h" -> gemini, "3p-weekly" ->
+    # claude, the Claude and GPT group), else the display name first word.
+    def gkey($gname):
+      ((.bucketId // "") | tostring | split("-")[0]) as $p |
+      if $p == "gemini" then "gemini" elif $p == "3p" then "claude"
+      elif $gname != "" then ($gname | ascii_downcase | split(" ")[0])
+      else "default" end;
     if (length != 1) or ((.[0]|type) != "object") then empty else .[0] end |
     [ ((.buckets // [])[]? | {g: "", b: .}),
-      ((.groups // [])[]? | (.displayName // "") as $g | (.buckets // [])[]? | {g: $g, b: .}) ] |
-    map(select((.b|type) == "object") | .g as $g | .b + {group: ($g|tostring)}) |
-    map(select(type == "object" and .disabled != true and
-               (.remainingFraction|type) == "number" and
+      ((.groups // [])[]? | (.displayName // "" | tostring) as $g | (.buckets // [])[]? | {g: $g, b: .}) ] |
+    map(select((.b|type) == "object") | .g as $g | .b |
+        select((.remainingFraction|type) == "number" and
                .remainingFraction >= 0 and .remainingFraction <= 1) |
-        (.resetTime | if type == "string" then
-           (sub("\\.[0-9]+"; "") | try fromdateiso8601 catch null) else null end) as $r |
-        {name: ((if .group != "" then "\(.group) \(.window // .bucketId // "")"
-                 else (.displayName // .bucketId // "") end) | tostring | .[0:40]),
+        (.resetTime | secs) as $r |
+        {key: (gkey($g) | .[0:20]), class: klass($r), disabled: (.disabled == true),
          pct: (((1 - .remainingFraction) * 1000 | round) / 10),
-         resets_at: (if $r == null then null else .resetTime end),
-         class: (if .window == "weekly" then "weekly"
-                 elif (.window|type) == "string" and (.window|test("^[0-9]+[hm]$")) then "window"
-                 elif $r != null and ($r - $now) > $weekly then "weekly" else "window" end)}) |
+         resets_at: (if $r == null then null else .resetTime end)}) |
     select(length > 0) |
-    (map(select(.class == "window")) | max_by(.pct)) as $w |
-    (map(select(.class == "weekly")) | max_by(.pct)) as $k |
-    {window_pct: $w.pct, weekly_pct: $k.pct,
-     window_resets_at: $w.resets_at, weekly_resets_at: $k.resets_at,
-     source: "quota-api",
-     models: [ .[] | select(.name != "") | {name, pct, resets_at} ] | .[0:8]}' 2>/dev/null
+    # Each group is its own quota: never folded into one number with another.
+    [ group_by(.key)[] | . as $bs |
+      (map(select(.disabled | not) | select(.class == "window")) | max_by(.pct)) as $w |
+      (map(select(.disabled | not) | select(.class == "weekly")) | max_by(.pct)) as $k |
+      {name: $bs[0].key, window_pct: $w.pct, weekly_pct: $k.pct,
+       window_resets_at: $w.resets_at, weekly_resets_at: $k.resets_at,
+       disabled: all($bs[]; .disabled)} ] | .[0:8] as $groups |
+    # The headline is the group the work will actually spend: the hint (from
+    # the model a burn asked for), else gemini (agy default), else the first.
+    ([$groups[] | select(.disabled | not) | .name]) as $live |
+    (if ($hint != "" and ($live | index($hint)) != null) then $hint
+     elif ($live | index("gemini")) != null then "gemini"
+     elif ($live | length) > 0 then $live[0] else $groups[0].name end) as $head |
+    ($groups | map(select(.name == $head)) | .[0]) as $h |
+    {window_pct: $h.window_pct, weekly_pct: $h.weekly_pct,
+     window_resets_at: $h.window_resets_at, weekly_resets_at: $h.weekly_resets_at,
+     source: "quota-api", headline_group: $head, groups: $groups,
+     models: [ .[] | select(.disabled | not) | {name: "\(.key) \(.class)", pct, resets_at} ] | .[0:8]}' 2>/dev/null
 )
+
+# _agy_usage_group_hint <model> -> the quota group that model spends:
+# "gemini", "claude" (agy's Claude and GPT group), or nothing (no hint).
+_agy_usage_group_hint() {
+  local m
+  m="$(printf '%s' "${1:-}" | tr '[:upper:]' '[:lower:]')"
+  case "$m" in
+    '') ;;
+    *gemini*) printf 'gemini' ;;
+    *claude*|*gpt*|*opus*|*sonnet*|*haiku*) printf 'claude' ;;
+  esac
+}

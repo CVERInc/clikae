@@ -191,6 +191,15 @@ usage_read() (
          select((.name|type) == "string" and (.name|length) > 0 and (.name|length) <= 40) |
          select((.pct|type) == "number" and .pct >= 0 and .pct <= 100) ] | .[0:8]
      else [] end) as $models |
+    # #151: agy quota groups, each its own quota, whitelisted like $models.
+    def gname: if type == "string" and test("^[a-z0-9_]{1,20}$") then . else null end;
+    (if .source == "quota-api" and (.groups|type) == "array" then
+       [ .groups[] | select(type == "object") |
+         {name: (.name|gname), window_pct: (.window_pct|pct), weekly_pct: (.weekly_pct|pct),
+          window_resets_at: (.window_resets_at|stamp), weekly_resets_at: (.weekly_resets_at|stamp),
+          disabled: (.disabled == true)} | select(.name != null) ] | .[0:8]
+     else [] end) as $groups |
+    (.headline_group | gname) as $head |
     # #107: "expired" exists only with its one reason, and never carries a
     # number — whatever else an adapter put beside it is dropped here.
     if .source == "expired" and .reason == "expired-token" then
@@ -203,7 +212,10 @@ usage_read() (
     if .source == "unknown" and $reason != null then . + {reason:$reason} else . end |
     if .source == "unknown" and $reason == "rate-limited" and $retry != null
     then . + {retry_after:$retry} else . end |
-    if (.source == "vendor" or .source == "quota-api") and ($models|length) > 0 then . + {models:$models} else . end
+    if (.source == "vendor" or .source == "quota-api") and ($models|length) > 0 then . + {models:$models} else . end |
+    if .source == "quota-api" and ($groups|length) > 0 then
+      . + {groups:$groups} + (if $head != null then {headline_group:$head} else {} end)
+    else . end
     end')" || { reading="$(usage_unknown)"; event_epoch=""; }
   # #149: a reading with no numbers never overwrites the last one that had
   # them. The previous cache's numbers (or the `last_good` it already carried
@@ -303,7 +315,8 @@ _usage_public() {
 # (a) `burn` refreshes the LAUNCHED tank's reading at run END — one vendor
 #     call, off the launch path (launching itself still pays zero — P1-2..
 #     P1-4), fired after the run's artifact check so it can never delay
-#     judging that run's own outcome. See lib/commands/burn.sh's cmd_burn.
+#     judging that run's own outcome. See lib/commands/burn.sh's cmd_burn;
+#     agy (#151) refreshes in _agy_burn with the run's --model as the hint.
 # (b) when the named tank is dry and burn must reroute, `_burn_next_same_
 #     engine` ranks every surviving candidate once on whatever is already on
 #     disk, then spends its live-call budget (`_BURN_REROUTE_REFRESH_CAP`,

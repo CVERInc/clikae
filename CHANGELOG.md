@@ -13,9 +13,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   token is still live (Linux file backend) is measured through agy's own
   `v1internal:retrieveUserQuotaSummary`: `window_pct`/`weekly_pct`/resets in
   the same shape as the claude rows, `source:"quota-api"`, each quota bucket
-  sorted into window or weekly by its own `window` name (`5h`/`weekly`), the
-  most spent bucket across agy's model groups as the number, every group's
-  rows under `models`. The calls identify as agy (`User-Agent: antigravity`,
+  sorted into window or weekly by its own `window` name (`5h`/`weekly`). agy's
+  Gemini and Claude/GPT groups are separate quotas: each has its own numbers
+  under `groups`, and the top-level ones are `headline_group`'s (the model a
+  burn passes agy, else Gemini). The text form prints both groups. The calls identify as agy (`User-Agent: antigravity`,
   `ideType: ANTIGRAVITY`); anything else is refused by the endpoint. Same TTL as claude. No live token, or any refusal, keeps today's
   `no-signal` row; the token never leaves the call.
 

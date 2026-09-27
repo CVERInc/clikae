@@ -7,6 +7,7 @@
 # (`[[ … ]]` carry `|| false`; see tests/README.md.)
 
 load '../helpers'
+bats_require_minimum_version 1.5.0   # for `run --separate-stderr`
 
 # _iso <seconds from now> -> an RFC 3339 instant (jq, so no GNU/BSD date split).
 _iso() { jq -nr --argjson d "$1" '(now + $d) | floor | todate'; }
@@ -45,14 +46,15 @@ case "$url" in
     esac ;;
   *:retrieveUserQuotaSummary)
     case "$*" in *'"project":"stub-project-1"'*) ;; *) exit 22 ;; esac
-    # The real body's shape (2026-09-27), values made up. 3p-weekly resets in
-    # 20 h and is still weekly: `window` decides, not the reset distance.
+    # The real body's shape (2026-09-27), values made up: Gemini's weekly is
+    # 99% spent, Claude/GPT's is untouched. 3p-weekly names its window in hours
+    # ("168h") and resets in 20 h: the hours, not the distance, make it weekly.
     printf '{"groups":[
       {"displayName":"Gemini Models","description":"Models within this group: Gemini Flash, Gemini Pro","buckets":[
-        {"bucketId":"gemini-weekly","displayName":"Weekly Limit Remaining","window":"weekly","remainingFraction":0.6,"resetTime":"%s"},
-        {"bucketId":"gemini-5h","displayName":"Five Hour Limit Remaining","window":"5h","remainingFraction":0.25,"resetTime":"%s"}]},
+        {"bucketId":"gemini-weekly","displayName":"Weekly Limit Remaining","window":"weekly","remainingFraction":0.01,"resetTime":"%s"},
+        {"bucketId":"gemini-5h","displayName":"Five Hour Limit Remaining","window":"5h","remainingFraction":1,"resetTime":"%s"}]},
       {"displayName":"Claude and GPT models","description":"Models within this group: Claude Opus","buckets":[
-        {"bucketId":"3p-weekly","displayName":"Weekly Limit Remaining","window":"weekly","remainingFraction":0.1,"resetTime":"%s"},
+        {"bucketId":"3p-weekly","displayName":"Weekly Limit Remaining","window":"168h","remainingFraction":1,"resetTime":"%s"},
         {"bucketId":"3p-5h","displayName":"Five Hour Limit Remaining","window":"5h","disabled":true,"remainingFraction":1,"resetTime":"%s"}]}]}' \
       "$AGY_WK_RESET" "$AGY_WIN_RESET" "$AGY_3P_RESET" "$AGY_WIN_RESET" ;;
   *) exit 22 ;;
@@ -61,17 +63,19 @@ STUB
   chmod +x "$TEST_HOME/.testbin/curl"
 }
 
-@test "agy usage: quota buckets become window/weekly by their own window name, source quota-api" {
+@test "agy usage: each quota group keeps its own numbers; the headline is Gemini by default" {
   agy_fixture
   run clikae usage agy pike --json
   [ "$status" -eq 0 ]
   printf '%s\n' "$output" > "$TEST_HOME/out.log"
-  echo "$output" | jq -e --arg w "$AGY_WIN_RESET" --arg k "$AGY_3P_RESET" '
-    .engine == "antigravity" and .source == "quota-api"
-    and .window_pct == 75 and .weekly_pct == 90
-    and .window_resets_at == $w and .weekly_resets_at == $k
-    and (has("gap") | not)
-    and ([.models[].name] == ["Gemini Models weekly","Gemini Models 5h","Claude and GPT models weekly"])'
+  echo "$output" | jq -e --arg k "$AGY_WK_RESET" --arg c "$AGY_3P_RESET" '
+    .engine == "antigravity" and .source == "quota-api" and (has("gap") | not)
+    and .headline_group == "gemini"
+    and .window_pct == 0 and .weekly_pct == 99 and .weekly_resets_at == $k
+    and ([.groups[] | {name, window_pct, weekly_pct, disabled}] ==
+         [{name:"claude",window_pct:null,weekly_pct:0,disabled:false},
+          {name:"gemini",window_pct:0,weekly_pct:99,disabled:false}])
+    and (.groups[] | select(.name == "claude") | .weekly_resets_at) == $c'
   # the project loadCodeAssist named is the one the quota call asked about
   grep -q 'stub-project-1' "$AGY_LOG"
   [ "$(tr '\n' ' ' < "$AGY_CALLS")" = "loadCodeAssist retrieveUserQuotaSummary " ] || false
@@ -79,6 +83,21 @@ STUB
   run clikae usage agy pike --json
   [ "$(wc -l < "$AGY_CALLS" | tr -d ' ')" = 2 ] || false
   ! grep -R 'stub-agy-secret151' "$AGY_LOG" "$TEST_HOME/out.log" "$CLIKAE_HOME/state"
+}
+
+@test "agy usage: a Claude model hint makes the Claude/GPT group the headline" {
+  agy_fixture
+  CLIKAE_AGY_USAGE_MODEL=claude-sonnet-4-6 run clikae usage agy pike --json
+  [ "$status" -eq 0 ]
+  echo "$output" | jq -e '.headline_group == "claude" and .weekly_pct == 0 and .window_pct == null'
+}
+
+@test "agy usage: the text form names both groups, headline first" {
+  agy_fixture
+  run --separate-stderr clikae usage agy pike
+  [ "$status" -eq 0 ]
+  # shellcheck disable=SC2154  # set by bats' run --separate-stderr
+  [[ "$stderr" == *'gemini 0/99% · claude -/0%'* ]] || false
 }
 
 @test "agy usage: an access token past its own expiry is never sent; the row stays no-signal" {
@@ -105,4 +124,13 @@ STUB
   [ "$status" -eq 0 ]
   echo "$output" | jq -e '.gap == "no-signal"'
   [ ! -e "$AGY_CALLS" ] || false
+}
+
+@test "agy burn: the model it passes agy is the usage hint (--model X, --model=X, -m X)" {
+  # shellcheck source=/dev/null
+  . "$CLIKAE_TEST_ROOT/lib/commands/burn.sh"
+  [ "$(_agy_burn_model_of --add-dir /x --model claude-opus)" = "claude-opus" ] || false
+  [ "$(_agy_burn_model_of --model=gemini-3-pro -p hi)" = "gemini-3-pro" ] || false
+  [ "$(_agy_burn_model_of -m gpt-oss)" = "gpt-oss" ] || false
+  [ -z "$(_agy_burn_model_of --add-dir /x)" ] || false
 }
