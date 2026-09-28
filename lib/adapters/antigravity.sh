@@ -714,7 +714,7 @@ adapter_usage() (
         {key: (gkey($g) | .[0:20]), class: klass($r), disabled: (.disabled == true),
          pct: (((1 - .remainingFraction) * 1000 | round) / 10),
          resets_at: (if $r == null then null else .resetTime end)}) |
-    select(length > 0) |
+    select(length > 0) | . as $buckets |
     # Each group is its own quota: never folded into one number with another.
     [ group_by(.key)[] | . as $bs |
       (map(select(.disabled | not) | select(.class == "window")) | max_by(.pct)) as $w |
@@ -732,7 +732,9 @@ adapter_usage() (
     {window_pct: $h.window_pct, weekly_pct: $h.weekly_pct,
      window_resets_at: $h.window_resets_at, weekly_resets_at: $h.weekly_resets_at,
      source: "quota-api", headline_group: $head, groups: $groups,
-     models: [ .[] | select(.disabled | not) | {name: "\(.key) \(.class)", pct, resets_at} ] | .[0:8]}' 2>/dev/null
+     # One row per enabled BUCKET (not per group): the board reads these to
+     # name a bucket more spent than the headline, e.g. "claude weekly".
+     models: [ $buckets[] | select(.disabled | not) | {name: "\(.key) \(.class)", pct, resets_at} ] | .[0:8]}' 2>/dev/null
 )
 
 # _agy_usage_group_hint <model> -> the quota group that model spends:

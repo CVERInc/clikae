@@ -75,7 +75,9 @@ STUB
     and ([.groups[] | {name, window_pct, weekly_pct, disabled}] ==
          [{name:"claude",window_pct:null,weekly_pct:0,disabled:false},
           {name:"gemini",window_pct:0,weekly_pct:99,disabled:false}])
-    and (.groups[] | select(.name == "claude") | .weekly_resets_at) == $c'
+    and (.groups[] | select(.name == "claude") | .weekly_resets_at) == $c
+    and ([.models[] | {name, pct}] ==
+         [{name:"gemini weekly",pct:99},{name:"gemini window",pct:0},{name:"claude weekly",pct:0}])'
   # the project loadCodeAssist named is the one the quota call asked about
   grep -q 'stub-project-1' "$AGY_LOG"
   [ "$(tr '\n' ' ' < "$AGY_CALLS")" = "loadCodeAssist retrieveUserQuotaSummary " ] || false
