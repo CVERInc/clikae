@@ -714,7 +714,7 @@ _limit_read_after() {
   local f="${CLIKAE_HOME:-$HOME/.clikae}/state/usage/$1/$2.json" line ca
   [ -f "$f" ] || return 1
   IFS= read -r line < "$f" || [ -n "$line" ] || return 1
-  case "$line" in *'"source":"vendor"'*|*'"source":"transcript"'*) ;; *) return 1 ;; esac
+  case "$line" in *'"source":"vendor"'*|*'"source":"transcript"'*|*'"source":"quota-api"'*) ;; *) return 1 ;; esac
   case "$line" in *'"window_pct":null,"weekly_pct":null'*) return 1 ;; esac
   case "$line" in *'"cached_at":'*) ;; *) return 1 ;; esac
   ca="${line##*\"cached_at\":}"; ca="${ca%%[!0-9]*}"
@@ -854,11 +854,63 @@ _limit_log_dry_uncached() {
   local logf="$1"
   [ -n "$logf" ] && [ -e "$logf" ] || return 1
   grep -qaE "$LIMIT_AGY_DRY_RE" "$logf" 2>/dev/null || return 1
-  # Echo the vendor's own reset phrase verbatim (never a computed countdown); the
-  # LAST occurrence is this run's most recent limit line. Guard the no-match so it
-  # never aborts the caller under `set -eo pipefail`.
-  grep -aoE 'Resets in [0-9hdms]+' "$logf" 2>/dev/null | tail -n 1 || true
+  # Echo the vendor's own reset phrase verbatim (never a computed countdown) --
+  # the BINDING one (#151): the weekly bucket's when this log shows one, else the
+  # rolling window's. See limit_log_resetsv for why "the last line" was wrong.
+  limit_log_resetsv "$logf"
+  if [ -n "$_LLR_WEEKLY" ]; then printf '%s\n' "$_LLR_WEEKLY"
+  elif [ -n "$_LLR_WINDOW" ]; then printf '%s\n' "$_LLR_WINDOW"
+  fi
   return 0
+}
+
+# limit_log_resetsv <logfile> -> sets _LLR_WINDOW and _LLR_WEEKLY, each the
+# vendor's verbatim "Resets in …" phrase for that bucket (or empty).
+#
+# #151: agy has TWO quota buckets and one sentence for both. The same account
+# produced, on the same day:
+#   Individual quota reached. … Resets in 2h44m36s.     <- rolling window
+#   Individual quota reached. … Resets in 143h31m50s.   <- weekly bucket
+# The old `grep 'Resets in' | tail -1` kept whichever came last, so a weekly
+# wall could be recorded as a few-hour one and the tank offered again long
+# before it could serve. Each phrase is classified by its own length: more than
+# LIMIT_AGY_WEEKLY_MIN_SEC (24 h -- the window is 2-5 h, the weekly bucket
+# ~143 h, nothing observed in between) is weekly, anything else is the window.
+# The last phrase OF EACH CLASS is kept, so a later window line never erases an
+# earlier weekly one. A phrase whose length does not parse counts as window:
+# the class that re-checks sooner is the one that cannot strand a tank.
+LIMIT_AGY_WEEKLY_MIN_SEC=86400
+limit_log_resetsv() {
+  _LLR_WINDOW=""; _LLR_WEEKLY=""
+  local _llr_p _llr_s
+  [ -n "${1:-}" ] && [ -e "$1" ] || return 0
+  while IFS= read -r _llr_p; do
+    _llr_s="$(limit_reset_phrase_secs "$_llr_p")" || _llr_s=0
+    if [ "$_llr_s" -gt "$LIMIT_AGY_WEEKLY_MIN_SEC" ]; then _LLR_WEEKLY="$_llr_p"
+    else _LLR_WINDOW="$_llr_p"; fi
+  done < <(grep -aoE 'Resets in [0-9]+[dhms]( ?[0-9]+[dhms])*' "$1" 2>/dev/null || true)
+  return 0
+}
+
+# limit_reset_phrase_secs "<Resets in 143h31m50s>" -> total seconds, or rc 1
+# when the phrase carries no d/h/m/s component this can read. Units summed as
+# found; each number is capped at 9 digits so the arithmetic cannot overflow.
+limit_reset_phrase_secs() {
+  local rest="${1#Resets in }" total=0 n u
+  [ "$rest" != "$1" ] || return 1
+  rest="${rest// /}"   # "1d 2h" reads as "1d2h"; Go's own durations carry no spaces
+  local whole="$rest"
+  while [[ "$rest" =~ ^([0-9]{1,9})([dhms])(.*)$ ]]; do
+    n=$((10#${BASH_REMATCH[1]})); u="${BASH_REMATCH[2]}"; rest="${BASH_REMATCH[3]}"
+    case "$u" in
+      d) total=$((total + n * 86400)) ;;
+      h) total=$((total + n * 3600)) ;;
+      m) total=$((total + n * 60)) ;;
+      s) total=$((total + n)) ;;
+    esac
+  done
+  [ -z "$rest" ] && [ -n "$whole" ] || return 1
+  printf '%s\n' "$total"
 }
 
 # limit_engine_detectable <cli> -> 0 if clikae can read this engine's fuel state

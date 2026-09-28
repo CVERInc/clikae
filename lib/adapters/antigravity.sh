@@ -581,3 +581,170 @@ adapter_recent_sids() {
   _agy_scope_rows "$dir" "$n" "$_rows" "$_cache_sid"
 }
 
+
+# ── Optional usage hook (#151) ───────────────────────────────────────────────
+# agy asks for its own quota: the CLI POSTs `v1internal:retrieveUserQuotaSummary`
+# (daily-cloudcode-pa.googleapis.com) with the tank's own OAuth token, after a
+# `v1internal:loadCodeAssist` that names the Cloud project the quota belongs to.
+# Both are reads. The shape, from the proto descriptor agy ships
+# (google.internal.cloud.code.v1internal, QuotaSummaryProto):
+#   request   {project}
+#   response  {buckets:[Bucket], groups:[{displayName, description,
+#              buckets:[Bucket]}], description}
+#   Bucket    {bucketId, displayName, description, window, disabled,
+#              remainingFraction | remainingAmount, resetTime}
+# Each bucket is classified by its OWN reset distance, the same 24 h line
+# limit.sh draws for the 429 sentence (LIMIT_AGY_WEEKLY_MIN_SEC): more than a
+# day away is the weekly bucket, anything else the rolling window. The most
+# spent bucket of each class is that class's number; every bucket rides along
+# as `models` (at most 8). source is "quota-api", so a reader can tell this
+# number from claude's vendor endpoint while treating it the same.
+#
+# The token file is the Linux "file" backend's (lib/commands/antigravity.sh,
+# #96). No file (the macOS Keychain backend, or a tank that never logged in),
+# an access token past its own recorded expiry, or a refusal: print nothing
+# and fail, so usage_read falls back to exactly today's "no-signal" row. An
+# expired agy token is the NORMAL idle state (it lives an hour and only agy
+# refreshes it), and `clikae usage --wake` is a claude-shaped remedy — calling
+# it "expired" would put a wrong instruction on most agy rows.
+# The token lives in this subshell and curl's stdin only, never argv/env/disk.
+# MEASURED 2026-09-27 on a real tank: both calls must look like agy's own.
+# loadCodeAssist with ideType IDE_UNSPECIFIED answers 200 but names no project
+# (the free tier comes back ineligible, UNSUPPORTED_CLIENT); with ideType
+# ANTIGRAVITY it names one. retrieveUserQuotaSummary answers 403 "You do not
+# have a valid license of this product" unless the User-Agent starts with
+# "antigravity" (a curl User-Agent: 403, "antigravity": 200). The real body:
+#   groups: "Gemini Models"         buckets gemini-weekly (window "weekly"),
+#                                           gemini-5h     (window "5h")
+#           "Claude and GPT models" buckets 3p-weekly, 3p-5h (may be disabled)
+# `window` names the bucket, so it decides the class; reset distance is only
+# the fallback for a window string this does not know. (Distance alone would
+# misfile a weekly bucket in the last day of its week, when its reset is under
+# 24 h away; the one measured tank had its two weekly resets 59 h and 108 h out.)
+# The two groups are SEPARATE quotas: Claude spent to 100% while Gemini has
+# room is a usable tank for Gemini work, and the reverse. So each group gets its
+# own numbers under `groups`, and the top-level window/weekly are ONE group's:
+# `headline_group`, the one the work will spend (CLIKAE_AGY_USAGE_MODEL, set by
+# burn from the model it passes agy; Gemini, agy's default, when there is none).
+_AGY_USAGE_BASE="${CLIKAE_AGY_USAGE_BASE:-https://daily-cloudcode-pa.googleapis.com}"
+
+# _agy_usage_platform -> the ClientMetadata.Platform value for this host.
+_agy_usage_platform() {
+  local os arch
+  os="$(uname -s 2>/dev/null)"; arch="$(uname -m 2>/dev/null)"
+  case "$os/$arch" in
+    Darwin/arm64)          printf 'DARWIN_ARM64' ;;
+    Darwin/*)              printf 'DARWIN_AMD64' ;;
+    Linux/aarch64|Linux/arm64) printf 'LINUX_ARM64' ;;
+    Linux/*)               printf 'LINUX_AMD64' ;;
+    *)                     printf 'PLATFORM_UNSPECIFIED' ;;
+  esac
+}
+_AGY_USAGE_MAX_BYTES=65536
+
+# _agy_usage_post <token> <method> <json body> -> the body on stdout, rc 0 on a
+# 2xx only. `--fail` keeps an error body from ever being read as a reading.
+_agy_usage_post() {
+  local out
+  out="$(
+    printf 'header = "Authorization: Bearer %s"\nheader = "User-Agent: antigravity"\n' "$1" |
+      curl -q -s -K - --fail --connect-timeout 3 --max-time 8 \
+        --max-filesize "$_AGY_USAGE_MAX_BYTES" \
+        -X POST -H 'Content-Type: application/json' --data "$3" \
+        "$_AGY_USAGE_BASE/v1internal:$2" 2>/dev/null |
+      head -c "$(( _AGY_USAGE_MAX_BYTES + 1 ))"
+    exit "${PIPESTATUS[1]}"
+  )" || return 1
+  [ "${#out}" -le "$_AGY_USAGE_MAX_BYTES" ] || return 1
+  printf '%s' "$out"
+}
+
+adapter_usage() (
+  set +x
+  set +a
+  local dir="$1" tokf token project body now
+  export -n token
+  tokf="$dir/antigravity-cli/antigravity-oauth-token"
+  [ -f "$tokf" ] && command -v jq >/dev/null 2>&1 || exit 1
+  now="$(date +%s)"
+  token="$(jq -er --argjson now "$now" '
+    .token | select(type == "object") |
+    (.expiry // "" | if type == "string" and . != ""
+       then (sub("\\.[0-9]+"; "") | try fromdateiso8601 catch 0) else 0 end) as $exp |
+    select($exp > $now + 30) | .access_token | select(type == "string" and . != "")' \
+    "$tokf" 2>/dev/null)" || { token=""; exit 1; }
+  case "$token" in *[!a-zA-Z0-9._~+/-]*) token=""; exit 1 ;; esac
+  project="$(_agy_usage_post "$token" loadCodeAssist \
+      "{\"metadata\":{\"ideType\":\"ANTIGRAVITY\",\"platform\":\"$(_agy_usage_platform)\",\"pluginType\":\"GEMINI\"}}" |
+    jq -r '.cloudaicompanionProject | if type == "string" then .
+           elif type == "object" then (.id // empty) else empty end' 2>/dev/null)" || project=""
+  case "$project" in *[!a-zA-Z0-9._:-]*) project="" ;; esac
+  body="$(_agy_usage_post "$token" retrieveUserQuotaSummary \
+    "$(jq -cn --arg p "$project" 'if $p == "" then {} else {project:$p} end')")" ||
+    { token=""; exit 1; }
+  token=""
+  local hint=""
+  hint="$(_agy_usage_group_hint "${CLIKAE_AGY_USAGE_MODEL:-}")"
+  printf '%s' "$body" | jq -ce -s --argjson now "$now" --argjson weekly "${LIMIT_AGY_WEEKLY_MIN_SEC:-86400}" \
+    --arg hint "$hint" '
+    def secs: if type == "string" then (sub("\\.[0-9]+"; "") | try fromdateiso8601 catch null) else null end;
+    # A bucket names its own window; only a string this does not know falls
+    # back to the reset distance. "<N>h" is hours: 5h is the window, 168h/120h
+    # (anything of 24 h or more) is weekly.
+    def klass($r):
+      if .window == "weekly" then "weekly"
+      elif (.window|type) == "string" and (.window|test("^[0-9]{1,6}h$")) then
+        (if (.window[:-1]|tonumber) >= 24 then "weekly" else "window" end)
+      elif (.window|type) == "string" and (.window|test("^[0-9]{1,6}m$")) then "window"
+      elif $r != null and ($r - $now) > $weekly then "weekly" else "window" end;
+    # The group key: bucketId prefix ("gemini-5h" -> gemini, "3p-weekly" ->
+    # claude, the Claude and GPT group), else the display name first word.
+    def gkey($gname):
+      ((.bucketId // "") | tostring | split("-")[0]) as $p |
+      if $p == "gemini" then "gemini" elif $p == "3p" then "claude"
+      elif $gname != "" then ($gname | ascii_downcase | split(" ")[0])
+      else "default" end;
+    if (length != 1) or ((.[0]|type) != "object") then empty else .[0] end |
+    [ ((.buckets // [])[]? | {g: "", b: .}),
+      ((.groups // [])[]? | (.displayName // "" | tostring) as $g | (.buckets // [])[]? | {g: $g, b: .}) ] |
+    map(select((.b|type) == "object") | .g as $g | .b |
+        select((.remainingFraction|type) == "number" and
+               .remainingFraction >= 0 and .remainingFraction <= 1) |
+        (.resetTime | secs) as $r |
+        {key: (gkey($g) | .[0:20]), class: klass($r), disabled: (.disabled == true),
+         pct: (((1 - .remainingFraction) * 1000 | round) / 10),
+         resets_at: (if $r == null then null else .resetTime end)}) |
+    select(length > 0) | . as $buckets |
+    # Each group is its own quota: never folded into one number with another.
+    [ group_by(.key)[] | . as $bs |
+      (map(select(.disabled | not) | select(.class == "window")) | max_by(.pct)) as $w |
+      (map(select(.disabled | not) | select(.class == "weekly")) | max_by(.pct)) as $k |
+      {name: $bs[0].key, window_pct: $w.pct, weekly_pct: $k.pct,
+       window_resets_at: $w.resets_at, weekly_resets_at: $k.resets_at,
+       disabled: all($bs[]; .disabled)} ] | .[0:8] as $groups |
+    # The headline is the group the work will actually spend: the hint (from
+    # the model a burn asked for), else gemini (agy default), else the first.
+    ([$groups[] | select(.disabled | not) | .name]) as $live |
+    (if ($hint != "" and ($live | index($hint)) != null) then $hint
+     elif ($live | index("gemini")) != null then "gemini"
+     elif ($live | length) > 0 then $live[0] else $groups[0].name end) as $head |
+    ($groups | map(select(.name == $head)) | .[0]) as $h |
+    {window_pct: $h.window_pct, weekly_pct: $h.weekly_pct,
+     window_resets_at: $h.window_resets_at, weekly_resets_at: $h.weekly_resets_at,
+     source: "quota-api", headline_group: $head, groups: $groups,
+     # One row per enabled BUCKET (not per group): the board reads these to
+     # name a bucket more spent than the headline, e.g. "claude weekly".
+     models: [ $buckets[] | select(.disabled | not) | {name: "\(.key) \(.class)", pct, resets_at} ] | .[0:8]}' 2>/dev/null
+)
+
+# _agy_usage_group_hint <model> -> the quota group that model spends:
+# "gemini", "claude" (agy's Claude and GPT group), or nothing (no hint).
+_agy_usage_group_hint() {
+  local m
+  m="$(printf '%s' "${1:-}" | tr '[:upper:]' '[:lower:]')"
+  case "$m" in
+    '') ;;
+    *gemini*) printf 'gemini' ;;
+    *claude*|*gpt*|*opus*|*sonnet*|*haiku*) printf 'claude' ;;
+  esac
+}

@@ -42,6 +42,7 @@ _usage_print() {
     printf '%s/%s %s\n' "$e" "$t" "$reading"
     case "$reading" in
       *'"source":"expired"'*) usage_expired_hintv "$t"; printf '  %s\n' "$_UEH" >&2 ;;
+      *'"groups":['*) _usage_groups_line "$reading" ;;
     esac
   fi
 }
@@ -56,6 +57,22 @@ _usage_print() {
 # never was one. agy has no number at all, so its token is when a tank of it
 # last ran. Human output only, on stderr: stdout stays one "<engine>/<tank>
 # <reading>" line per tank for anything parsing it; --json never has it.
+# _usage_groups_line <reading> — #151: agy's quota groups are separate quotas,
+# so the text form names each one, window/weekly used:
+#   gemini 0/99% · claude -/100%
+# ("-" = no enabled bucket of that class). The headline group, the one the
+# top-level numbers are, comes first. stderr, like the expired hint above.
+_usage_groups_line() {
+  local line
+  line="$(printf '%s' "$1" | jq -r '
+    def r: if type == "number" then (. + 0.5 | floor | tostring) else "-" end;
+    .headline_group as $h |
+    [ (.groups // [])[] | select(.disabled | not) ] |
+    (map(select(.name == $h)) + map(select(.name != $h))) |
+    map("\(.name) \(.window_pct|r)/\(.weekly_pct|r)%") | join(" · ")' 2>/dev/null)" || line=""
+  [ -z "$line" ] || printf '  %s\n' "$line" >&2
+}
+
 _USAGE_SUM_ENGINES=""
 _usage_summary_add() {
   local e="$1" tok var
@@ -121,7 +138,10 @@ per tank, adding "engine"/"tank" to the reading; the plain form prints
 
 Reading fields: window_pct, weekly_pct (0-100, or null), window_resets_at,
 weekly_resets_at (ISO instants, or null), source. source is "vendor" (a
-live call answered), "transcript" (read from evidence the engine already
+live call answered), "quota-api" (agy: its own retrieveUserQuotaSummary
+answered; the top-level numbers are one quota group's, headline_group,
+and every group is under groups),
+"transcript" (read from evidence the engine already
 wrote locally — no live process invoked; currently Codex), "expired" (the
 login is fine but its access token has lapsed — see --wake), or "unknown"
 (no usable reading).

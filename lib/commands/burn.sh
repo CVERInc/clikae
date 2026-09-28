@@ -1057,6 +1057,18 @@ _burn_compose() {
 # active tank), so unlike other engines' burn there's no cross-terminal safety
 # concern from an interactive session being mid-use on a DIFFERENT tank — this
 # still moves the ONE global active tank, same as `clikae agy <tank>` always has.
+# _agy_burn_model_of <agy args...> -> the value of --model / --model=X / -m,
+# or nothing. Only a hint for which quota group usage calls the headline.
+_agy_burn_model_of() {
+  while [ "$#" -gt 0 ]; do
+    case "$1" in
+      --model=*) printf '%s' "${1#--model=}"; return 0 ;;
+      --model|-m) [ "$#" -ge 2 ] && printf '%s' "$2"; return 0 ;;
+    esac
+    shift
+  done
+}
+
 _agy_burn() {
   local start_tank="$1" prompt="$2" artifact="$3" timeout_s="$4" fresh="$5" reroute="$6" wait_for_reset_s="$7" allow_active="$8" launch_cwd="$9"; shift 9
   local n_extra="$1"; shift
@@ -1220,6 +1232,14 @@ _agy_burn() {
     local reset dry=1
     reset="$(limit_log_dry "$runlog")" && dry=0
     rm -f "$runlog"
+    # #151: refresh this tank's usage the way (a) does for env engines, with
+    # the model this run passed agy as the hint for which quota group is the
+    # headline (agy's Gemini and Claude/GPT groups are separate quotas).
+    # Best-effort; a tank with no live token makes no call at all.
+    if declare -F usage_read >/dev/null; then
+      CLIKAE_AGY_USAGE_MODEL="$(_agy_burn_model_of ${extra[@]+"${extra[@]}"})" \
+        usage_read antigravity "$cur" 1 >/dev/null 2>&1 || true
+    fi
     if [ "$dry" -eq 0 ]; then
       log_warn "agy/$cur ran dry${reset:+  — }${reset}"
 

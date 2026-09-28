@@ -191,6 +191,15 @@ usage_read() (
          select((.name|type) == "string" and (.name|length) > 0 and (.name|length) <= 40) |
          select((.pct|type) == "number" and .pct >= 0 and .pct <= 100) ] | .[0:8]
      else [] end) as $models |
+    # #151: agy quota groups, each its own quota, whitelisted like $models.
+    def gname: if type == "string" and test("^[a-z0-9_]{1,20}$") then . else null end;
+    (if .source == "quota-api" and (.groups|type) == "array" then
+       [ .groups[] | select(type == "object") |
+         {name: (.name|gname), window_pct: (.window_pct|pct), weekly_pct: (.weekly_pct|pct),
+          window_resets_at: (.window_resets_at|stamp), weekly_resets_at: (.weekly_resets_at|stamp),
+          disabled: (.disabled == true)} | select(.name != null) ] | .[0:8]
+     else [] end) as $groups |
+    (.headline_group | gname) as $head |
     # #107: "expired" exists only with its one reason, and never carries a
     # number — whatever else an adapter put beside it is dropped here.
     if .source == "expired" and .reason == "expired-token" then
@@ -199,11 +208,14 @@ usage_read() (
     else
     {window_pct:(.window_pct|pct),weekly_pct:(.weekly_pct|pct),
      window_resets_at:(.window_resets_at|stamp),weekly_resets_at:(.weekly_resets_at|stamp),
-     source:(if .source == "vendor" or .source == "transcript" then .source else "unknown" end)} |
+     source:(if .source == "vendor" or .source == "transcript" or .source == "quota-api" then .source else "unknown" end)} |
     if .source == "unknown" and $reason != null then . + {reason:$reason} else . end |
     if .source == "unknown" and $reason == "rate-limited" and $retry != null
     then . + {retry_after:$retry} else . end |
-    if .source == "vendor" and ($models|length) > 0 then . + {models:$models} else . end
+    if (.source == "vendor" or .source == "quota-api") and ($models|length) > 0 then . + {models:$models} else . end |
+    if .source == "quota-api" and ($groups|length) > 0 then
+      . + {groups:$groups} + (if $head != null then {headline_group:$head} else {} end)
+    else . end
     end')" || { reading="$(usage_unknown)"; event_epoch=""; }
   # #149: a reading with no numbers never overwrites the last one that had
   # them. The previous cache's numbers (or the `last_good` it already carried
@@ -303,7 +315,8 @@ _usage_public() {
 # (a) `burn` refreshes the LAUNCHED tank's reading at run END — one vendor
 #     call, off the launch path (launching itself still pays zero — P1-2..
 #     P1-4), fired after the run's artifact check so it can never delay
-#     judging that run's own outcome. See lib/commands/burn.sh's cmd_burn.
+#     judging that run's own outcome. See lib/commands/burn.sh's cmd_burn;
+#     agy (#151) refreshes in _agy_burn with the run's --model as the hint.
 # (b) when the named tank is dry and burn must reroute, `_burn_next_same_
 #     engine` ranks every surviving candidate once on whatever is already on
 #     disk, then spends its live-call budget (`_BURN_REROUTE_REFRESH_CAP`,
@@ -486,7 +499,7 @@ usage_cache_peek() {
   command -v jq >/dev/null 2>&1 || return 1
   [ -n "$now" ] || now="$(date +%s)"
   jq -er --argjson now "$now" --argjson max_age "$_USAGE_CACHE_PEEK_MAX_AGE_SEC" "$_USAGE_NORM_STAMP_JQ"'
-    select(.source == "vendor" or .source == "transcript") |
+    select(.source == "vendor" or .source == "transcript" or .source == "quota-api") |
     select(.window_pct != null and .weekly_pct != null) |
     (.cached_at) as $evidence |
     select($evidence != null) |
@@ -515,7 +528,7 @@ usage_cache_has_reading() {
   local cache="$CLIKAE_HOME/state/usage/$1/$2.json"
   [ -f "$cache" ] || return 1
   command -v jq >/dev/null 2>&1 || return 1
-  jq -e '(.source == "vendor" or .source == "transcript") and .window_pct != null and .weekly_pct != null' \
+  jq -e '(.source == "vendor" or .source == "transcript" or .source == "quota-api") and .window_pct != null and .weekly_pct != null' \
     "$cache" >/dev/null 2>&1
 }
 
@@ -534,7 +547,7 @@ usage_board_fields() {
   command -v jq >/dev/null 2>&1 || return 1
   [ -n "$now" ] || now="$(date +%s)"
   jq -er --argjson now "$now" "$_USAGE_NORM_STAMP_JQ"'
-    select(.source == "vendor" or .source == "transcript") |
+    select(.source == "vendor" or .source == "transcript" or .source == "quota-api") |
     select(.window_pct != null or .weekly_pct != null) |
     # #149: one axis may be absent (a codex free plan has a single 30-day
     # window, read as weekly). "-" marks it — never 0, and never an empty
@@ -571,7 +584,7 @@ usage_cached_fields() {
   [ -n "$now" ] || now="$(date +%s)"
   jq -er --argjson now "$now" --argjson ttl "$ttl" "$_USAGE_NORM_STAMP_JQ"'
     (.scanned_at // .cached_at) as $scanned |
-    select((.source == "vendor" or .source == "transcript") and $scanned <= $now and ($now-$scanned < $ttl)) |
+    select((.source == "vendor" or .source == "transcript" or .source == "quota-api") and $scanned <= $now and ($now-$scanned < $ttl)) |
     select(.window_pct != null and .weekly_pct != null) |
     select(all(.window_resets_at, .weekly_resets_at; expired | not)) |
     [.window_pct,.weekly_pct,([.window_pct,.weekly_pct]|max)] | @tsv' "$cache" 2>/dev/null

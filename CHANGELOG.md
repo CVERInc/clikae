@@ -7,6 +7,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **`clikae usage agy` reads a number (#151).** A tank whose saved access
+  token is still live (Linux file backend) is measured through agy's own
+  `v1internal:retrieveUserQuotaSummary`: `window_pct`/`weekly_pct`/resets in
+  the same shape as the claude rows, `source:"quota-api"`, each quota bucket
+  sorted into window or weekly by its own `window` name (`5h`/`weekly`). agy's
+  Gemini and Claude/GPT groups are separate quotas: each has its own numbers
+  under `groups`, and the top-level ones are `headline_group`'s (the model a
+  burn passes agy, else Gemini). The text form prints both groups. The calls identify as agy (`User-Agent: antigravity`,
+  `ideType: ANTIGRAVITY`); anything else is refused by the endpoint. Same TTL as claude. No live token, or any refusal, keeps today's
+  `no-signal` row; the token never leaves the call.
+
+### Fixed
+
+- **An agy weekly wall is no longer recorded as a few-hour one (#151).** agy's
+  429 sentence names one of two resets: a 2-5 h rolling window or a ~143 h
+  weekly bucket. The dry check kept only the last "Resets in", so a window
+  line after a weekly one made the tank look usable again in hours. Each
+  phrase is now classified by its own length (more than 24 h is weekly), the
+  last of each bucket is kept, and the weekly one is the reset that counts.
+
 ## [0.37.0] — 2026-09-27
 
 ### Changed
