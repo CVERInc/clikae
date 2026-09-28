@@ -145,15 +145,25 @@ numbers and how old it is, plus one word for why there is no new one:</p>
 </tr>
 <tr>
 <td><code>no-signal</code></td>
-<td>a probe was asked and answered nothing usable, or the engine exposes no usage at all (agy)</td>
+<td>a probe was asked and answered nothing usable, or (agy) there was no live access token to ask with</td>
 <td>use the aged number, or fill it in by hand</td>
 </tr>
 </tbody>
 </table>
-<p>On the board that reads <code>weekly 85% · 5h ago · expired</code>. An agy tank reads
-<code>no-signal · last used 2h ago</code>: agy has one global login and no usage signal,
-so the one real trace is when that tank last wrote its own log
-(<code>&lt;tank&gt;/antigravity-cli/log/</code>). codex tanks idle for over a week are read
+<p>On the board that reads <code>weekly 85% · 5h ago · expired</code>. An agy tank whose
+saved access token is still live (Linux file backend; the token lives an hour
+and only agy refreshes it) is read through agy's own
+<code>v1internal:retrieveUserQuotaSummary</code>, <code>source:&quot;quota-api&quot;</code>: each quota bucket
+is the window or the weekly one by its own <code>window</code> name (<code>5h</code> / <code>weekly</code>; an
+<code>&lt;N&gt;h</code> of 24 or more is weekly). agy's two model groups, Gemini and Claude/GPT,
+are separate quotas, so each gets its own numbers under <code>groups</code>, and the
+top-level window/weekly are one group's, named by <code>headline_group</code>: the group
+the work will spend (a burn's <code>--model</code>), Gemini when nothing says otherwise.
+The text form prints every group, e.g. <code>gemini 0/99% · claude -/0%</code>. Otherwise it
+reads <code>no-signal · last used 2h ago</code>, the one real trace being when that tank
+last wrote its own log (<code>&lt;tank&gt;/antigravity-cli/log/</code>). A 429's &quot;Resets in&quot;
+is split the same way: a weekly reset is kept even when a window line follows
+it, so a weekly wall is never recorded as a few-hour one. codex tanks idle for over a week are read
 live through <code>codex app-server</code>'s <code>account/rateLimits/read</code>, which costs no
 turn (<code>CLIKAE_CODEX_USAGE_PROBE=0</code> turns that off). When the vendor reports
 a per-model weekly row above the tank's own weekly number, the board and the
