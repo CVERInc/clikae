@@ -721,7 +721,7 @@ STUB
   [ "$status" -eq 0 ]
   [ -f "$A" ]
   run cat "$A"
-  [[ "$output" == clikae-*-burn-* ]]
+  [[ "$output" == clikae-*-burn-* ]] || false
 }
 
 @test "burn's engine process gets the tmux guard first on PATH despite the compgen -e restore (P2-3)" {

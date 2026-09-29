@@ -92,7 +92,7 @@ live_usage() {
   [ "$(wc -l < "$USAGE_CALLS" | tr -d ' ')" = 1 ]
   run clikae
   [ "$status" -eq 0 ]
-  [[ "$output" == *'window 65% · weekly 92%'* ]]
+  [[ "$output" == *'window 65% · weekly 92%'* ]] || false
   printf '%s\n' "$output" >> "$TEST_HOME/output.log"
   run clikae usage --fresh --json
   [ "$status" -eq 0 ]
@@ -106,10 +106,10 @@ live_usage() {
   run clikae usage claude work --json
   [ "$status" -eq 0 ]
   echo "$output" | jq -e '.source == "unknown" and .window_pct == null'
-  [[ "$output" != *'stub-secret-usage72'* ]]
+  [[ "$output" != *'stub-secret-usage72'* ]] || false
   run clikae
   [ "$status" -eq 0 ]
-  [[ "$output" != *'stub-secret-usage72'* ]]
+  [[ "$output" != *'stub-secret-usage72'* ]] || false
   [ "$(wc -l < "$USAGE_CALLS" | tr -d ' ')" = 1 ]
 }
 
@@ -633,7 +633,7 @@ STUB
     '{window_pct:$pct,weekly_pct:20,source:"vendor",cached_at:$cached_at}' \
     > "$CLIKAE_HOME/state/usage/claude/work.json"
   _home_fuel_dotv_compute '' claude work "$now"
-  [[ "$_FNOTE" != *%* ]]
+  [[ "$_FNOTE" != *%* ]] || false
 }
 
 @test "P3-5 (round-6 review, toward #107): an unknown reading names WHY, and only ever with one of three words" {
@@ -719,9 +719,9 @@ STUB
   [ "$status" -eq 0 ]
   [[ "$output" != *"once per candidate"* ]] \
     || { echo "--help still claims one call per candidate:"; echo "$output"; false; }
-  [[ "$output" == *"NOT one call per candidate"* ]]
-  [[ "$output" == *"3 calls"* ]]
-  [[ "$output" == *"0% window"* ]]
+  [[ "$output" == *"NOT one call per candidate"* ]] || false
+  [[ "$output" == *"3 calls"* ]] || false
+  [[ "$output" == *"0% window"* ]] || false
 }
 
 @test "P3-7 (round-6 review): a FUTURE cached_at counts as age 0 for BOTH rulers, not unknown for one and fresh for the other" {
@@ -1261,7 +1261,7 @@ STUB
 @test "usage.sh:29 (P3): a third positional argument is rejected with a clear error, not silent" {
   run clikae usage claude work extra
   [ "$status" -eq 1 ]
-  [[ "$output" == *"Too many arguments"* ]]
+  [[ "$output" == *"Too many arguments"* ]] || false
 }
 
 @test "P3: codex gets a real cache hit within TTL — scanned_at, not the event's own stale timestamp" {
