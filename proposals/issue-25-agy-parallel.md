@@ -2,7 +2,7 @@
 
 > Status: **Design Discussion, Unresolved**. The conclusion leans towards "do not implement multi-account parallel execution (proven unfeasible); same-account multi-worker parallel execution is technically possible but has limited value and low priority."
 > Scope: Only concerns `agy` (Antigravity CLI). Parallel execution for `claude` / `codex` is a separate topic.
-> Relevant code: `lib/commands/antigravity.sh`, `lib/targets/antigravity.sh`, `docs/dogfood-agy-headless.md`, `HANDOFF.md` (OPEN — `clikae auto` / dropped-parallel-task relay).
+> Relevant code: `lib/commands/antigravity.sh`, `lib/targets/antigravity.sh`, `HANDOFF.md` (OPEN — `clikae auto` / dropped-parallel-task relay).
 
 ---
 
@@ -76,7 +76,7 @@ In short: **B trades "wall-clock throughput" for "earlier rate limiting + coordi
 
 Yes, but very narrow, and **mostly replaceable by simpler solutions**:
 
-- **The only real benefit is wall-clock reduction**: If the task is naturally partitionable (N independent pieces) and **the quota pool is large enough to not dry out**, N parallel workers are indeed faster than sequential execution. The agy spawning 5 subagents in parallel for translation in `docs/dogfood-agy-headless.md` fits this shape—but note that this was **internal subagent spawning within agy**, and clikae didn't need to manage separate `$HOME` paths.
+- **The only real benefit is wall-clock reduction**: If the task is naturally partitionable (N independent pieces) and **the quota pool is large enough to not dry out**, N parallel workers are indeed faster than sequential execution. The agy spawning 5 subagents in parallel for translation in an earlier headless-agy dogfooding session (write-up not included in this repository) fits this shape—but note that this was **internal subagent spawning within agy**, and clikae didn't need to manage separate `$HOME` paths.
 - **Counterexamples (where B's value is negated):**
   - Small tasks → Sequential is fast enough; not worth the overhead of fan-out.
   - Large tasks that dry out the account → Parallel execution just hits the limit faster, leaving you to coordinate a "half-finished, dried-out task" (like the mid-run dry task in the HANDOFF dogfood).
