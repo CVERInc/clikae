@@ -143,14 +143,14 @@ _seed_transcript() {
 @test "resume --help shows usage" {
   run clikae resume --help
   [ "$status" -eq 0 ]
-  [[ "$output" == *"Usage: clikae resume"* ]]
+  [[ "$output" == *"Usage: clikae resume"* ]] || false
 }
 
 @test "resume is a reserved command (not mistaken for a tank)" {
   run clikae resume "no-such-session-id-xyz"
   [ "$status" -ne 0 ]
   # The error is resume's "No session", not the dispatcher's "Unknown command".
-  [[ "$output" == *"No session"* ]]
+  [[ "$output" == *"No session"* ]] || false
 }
 
 # --- resume ask-tank (lib/core/resume_settings.sh) -----------------------------
@@ -168,13 +168,13 @@ _seed_transcript() {
   [[ "$output" == *"dry-only"* ]] || false
   [ "$(cat "$CLIKAE_HOME/resume-ask-tank")" = "dry-only" ]
   run clikae resume ask-tank
-  [[ "$output" == *"dry-only"* ]]
+  [[ "$output" == *"dry-only"* ]] || false
 }
 
 @test "resume ask-tank rejects an unknown value" {
   run clikae resume ask-tank sometimes
   [ "$status" -ne 0 ]
-  [[ "$output" == *"Unknown choice"* ]]
+  [[ "$output" == *"Unknown choice"* ]] || false
 }
 
 # --- _resume_carry_session (lib/core/session_carry.sh) -------------------------

@@ -139,7 +139,7 @@ _fake_bin() {
   run _home_render_static "$items"
   [ "$status" -eq 0 ]
   [[ "$output" == *"launch"* ]] || false
-  [[ "$output" != *'\033'* ]]      # no literal escape leaked into the output
+  [[ "$output" != *'\033'* ]] || false      # no literal escape leaked into the output
 }
 
 # P3-5 (2026-09-14 round-2 review): _human_age moved to lib/core/duration.sh,
@@ -296,7 +296,7 @@ _agy_log() { # <line>
   [ "$status" -eq 0 ]
   [[ "$output" == *"agy"* ]] || false
   [[ "$output" == *"!"* ]] || false
-  [[ "$output" == *"Resets in 3h32m48s"* ]]   # the vendor's verbatim reset phrase
+  [[ "$output" == *"Resets in 3h32m48s"* ]] || false   # the vendor's verbatim reset phrase
 }
 
 @test "a log-only target (agy) with a clean quota log is NOT badged" {

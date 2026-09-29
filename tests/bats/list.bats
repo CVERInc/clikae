@@ -51,7 +51,7 @@ load '../helpers'
   [[ "$output" == *'"cli":"claude"'* ]] || false
   [[ "$output" == *'"profile":"work"'* ]] || false
   [[ "$output" == *"\"path\":\"$CLIKAE_HOME/profiles/claude/work\""* ]] || false
-  [[ "$output" == *'"account":null'* ]]      # not logged in in the test env
+  [[ "$output" == *'"account":null'* ]] || false      # not logged in in the test env
 }
 
 @test "list --json: account label appears when logged in" {
