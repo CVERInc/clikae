@@ -32,7 +32,7 @@ Backward compatible: yes (additive — the current `-- <cmd…>` form keeps work
 
 ## 1. Problem statement
 
-`clikae burn` already nails its core bet (artifact verification + dry-reroute + cross-account offload). The remaining friction, surfaced directly in the dogfood writeup (`docs/dogfood-burn-tugtile.md` § friction 1), is that **the caller must hand-assemble each engine's headless invocation by hand**:
+`clikae burn` already nails its core bet (artifact verification + dry-reroute + cross-account offload). The remaining friction, surfaced directly in a dogfood writeup (not included in this repository), is that **the caller must hand-assemble each engine's headless invocation by hand**:
 
 ```bash
 # claude — must remember -p + the skip-permissions flag + --add-dir
@@ -171,7 +171,7 @@ adapter_burn_flags <prompt> [add-dir…]   # optional hook; newline-per-argv; no
 
 ## 6. agy note
 
-agy stays rejected by burn (global single-account — `lib/commands/burn.sh` already errors early, and `docs/dogfood-burn-tugtile.md` postscript explains why). It simply won't define `adapter_burn_flags`. The separate "let burn drive agy via serialize-and-restore" idea from that postscript is **out of scope** for #24 and tracked elsewhere.
+agy stays rejected by burn (global single-account — `lib/commands/burn.sh` already errors early; a dogfood writeup's postscript, not included in this repository, explains why). It simply won't define `adapter_burn_flags`. The separate "let burn drive agy via serialize-and-restore" idea from that postscript is **out of scope** for #24 and tracked elsewhere.
 
 ## 7. Implementation sketch (files / functions)
 

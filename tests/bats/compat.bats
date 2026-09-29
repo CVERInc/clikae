@@ -302,24 +302,41 @@ _bash32_gate_floor() {
   [ "$checked" -lt "$floor" ]
 }
 
-@test "P3-2 (round-4 review): the docker gate's negative control — seed c673adb's claude.sh, it must go red" {
+@test "P3-2 (round-4 review): the docker gate's negative control — a synthesized bash-4-only file must go red" {
   # This is the review's own negative control for THIS gate specifically
   # (distinct from "the compat scans do not fire on their own documentation"
-  # above, which guards the grep-based scans): the historical claude.sh at
-  # c673adb is the file whose bash-4+ shape once broke CI's real macOS bash
-  # 3.2 with a genuine PARSE error (not a construct grep can name) — a
-  # disposable copy of it must make this gate fail, verbatim, with that
-  # error, or the gate is not actually exercising anything.
+  # above, which guards the grep-based scans): a file that is valid bash 4+
+  # but a PARSE error under bash 3.2 must make this gate fail, or the gate is
+  # not actually exercising anything.
+  #
+  # The control used to seed a historical claude.sh via `git show c673adb:…`.
+  # That commit is not reachable from a public clone (nor from CI's depth-1
+  # checkout), so the control skipped everywhere and never proved a thing. The
+  # fixture is now synthesized here: `;;&` (case fall-through-and-test) arrived
+  # in bash 4.0, and bash 3.2 rejects it at parse time.
   command -v docker >/dev/null 2>&1 ||
     skip "docker not on PATH — cannot run a real bash 3.2 to parse-check lib/ + bin/"
-  command -v git >/dev/null 2>&1 || skip "git not on PATH — cannot fetch c673adb's claude.sh"
   local probe="$TEST_HOME/negcontrol"
   mkdir -p "$probe/lib/adapters" "$probe/bin"
-  ( cd "$CLIKAE_TEST_ROOT" && git show c673adb:lib/adapters/claude.sh ) > "$probe/lib/adapters/claude.sh" \
-    || skip "c673adb:lib/adapters/claude.sh not reachable from this checkout"
+  cat > "$probe/lib/adapters/bash4only.sh" <<'FIXTURE'
+_bash4only() {
+  case "$1" in
+    a*) echo "starts with a" ;;&
+    *z) echo "ends with z" ;;
+  esac
+}
+FIXTURE
+  # The fixture must be GOOD bash 4+, or a red gate would only prove that a
+  # broken file is broken. Checked with the host bash when it is 4+ (macOS's
+  # /bin/bash is 3.2, so there this half has nothing to compare against).
+  if [ "${BASH_VERSINFO[0]}" -ge 4 ]; then
+    bash -n "$probe/lib/adapters/bash4only.sh" \
+      || { echo "fixture does not parse under bash $BASH_VERSION — it is not a bash-4-only construct" >&2; false; }
+  fi
   run _bash32_parse_gate "$probe"
   [ "$status" -ne 0 ]
-  [[ "$output" == *"unexpected EOF while looking for matching"* ]] || { echo "expected the verbatim bash 3.2 parse error, got: $output" >&2; false; }
+  [[ "$output" == *"checked=1"* ]] || { echo "expected the gate to check exactly the fixture, got: $output" >&2; false; }
+  [[ "$output" == *"syntax error near unexpected token"* ]] || { echo "expected the verbatim bash 3.2 parse error, got: $output" >&2; false; }
 }
 
 # --- PowerShell adapter table parity (informational; no Windows/pwsh needed) ----
