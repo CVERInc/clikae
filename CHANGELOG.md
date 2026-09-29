@@ -22,6 +22,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **wake checks that its nudge landed, and retries a refused one (#161).**
+  A successful `send-keys` used to be the whole verdict, so a "go" Claude
+  refused was logged `typed` and the waiter stopped. After typing it now
+  watches the tank's transcript for up to `WAKE_VERIFY_SECONDS` (180 s): a
+  new real turn is traced `confirmed`; a fresh limit line is `refused` and
+  retried after the backoff, from the same `WAKE_RETRY_MAX` budget; neither
+  is `no-effect`, logged and not retried, so wake never types a second "go"
+  without evidence. A tank with no transcript to read is traced `unverified`.
+  The check reads the whole tank's recent transcripts for now; #162 narrows
+  it to the parked session.
 - **An agy weekly wall is no longer recorded as a few-hour one (#151).** agy's
   429 sentence names one of two resets: a 2-5 h rolling window or a ~143 h
   weekly bucket. The dry check kept only the last "Resets in", so a window

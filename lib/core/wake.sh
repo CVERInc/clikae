@@ -37,8 +37,32 @@ WAKE_BUFFER_SECONDS=60
 # when the server agrees. A nudge that lands a moment early is refused and burns
 # nothing but a turn, so we retry a few times and then stop, visibly. Retrying
 # forever would turn a helper into something knocking on a door all night.
+#
+# ONE BUDGET, TWO REASONS TO SPEND IT: there was no pane to type into, or the
+# nudge was typed and the transcript answered it with a fresh limit line (see
+# wake_verify). Until #161 only the first existed, and this comment promised
+# the second: a refused "go" was logged as `typed` and the waiter went home.
 WAKE_RETRY_MAX=3
 WAKE_RETRY_BACKOFF=120
+
+# WAKE_VERIFY_SECONDS / WAKE_VERIFY_INTERVAL — how long, after typing, to watch
+# the transcript for the ANSWER to the nudge, and how often to look.
+#
+# `send-keys` succeeding says the keystrokes reached tmux, nothing more. What
+# actually says the conversation resumed is the engine writing a new turn. Two
+# answers arrive fast and one never arrives:
+#   · a real assistant line newer than the send      -> `confirmed`
+#   · a fresh synthetic limit line newer than the send -> `refused` (retry)
+#   · neither within the window                      -> `no-effect` (logged,
+#     NOT retried: with no evidence either way, a second "go" could land in a
+#     conversation that is working — the one harm this feature must not do)
+# A refusal is written within a second or two; a real turn's first line within
+# seconds, or a minute or two behind a long thinking block. Three minutes covers
+# both without turning a silent failure into a long one. Elapsed time is COUNTED
+# in intervals rather than read off the clock, so a test drives the whole
+# window with one-second slices (same device as wake_watch's _usage_slept).
+WAKE_VERIFY_SECONDS=180
+WAKE_VERIFY_INTERVAL=5
 
 # --- the trace ----------------------------------------------------------------
 #
@@ -297,6 +321,73 @@ wake_send() {
   return 0
 }
 
+# wake_turn_since <engine> <tank> <epoch> -> what the transcript says happened
+# AFTER <epoch>: echoes `confirmed` (a real turn, or the vendor's own
+# auto-continuation, is the newest event) or `refused` (a genuine limit line is
+# the newest), rc 0. rc 1 = nothing newer than <epoch> yet. rc 3 = there is no
+# transcript this can read for that tank (unknown tank, an engine whose limit
+# never lands in a file here, no projects dir) — "cannot tell", not "no".
+#
+# Reads the same readings wake_tank_recovered does (the tank's transcripts
+# touched in the 5h window, folded by _limit_claude_readings), because that is
+# the association the waiter already has between itself and a conversation.
+# 🔴 That is the WHOLE TANK, not the parked session: a subagent's or another
+# session's turn on the same tank can read as `confirmed`. #162 narrows both
+# callers to the parked session's own jsonl; this deliberately does not fork a
+# second notion of "which transcript" in the meantime.
+#
+# Stamps are compared as epochs, `>=` the send second: the send instant is
+# floored to a whole second, and a refusal can land inside that same second.
+# Nothing older can: the limit that parked the session is hours old, and a
+# previous attempt's refusal is a whole WAKE_RETRY_BACKOFF behind.
+wake_turn_since() {
+  local engine="$1" tank="$2" since="$3" dir files out maxL maxS reset s=0 l=0
+  [ "$engine" = "claude" ] && [ -n "$tank" ] || return 3
+  case "$since" in ''|*[!0-9]*) return 3 ;; esac
+  declare -F profile_dir >/dev/null 2>&1 || return 3
+  declare -F _limit_claude_readings >/dev/null 2>&1 || return 3
+  dir="$(profile_dir "$engine" "$tank" 2>/dev/null)" || return 3
+  [ -n "$dir" ] && [ -d "$dir/projects" ] || return 3
+  files="$(find "$dir/projects" -name '*.jsonl' -mmin -300 2>/dev/null)"
+  [ -n "$files" ] || return 1
+  out="$(_limit_claude_readings "$files")"
+  IFS=$'\037' read -r maxL maxS reset <<EOF
+$out
+EOF
+  : "$reset"
+  [ -n "$maxS" ] && s="$(_limit_iso_epoch "$maxS" 0)"
+  [ -n "$maxL" ] && l="$(_limit_iso_epoch "$maxL" 0)"
+  # A success newer than the send AND newer than any limit: the nudge took.
+  # ISO stamps sort as strings, which is how the scanner itself ranks them.
+  if [ "$s" -ge "$since" ] && { [ -z "$maxL" ] || [ "$maxS" \> "$maxL" ]; }; then
+    printf 'confirmed'; return 0
+  fi
+  if [ "$l" -ge "$since" ]; then
+    printf 'refused'; return 0
+  fi
+  return 1
+}
+
+# wake_verify <engine> <tank> <sent-epoch> -> echo the nudge's outcome:
+# confirmed | refused | no-effect | unverified. Always rc 0; the word is the
+# answer. Polls wake_turn_since every WAKE_VERIFY_INTERVAL for at most
+# WAKE_VERIFY_SECONDS, and returns the moment the transcript answers.
+wake_verify() {
+  local engine="$1" tank="$2" sent="$3" waited=0 v rc
+  while :; do
+    rc=0; v="$(wake_turn_since "$engine" "$tank" "$sent")" || rc=$?
+    case "$rc" in
+      0) printf '%s' "$v"; return 0 ;;
+      3) printf 'unverified'; return 0 ;;
+    esac
+    if [ "$waited" -ge "$WAKE_VERIFY_SECONDS" ]; then
+      printf 'no-effect'; return 0
+    fi
+    sleep "$WAKE_VERIFY_INTERVAL"
+    waited=$(( waited + WAKE_VERIFY_INTERVAL ))
+  done
+}
+
 # --- the preference: on by default, but asked once ---------------------------
 #
 # Decided 2026-08-12: automatically waking a limited tank is ON, but the FIRST
@@ -356,7 +447,8 @@ wake_enabled() {
 # --- the waiter --------------------------------------------------------------
 
 # wake_sit <session> <reset_epoch> [engine] [tank] -> 0 if the nudge was
-# delivered (or deliberately skipped), 1 if it gave up. This is the body that
+# delivered (confirmed, no-effect, unverified) or deliberately skipped, 1 if it
+# gave up (no pane, or every attempt refused). This is the body that
 # runs inside the tmux window; it blocks for hours.
 #
 # It reads the real clock on purpose — it IS the sleeper. What makes it testable
@@ -379,6 +471,11 @@ wake_enabled() {
 #      still dry no turn can be running, so a moving screen is a countdown
 #      re-rendering, not work in flight. Vetoing on it is what made this feature
 #      fire once in 24 limits.
+#   4. After typing: did it LAND? (wake_verify) A new real turn -> `confirmed`,
+#      done. A fresh limit line -> `refused`: back off and retry, from the same
+#      WAKE_RETRY_MAX budget as (2). Neither -> `no-effect`: logged and left
+#      alone, because typing again without evidence is how a second "go" lands
+#      in a conversation that is already working.
 #
 # Every one of those outcomes is written to the tank's trace (wake_trace), because
 # the previous version's whole account of itself was text in a window that dies
@@ -390,6 +487,9 @@ wake_sit() {
   engine="${_id%%$'\037'*}"; tank="${_id#*$'\037'}"
   local target=$(( reset + WAKE_BUFFER_SECONDS ))
   local attempt=0 now left
+  # Why the next retry is being spent. Reset each pass, so a pass that finds no
+  # pane after an earlier refusal reports the pane, not the stale refusal.
+  local _no_pane="no live pane to type into" _reason
   wake_trace "$engine" "$tank" "$session" "attached" \
     "reset $(wake_stamp "$reset") +${WAKE_BUFFER_SECONDS}s"
 
@@ -437,14 +537,18 @@ wake_sit() {
     # Target the ENGINE window, not whatever window is focused — the waiter's own
     # `wake` window may be the active one (the user was told to watch it here).
     local _etgt; _etgt="$(wake_engine_target "$session")"
+    _reason="$_no_pane"
     # (2) Something to type into. Not waivable, and the only thing the retries
     # below are still for.
     if wake_pane_live "$_etgt"; then
       # (3) Settle — and only a settle. wake_pane_idle sleeps for the settle
       # window either way; its VERDICT is now a note in the trace rather than a
       # gate, because a dry tank cannot be mid-turn (see its header).
-      local _bypassed=0
+      local _bypassed=0 _sent
       wake_pane_idle "$_etgt" 2 || _bypassed=1
+      # Taken BEFORE the keystrokes: an answer to the nudge can only be newer
+      # than this, and a refusal lands within a second of it.
+      _sent="$(date +%s)"
       if wake_send "$_etgt"; then
         # The countdown line is overwritten in place, so clear it first and then
         # let the badge speak: sending the nudge changed something, which is the
@@ -459,28 +563,62 @@ wake_sit() {
           wake_trace "$engine" "$tank" "$session" "typed" "\"$WAKE_NUDGE\" — pane idle"
           log_done "$(printf '%s — sent "%s" at %s' "$session" "$WAKE_NUDGE" "$(date '+%H:%M:%S')")"
         fi
-        return 0
+        # (4) Did it land? `typed` is what we did; this is what it caused.
+        local _verdict
+        _verdict="$(wake_verify "$engine" "$tank" "$_sent")"
+        case "$_verdict" in
+          confirmed)
+            wake_trace "$engine" "$tank" "$session" "confirmed" \
+              "a new turn landed after the nudge"
+            return 0 ;;
+          no-effect)
+            wake_trace "$engine" "$tank" "$session" "no-effect" \
+              "no new turn and no new limit within ${WAKE_VERIFY_SECONDS}s; not retried"
+            log_warn "$(printf '%s — no new turn within %ss of the nudge.' "$session" "$WAKE_VERIFY_SECONDS")"
+            printf '   Not typing again blind. Attach and check the session.\n'
+            return 0 ;;
+          refused)
+            _reason="the nudge was refused (a fresh limit line)"
+            wake_trace "$engine" "$tank" "$session" "refused" \
+              "a fresh limit line answered the nudge"
+            ;;
+          *)
+            # No transcript to read for this tank: exactly the old behaviour,
+            # said out loud so the trace does not imply a check that never ran.
+            wake_trace "$engine" "$tank" "$session" "unverified" \
+              "no transcript to check the nudge against"
+            return 0 ;;
+        esac
       fi
     fi
 
     attempt=$(( attempt + 1 ))
     wake_trace "$engine" "$tank" "$session" "attempt" \
-      "$attempt/$WAKE_RETRY_MAX — no live pane to type into"
+      "$attempt/$WAKE_RETRY_MAX — $_reason"
     if [ "$attempt" -ge "$WAKE_RETRY_MAX" ]; then
       # Stop visibly. A waiter that quietly disappears leaves someone believing
       # their work resumed; the window stays with the reason written in it — and
       # now the trace keeps it after the window is gone.
       printf '\r\033[K'
-      wake_trace "$engine" "$tank" "$session" "gave-up" \
-        "no live pane after $attempt attempt(s); nothing sent"
       log_warn "$(printf '%s — gave up after %s attempt(s).' "$session" "$attempt")"
-      printf '   The pane was not there to type into (the engine exited, or it died).\n'
-      printf '   Nothing was sent. Attach and continue by hand.\n'
+      if [ "$_reason" = "$_no_pane" ]; then
+        wake_trace "$engine" "$tank" "$session" "gave-up" \
+          "no live pane after $attempt attempt(s); nothing sent"
+        printf '   The pane was not there to type into (the engine exited, or it died).\n'
+        printf '   Nothing was sent. Attach and continue by hand.\n'
+      else
+        wake_trace "$engine" "$tank" "$session" "gave-up" \
+          "last nudge refused after $attempt attempt(s)"
+        printf '   The nudge was typed and refused: the limit has not lifted yet.\n'
+        printf '   Attach and continue by hand once it has.\n'
+      fi
       return 1
     fi
     printf '\r\033[K… %s — not ready (attempt %s/%s), retrying in %ss\n' \
       "$session" "$attempt" "$WAKE_RETRY_MAX" "$WAKE_RETRY_BACKOFF"
-    target=$(( now + WAKE_RETRY_BACKOFF ))
+    # A fresh clock: a refusal was learned after a verify window, so `now` from
+    # the top of the loop is stale by up to WAKE_VERIFY_SECONDS.
+    target=$(( $(date +%s) + WAKE_RETRY_BACKOFF ))
   done
 }
 
