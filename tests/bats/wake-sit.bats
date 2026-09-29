@@ -32,6 +32,52 @@ _src_wake() {
   WAKE_RETRY_MAX=2
   # shellcheck disable=SC2034  # read by the wake loop sourced above
   WAKE_RETRY_BACKOFF=1
+  # The post-send check (#161): two one-second looks, so a test whose pane
+  # never answers costs two seconds, not three minutes.
+  # shellcheck disable=SC2034  # read by the wake loop sourced above
+  WAKE_VERIFY_SECONDS=2
+  # shellcheck disable=SC2034  # read by the wake loop sourced above
+  WAKE_VERIFY_INTERVAL=1
+}
+
+# _responder <transcript> <out> <answer>... -> path of a script that stands in
+# for the engine: for each line typed into its pane it appends that line to
+# <out>, then appends the NEXT answer to <transcript>, stamped with the real
+# clock at that moment — `turn` (a real assistant line), `limit` (the
+# synthetic refusal Claude writes), or `none`. The last answer repeats.
+# A script file rather than an inline tmux command: the JSON's quotes would
+# otherwise have to survive three layers of shell.
+_responder() {
+  local tx="$1" out="$2" f="$BATS_TEST_TMPDIR/responder.sh"; shift 2
+  {
+    printf '#!/bin/bash\n'
+    printf 'tx=%q; out=%q; answers=(%s)\n' "$tx" "$out" "$*"
+    cat <<'SH'
+i=0
+while IFS= read -r line; do
+  printf '%s\n' "$line" >> "$out"
+  a="${answers[$i]:-${answers[${#answers[@]}-1]}}"
+  i=$((i + 1))
+  now="$(date -u '+%Y-%m-%dT%H:%M:%S.000Z')"
+  case "$a" in
+    turn)  printf '{"type":"assistant","message":{"model":"claude-opus","content":[{"type":"text","text":"Continuing."}]},"timestamp":"%s"}\n' "$now" >> "$tx" ;;
+    limit) printf '{"type":"assistant","isApiErrorMessage":true,"message":{"model":"<synthetic>","content":[{"type":"text","text":"You have hit your session limit · resets 8:20pm (Asia/Tokyo)"}]},"timestamp":"%s"}\n' "$now" >> "$tx" ;;
+  esac
+done
+sleep 30
+SH
+  } > "$f"
+  chmod +x "$f"
+  printf '%s' "$f"
+}
+
+# _parked <tank> -> a transcript for <tank> holding one OLD genuine limit (the
+# one that parked the session); prints its path.
+_parked() {
+  local proj="$CLIKAE_HOME/profiles/claude/$1/projects/p"
+  mkdir -p "$proj"
+  printf '%s\n' '{"type":"assistant","isApiErrorMessage":true,"message":{"model":"<synthetic>","content":[{"type":"text","text":"You have hit your session limit · resets 8:20pm (Asia/Tokyo)"}]},"timestamp":"2026-09-16T13:37:00.000Z"}' > "$proj/s.jsonl"
+  printf '%s' "$proj/s.jsonl"
 }
 
 _sess() { printf 'cksit-%s-%s' "$$" "${BATS_TEST_NUMBER:-0}"; }
@@ -200,20 +246,105 @@ teardown() {
   command -v tmux >/dev/null 2>&1 || skip "tmux not installed"
   _src_wake
   local tank; tank="$(_tankname)"
-  wake_tank_recovered() { return 1; }
+  local tx; tx="$(_parked "$tank")"
   local out="$BATS_TEST_TMPDIR/typed"
-  tmux new-session -d -s "$(_sess)" "read -r line; printf '%s' \"\$line\" > '$out'; sleep 10"
+  tmux new-session -d -s "$(_sess)" "$(_responder "$tx" "$out" turn)"
   sleep 1
   wake_sit "$(_sess)" "$(date +%s)" claude "$tank" >/dev/null
   local log="$CLIKAE_HOME/state/wake/claude-$tank.log"
   [ -f "$log" ] || { echo "no trace at $log"; false; }
   grep -q $'\tattached\t' "$log" || { cat "$log"; false; }
   grep -q $'\ttyped\t' "$log" || { cat "$log"; false; }
-  # …and the thing a person actually runs surfaces it.
+  grep -q $'\tconfirmed\t' "$log" || { cat "$log"; false; }
+  # …and the thing a person actually runs surfaces the LAST one: what the
+  # nudge caused, not merely that it was typed.
   run "$CLIKAE_BIN" wake
   [ "$status" -eq 0 ]
   [[ "$output" == *"claude-$tank"* ]] || { echo "$output"; false; }
-  [[ "$output" == *"typed"* ]] || { echo "$output"; false; }
+  [[ "$output" == *"confirmed"* ]] || { echo "$output"; false; }
+}
+
+# --- #161: did the nudge land? ------------------------------------------------
+#
+# `send-keys` succeeding used to be the whole verdict: a "go" Claude refused, or
+# one a modal swallowed, was logged `typed` and the waiter went home. These drive
+# the real loop against a real pane whose "engine" answers each line by writing
+# to the tank's real transcript, read through the real limit scanner.
+
+@test "verify: a nudge answered by a new turn is CONFIRMED, and typed once" {
+  command -v tmux >/dev/null 2>&1 || skip "tmux not installed"
+  _src_wake
+  local tank; tank="$(_tankname)"
+  local tx; tx="$(_parked "$tank")"
+  local out="$BATS_TEST_TMPDIR/typed"
+  tmux new-session -d -s "$(_sess)" "$(_responder "$tx" "$out" turn)"
+  sleep 1
+  run wake_sit "$(_sess)" "$(date +%s)" claude "$tank"
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  local log="$CLIKAE_HOME/state/wake/claude-$tank.log"
+  [ "$(tail -n 1 "$log" | cut -f3)" = "confirmed" ] || { cat "$log"; false; }
+  ! grep -q $'\trefused\t' "$log" || { cat "$log"; false; }
+  [ "$(grep -c . "$out")" -eq 1 ] || { cat "$out"; false; }
+}
+
+@test "verify: a nudge answered by a fresh limit is REFUSED, retried, and the retries are bounded" {
+  # WAKE_RETRY_MAX=2 here: two nudges, two refusals, then a visible give-up —
+  # never a third "go", and never a loop.
+  command -v tmux >/dev/null 2>&1 || skip "tmux not installed"
+  _src_wake
+  local tank; tank="$(_tankname)"
+  local tx; tx="$(_parked "$tank")"
+  local out="$BATS_TEST_TMPDIR/typed"
+  tmux new-session -d -s "$(_sess)" "$(_responder "$tx" "$out" limit)"
+  sleep 1
+  run wake_sit "$(_sess)" "$(date +%s)" claude "$tank"
+  [ "$status" -eq 1 ] || { echo "$output"; false; }
+  [[ "$output" == *"refused"* ]] || { echo "$output"; false; }
+  local log="$CLIKAE_HOME/state/wake/claude-$tank.log"
+  [ "$(grep -c $'\trefused\t' "$log")" -eq 2 ] || { cat "$log"; false; }
+  [ "$(tail -n 1 "$log" | cut -f3)" = "gave-up" ] || { cat "$log"; false; }
+  ! grep -q $'\tconfirmed\t' "$log" || { cat "$log"; false; }
+  sleep 1
+  [ "$(grep -c . "$out")" -eq 2 ] || { echo "typed $(grep -c . "$out") times"; false; }
+}
+
+@test "verify: a refusal is retried, and a retry that lands is CONFIRMED" {
+  # The refused test above would also pass for a waiter that gave up without
+  # ever retrying if the count were not checked; this one needs the retry to
+  # actually type again and read the second answer.
+  command -v tmux >/dev/null 2>&1 || skip "tmux not installed"
+  _src_wake
+  local tank; tank="$(_tankname)"
+  local tx; tx="$(_parked "$tank")"
+  local out="$BATS_TEST_TMPDIR/typed"
+  tmux new-session -d -s "$(_sess)" "$(_responder "$tx" "$out" limit turn)"
+  sleep 1
+  run wake_sit "$(_sess)" "$(date +%s)" claude "$tank"
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  local log="$CLIKAE_HOME/state/wake/claude-$tank.log"
+  [ "$(grep -c $'\trefused\t' "$log")" -eq 1 ] || { cat "$log"; false; }
+  [ "$(tail -n 1 "$log" | cut -f3)" = "confirmed" ] || { cat "$log"; false; }
+  [ "$(grep -c . "$out")" -eq 2 ] || { cat "$out"; false; }
+}
+
+@test "verify: a nudge with no answer is NO-EFFECT — logged once, never typed again" {
+  # The old limit that parked the session is still in the transcript; it must
+  # not be read as a refusal of the nudge (it is older than the send).
+  command -v tmux >/dev/null 2>&1 || skip "tmux not installed"
+  _src_wake
+  local tank; tank="$(_tankname)"
+  local tx; tx="$(_parked "$tank")"
+  local out="$BATS_TEST_TMPDIR/typed"
+  tmux new-session -d -s "$(_sess)" "$(_responder "$tx" "$out" none)"
+  sleep 1
+  run wake_sit "$(_sess)" "$(date +%s)" claude "$tank"
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  [[ "$output" == *"no new turn"* ]] || { echo "$output"; false; }
+  local log="$CLIKAE_HOME/state/wake/claude-$tank.log"
+  [ "$(tail -n 1 "$log" | cut -f3)" = "no-effect" ] || { cat "$log"; false; }
+  ! grep -q $'\trefused\t' "$log" || { cat "$log"; false; }
+  sleep 1
+  [ "$(grep -c . "$out")" -eq 1 ] || { echo "typed $(grep -c . "$out") times"; false; }
 }
 
 @test "trace: a waiter whose session is killed records WHY, where the window cannot" {
