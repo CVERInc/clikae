@@ -28,6 +28,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   hour apart, all traced `context=757329`; the second took 5,008 tokens in and
   left 10,773). The context is now read only from turns after the last compact
   boundary; with none yet, the watcher holds.
+- **`clikae burn --artifact <a directory>` no longer exits silently.** Sizing
+  the artifact for the status file ran `wc -c` on the directory, and under
+  `set -e` that ended the burn with exit 1 and nothing on screen. A non-file
+  now sizes as unknown (`?` in the summary, `null` in `--json`). Found because
+  two tests named the real `/tmp/x`, which was a directory on one machine;
+  they use the test's own temp dir now.
 - **wake checks that its nudge landed, and retries a refused one (#161).**
   A successful `send-keys` used to be the whole verdict, so a "go" Claude
   refused was logged `typed` and the waiter stopped. After typing it now

@@ -256,7 +256,18 @@ STUB
 @test "burn rejects agy with no raw '-- <cmd...>' form (no adapter to fill flags)" {
   mkdir -p "$HOME/.gemini"
   printf 'y\n' | "$CLIKAE_BIN" init agy work >/dev/null 2>&1
-  run clikae burn agy work --artifact /tmp/x -- run /tmp/x
+  run clikae burn agy work --artifact "$BATS_TEST_TMPDIR/x" -- run "$BATS_TEST_TMPDIR/x"
+  [ "$status" -ne 0 ]
+  [[ "$output" == *"no adapter"* ]] || false
+}
+
+@test "burn: an --artifact path that is a directory still gets its refusal on screen" {
+  # `/tmp/x` was a real directory on one machine, and the test above (which
+  # named it) exited 1 with nothing printed: sizing the artifact for the status
+  # file failed under `set -e` before any refusal could be reached.
+  mkdir -p "$HOME/.gemini" "$BATS_TEST_TMPDIR/adir"
+  printf 'y\n' | "$CLIKAE_BIN" init agy work >/dev/null 2>&1
+  run clikae burn agy work --artifact "$BATS_TEST_TMPDIR/adir" -- run x
   [ "$status" -ne 0 ]
   [[ "$output" == *"no adapter"* ]] || false
 }
@@ -2992,7 +3003,7 @@ _permission_argv() (
 # advisory now) fails before $HOME/.clikae/logs is ever created, so if the
 # advisory still prints here, it printed before any state existed.
 @test "burn #60: raw-argv --permission advisory fires before validate_name / any state work" {
-  run clikae burn codex 'bad name' --artifact /tmp/x --permission auto -- run /tmp/x
+  run clikae burn codex 'bad name' --artifact "$BATS_TEST_TMPDIR/x" --permission auto -- run "$BATS_TEST_TMPDIR/x"
   [ "$status" -ne 0 ]
   [[ "$output" == *'--permission does not modify raw engine argv; set the engine permission flag after --.'* ]] || false
   [ ! -d "$CLIKAE_HOME/logs" ]

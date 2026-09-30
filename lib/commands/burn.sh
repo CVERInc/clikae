@@ -838,9 +838,12 @@ EOF
 # run can't be mistaken for this run's success (2026-06-06 tugtile dogfood #2).
 # Whole-second resolution; a same-second overwrite is invisible (--fresh sidesteps it).
 
-# _burn_size <path> -> byte count, or "?" if absent (for the summary line).
+# _burn_size <path> -> byte count, or "?" if absent or not a file (for the
+# summary line). A directory must answer too: `wc -c < dir` fails, and under
+# bin/clikae's `set -eo pipefail` that failure ended the whole burn silently —
+# exit 1, no refusal on screen — the moment the status file was first written.
 _burn_size() {
-  if [ -e "$1" ]; then wc -c < "$1" 2>/dev/null | tr -d ' '; else printf '?'; fi
+  if [ -f "$1" ]; then wc -c < "$1" 2>/dev/null | tr -d ' '; else printf '?'; fi
 }
 
 # _burn_sweep_old_logs — best-effort retention for burn's own prompt-copy run
@@ -2556,6 +2559,8 @@ _burn_result() {
   elif [ -n "$art" ] && [ -e "$art" ]; then
     bytes="$(_burn_size "$art")"
   fi
+  # A number or null, never the summary line's "?" (a directory, a vanished file).
+  case "$bytes" in ''|*[!0-9]*) bytes=null ;; esac
   printf '{"ok":%s,"engine":%s,"tank":%s,"artifact":%s,"artifact_bytes":%s,"reason":%s,"reset":%s,"rerouted_from":[%s],"elapsed_s":%s,"queued_for_s":%s,"run_id":%s,"resumed":%s,"left_behind":%s,%s}\n' \
     "$ok" "$(json_or_null "$eng")" "$(json_or_null "$tk")" "$(json_or_null "$art")" \
     "${bytes:-null}" "$(json_str "$reason")" "$(json_or_null "$reset")" \
