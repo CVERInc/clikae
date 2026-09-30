@@ -22,6 +22,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Warm `/compact` no longer compacts a summary again.** A compaction writes
+  no assistant turn, so the transcript's last `usage` stayed the pre-compact
+  one and an idle cockpit was compacted again every 50 minutes (three sends an
+  hour apart, all traced `context=757329`; the second took 5,008 tokens in and
+  left 10,773). The context is now read only from turns after the last compact
+  boundary; with none yet, the watcher holds.
 - **wake checks that its nudge landed, and retries a refused one (#161).**
   A successful `send-keys` used to be the whole verdict, so a "go" Claude
   refused was logged `typed` and the waiter stopped. After typing it now
