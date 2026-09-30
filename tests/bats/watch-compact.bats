@@ -129,6 +129,48 @@ teardown() {
     "$(wake_log_file claude t1 "")"
 }
 
+@test "compact: a compaction with no turn after it -> holds (never a summary of a summary)" {
+  command -v tmux >/dev/null 2>&1 || skip "tmux not installed"
+  command -v jq >/dev/null 2>&1 || skip "jq not installed"
+  _src
+  # The big turn is still the transcript's last usage; the boundary says that
+  # context is gone.
+  _transcript 750000; _pane ""
+  printf '{"type":"system","subtype":"compact_boundary","compactMetadata":{"preTokens":750010}}\n{"type":"user","isCompactSummary":true,"message":{"content":"summary"}}\n' >> "$TX"
+  run compact_tick claude t1 "$S" "$(_idle_now)"
+  [ "$status" -eq 1 ]
+  [ "$output" = "hold: already-compacted" ]
+  [ ! -e "$TYPED" ]
+}
+
+@test "compact: after a compaction, only the turns since it are the context" {
+  command -v tmux >/dev/null 2>&1 || skip "tmux not installed"
+  command -v jq >/dev/null 2>&1 || skip "jq not installed"
+  _src
+  _transcript 750000
+  { printf '{"type":"system","subtype":"compact_boundary"}\n'; _usage 2 44000 25000; } >> "$TX"
+  run compact_context_tokens "$TX"
+  [ "$output" = $'69002\t44000' ]
+  _pane ""
+  run compact_tick claude t1 "$S" "$(_idle_now)"
+  [ "$output" = "hold: small-context" ]
+  # Grown big again since: that is a new context, and it is compacted.
+  _usage 2 0 300000 >> "$TX"
+  run compact_tick claude t1 "$S" "$(_idle_now)"
+  [ "$status" -eq 0 ]
+  grep -q $'\tcompact-sent\tcontext=300002 idle=' "$(wake_log_file claude t1 "")"
+}
+
+@test "compact: a transcript that only QUOTES a boundary is not compacted-already" {
+  _src
+  _transcript 250000
+  # Message text carrying the marker: its quotes are escaped inside the JSON.
+  printf '%s\n' '{"type":"user","message":{"content":"grep \"subtype\":\"compact_boundary\" f"}}' >> "$TX"
+  run compact_context_tokens "$TX"
+  [ "$status" -eq 0 ]
+  [ "$output" = $'250010\t0' ]
+}
+
 @test "compact: not idle long enough -> holds, nothing typed" {
   command -v tmux >/dev/null 2>&1 || skip "tmux not installed"
   _src

@@ -33,9 +33,17 @@
 #
 # 🔴 ONCE PER IDLE PERIOD. The idle period is identified by the transcript's
 # mtime at the moment of the send. The compaction itself writes to the
-# transcript, so the next idle period has a different mtime — and by then the
-# context is the summary, well under the threshold. A send that did not take
-# (the engine ignored it) is not retried inside the same period.
+# transcript, so the next idle period has a different mtime. A send that did
+# not take (the engine ignored it) is not retried inside the same period.
+#
+# 🔴 ONCE PER CONTEXT. A compaction writes a boundary line and a summary, but no
+# assistant turn — so the transcript's last `usage` is still the one from
+# BEFORE it. Read naively, a cockpit left idle keeps looking as big as it was
+# and gets compacted again every 50 minutes: a summary of a summary, which only
+# loses detail (2026-09-30: three sends an hour apart, all logged
+# context=757329, while the second one's own boundary recorded 5,008 tokens in
+# and 10,773 out). So (4) counts only turns AFTER the last compact boundary;
+# none yet means the context is the summary, and it holds (`already-compacted`).
 #
 # EVERY ACTION IS WRITTEN DOWN, in the waiter's own trace (wake_trace, one file
 # per tank under state/wake/), so `clikae watch compact` and `clikae wake` can
@@ -170,13 +178,31 @@ _compact_usage_rows() {
     | select(.[0] > 0) | @tsv' 2>/dev/null || true
 }
 
+# The engine's own compaction marker, as a JSON key/value. Inside message text
+# (a transcript that QUOTES one) the quotes are escaped, so this never matches.
+_COMPACT_BOUNDARY='"subtype":"compact_boundary"'
+
+# _compact_since_boundary -> stdin's lines after the LAST compact boundary (all
+# of them when there is none).
+_compact_since_boundary() {
+  awk -v pat="$_COMPACT_BOUNDARY" '
+    index($0, pat) { n = 0; next }
+    { buf[++n] = $0 }
+    END { for (i = 1; i <= n; i++) print buf[i] }'
+}
+
 # compact_context_tokens <transcript> -> "<context>\t<cache_creation>" of the
-# LAST real turn, or nothing (return 1) when none is in the recent tail.
+# LAST real turn since the last compaction. Nothing when there is none in the
+# recent tail: return 2 when that is because a compaction is the last thing
+# that happened (the context is its summary), 1 otherwise.
 compact_context_tokens() {
   local f="$1" row
   [ -f "$f" ] || return 1
-  row="$(transcript_tail "$f" | _compact_usage_rows | tail -n 1)"
-  [ -n "$row" ] || return 1
+  row="$(transcript_tail "$f" | _compact_since_boundary | _compact_usage_rows | tail -n 1)"
+  if [ -z "$row" ]; then
+    transcript_tail "$f" | grep -aqF "$_COMPACT_BOUNDARY" && return 2
+    return 1
+  fi
   printf '%s\n' "$row"
 }
 
@@ -224,8 +250,8 @@ _compact_verify() {
   [ -n "$f" ] && [ -f "$f" ] || return 0
   after="$(tail -c "+$((_COMPACT_PENDING_OFFSET + 1))" "$f" 2>/dev/null)"
   # Only turns AFTER the compaction count; the summary call itself is not one.
-  printf '%s' "$after" | grep -aq '"compact_boundary"' || return 0
-  row="$(printf '%s\n' "$after" | awk '/"compact_boundary"/ { on = 1; next } on' | _compact_usage_rows | head -n 1)"
+  printf '%s' "$after" | grep -aqF "$_COMPACT_BOUNDARY" || return 0
+  row="$(printf '%s\n' "$after" | awk -v pat="$_COMPACT_BOUNDARY" 'index($0, pat) { on = 1; next } on' | _compact_usage_rows | head -n 1)"
   [ -n "$row" ] || return 0
   local ctx cre
   IFS=$'\t' read -r ctx cre <<< "$row"
@@ -253,8 +279,10 @@ compact_tick() {
   [ "$mt" != "$_COMPACT_SENT_MTIME" ] || { _compact_why sent-this-period; return 1; }
   [ $((now - mt)) -ge "$COMPACT_IDLE_SECONDS" ] || { _compact_why not-idle; return 1; }
 
-  local row ctx
-  row="$(compact_context_tokens "$f")" || { _compact_why no-usage; return 1; }
+  local row ctx rc=0
+  row="$(compact_context_tokens "$f")" || rc=$?
+  [ "$rc" -ne 2 ] || { _compact_why already-compacted; return 1; }
+  [ "$rc" -eq 0 ] || { _compact_why no-usage; return 1; }
   ctx="${row%%$'\t'*}"
   [ "$ctx" -ge "$(_compact_min_tokens)" ] 2>/dev/null || { _compact_why small-context; return 1; }
 
