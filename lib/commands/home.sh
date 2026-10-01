@@ -4223,7 +4223,7 @@ EOF
 _home_update_prompt() {
   update_check_refresh
   local latest; latest="$(update_check_pending)" || return 0
-  local cmd; cmd="$(update_upgrade_command)"
+  local cmd; cmd="$(update_upgrade_command "$latest")"
   # The banner doubles as the menu title (_home_choose prints the title above the
   # options, codex-style). Release-notes link on its own line.
   #

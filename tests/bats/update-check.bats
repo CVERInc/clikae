@@ -145,6 +145,27 @@ _seed_cache() { # <version>  (stamp = now, so refresh sees it as fresh and skips
   [ "$output" = "curl" ]
 }
 
+@test "update_install_method: a clone of the repo is git; the command checks out the offered tag" {
+  _src
+  export CLIKAE_ROOT="$TEST_HOME/src/clikae"
+  mkdir -p "$CLIKAE_ROOT/bin" "$CLIKAE_ROOT/.git"; : > "$CLIKAE_ROOT/bin/clikae"
+  run update_install_method
+  [ "$output" = "git" ]
+  run update_upgrade_command 0.38.0
+  [ "$output" = "git -C $CLIKAE_ROOT fetch --tags --quiet origin && git -C $CLIKAE_ROOT checkout --quiet v0.38.0" ]
+  # No version named: nothing to check out, so no command (the prompt falls back to the release page).
+  run update_upgrade_command
+  [ -z "$output" ]
+}
+
+@test "update_install_method: a .git beside something that is not clikae is still unknown" {
+  _src
+  export CLIKAE_ROOT="$TEST_HOME/some/other/repo"
+  mkdir -p "$CLIKAE_ROOT/.git"
+  run update_install_method
+  [ "$output" = "unknown" ]
+}
+
 @test "update_install_method: anywhere else is unknown (no upgrade command, never guess-run)" {
   _src
   export CLIKAE_ROOT="$TEST_HOME/some/dev/checkout"

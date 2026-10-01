@@ -120,9 +120,12 @@ update_check_skip() {
   printf '%s\n' "$1" > "$f" 2>/dev/null || true
 }
 
-# update_install_method -> brew | curl | unknown, from the RESOLVED install root
-# (CLIKAE_ROOT already follows symlinks). brew's libexec lives under .../Cellar/clikae/;
-# the curl installer lands under ~/.local. Anything else → unknown (we won't guess).
+# update_install_method -> brew | git | curl | unknown, from the RESOLVED install
+# root (CLIKAE_ROOT already follows symlinks). brew's libexec lives under
+# .../Cellar/clikae/; a clone of this repository has its own .git (a Linux host
+# with no brew — reefbox — runs one, checked out at a release tag and reached
+# through a ~/.local/bin symlink); the curl installer lands under ~/.local.
+# Anything else → unknown (we won't guess).
 update_install_method() {
   case "$CLIKAE_ROOT" in
     */Cellar/clikae/*) printf 'brew'; return 0 ;;
@@ -131,17 +134,22 @@ update_install_method() {
     local p; p="$(brew --prefix 2>/dev/null || true)"
     [ -n "$p" ] && case "$CLIKAE_ROOT" in "$p"/*) printf 'brew'; return 0 ;; esac
   fi
+  if [ -e "$CLIKAE_ROOT/.git" ] && [ -f "$CLIKAE_ROOT/bin/clikae" ]; then printf 'git'; return 0; fi
   case "$CLIKAE_ROOT" in
     "$HOME"/.local|"$HOME"/.local/*) printf 'curl'; return 0 ;;
   esac
   printf 'unknown'
 }
 
-# update_upgrade_command -> the exact shell command that upgrades THIS install, or
-# empty when the method is unknown (caller then just shows the release page).
+# update_upgrade_command [<version>] -> the exact shell command that upgrades THIS
+# install, or empty when the method is unknown (caller then just shows the
+# release page). A git checkout moves to the release TAG it was offered, not to
+# a branch head: that is what the prompt named, and what the tap would ship.
+# Without a version it has nothing to check out and stays empty.
 update_upgrade_command() {
   case "$(update_install_method)" in
     brew) printf 'brew upgrade clikae' ;;
+    git)  [ -n "${1:-}" ] && printf 'git -C %q fetch --tags --quiet origin && git -C %q checkout --quiet v%s' "$CLIKAE_ROOT" "$CLIKAE_ROOT" "$1" ;;
     curl) printf 'curl -fsSL https://raw.githubusercontent.com/CVERInc/clikae/main/install.sh | bash' ;;
     *)    printf '' ;;
   esac

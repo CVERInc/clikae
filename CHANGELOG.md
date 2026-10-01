@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **The update prompt can upgrade a git checkout.** A clone of this repository
+  (a Linux host with no brew, checked out at a release tag and reached through
+  a `~/.local/bin` symlink) used to be `unknown`, so the board could only show
+  the release page and the person had to leave clikae to update. It is now
+  `git`: option 1 fetches tags and checks out the offered release's tag.
+
 ## [0.38.0] — 2026-10-01
 
 ### Added
