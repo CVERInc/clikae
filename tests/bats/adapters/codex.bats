@@ -287,3 +287,66 @@ seed_rollout() {
   run adapter_recent_sids "$PROFILE" 10
   [ "${output#*$'\037'}" = "019E0000-0000-7000-8000-0000000FA57A" ] || { printf '%q\n' "$output"; false; }
 }
+
+# --- adapter_session_mode: a subagent thread is not a session a person opened --
+# Measured on a real tank (78 rollouts, codex 0.154–0.160, 2026-10-02): the 8
+# threads the TUI's own multi-agent feature spawned all carry
+# `"thread_source":"subagent"` and a `source` OBJECT keyed `subagent` — and all
+# 8 inherit their parent's `"originator":"codex-tui"`. Read by originator alone
+# they are "interactive" and fill the board's Continue list with the parent's
+# briefs, which is #153 again on another engine.
+
+# seed_meta <sid> <payload-tail> [hhmmss] — a session_meta whose payload opens
+# the way a real 0.160.0 one does (session_id BEFORE id, cwd before originator)
+# and ends with <payload-tail>, verbatim.
+seed_meta() {
+  local sid="$1" tail="$2" ts="${3:-10-00-00}"
+  local f="$SDIR/2026/06/03/rollout-2026-06-03T$ts-$sid.jsonl"
+  {
+    printf '{"timestamp":"2026-06-03T01:00:00.000Z","ordinal":0,"type":"session_meta","payload":{"session_id":"019e0000-0000-7000-8000-00000000cafe","id":"%s","cwd":"%s",%s}}\n' "$sid" "$WORK" "$tail"
+    printf '{"type":"event_msg","payload":{"type":"user_message","message":"brief"}}\n'
+  } > "$f"
+}
+
+@test "codex adapter_session_mode: a subagent thread is headless though its originator says codex-tui" {
+  _setup_codex
+  local sub=019e0000-0000-7000-8000-0000000000a1
+  seed_meta "$sub" '"parent_thread_id":"019e0000-0000-7000-8000-00000000cafe","originator":"codex-tui","source":{"subagent":{"thread_spawn":{"parent_thread_id":"019e0000-0000-7000-8000-00000000cafe","depth":1}}},"thread_source":"subagent","agent_nickname":"Curie"'
+  run adapter_session_mode "$PROFILE" "$sub"
+  [ "$output" = headless ] || { echo "got: $output"; false; }
+  [ "$status" -eq 1 ]
+}
+
+@test "codex adapter_session_mode: either signal alone is enough — thread_source, or the source object" {
+  _setup_codex
+  local a=019e0000-0000-7000-8000-0000000000b1 b=019e0000-0000-7000-8000-0000000000b2
+  seed_meta "$a" '"originator":"codex-tui","source":"vscode","thread_source":"subagent"' 10-00-01
+  seed_meta "$b" '"originator":"codex-tui","source":{"subagent":{"thread_spawn":{"depth":1}}}' 10-00-02
+  run adapter_session_mode "$PROFILE" "$a"
+  [ "$output" = headless ] || { echo "thread_source alone: $output"; false; }
+  run adapter_session_mode "$PROFILE" "$b"
+  [ "$output" = headless ] || { echo "source object alone: $output"; false; }
+}
+
+# 🔴 STRUCTURE, NEVER TEXT. A person's own session whose instructions (or whose
+# working directory) merely SAY the words stays on the board: inside a JSON
+# string every quote is escaped, so the structural bytes cannot occur there.
+@test "codex adapter_session_mode: a human session that only mentions the words is interactive" {
+  _setup_codex
+  local h=019e0000-0000-7000-8000-0000000000c1
+  seed_meta "$h" '"originator":"codex-tui","source":"vscode","thread_source":"user","base_instructions":{"text":"a rollout says \"thread_source\":\"subagent\" and \"source\":{\"subagent\":{}} when it is one"}'
+  run adapter_session_mode "$PROFILE" "$h"
+  [ "$output" = interactive ] || { echo "got: $output"; false; }
+  [ "$status" -eq 0 ]
+}
+
+@test "codex adapter_session_mode: codex exec stays headless, no originator stays unknown" {
+  _setup_codex
+  local e=019e0000-0000-7000-8000-0000000000d1 u=019e0000-0000-7000-8000-0000000000d2
+  seed_meta "$e" '"originator":"codex_exec","source":"exec","thread_source":"user"' 10-00-03
+  seed_meta "$u" '"cli_version":"0.100.0"' 10-00-04
+  run adapter_session_mode "$PROFILE" "$e"
+  [ "$output" = headless ] && [ "$status" -eq 1 ] || { echo "exec: $output/$status"; false; }
+  run adapter_session_mode "$PROFILE" "$u"
+  [ "$output" = unknown ] && [ "$status" -eq 0 ] || { echo "no originator: $output/$status"; false; }
+}
