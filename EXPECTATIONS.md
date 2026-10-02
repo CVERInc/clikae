@@ -3,7 +3,7 @@
 A field guide to clikae behaviours that **look** like bugs but are deliberate —
 usually because a vendor's real nature leaks through clikae's uniform "tank" model.
 If something here surprised you, it's working as intended; the *why* is below.
-(For things that are actually broken, see the [CHANGELOG](https://github.com/CVERInc/clikae/blob/422cc57be252d6aed344b11da24e604360c6b1ec/CHANGELOG.md) /
+(For things that are actually broken, see the [CHANGELOG](https://github.com/CVERInc/clikae/blob/299b23fb18df45a64713e2357a016c05e646ab45/CHANGELOG.md) /
 [issues](https://github.com/CVERInc/clikae/issues).)
 
 ## Fuel gauge & limits
@@ -270,14 +270,16 @@ in `state/burn-sessions/<engine>/<tank>`, keyed by engine id for every engine
 there by the next command you run (merged line by line if both exist).
 
 **The Resume rows are sessions a person opened — nothing an engine ran on its
-own (#153).** agy subagent conversations, `claude -p` / SDK runs and `codex
-exec` runs are left off the board, whoever started them. What decides is what
+own (#153).** agy and codex subagent conversations, `claude -p` / SDK runs and
+`codex exec` runs are left off the board, whoever started them. What decides is what
 the engine itself recorded about the session, never what its first message
 says: for agy, the conversation's own metadata names a parent conversation or
 carries an agent configuration (the `self` subagent and built-in agents such
 as `research` alike); for claude, the transcript's `entrypoint` (`cli` is the
 terminal UI, `sdk-cli` is print/SDK mode); for codex, the rollout's
-`originator` (`codex-tui` versus `codex_exec`). A human's agy conversation and
+`thread_source` first (a thread the terminal UI's own multi-agent feature
+spawned says `subagent`, and carries its parent's `originator`, so it is asked
+before that), then its `originator` (`codex-tui` versus `codex_exec`). A human's agy conversation and
 a `clikae burn`'s look the same in agy's metadata, so agy burns are hidden the
 way every engine's are, by the burn record above. A session whose kind cannot
 be read at all — no metadata, an older transcript that never recorded it — is
