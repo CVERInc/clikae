@@ -15,6 +15,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the release page and the person had to leave clikae to update. It is now
   `git`: option 1 fetches tags and checks out the offered release's tag.
 
+### Fixed
+
+- **The home board no longer lists codex subagent threads (#153 on codex).**
+  The terminal UI's multi-agent feature writes each thread it spawns as a
+  rollout of its own, in the same store and the same directory as the session
+  that spawned it — and with that session's `originator`, so the board read
+  them as conversations a person had opened and filled the Continue list with
+  the parent's briefs. What says otherwise is the rollout's own
+  `thread_source` (`subagent`) and its `source`, an object keyed `subagent`
+  rather than a string; either one is enough, and both are read before
+  `originator`. Measured on a real tank: 8 of 8 subagent threads carried both,
+  and the one session a person opened is the one row left.
+
 ## [0.38.0] — 2026-10-01
 
 ### Added

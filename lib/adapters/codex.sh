@@ -657,18 +657,59 @@ EOF
 }
 
 # Optional hook (#153): interactive / headless / unknown — see
-# antigravity.sh's twin for the contract. The signal is session_meta's own
-# "originator" (first line of the rollout, already read by _codex_meta_field
-# and cached): "codex_exec" is `codex exec` — headless, what `clikae burn`
-# and `conduct` run — and "codex-tui" is the interactive TUI. Both values are
-# from real rollouts already cited in this repo (lib/core/limit.sh's codex
-# limit reader; tests/bats/limit-codex-status.bats). Anything else, or no
-# originator at all, is `unknown` and stays on the board.
+# antigravity.sh's twin for the contract. Everything read here is session_meta
+# (the rollout's first line), never the conversation's text.
+#
+# 🔴 A SUBAGENT THREAD IS ASKED FIRST, AND ORIGINATOR CANNOT ANSWER IT. The
+# TUI's own multi-agent feature writes each thread it spawns as a rollout of
+# its own, in the same store, with the parent's cwd and the PARENT'S
+# originator. Measured on a real tank (78 rollouts, codex 0.154–0.160,
+# 2026-10-02):
+#
+#   originator   thread_source   source                    count
+#   codex_exec   user            "exec"                       69
+#   codex-tui    subagent        {"subagent":{…}}              8
+#   codex-tui    user            "vscode"                      1
+#
+# Read by originator alone, those 8 were "interactive" and filled the Continue
+# list with their parent's briefs. A thread is a subagent when EITHER holds,
+# and both are checked — the same shape as agy's twin, so that a release which
+# renames one of them is still caught by the other:
+#   - `"thread_source":"subagent"`, or
+#   - `source` is an OBJECT whose first key is `subagent` (a session a person
+#     or `codex exec` started has a string there).
+# `parent_thread_id` is on all 8 too and is deliberately NOT a signal: nothing
+# measured says a person's own fork does not carry one, and hiding a
+# conversation someone opened is the worse mistake.
+#
+# These are matched as bytes on the raw line, which is safe because the line is
+# JSON: inside any string value (base_instructions is 22 KB of prose, and cwd
+# is whatever the person named a directory) every quote is escaped, so
+# `"thread_source":"subagent"` with bare quotes can only be structure. Pinned
+# by a counter-specimen in tests/bats/adapters/codex.bats.
+#
+# Then "originator": "codex_exec" is `codex exec` — headless, what `clikae
+# burn` and `conduct` run — and "codex-tui" is the interactive TUI. Anything
+# else, or no originator at all, is `unknown` and stays on the board.
 adapter_session_mode() {
-  local dir="$1" sid="$2" f o
+  local dir="$1" sid="$2" f
   f="$(_codex_find_rollout "$dir" "$sid")"
   if [ -z "$sid" ] || [ -z "$f" ] || [ ! -f "$f" ]; then printf 'unknown'; return 2; fi
-  o="$(_codex_meta_field "$f" originator 2>/dev/null || true)"
+  if declare -F reading_cache_run >/dev/null; then
+    reading_cache_run codex-mode "$f" _codex_mode_uncached "$f"
+  else
+    _codex_mode_uncached "$f"
+  fi
+}
+
+_codex_mode_uncached() {
+  local LC_ALL=C
+  local first_line="" o=""
+  local sub_re='"thread_source": *"subagent"|"source": *\{ *"subagent" *:'
+  local org_re='"originator": *"([^"]*)"'
+  read -r first_line < "$1" 2>/dev/null || true
+  if [[ "$first_line" =~ $sub_re ]]; then printf 'headless'; return 1; fi
+  [[ "$first_line" =~ $org_re ]] && o="${BASH_REMATCH[1]}"
   case "$o" in
     codex_exec) printf 'headless';    return 1 ;;
     codex-tui)  printf 'interactive'; return 0 ;;

@@ -230,6 +230,31 @@ _claude_tx() {   # <dir> <sid> <entrypoint|-> <title> <stamp>
   [[ "$output" != *"EXEC-"* ]] || { echo "headless listed: $output"; false; }
 }
 
+# The TUI's own multi-agent feature writes each subagent thread as a rollout of
+# its own, in the same store, with the parent's cwd AND the parent's
+# originator ("codex-tui"). What says so is session_meta's `thread_source`.
+@test "#153: codex — a subagent thread of a TUI session is not on the board" {
+  clikae init codex a >/dev/null
+  local work="$TEST_HOME/work"; mkdir -p "$work"
+  local sdir="$CLIKAE_HOME/profiles/codex/a/sessions/2026/06/03"; mkdir -p "$sdir"
+  local i sid f parent="019e0000-0000-7000-8000-000000000001"
+  f="$sdir/rollout-2026-06-03T09-00-00-$parent.jsonl"
+  { printf '{"type":"session_meta","payload":{"session_id":"%s","id":"%s","cwd":"%s","originator":"codex-tui","source":"vscode","thread_source":"user"}}\n' "$parent" "$parent" "$work"
+    printf '{"type":"event_msg","payload":{"type":"user_message","message":"HUMAN-TUI session"}}\n'; } > "$f"
+  touch -t 202001010000 "$f"
+  for i in 1 2 3 4 5 6 7 8 9 10 11 12; do
+    sid="019e9999-0000-7000-8000-0000000000$(printf %02d "$i")"
+    f="$sdir/rollout-2026-06-03T10-00-$(printf %02d "$i")-$sid.jsonl"
+    { printf '{"type":"session_meta","payload":{"session_id":"%s","id":"%s","parent_thread_id":"%s","cwd":"%s","originator":"codex-tui","source":{"subagent":{"thread_spawn":{"parent_thread_id":"%s","depth":1}}},"thread_source":"subagent"}}\n' "$parent" "$sid" "$parent" "$work" "$parent"
+      printf '{"type":"event_msg","payload":{"type":"user_message","message":"SUBAGENT-%s brief"}}\n' "$i"; } > "$f"
+  done
+  cd "$work"
+  run clikae
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  [[ "$output" == *"HUMAN-TUI session"* ]] || { echo "$output"; false; }
+  [[ "$output" != *"SUBAGENT-"* ]] || { echo "subagent listed: $output"; false; }
+}
+
 @test "#153: a title is one line — newlines, tabs, ESC and the field separator become spaces" {
   source "$CLIKAE_LIB/commands/home.sh"
   _home_title_linev $'first\nsecond\r\tthird \033[31mred\037field   end' 120
