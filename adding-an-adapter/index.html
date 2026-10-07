@@ -180,7 +180,7 @@ implementation to read.</p>
 </tr>
 <tr>
 <td><code>adapter_relay &lt;from&gt; &lt;to&gt;</code></td>
-<td><code>clikae to</code> / <code>relay</code> can carry a <strong>live</strong> session across tanks. Without it, the carry starts a clean session and says so.</td>
+<td><code>clikae to</code> / <code>relay</code> can carry a <strong>live</strong> session across tanks. Copy only — set <code>ADAPTER_RELAY_SID=&lt;sid&gt;</code> and return 0; relay launches it through the normal <code>clikae &lt;engine&gt; &lt;tank&gt;</code> launcher (tmux when available). Without it, the carry starts a clean session and says so.</td>
 <td>claude</td>
 </tr>
 <tr>

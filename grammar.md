@@ -81,7 +81,7 @@ one line per drifted tank. Requires `jq`; a missing template or missing `jq` is
 reported and skipped, not a hard failure — a tank always finishes creating.
 Skip the template on a single tank with `clikae init claude <tank> --no-template`
 or machine-wide with `CLIKAE_NO_PERMISSIONS_TEMPLATE=1`. See
-[the seed documentation](https://github.com/CVERInc/clikae/blob/299b23fb18df45a64713e2357a016c05e646ab45/templates/permissions/README.md).
+[the seed documentation](https://github.com/CVERInc/clikae/blob/2ceb539f4bf6064b36110a4aeafcfa05f12ce178/templates/permissions/README.md).
 
 ### 3.1 Switching — the elided verb
 
