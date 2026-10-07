@@ -1031,6 +1031,7 @@ adapter_relay() {
   # (CVERInc/clikae-lab#1, 2026-10-07). The adapter knows the profile DIR, not
   # the tank name the launcher keys on, so it reports the carried sid and
   # cmd_relay hands it to the same launcher as `clikae claude <tank>`.
+  # shellcheck disable=SC2034  # ADAPTER_RELAY_SID is an output slot, read by lib/commands/relay.sh.
   ADAPTER_RELAY_SID="$sid"
   return 0
 }
