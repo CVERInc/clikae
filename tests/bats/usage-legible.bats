@@ -332,7 +332,11 @@ _lg_cache() {
   sort "$log" > "$log.s"
   [ "$(cat "$log.s")" = "$(printf 'claude exp\nclaude stale\ncodex none')" ] || { cat "$log.s"; false; }
   # Opening the board never spends quota: no --wake anywhere on this path.
-  if declare -f _home_usage_refresh_on_open _home_usage_refresh_one | grep -q -- '--wake'; then
+  # Read the SOURCE, not `declare -f`: _home_usage_refresh_one is stubbed above.
+  local body
+  body="$(awk '/^_home_usage_refresh_(on_open|one)\(\) \{/{f=1} f{print} f&&/^}/{f=0}' "$CLIKAE_LIB/commands/home.sh")"
+  [ -n "$body" ] || { echo "refresh functions not found in home.sh"; false; }
+  if printf '%s\n' "$body" | grep -q -- '--wake'; then
     echo "board-open path runs --wake"; false
   fi
   # The stub never clears its marker = still in flight: a re-open fires nothing.
