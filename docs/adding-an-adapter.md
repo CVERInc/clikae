@@ -58,7 +58,7 @@ implementation to read.
 | **Headless + fleet** | | |
 | `adapter_start_with_prompt` | Marks the engine as an **AI engine** — it's what the new-tank picker classifies on, and what `burn` needs to start a task. | claude, codex, grok |
 | `adapter_burn_flags` / `adapter_audit_flags` | `burn`'s write dialect and `conduct`'s read-only dialect, so a reroute regenerates the *right* flags for the target engine. | claude, codex, grok |
-| `adapter_relay <from> <to>` | `clikae to` / `relay` can carry a **live** session across tanks. Without it, the carry starts a clean session and says so. | claude |
+| `adapter_relay <from> <to>` | `clikae to` / `relay` can carry a **live** session across tanks. Copy only — set `ADAPTER_RELAY_SID=<sid>` and return 0; relay launches it through the normal `clikae <engine> <tank>` launcher (tmux when available). Without it, the carry starts a clean session and says so. | claude |
 | `adapter_memory_dir` / `adapter_memory_pointer_path` | Soul membership. Defining `adapter_memory_dir` (a real memory directory) also enables `--ephemeral`; the pointer variant is for engines whose memory is opaque. | claude / codex, grok |
 | `adapter_mcp_config_file` | `clikae mcp share` can fan a server into this engine's tanks. | claude |
 | `adapter_hooks_config_file` | `clikae hooks share` can fan a hook into this engine's tanks. Defining it is a promise that the file is `<tank dir>/settings.json`: the writer is `_settings_write_file` (`lib/commands/settings.sh`), which derives that path from the tank directory, and `fleet_hooks_prelaunch` refuses to write when the adapter names anything else. An engine whose hooks live elsewhere needs a writer of its own first. | claude |

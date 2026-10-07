@@ -1023,7 +1023,16 @@ adapter_relay() {
 
   log_done "Carried session ${sid%%-*}… into the target profile."
   log_dim "Resuming on the new profile's quota; the original session is untouched."
-  CLAUDE_CONFIG_DIR="$to_dir" exec claude --resume "$sid" "$@"
+  # 🔴 CARRY ONLY — DO NOT LAUNCH HERE. This used to end in
+  # `CLAUDE_CONFIG_DIR="$to_dir" exec claude --resume "$sid"`, which made relay
+  # (and the board's dry-tank "carry onward", which execs `clikae relay`) the one
+  # carry path that started an engine with no tmux, no scrollback trap and no
+  # wake watcher — over SSH the session died with the connection
+  # (CVERInc/clikae-lab#1, 2026-10-07). The adapter knows the profile DIR, not
+  # the tank name the launcher keys on, so it reports the carried sid and
+  # cmd_relay hands it to the same launcher as `clikae claude <tank>`.
+  ADAPTER_RELAY_SID="$sid"
+  return 0
 }
 
 # Optional hook: a human-readable label for whichever account is logged in to

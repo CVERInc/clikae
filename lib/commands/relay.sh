@@ -260,7 +260,7 @@ EOF
   # from relay's carry so the two intents never get muddled.
   if [ "$want_fresh" -eq 1 ]; then
     log_info "Opening $cli fresh under '$to' (no session carried over)."
-    adapter_run "$to_dir" "$@"   # execs
+    _relay_launch "$cli" "$to" "$@"
   fi
 
   # If the adapter knows how to carry session state, let it. It exec's on
@@ -300,7 +300,7 @@ EOF
             continue ;;
           f|F|fresh|FRESH)
             log_info "Opening $cli fresh under '$to' (no session carried over)."
-            adapter_run "$to_dir" "$@" ;;   # execs
+            _relay_launch "$cli" "$to" "$@" ;;
           *)
             log_dim "Cancelled — nothing carried, no quota spent."
             return 0 ;;
@@ -311,10 +311,33 @@ EOF
     # sid is a UUID (no spaces); the conditional expansion passes --session only
     # when a specific session was chosen, else relay carries the newest.
     # shellcheck disable=SC2086
-    adapter_relay "$from_dir" "$to_dir" ${chosen_sid:+--session "$chosen_sid"} "$@" || true
+    ADAPTER_RELAY_SID=""
+    if adapter_relay "$from_dir" "$to_dir" ${chosen_sid:+--session "$chosen_sid"} "$@" \
+       && [ -n "$ADAPTER_RELAY_SID" ]; then
+      local -a rargs=(); local line
+      while IFS= read -r line; do [ -n "$line" ] && rargs+=("$line"); done <<EOF
+$(adapter_resume_args "$ADAPTER_RELAY_SID")
+EOF
+      _relay_launch "$cli" "$to" "${rargs[@]}" "$@"
+    fi
     log_warn "No session was carried over; starting $cli fresh under '$to'."
   else
     log_info "$cli has no session carry-over; starting fresh under '$to'."
   fi
-  adapter_run "$to_dir" "$@"
+  _relay_launch "$cli" "$to" "$@"
+}
+
+# _relay_launch <engine> <tank> [engine-args...] — exec the SAME launcher as
+# `clikae <engine> <tank> -- <args>` (cmd_switch): tmux session
+# clikae-<engine>-<tank>-<n>, scrollback trap, wake watcher. Never returns.
+#
+# WHY: relay used to call adapter_run / exec the engine itself, so a carried
+# session lived outside tmux and died with the SSH connection that started it
+# (CVERInc/clikae-lab#1) — the same drift resume.sh's _resume_exec documents.
+# tmux stays OPTIONAL: when it is absent (or there is no terminal), cmd_switch
+# itself falls back to `clikae run`, i.e. the plain foreground exec this used
+# to do — the no-tmux behaviour is switch's, not a second copy here.
+_relay_launch() {
+  local engine="$1" tank="$2"; shift 2
+  exec "$CLIKAE_BIN" "$engine" "$tank" -- "$@"
 }

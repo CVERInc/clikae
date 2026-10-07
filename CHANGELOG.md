@@ -7,6 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **A session carried to another tank now lives in tmux like any other.**
+  `clikae relay` / `clikae to`, and the board's "carry onward" for a dry tank
+  (which runs relay), copied the transcript and then started the engine
+  directly — no `clikae-<engine>-<tank>-*` tmux session, no scrollback capture,
+  no wake watcher — so over SSH the session died with the connection
+  (clikae-lab#1). Relay now launches the carried session exactly as
+  `clikae <engine> <tank> -- --resume <id>` does. tmux is still optional:
+  without it (or without a terminal), the engine runs in the foreground as
+  before.
+
 ## [0.39.0] — 2026-10-02
 
 ### Added
