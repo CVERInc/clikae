@@ -26,6 +26,42 @@ list_adapters() {
   done | sort
 }
 
+# engine_is_session_engine <engine>  -> 0 when <engine> is an AI engine that can
+# run a session / be handed a brief (claude, codex, grok, … and agy), 1 for the
+# account-switching TOOL CLIs (gh, npm, aws, cloudflare, …). THE one rule: the
+# board's tank list, next_tank's carry-onward ring, and handoff/relay's target
+# check all call this, so they can't drift apart again (a dry claude tank was
+# auto-carried onto gh/work because next_tank lacked the board's filter).
+# Criterion: the adapter defines adapter_start_with_prompt; agy/antigravity is a
+# launch-only AI target with its own path. Subshell: never pollutes the caller's
+# loaded adapter.
+engine_is_session_engine() {
+  case "$1" in agy|antigravity) return 0 ;; esac
+  [ -f "$CLIKAE_LIB/adapters/$1.sh" ] || return 1
+  ( load_adapter "$1" >/dev/null 2>&1 \
+      && declare -F adapter_start_with_prompt >/dev/null 2>&1 )
+}
+
+# session_engines_list -> comma-separated AI engines (for "pick one of: …" hints).
+session_engines_list() {
+  local n out=""
+  while IFS= read -r n; do
+    [ -n "$n" ] || continue
+    engine_is_session_engine "$n" && out="${out:+$out, }$n"
+  done <<EOF
+$(list_adapters)
+EOF
+  printf '%s' "$out"
+}
+
+# refuse_non_session_engine <engine>  -> dies (exit 1) with one clear line when
+# <engine> is a tool CLI, BEFORE any window/tmux is opened by handoff/relay.
+refuse_non_session_engine() {
+  engine_is_session_engine "$1" && return 0
+  [ -f "$CLIKAE_LIB/adapters/$1.sh" ] || return 0   # unknown name: caller's own error path
+  log_fail "$1 is an account tool, not an AI engine — pick one of: $(session_engines_list)"
+}
+
 # Portable file mtime in epoch seconds. GNU stat FIRST: on Linux `stat -f` means
 # --file-system (it silently prints garbage instead of failing), so the BSD form
 # must never be tried first there. BSD/macoS stat rejects `-c`, failing cleanly to

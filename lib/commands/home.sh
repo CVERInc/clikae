@@ -1096,8 +1096,7 @@ _home_items() {
     # live in `clikae tanks` (the full inventory), not on the board. (Real-user
     # feedback 2026-06.) The adapters stay; only their presence on the board does not.
     if [ "$cli" != "antigravity" ]; then
-      ( load_adapter "$cli" >/dev/null 2>&1 \
-          && declare -F adapter_start_with_prompt >/dev/null 2>&1 ) || continue
+      engine_is_session_engine "$cli" || continue   # the one shared rule (next_tank uses it too)
       # Gate passed → safe to load in the parent too, so the label/active forks
       # below (and later rows of the same cli) inherit the memo instead of
       # re-sourcing the adapter per row.
@@ -3114,9 +3113,14 @@ EOF
     label_relay="$(printf "$T_RESUME_OPT_RELAY" "$ne/$nt")"
   fi
   label_force="$(printf "$T_RESUME_OPT_FORCE" "$cli/$profile")"
+  local title
   if [ -n "$label_relay" ]; then opts="$(printf '%s\n%s' "$label_relay" "$label_force")"
-  else opts="$label_force"; fi
-  choice="$(_home_choose "$(printf "$T_RESUME_DRY_TITLE" "$cli/$profile")" "$opts" "${opts%%$'\n'*}")" || return 1
+    title="$(printf "$T_RESUME_DRY_TITLE" "$cli/$profile")"
+  else opts="$label_force"
+    # No fuelled AI tank to carry onto — say so instead of picking anything.
+    title="$(printf "$T_RESUME_DRY_NO_TARGET" "$cli/$profile")"
+  fi
+  choice="$(_home_choose "$title" "$opts" "${opts%%$'\n'*}")" || return 1
   if [ -n "$label_relay" ] && [ "$choice" = "$label_relay" ]; then
     history_log "board: dry-relay $cli/$profile → $ne/$nt"
     if [ "$ne" = "$cli" ]; then

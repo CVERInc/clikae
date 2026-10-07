@@ -9,6 +9,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **A dry tank is never carried onto an account tool.** The board's "carry
+  onward" could pick a tool CLI (gh, npm, …) as the next tank — `next_tank`
+  skipped agy, solo and dry tanks but not tool CLIs, while the board's tank
+  list had its own filter — so `clikae handoff … --to gh/work` opened a window
+  showing only FAIL. Both now share one rule (`engine_is_session_engine`);
+  `clikae handoff --to` and `clikae relay` refuse a tool CLI up front with one
+  line naming the AI engines to pick from, and the dry menu says so when no AI
+  tank has fuel instead of picking something.
 - **A session carried to another tank now lives in tmux like any other.**
   `clikae relay` / `clikae to`, and the board's "carry onward" for a dry tank
   (which runs relay), copied the transcript and then started the engine

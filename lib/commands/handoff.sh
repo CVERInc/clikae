@@ -87,6 +87,11 @@ EOF
     *) log_fail "Too many arguments. Usage: clikae handoff $cli [<tank>]" ;;
   esac
 
+  # A tool CLI (gh/npm/cloudflare/…) can't take a brief: refuse UP FRONT, before
+  # any transcript work or window/tmux — the board once auto-carried a dry tank
+  # onto gh/work and the new window showed only a FAIL line.
+  [ -z "$to" ] || refuse_non_session_engine "${to%%/*}"
+
   load_adapter "$cli"
 
   if ! declare -F adapter_transcript_path >/dev/null; then
