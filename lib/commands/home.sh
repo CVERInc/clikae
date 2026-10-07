@@ -1655,16 +1655,8 @@ _home_fuel_dotv_compute() {
       # constants' own header just above _home_weekly_pathv. A full window
       # costs a couple of hours; a full week costs days, so weekly's own
       # yellow line sits below window's.
-      up="${up%%.*}"; uw="${uw%%.*}"
-      if [ "$up" -ge "$_FUEL_RED_WINDOW_PCT" ] || [ "$uw" -ge "$_FUEL_RED_WEEKLY_PCT" ]; then
-        _FDOT="${__C_RED}○$__C_RESET"
-      elif [ "$uw" -ge "$_FUEL_YELLOW_WEEKLY_PCT" ] || [ "$up" -ge "$_FUEL_YELLOW_WINDOW_PCT" ]; then
-        _FDOT="${__C_YELLOW}◐$__C_RESET"
-      elif [ "$_bind_spent" = 1 ]; then
-        _FDOT="${__C_YELLOW}◐$__C_RESET"
-      else
-        _FDOT="${__C_GREEN}●$__C_RESET"
-      fi
+      _home_fuel_glyphv "$up" "$uw" "$_bind_spent"
+      _FDOT="$_FGLYPH"
       return 0
     fi
     # 24h or older: too stale to trust — fall through as if unread, below.
@@ -1693,14 +1685,19 @@ _home_fuel_dotv_compute() {
           _FDOT="${__C_DIM}·$__C_RESET"; _FNOTE="$_UEH"
           # #149: the last number it had, with its age, beats the remedy
           # alone — the full remedy sentence is `clikae usage`'s.
-          _home_last_goodv "$_uline" "$now" && _FNOTE="$_LGN · expired"
+          # A vendor-stamped number with its age beside it is a measurement,
+          # not a guess: it draws the band it fell in, dimmed, instead of the
+          # no-reading `·` (which stays for "no number on record at all").
+          if _home_last_goodv "$_uline" "$now"; then
+            _FNOTE="$_LGN · expired"; _home_fuel_glyphv "$_LGW" "$_LGK" 0 dim; _FDOT="$_FGLYPH"
+          fi
           return 0
         fi ;;
       *'"source":"unknown"'*'"last_good":'*)
         # #149: no number now, but one on record — say it, aged, with the
         # reason word, instead of a blank or a bare dot.
         if _home_last_goodv "$_uline" "$now"; then
-          _FDOT="${__C_DIM}·$__C_RESET"
+          _home_fuel_glyphv "$_LGW" "$_LGK" 0 dim; _FDOT="$_FGLYPH"
           if [ "$cli" = codex ]; then _FNOTE="$_LGN · no-probe"; else _FNOTE="$_LGN · no-signal"; fi
           return 0
         fi ;;
@@ -1710,10 +1707,15 @@ _home_fuel_dotv_compute() {
   # real trace there is — when this tank last wrote its own log — rather than
   # an empty green row that reads as "known to be fine".
   if [ "$cli" = antigravity ] && declare -F usage_agy_last_used >/dev/null 2>&1; then
-    local _agy_at _agy_age=""
-    _FNOTE="no-signal · never used"
+    local _agy_at _agy_age="" _agy_why="no-signal"
+    # No token file = this host's agy keeps its login where the quota probe
+    # (adapter_usage, the Linux "file" backend) cannot reach: there will
+    # never be a number here, so say that instead of a bare "no-signal".
+    [ -f "$CLIKAE_HOME/profiles/antigravity/$profile/antigravity-cli/antigravity-oauth-token" ] ||
+      _agy_why="no quota reading on this backend"
+    _FNOTE="$_agy_why · never used"
     if _agy_at="$(usage_agy_last_used "$profile")" && [ -n "$_agy_at" ]; then
-      _FNOTE="no-signal · last used"
+      _FNOTE="$_agy_why · last used"
       declare -F _human_agev >/dev/null 2>&1 && _human_agev _agy_age "$_agy_at" "$now" && _FNOTE="$_FNOTE $_agy_age"
     fi
     _FDOT="${__C_DIM}·$__C_RESET"; return 0
@@ -1725,19 +1727,42 @@ _home_fuel_dotv_compute() {
   _FDOT="${__C_DIM}·$__C_RESET"
 }
 
+# _home_fuel_glyphv <window%> <weekly%> <bind_spent 0|1> [dim] -> $_FGLYPH,
+# the one band rule (red ○ / yellow ◐ / green ●) for a reading. "-" = axis not
+# reported (reads as 0). `dim` keeps the band's glyph but paints it dim: an
+# aged last_good reading, not a fresh one.
+_home_fuel_glyphv() {
+  local up="${1%%.*}" uw="${2%%.*}" g c
+  case "$up" in ''|*[!0-9]*) up=0 ;; esac
+  case "$uw" in ''|*[!0-9]*) uw=0 ;; esac
+  if [ "$up" -ge "$_FUEL_RED_WINDOW_PCT" ] || [ "$uw" -ge "$_FUEL_RED_WEEKLY_PCT" ]; then
+    g="○"; c="$__C_RED"
+  elif [ "$uw" -ge "$_FUEL_YELLOW_WEEKLY_PCT" ] || [ "$up" -ge "$_FUEL_YELLOW_WINDOW_PCT" ] || [ "$3" = 1 ]; then
+    g="◐"; c="$__C_YELLOW"
+  else
+    g="●"; c="$__C_GREEN"
+  fi
+  [ "${4:-}" != dim ] || c="$__C_DIM"
+  _FGLYPH="$c$g$__C_RESET"
+}
+
 # _home_last_goodv <cache-line> <now> -> $_LGN = "weekly 85% · 5h ago" from the
-# cache's `last_good` object (#149), rc=1 when there is none or it is over 7
-# days old. Fork-free apart from _human_age: the object's key order is fixed
+# cache's `last_good` object (#149), rc=1 when there is none or it is over 14
+# days old (was 7; a stamped number shown with its age is still a measurement).
+# Also sets $_LGW/$_LGK, the window/weekly pct ("-" when the vendor gave none),
+# for _home_fuel_glyphv. Fork-free apart from _human_age: the object's key order is fixed
 # by usage_read's own writer (window_pct, weekly_pct, at).
 _home_last_goodv() {
   local lg w k at
-  _LGN=""
+  _LGN=""; _LGW=-; _LGK=-
   case "$1" in *'"last_good":{'*) ;; *) return 1 ;; esac
   lg="${1#*\"last_good\":\{}"; lg="${lg%%\}*}"
   w="${lg#*\"window_pct\":}"; w="${w%%[,\}]*}"
   k="${lg#*\"weekly_pct\":}"; k="${k%%[,\}]*}"
   at="${lg#*\"at\":}"; at="${at%%[!0-9]*}"
-  [ -n "$at" ] && [ $(( $2 - at )) -lt 604800 ] || return 1
+  [ -n "$at" ] && [ $(( $2 - at )) -lt 1209600 ] || return 1
+  case "$w" in ''|null) ;; *) _LGW="$w" ;; esac
+  case "$k" in ''|null) ;; *) _LGK="$k" ;; esac
   if [ "$k" != null ] && [ -n "$k" ]; then _LGN="weekly ${k}%"
   elif [ "$w" != null ] && [ -n "$w" ]; then _LGN="window ${w}%"
   else return 1; fi
@@ -3876,6 +3901,61 @@ EOF
   esac
 }
 
+# _home_usage_refresh_on_open [now] -> one background refresh per tank whose
+# usage cache is missing or older than CLIKAE_USAGE_TTL. The board never
+# fetches on its draw path, and the only periodic refresher is a live session's
+# own watcher — so an idle tank's cache aged until the light went `·` and
+# stayed there. Opening the board is the one moment someone is looking.
+#
+# 🔴 Same contract as wake_usage_prime: backgrounded, output discarded,
+# disowned; the first draw pays only a `read` per cache file. Board-only — it
+# is called from _home_pick, never from a launch path. An in-flight marker
+# (mkdir, atomic) per tank keeps a re-opened board from stacking refreshes; a
+# marker over 5 minutes old is a dead refresh and is taken over. bash + jq
+# only (usage_read), no tmux. A claude tank whose cache says expired-token
+# goes through `clikae usage claude --wake <tank>` so the token is renewed
+# (burn's own rules apply: the recorded cockpit and a busy tank are refused).
+# agy is skipped: there is no reading to refresh. Prints the count fired.
+_home_usage_refresh_on_open() {
+  local now="${1:-}" ttl e t _p f line ca mark mode n=0
+  declare -F usage_read >/dev/null 2>&1 || { printf '0'; return 0; }
+  [ -n "$now" ] || now="$(date +%s 2>/dev/null || echo 0)"
+  ttl="${CLIKAE_USAGE_TTL:-120}"; case "$ttl" in ''|*[!0-9]*) ttl=120 ;; esac
+  while IFS=$'\t' read -r e t _p; do
+    [ -n "$t" ] && [ "$e" != antigravity ] || continue
+    f="$CLIKAE_HOME/state/usage/$e/$t.json"; line=""; ca=""; mode=read
+    if [ -f "$f" ]; then
+      IFS= read -r line < "$f" || true
+      ca="${line##*\"cached_at\":}"; ca="${ca%%[!0-9]*}"
+      [ -z "$ca" ] || [ $(( now - ca )) -ge "$ttl" ] || continue
+      case "$line" in *'"reason":"expired-token"'*) [ "$e" != claude ] || mode=wake ;; esac
+    fi
+    mark="$CLIKAE_HOME/state/usage/$e/$t.refreshing"
+    mkdir -p "$CLIKAE_HOME/state/usage/$e" 2>/dev/null || continue
+    if ! mkdir "$mark" 2>/dev/null; then
+      [ -n "$(find "$mark" -maxdepth 0 -mmin +5 2>/dev/null)" ] || continue
+      touch "$mark" 2>/dev/null || continue
+    fi
+    _home_usage_refresh_one "$e" "$t" "$mode" "$mark" >/dev/null 2>&1 &
+    disown 2>/dev/null || true
+    n=$((n + 1))
+  done <<EOF_ROO
+$(list_all_profiles 2>/dev/null || true)
+EOF_ROO
+  printf '%s' "$n"
+}
+
+# _home_usage_refresh_one <engine> <tank> <read|wake> <marker> -> the body of
+# one background refresh; always clears its in-flight marker.
+_home_usage_refresh_one() {
+  if [ "$3" = wake ]; then
+    "$CLIKAE_ROOT/bin/clikae" usage "$1" --wake "$2" || true
+  else
+    usage_read "$1" "$2" || true
+  fi
+  rmdir "$4" 2>/dev/null || true
+}
+
 _home_pick() {
   local items="$1" dry="$2"
 
@@ -3920,7 +4000,11 @@ _home_pick() {
   # repaint. So the wait polls instead, and only repaints when the width or the
   # height actually changed; an idle board with a still terminal draws nothing.
   # Reported alongside the ssh-from-PineNote report, 2026-08-16.
-  local _lastsize=""
+  local _lastsize="" _rf_left=0 _rf_tick=0
+  # Refresh-on-open: stale caches are re-read in the background; while any
+  # were fired, the idle wait repaints every 5s for a minute so the new
+  # readings land without a keypress.
+  [ "$(_home_usage_refresh_on_open)" = 0 ] || _rf_left=12
   while :; do
     view="$(_home_filter "$items" "$filter")"
     # 🔴 `|| true`. `grep -c .` exits 1 on ZERO matches and the board runs under
@@ -4000,6 +4084,12 @@ _home_pick() {
         _lastsize="$_cursize"; TUI_KEY="__resized"; break
       fi
       _lastsize="$_cursize"
+      if [ "$_rf_left" -gt 0 ]; then
+        _rf_tick=$((_rf_tick + 1))
+        if [ "$_rf_tick" -ge 5 ]; then
+          _rf_tick=0; _rf_left=$((_rf_left - 1)); TUI_KEY="__resized"; break
+        fi
+      fi
     done
     [ "$TUI_KEY" = "__resized" ] && continue
     sel_row="$(printf '%s\n' "$view" | sed -n "$((sel + 1))p")"
