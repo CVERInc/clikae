@@ -25,6 +25,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   text.** The quoting that hands the command to tmux used `sed`, which macOS's
   sed rejects ("illegal byte sequence") on the bytes `%q` leaves behind, so the
   pane ran `bash -c ''`. The quoting is now pure bash.
+- **The board's fuel light shows up again on idle tanks.** A tank whose token
+  had expired, or whose cache nobody refreshed, drew the no-reading `·` even
+  with a vendor number on record. It now draws that number's band (●/◐/○)
+  dimmed, beside its age; a recorded number stays usable for 14 days (was 7).
+  Opening the board fires one background refresh per tank whose cache is
+  older than `CLIKAE_USAGE_TTL` (a plain usage read; it never spends model
+  quota), with an in-flight marker so re-opening does not stack them, and
+  repaints for a minute so the new readings land. An expired token keeps its
+  dim last-good light, and the note names the step: `clikae usage --wake <tank>`. An agy tank with
+  no token file now says "no quota reading on this backend".
 
 ## [0.39.0] — 2026-10-02
 

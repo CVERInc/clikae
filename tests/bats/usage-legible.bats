@@ -131,10 +131,14 @@ STUB
   at="$(usage_agy_last_used ray)"; now=$(( at + 7200 ))
   _home_fuel_dotv_compute "" antigravity ray "$now"
   [ "$_FDOT" = "DIM·" ]
-  [ "$_FNOTE" = "no-signal · last used 2h ago" ] || { echo "note: $_FNOTE"; false; }
+  [ "$_FNOTE" = "no quota reading on this backend · last used 2h ago" ] || { echo "note: $_FNOTE"; false; }
   _agy_tank chromis
   _home_fuel_dotv_compute "" antigravity chromis "$now"
-  [ "$_FNOTE" = "no-signal · never used" ]
+  [ "$_FNOTE" = "no quota reading on this backend · never used" ]
+  # With a token file (the Linux "file" backend) the probe exists: no-signal.
+  : > "$CLIKAE_HOME/profiles/antigravity/chromis/antigravity-cli/antigravity-oauth-token"
+  _home_fuel_dotv_compute "" antigravity chromis "$now"
+  [ "$_FNOTE" = "no-signal · never used" ] || { echo "note: $_FNOTE"; false; }
 }
 
 @test "#149 board: an expired cell prints the last good weekly number, its age and the word expired" {
@@ -144,7 +148,7 @@ STUB
   printf '{"window_pct":null,"weekly_pct":null,"window_resets_at":null,"weekly_resets_at":null,"source":"expired","reason":"expired-token","cached_at":%s,"scanned_at":%s,"last_good":{"window_pct":10,"weekly_pct":85,"at":%s}}\n' \
     "$now" "$now" "$(( now - 18000 ))" > "$CLIKAE_HOME/state/usage/claude/goby.json"
   _home_fuel_dotv_compute "" claude goby "$now"
-  [ "$_FNOTE" = "weekly 85% · 5h ago · expired" ] || { echo "note: $_FNOTE"; false; }
+  [ "$_FNOTE" = "weekly 85% · 5h ago · expired · clikae usage --wake goby to renew" ] || { echo "note: $_FNOTE"; false; }
   printf '{"window_pct":null,"weekly_pct":null,"window_resets_at":null,"weekly_resets_at":null,"source":"unknown","cached_at":%s,"scanned_at":%s,"last_good":{"window_pct":null,"weekly_pct":40,"at":%s}}\n' \
     "$now" "$now" "$(( now - 3600 ))" > "$CLIKAE_HOME/state/usage/codex/marlin.json" 2>/dev/null ||
     { mkdir -p "$CLIKAE_HOME/state/usage/codex"; printf '{"window_pct":null,"weekly_pct":null,"window_resets_at":null,"weekly_resets_at":null,"source":"unknown","cached_at":%s,"scanned_at":%s,"last_good":{"window_pct":null,"weekly_pct":40,"at":%s}}\n' "$now" "$now" "$(( now - 3600 ))" > "$CLIKAE_HOME/state/usage/codex/marlin.json"; }
@@ -270,4 +274,72 @@ _goby_cache() { # <weekly> <models-json-array-or-empty>
   # A last-known number is marked with "?".
   USAGE_NETFAIL=1 run --separate-stderr clikae usage claude --fresh
   [ "$(printf '%s\n' "$stderr" | tail -n 1)" = "claude 92?" ] || { echo "stderr: $stderr"; false; }
+}
+
+# _lg_cache <engine> <tank> <source> <cached_at> <last_good json or empty>
+_lg_cache() {
+  mkdir -p "$CLIKAE_HOME/state/usage/$1"
+  printf '{"window_pct":null,"weekly_pct":null,"window_resets_at":null,"weekly_resets_at":null,"source":"%s"%s,"cached_at":%s,"scanned_at":%s%s}\n' \
+    "$3" "$([ "$3" != expired ] || printf ',"reason":"expired-token"')" "$4" "$4" "${5:+,\"last_good\":$5}" > "$CLIKAE_HOME/state/usage/$1/$2.json"
+}
+
+@test "board light: an expired cache with a 21h-old last_good draws its band dimmed, not the no-reading dot" {
+  _board_env
+  local now at; now="$(date +%s)"; at=$(( now - 75600 ))
+  _lg_cache claude goby expired "$now" "{\"window_pct\":10,\"weekly_pct\":19,\"at\":$at}"
+  _home_fuel_dotv_compute "" claude goby "$now"
+  [ "$_FDOT" = "DIM●" ] || { echo "dot: $_FDOT"; false; }
+  [ "$_FNOTE" = "weekly 19% · 21h ago · expired · clikae usage --wake goby to renew" ] || { echo "note: $_FNOTE"; false; }
+  _lg_cache claude goby expired "$now" "{\"window_pct\":10,\"weekly_pct\":88,\"at\":$at}"
+  _home_fuel_dotv_compute "" claude goby "$now"
+  [ "$_FDOT" = "DIM◐" ] || { echo "dot: $_FDOT"; false; }
+  _lg_cache claude goby expired "$now" "{\"window_pct\":100,\"weekly_pct\":40,\"at\":$at}"
+  _home_fuel_dotv_compute "" claude goby "$now"
+  [ "$_FDOT" = "DIM○" ] || { echo "dot: $_FDOT"; false; }
+  # unknown + last_good takes the same path.
+  _lg_cache codex marlin unknown "$now" "{\"window_pct\":null,\"weekly_pct\":91,\"at\":$at}"
+  _home_fuel_dotv_compute "" codex marlin "$now"
+  [ "$_FDOT" = "DIM◐" ] || { echo "codex dot: $_FDOT"; false; }
+}
+
+@test "board light: no last_good, or one 15 days old, stays the no-reading dot" {
+  _board_env
+  local now; now="$(date +%s)"
+  _lg_cache claude goby expired "$now" ""
+  _home_fuel_dotv_compute "" claude goby "$now"
+  [ "$_FDOT" = "DIM·" ] || { echo "dot: $_FDOT"; false; }
+  _lg_cache claude goby expired "$now" "{\"window_pct\":10,\"weekly_pct\":19,\"at\":$(( now - 15 * 86400 ))}"
+  _home_fuel_dotv_compute "" claude goby "$now"
+  [ "$_FDOT" = "DIM·" ] || { echo "dot: $_FDOT"; false; }
+  # 13 days is still inside the 14-day window.
+  _lg_cache claude goby expired "$now" "{\"window_pct\":10,\"weekly_pct\":19,\"at\":$(( now - 13 * 86400 ))}"
+  _home_fuel_dotv_compute "" claude goby "$now"
+  [ "$_FDOT" = "DIM●" ] || { echo "13d dot: $_FDOT"; false; }
+}
+
+@test "board refresh-on-open: one background refresh per stale tank, none for fresh, none while in flight, never --wake" {
+  _board_env
+  local now log; now="$(date +%s)"; log="$BATS_TEST_TMPDIR/refresh.log"
+  list_all_profiles() { printf 'claude\tstale\t/x\nclaude\texp\t/x\nclaude\tfresh\t/x\ncodex\tnone\t/x\nantigravity\tray\t/x\n'; }
+  _home_usage_refresh_one() { printf '%s %s\n' "$1" "$2" >> "$T_LOG"; }
+  T_LOG="$log"
+  _lg_cache claude stale vendor $(( now - 600 )) ""
+  _lg_cache claude exp expired $(( now - 600 )) ""
+  _lg_cache claude fresh vendor $(( now - 10 )) ""
+  run _home_usage_refresh_on_open "$now"
+  [ "$output" = 3 ] || { echo "fired: $output"; false; }
+  wait
+  sort "$log" > "$log.s"
+  [ "$(cat "$log.s")" = "$(printf 'claude exp\nclaude stale\ncodex none')" ] || { cat "$log.s"; false; }
+  # Opening the board never spends quota: no --wake anywhere on this path.
+  # Read the SOURCE, not `declare -f`: _home_usage_refresh_one is stubbed above.
+  local body
+  body="$(awk '/^_home_usage_refresh_(on_open|one)\(\) \{/{f=1} f{print} f&&/^}/{f=0}' "$CLIKAE_LIB/commands/home.sh")"
+  [ -n "$body" ] || { echo "refresh functions not found in home.sh"; false; }
+  if printf '%s\n' "$body" | grep -q -- '--wake'; then
+    echo "board-open path runs --wake"; false
+  fi
+  # The stub never clears its marker = still in flight: a re-open fires nothing.
+  run _home_usage_refresh_on_open "$now"
+  [ "$output" = 0 ] || { echo "re-open fired: $output"; false; }
 }
