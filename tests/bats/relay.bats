@@ -123,3 +123,94 @@ _seed_transcript() {
   [ "$status" -ne 0 ]
   [[ "$output" == *"explicitly"* ]] || false
 }
+
+# CVERInc/clikae-lab#1 (2026-10-07, reefbox over SSH from a phone): the board's
+# dry-tank "carry onward" execs `clikae relay`, and relay's carry ended in the
+# claude adapter's own `exec claude --resume` — the transcript landed on the new
+# tank but the engine ran with no tmux session, no scrollback trap and no wake
+# watcher, so it died with the SSH connection. `clikae claude <tank> -- --resume`
+# had all three. These two pin both halves: with tmux, the carried session goes
+# through switch's tmux launch; without tmux, relay still just runs the engine.
+
+# A fake tmux: logs every argv (one record per call) and answers the few probes
+# switch makes. has-session says "no such session", so switch creates one.
+_install_tmux_stub() {
+  mkdir -p "$TEST_HOME/bin"
+  cat > "$TEST_HOME/bin/tmux" <<'STUB'
+#!/usr/bin/env bash
+printf '%s\n' "$*" >> "${HOME:?}/tmux-argv.log"
+for a in "$@"; do
+  case "$a" in
+    -V) echo "tmux 3.4"; exit 0 ;;
+    has-session) exit 1 ;;
+    new-session|new|attach|attach-session|list-sessions|ls|display-message|show-options|set-option|set|set-environment|setenv|kill-server|switch-client) exit 0 ;;
+  esac
+done
+exit 0
+STUB
+  chmod +x "$TEST_HOME/bin/tmux"
+  # Settle the one-time asks so the pty run never waits on a prompt.
+  echo off > "$CLIKAE_HOME/wake-on-reset"
+  echo off > "$CLIKAE_HOME/warm-compact"
+}
+
+@test "relay (cross-tank carry) launches through switch's tmux path, like clikae <engine> <tank>" {
+  command -v python3 >/dev/null 2>&1 || skip "python3 needed for the pty"
+  _install_claude_stub
+  clikae init claude wrasse
+  clikae init claude goby
+  _install_tmux_stub
+  local work="$TEST_HOME/work"; mkdir -p "$work"
+  local sid="8c66f1d2-a689-4d7a-aeac-f2420a13fdb7"
+  _seed_transcript wrasse "$work" "$sid"
+
+  cd "$work"
+  unset CLAUDE_CONFIG_DIR
+  # A real pty: without a terminal, switch is entitled to skip tmux.
+  run _pty_run "$CLIKAE_BIN" relay claude wrasse goby --yes
+  [ -f "$TEST_HOME/tmux-argv.log" ] || { echo "tmux never invoked: $output"; false; }
+
+  local tlog; tlog="$(cat "$TEST_HOME/tmux-argv.log")"
+  # The session is named like a normal launch, and its command carries the
+  # scrollback trap and the resume of the carried sid.
+  [[ "$tlog" == *"new-session"*"clikae-claude-goby-"* ]] || { echo "no clikae-claude-goby-* session: $tlog"; false; }
+  [[ "$tlog" == *".clikae/state/clikae-claude-goby-"*".scrollback"* ]] || { echo "no scrollback trap: $tlog"; false; }
+  [[ "$tlog" == *"--resume $sid"* ]] || { echo "carried sid not resumed: $tlog"; false; }
+  # The transcript was carried.
+  local slug; slug="$(_slug "$work")"
+  [ -f "$CLIKAE_HOME/profiles/claude/goby/projects/$slug/$sid.jsonl" ]
+}
+
+@test "relay without tmux on PATH still execs the engine (tmux is never required)" {
+  command -v python3 >/dev/null 2>&1 || skip "python3 needed for the pty"
+  _install_claude_stub
+  clikae init claude wrasse
+  clikae init claude goby
+  local work="$TEST_HOME/work"; mkdir -p "$work"
+  local sid="8c66f1d2-a689-4d7a-aeac-f2420a13fdb7"
+  _seed_transcript wrasse "$work" "$sid"
+
+  # PATH with no tmux at all — shadow every directory that has one.
+  local nodir="$TEST_HOME/notmux"; mkdir -p "$nodir"
+  local d p=""
+  IFS=: read -ra _dirs <<<"$PATH"
+  for d in "${_dirs[@]}"; do
+    [ -n "$d" ] || continue
+    if [ -x "$d/tmux" ] && [ "$d" != "$TEST_HOME/bin" ]; then
+      for f in "$d"/*; do
+        [ "${f##*/}" = tmux ] && continue
+        [ -e "$nodir/${f##*/}" ] || ln -s "$f" "$nodir/${f##*/}" 2>/dev/null || true
+      done
+      d="$nodir"
+    fi
+    p="${p:+$p:}$d"
+  done
+
+  cd "$work"
+  unset CLAUDE_CONFIG_DIR
+  # Even on a terminal (where switch WOULD use tmux), no tmux -> plain exec.
+  PATH="$p" run _pty_run "$CLIKAE_BIN" relay claude wrasse goby --yes
+  PATH="$p" command -v tmux && { echo "tmux still on PATH"; false; }
+  grep -q "ARGS=--resume $sid" "$CLAUDE_STUB_LOG" || { echo "engine not run: $output"; false; }
+  grep -q "CLAUDE_CONFIG_DIR=$CLIKAE_HOME/profiles/claude/goby" "$CLAUDE_STUB_LOG"
+}
