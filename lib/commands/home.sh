@@ -1689,7 +1689,7 @@ _home_fuel_dotv_compute() {
           # not a guess: it draws the band it fell in, dimmed, instead of the
           # no-reading `·` (which stays for "no number on record at all").
           if _home_last_goodv "$_uline" "$now"; then
-            _FNOTE="$_LGN · expired"; _home_fuel_glyphv "$_LGW" "$_LGK" 0 dim; _FDOT="$_FGLYPH"
+            _FNOTE="$_LGN · expired · clikae usage --wake $profile to renew"; _home_fuel_glyphv "$_LGW" "$_LGK" 0 dim; _FDOT="$_FGLYPH"
           fi
           return 0
         fi ;;
@@ -3912,23 +3912,22 @@ EOF
 # is called from _home_pick, never from a launch path. An in-flight marker
 # (mkdir, atomic) per tank keeps a re-opened board from stacking refreshes; a
 # marker over 5 minutes old is a dead refresh and is taken over. bash + jq
-# only (usage_read), no tmux. A claude tank whose cache says expired-token
-# goes through `clikae usage claude --wake <tank>` so the token is renewed
-# (burn's own rules apply: the recorded cockpit and a busy tank are refused).
-# agy is skipped: there is no reading to refresh. Prints the count fired.
+# only (usage_read), no tmux. 🔴 Never `usage --wake`: that is a headless
+# prompt, and opening the board must never spend model quota. An expired
+# token's read just fails; the row keeps its dim last-good light and its note
+# names the one manual step. agy is skipped: there is no reading to refresh. Prints the count fired.
 _home_usage_refresh_on_open() {
-  local now="${1:-}" ttl e t _p f line ca mark mode n=0
+  local now="${1:-}" ttl e t _p f line ca mark n=0
   declare -F usage_read >/dev/null 2>&1 || { printf '0'; return 0; }
   [ -n "$now" ] || now="$(date +%s 2>/dev/null || echo 0)"
   ttl="${CLIKAE_USAGE_TTL:-120}"; case "$ttl" in ''|*[!0-9]*) ttl=120 ;; esac
   while IFS=$'\t' read -r e t _p; do
     [ -n "$t" ] && [ "$e" != antigravity ] || continue
-    f="$CLIKAE_HOME/state/usage/$e/$t.json"; line=""; ca=""; mode=read
+    f="$CLIKAE_HOME/state/usage/$e/$t.json"; line=""; ca=""
     if [ -f "$f" ]; then
       IFS= read -r line < "$f" || true
       ca="${line##*\"cached_at\":}"; ca="${ca%%[!0-9]*}"
       [ -z "$ca" ] || [ $(( now - ca )) -ge "$ttl" ] || continue
-      case "$line" in *'"reason":"expired-token"'*) [ "$e" != claude ] || mode=wake ;; esac
     fi
     mark="$CLIKAE_HOME/state/usage/$e/$t.refreshing"
     mkdir -p "$CLIKAE_HOME/state/usage/$e" 2>/dev/null || continue
@@ -3936,7 +3935,7 @@ _home_usage_refresh_on_open() {
       [ -n "$(find "$mark" -maxdepth 0 -mmin +5 2>/dev/null)" ] || continue
       touch "$mark" 2>/dev/null || continue
     fi
-    _home_usage_refresh_one "$e" "$t" "$mode" "$mark" >/dev/null 2>&1 &
+    _home_usage_refresh_one "$e" "$t" "$mark" >/dev/null 2>&1 &
     disown 2>/dev/null || true
     n=$((n + 1))
   done <<EOF_ROO
@@ -3945,15 +3944,11 @@ EOF_ROO
   printf '%s' "$n"
 }
 
-# _home_usage_refresh_one <engine> <tank> <read|wake> <marker> -> the body of
-# one background refresh; always clears its in-flight marker.
+# _home_usage_refresh_one <engine> <tank> <marker> -> the body of one
+# background refresh (a plain usage_read); always clears its in-flight marker.
 _home_usage_refresh_one() {
-  if [ "$3" = wake ]; then
-    "$CLIKAE_ROOT/bin/clikae" usage "$1" --wake "$2" || true
-  else
-    usage_read "$1" "$2" || true
-  fi
-  rmdir "$4" 2>/dev/null || true
+  usage_read "$1" "$2" || true
+  rmdir "$3" 2>/dev/null || true
 }
 
 _home_pick() {

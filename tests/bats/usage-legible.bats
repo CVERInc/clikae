@@ -148,7 +148,7 @@ STUB
   printf '{"window_pct":null,"weekly_pct":null,"window_resets_at":null,"weekly_resets_at":null,"source":"expired","reason":"expired-token","cached_at":%s,"scanned_at":%s,"last_good":{"window_pct":10,"weekly_pct":85,"at":%s}}\n' \
     "$now" "$now" "$(( now - 18000 ))" > "$CLIKAE_HOME/state/usage/claude/goby.json"
   _home_fuel_dotv_compute "" claude goby "$now"
-  [ "$_FNOTE" = "weekly 85% · 5h ago · expired" ] || { echo "note: $_FNOTE"; false; }
+  [ "$_FNOTE" = "weekly 85% · 5h ago · expired · clikae usage --wake goby to renew" ] || { echo "note: $_FNOTE"; false; }
   printf '{"window_pct":null,"weekly_pct":null,"window_resets_at":null,"weekly_resets_at":null,"source":"unknown","cached_at":%s,"scanned_at":%s,"last_good":{"window_pct":null,"weekly_pct":40,"at":%s}}\n' \
     "$now" "$now" "$(( now - 3600 ))" > "$CLIKAE_HOME/state/usage/codex/marlin.json" 2>/dev/null ||
     { mkdir -p "$CLIKAE_HOME/state/usage/codex"; printf '{"window_pct":null,"weekly_pct":null,"window_resets_at":null,"weekly_resets_at":null,"source":"unknown","cached_at":%s,"scanned_at":%s,"last_good":{"window_pct":null,"weekly_pct":40,"at":%s}}\n' "$now" "$now" "$(( now - 3600 ))" > "$CLIKAE_HOME/state/usage/codex/marlin.json"; }
@@ -289,7 +289,7 @@ _lg_cache() {
   _lg_cache claude goby expired "$now" "{\"window_pct\":10,\"weekly_pct\":19,\"at\":$at}"
   _home_fuel_dotv_compute "" claude goby "$now"
   [ "$_FDOT" = "DIM●" ] || { echo "dot: $_FDOT"; false; }
-  [ "$_FNOTE" = "weekly 19% · 21h ago · expired" ] || { echo "note: $_FNOTE"; false; }
+  [ "$_FNOTE" = "weekly 19% · 21h ago · expired · clikae usage --wake goby to renew" ] || { echo "note: $_FNOTE"; false; }
   _lg_cache claude goby expired "$now" "{\"window_pct\":10,\"weekly_pct\":88,\"at\":$at}"
   _home_fuel_dotv_compute "" claude goby "$now"
   [ "$_FDOT" = "DIM◐" ] || { echo "dot: $_FDOT"; false; }
@@ -317,11 +317,11 @@ _lg_cache() {
   [ "$_FDOT" = "DIM●" ] || { echo "13d dot: $_FDOT"; false; }
 }
 
-@test "board refresh-on-open: one background refresh per stale tank, none for fresh, none while in flight" {
+@test "board refresh-on-open: one background refresh per stale tank, none for fresh, none while in flight, never --wake" {
   _board_env
   local now log; now="$(date +%s)"; log="$BATS_TEST_TMPDIR/refresh.log"
   list_all_profiles() { printf 'claude\tstale\t/x\nclaude\texp\t/x\nclaude\tfresh\t/x\ncodex\tnone\t/x\nantigravity\tray\t/x\n'; }
-  _home_usage_refresh_one() { printf '%s %s %s\n' "$1" "$2" "$3" >> "$T_LOG"; }
+  _home_usage_refresh_one() { printf '%s %s\n' "$1" "$2" >> "$T_LOG"; }
   T_LOG="$log"
   _lg_cache claude stale vendor $(( now - 600 )) ""
   _lg_cache claude exp expired $(( now - 600 )) ""
@@ -330,7 +330,9 @@ _lg_cache() {
   [ "$output" = 3 ] || { echo "fired: $output"; false; }
   wait
   sort "$log" > "$log.s"
-  [ "$(cat "$log.s")" = "$(printf 'claude exp wake\nclaude stale read\ncodex none read')" ] || { cat "$log.s"; false; }
+  [ "$(cat "$log.s")" = "$(printf 'claude exp\nclaude stale\ncodex none')" ] || { cat "$log.s"; false; }
+  # Opening the board never spends quota: no --wake anywhere on this path.
+  ! declare -f _home_usage_refresh_on_open _home_usage_refresh_one | grep -q -- '--wake'
   # The stub never clears its marker = still in flight: a re-open fires nothing.
   run _home_usage_refresh_on_open "$now"
   [ "$output" = 0 ] || { echo "re-open fired: $output"; false; }
