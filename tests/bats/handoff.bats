@@ -1140,3 +1140,79 @@ _codex_timing_awk() {
   [ "$actual" = "$golden" ]
   [ -n "$actual" ]
 }
+
+# clikae-lab#1's sibling: the board's dry-tank cross-engine "carry onward" execs
+# `clikae handoff … --to <engine>/<tank>`, and handoff used to start that engine
+# itself (adapter_start_with_prompt) — no tmux session, no scrollback trap, no
+# wake watcher. With a tank named, it now goes through `clikae <engine> <tank>`.
+
+_handoff_codex_stub() {
+  mkdir -p "$TEST_HOME/bin"
+  cat > "$TEST_HOME/bin/codex" <<'STUB'
+#!/usr/bin/env bash
+{ echo "CODEX_HOME=$CODEX_HOME"; echo "PROMPT=$1"; } > "$CODEX_STUB_LOG"
+exit 0
+STUB
+  chmod +x "$TEST_HOME/bin/codex"
+  export PATH="$TEST_HOME/bin:$PATH" CODEX_STUB_LOG="$TEST_HOME/codex.log"
+}
+
+@test "handoff --to <engine>/<tank> launches through switch's tmux path, like clikae <engine> <tank>" {
+  command -v python3 >/dev/null 2>&1 || skip "python3 needed for the pty"
+  _handoff_codex_stub
+  clikae init claude a
+  clikae init codex work
+  # Fake tmux: log argv, say "no such session" so switch creates one.
+  cat > "$TEST_HOME/bin/tmux" <<'STUB'
+#!/usr/bin/env bash
+printf '%s\n' "$*" >> "${HOME:?}/tmux-argv.log"
+for a in "$@"; do
+  case "$a" in -V) echo "tmux 3.4"; exit 0 ;; has-session) exit 1 ;; esac
+done
+exit 0
+STUB
+  chmod +x "$TEST_HOME/bin/tmux"
+  echo off > "$CLIKAE_HOME/wake-on-reset"; echo off > "$CLIKAE_HOME/warm-compact"
+  local work="$TEST_HOME/work"; mkdir -p "$work"
+  _seed_transcript a "$work" "66666666-5555-5555-5555-555555555555"
+
+  cd "$work"
+  CLAUDE_CONFIG_DIR="$CLIKAE_HOME/profiles/claude/a" \
+    run _pty_run "$CLIKAE_BIN" handoff claude --to codex/work
+  [ -f "$TEST_HOME/tmux-argv.log" ] || { echo "tmux never invoked: $output"; false; }
+  local tlog; tlog="$(cat "$TEST_HOME/tmux-argv.log")"
+  [[ "$tlog" == *"new-session"*"clikae-codex-work-"* ]] || { echo "no clikae-codex-work-* session: $tlog"; false; }
+  [[ "$tlog" == *".clikae/state/clikae-codex-work-"*".scrollback"* ]] || { echo "no scrollback trap: $tlog"; false; }
+}
+
+@test "handoff --to <engine>/<tank> without tmux on PATH still execs the engine" {
+  command -v python3 >/dev/null 2>&1 || skip "python3 needed for the pty"
+  _handoff_codex_stub
+  clikae init claude a
+  clikae init codex work
+  local work="$TEST_HOME/work"; mkdir -p "$work"
+  _seed_transcript a "$work" "77777777-5555-5555-5555-555555555555"
+
+  # PATH with no tmux: mirror each dir that has one, minus tmux.
+  local nodir="$TEST_HOME/notmux"; mkdir -p "$nodir"
+  local d f p=""
+  IFS=: read -ra _dirs <<<"$PATH"
+  for d in "${_dirs[@]}"; do
+    [ -n "$d" ] || continue
+    if [ -x "$d/tmux" ]; then
+      for f in "$d"/*; do
+        [ "${f##*/}" = tmux ] && continue
+        [ -e "$nodir/${f##*/}" ] || ln -s "$f" "$nodir/${f##*/}" 2>/dev/null || true
+      done
+      d="$nodir"
+    fi
+    p="${p:+$p:}$d"
+  done
+
+  cd "$work"
+  PATH="$p" CLAUDE_CONFIG_DIR="$CLIKAE_HOME/profiles/claude/a" \
+    run _pty_run "$CLIKAE_BIN" handoff claude --to codex/work
+  PATH="$p" command -v tmux && { echo "tmux still on PATH"; false; }
+  grep -q "CODEX_HOME=$CLIKAE_HOME/profiles/codex/work" "$CODEX_STUB_LOG" || { echo "engine not run: $output"; false; }
+  grep -q "second real prompt" "$CODEX_STUB_LOG"
+}

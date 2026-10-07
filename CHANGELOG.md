@@ -18,6 +18,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `clikae <engine> <tank> -- --resume <id>` does. tmux is still optional:
   without it (or without a terminal), the engine runs in the foreground as
   before.
+- **`clikae handoff --to <engine>/<tank>` launches through the same launcher.**
+  The board's cross-engine "carry onward" started the target engine directly,
+  outside tmux, like relay did. It now goes through `clikae <engine> <tank>`.
+- **A tmux session no longer starts empty when its arguments contain non-ASCII
+  text.** The quoting that hands the command to tmux used `sed`, which macOS's
+  sed rejects ("illegal byte sequence") on the bytes `%q` leaves behind, so the
+  pane ran `bash -c ''`. The quoting is now pure bash.
 
 ## [0.39.0] — 2026-10-02
 

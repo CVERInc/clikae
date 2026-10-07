@@ -1641,6 +1641,14 @@ _tmux_touch_scroll_floor_met() {
 # it first: a passthrough arg carrying a double-quote, $, backslash, or backtick
 # was mangled — and a backtick / $(...) was executed. Single-quoting with the
 # canonical '\'' escape passes the built command through untouched.
+#
+# 🔴 Pure bash, no sed. The old `printf | sed "s/'/'\\''/g"` died on BSD sed with
+# "illegal byte sequence" whenever the command carried non-ASCII text: `%q`
+# (switch.sh's target_cmd) escapes a multibyte character byte-by-byte, leaving
+# raw high bytes sed refuses to read under a UTF-8 locale. The substitution then
+# printed nothing and the pane ran `bash -c ''` — an empty tmux session. A
+# handoff brief (clikae-lab#1's sibling) is exactly such an argument.
 _switch_shquote() {
-  printf "'%s'" "$(printf '%s' "$1" | sed "s/'/'\\\\''/g")"
+  local q="'"
+  printf "'%s'" "${1//$q/$q\\$q$q}"
 }

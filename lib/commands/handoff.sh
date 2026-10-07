@@ -185,6 +185,18 @@ EOF
     fi
     log_done "Handing off: $cli/$profile → $to${to_dir:+ ($to_dir)}"
     log_dim "Starting $to_cli seeded with the brief; the source session is untouched."
+    # 🔴 A NAMED TANK GOES THROUGH THE LAUNCHER. adapter_start_with_prompt execs
+    # the engine itself (claude/codex/grok: adapter_run with the brief as the
+    # first argument), so a handoff onto a tank — including the board's dry-tank
+    # cross-engine "carry onward" — ran with no tmux session, no scrollback trap
+    # and no wake watcher, and died with an SSH connection (clikae-lab#1; the
+    # same drift relay.sh's _relay_launch fixes). `clikae <engine> <tank> --
+    # <brief> …` is the identical argv through switch, which keeps tmux optional:
+    # no tmux / no terminal -> it execs `clikae run`, the old foreground launch.
+    # With no tank named there is nothing for switch to key on; the hook stays.
+    if [ -n "$to_profile" ]; then
+      exec "$CLIKAE_BIN" "$to_cli" "$to_profile" -- "$brief" "$@"
+    fi
     adapter_start_with_prompt "$to_dir" "$brief" "$@"
 
   else
