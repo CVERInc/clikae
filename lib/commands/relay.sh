@@ -199,6 +199,10 @@ EOF
     *) log_fail "Too many arguments. Usage: clikae relay $cli [<from>] <to>" ;;
   esac
 
+  # Relay resumes a session on another tank of the same engine — meaningless for
+  # an account tool (gh/npm/cloudflare/…). Refuse before any picker/window/tmux.
+  refuse_non_session_engine "$cli"
+
   load_adapter "$cli"
 
   # Auto-detect <from> when not given explicitly: first this shell's live env var,

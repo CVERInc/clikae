@@ -1206,7 +1206,7 @@ EOF
   fi
 
   # Pass 1: nearest fuelled SAME-engine tank (real resume). Pass 2: any engine.
-  local pass e t
+  local pass e t ok_keys=$'\n' tool_keys=$'\n'
   for pass in same any; do
     for entry in ${ring[@]+"${ring[@]}"}; do
       e="${entry%%/*}"; t="${entry#*/}"
@@ -1214,6 +1214,14 @@ EOF
       # target (handoff treats it as a no-/tank single-account target, so a ring
       # entry "antigravity/<tank>" would dead-end). Reach it explicitly instead.
       [ "$e" = "antigravity" ] && continue
+      # A tool CLI (gh/npm/cloudflare/…) can't resume or take a brief — the SAME
+      # rule the board's tank list uses (engine_is_session_engine), memoized per
+      # engine so the subshell runs once per engine, not per tank.
+      case "$tool_keys" in *$'\n'"$e"$'\n'*) continue ;; esac
+      case "$ok_keys" in *$'\n'"$e"$'\n'*) ;; *)
+        if engine_is_session_engine "$e"; then ok_keys="$ok_keys$e"$'\n'
+        else tool_keys="$tool_keys$e"$'\n'; continue; fi ;;
+      esac
       tank_is_solo "$e" "$t" && continue   # a solo tank is out of the fleet — never an auto carry-onward target
       [ "$pass" = "same" ] && [ "$e" != "$engine" ] && continue
       case "$dry_keys" in *$'\n'"$entry"$'\n'*) continue ;; esac

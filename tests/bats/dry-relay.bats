@@ -180,6 +180,36 @@ _seed_email() { # <engine> <profile> <email>
   [ "$(next_tank claude a)" = "$(printf 'claude\tc')" ]
 }
 
+# 2026-10-07 user report: `board: dry-relay claude/CX → gh/work`. next_tank must
+# skip tool CLIs with the same predicate the board's tank list uses.
+@test "next_tank skips tool CLIs (npm/gh) and lands on the next AI tank" {
+  _src
+  clikae init claude a
+  clikae init npm work
+  clikae init gh work
+  clikae init codex b
+  _seed_dry_tx claude a
+  printf 'claude/a\nnpm/work\ngh/work\ncodex/b\n' > "$CLIKAE_HOME/order"
+  [ "$(next_tank claude a)" = "$(printf 'codex\tb')" ]
+}
+
+@test "next_tank returns nothing when only tool CLIs remain; the dry menu says so" {
+  _src
+  clikae init claude a
+  clikae init npm work
+  clikae init gh work
+  _seed_dry_tx claude a
+  printf 'claude/a\nnpm/work\ngh/work\n' > "$CLIKAE_HOME/order"
+  [ -z "$(next_tank claude a)" ]
+  . "$CLIKAE_TEST_ROOT/lib/core/i18n.sh"
+  . "$CLIKAE_TEST_ROOT/lib/commands/home.sh"
+  _home_choose() { printf 'TITLE=%s\nOPTS=%s\n' "$1" "$2" >&2; return 1; }   # stderr: stdout is captured
+  run _home_resume_dry_action claude a "" ""
+  [[ "$output" == *"no other AI tank has fuel to carry onto"* ]] || false
+  [[ "$output" != *"gh/work"* ]] || false
+  [[ "$output" != *"npm/work"* ]] || false
+}
+
 # --- capture-time annotation (codex/agy snapshots read honestly) ---------------
 
 @test "dry_store_epoch: returns the recorded epoch" {
