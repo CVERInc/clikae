@@ -211,7 +211,7 @@ STUB
   CLAUDE_CONFIG_DIR="$CLIKAE_HOME/profiles/claude/a" \
     run clikae handoff claude --to aws/work
   [ "$status" -ne 0 ]
-  [[ "$output" == *"can't be started from a handoff brief"* ]] || false
+  [[ "$output" == *"aws is an account tool, not an AI engine"* ]] || false
 }
 
 @test "handoff errors when there's no session for this directory" {
@@ -1215,4 +1215,35 @@ STUB
   PATH="$p" command -v tmux && { echo "tmux still on PATH"; false; }
   grep -q "CODEX_HOME=$CLIKAE_HOME/profiles/codex/work" "$CODEX_STUB_LOG" || { echo "engine not run: $output"; false; }
   grep -q "second real prompt" "$CODEX_STUB_LOG"
+}
+
+# 2026-10-07 user report: the board auto-carried a dry claude tank onto gh/work.
+# A tool CLI must be refused up front — one clear line, non-zero, and no tmux.
+@test "handoff --to gh/work refuses a tool CLI up front, before any tmux" {
+  clikae init claude a
+  clikae init gh work
+  mkdir -p "$TEST_HOME/bin"
+  cat > "$TEST_HOME/bin/tmux" <<'STUB'
+#!/usr/bin/env bash
+printf '%s\n' "$*" >> "${HOME:?}/tmux-argv.log"
+exit 0
+STUB
+  chmod +x "$TEST_HOME/bin/tmux"
+  local work="$TEST_HOME/work"; mkdir -p "$work"
+  _seed_transcript a "$work" "77777777-7777-7777-7777-777777777777"
+  cd "$work"
+  PATH="$TEST_HOME/bin:$PATH" CLAUDE_CONFIG_DIR="$CLIKAE_HOME/profiles/claude/a" \
+    run clikae handoff claude --to gh/work
+  [ "$status" -ne 0 ]
+  [[ "$output" == *"gh is an account tool, not an AI engine — pick one of:"*claude* ]] || false
+  [[ "$output" != *"pick one of:"*" gh"* ]] || false
+  [ ! -f "$TEST_HOME/tmux-argv.log" ] || { echo "tmux was called: $(cat "$TEST_HOME/tmux-argv.log")"; false; }
+}
+
+@test "relay refuses a tool CLI up front" {
+  clikae init gh a
+  clikae init gh b
+  run clikae relay gh a b
+  [ "$status" -ne 0 ]
+  [[ "$output" == *"gh is an account tool, not an AI engine"* ]] || false
 }
