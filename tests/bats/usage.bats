@@ -1662,7 +1662,7 @@ _usage107_calls() { if [ -f "$USAGE_CALLS" ]; then wc -l < "$USAGE_CALLS" | tr -
   # static board prints as a footer line (the interactive one leaves it to
   # Enter on the row and the `?` page).
   [ "$_FNOTE" = "expired" ] || { echo "note: $_FNOTE"; false; }
-  [ "$_FREMEDY" = "clikae usage --wake work" ] || { echo "remedy: $_FREMEDY"; false; }
+  [ "$_FREMEDY" = "clikae usage claude --wake work" ] || { echo "remedy: $_FREMEDY"; false; }
   # It fits the tank row's gutter on an 80-column terminal: 47 columns of
   # row before the note, and the note is plain ASCII now — measured like any
   # other fuel string, no per-glyph width exception.
@@ -1717,13 +1717,13 @@ STUB
   _usage107_creds rt-stub-value
   _usage107_wake_stubs
   mkdir -p "$CLIKAE_HOME/state"; printf 'claude/work\n' > "$CLIKAE_HOME/state/cockpit"
-  run --separate-stderr clikae usage --wake work --json
+  run --separate-stderr clikae usage claude --wake work --json
   [ "$status" -ne 0 ]
   [[ "$stderr" == *"cockpit-guard: refused — claude/work is the recorded cockpit"* ]] || { echo "stderr: $stderr"; false; }
   [ ! -e "$WAKE_ARGV_LOG" ] || { echo "the engine was started on the cockpit"; false; }
   [ -z "$output" ]
 
-  run --separate-stderr clikae usage --wake work --json --force-cockpit
+  run --separate-stderr clikae usage claude --wake work --json --force-cockpit
   [ "$status" -eq 0 ] || { echo "stderr: $stderr"; false; }
   [ -s "$WAKE_ARGV_LOG" ]
   echo "$output" | jq -e '.source == "vendor" and .weekly_pct == 99'
@@ -1743,7 +1743,7 @@ STUB
   [ "$(_usage107_calls)" = 1 ]
   : > "$USAGE_CALLS"
 
-  CLIKAE_USAGE_TTL=999999 run --separate-stderr clikae usage --wake work --json
+  CLIKAE_USAGE_TTL=999999 run --separate-stderr clikae usage claude --wake work --json
   [ "$status" -eq 0 ] || { echo "stderr: $stderr"; false; }
   echo "$output" | jq -e '.engine == "claude" and .tank == "work" and .source == "vendor" and .window_pct == 3 and .weekly_pct == 99' \
     || { echo "got: $output"; false; }

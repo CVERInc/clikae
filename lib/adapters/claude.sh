@@ -1159,7 +1159,7 @@ _claude_usage_unreadable() {
 # it. NOTE WHAT THIS DELIBERATELY DOES NOT DO: the issue proposed collapsing
 # 401/403 into a single `reauth`, which would undo #107/#117 — that PR split
 # the auth case into `expired-token` (a session fixes it; the board says
-# `expired · usage --wake <tank>`) and `no-credentials` (this one really
+# `expired`, remedy in the footer / `?` page) and `no-credentials` (this one really
 # does need a login), because an idle tank at 99% weekly used to read exactly
 # like a tank with no login at all. Those two words ARE the auth class, finer
 # than `reauth`; callers that want the class ask for "expired-token or

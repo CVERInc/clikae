@@ -1443,16 +1443,17 @@ _home_weekly_read() {
 }
 
 # _home_weekly_normv <verbatim phrase> -> $_WNORM, the phrase in the board's
-# grammar when it is the one shape clikae knows ("used 85% of your weekly
-# limit" -> "weekly 85%"), else verbatim — a phrase the parser cannot read
-# is still the vendor's word, and better long than guessed.
+# grammar when it is the shape limit_weekly_marker writes ("85% of your
+# weekly limit" — the cache starts at the digits; "week limit" and a leading
+# "used " are accepted too) -> "weekly 85%", else verbatim — a phrase the
+# parser cannot read is still the vendor's word, and better long than guessed.
 _home_weekly_normv() {
   local n
   _WNORM="$1"
   case "$1" in
-    *used\ *%\ of\ your\ weekly\ limit*)
-      n="${1#*used }"; n="${n%%\%*}"; n="${n%%.*}"
-      case "$n" in ''|*[!0-9]*) ;; *) _WNORM="weekly ${n}%" ;; esac ;;
+    *%\ of\ your\ week*limit*)
+      n="${1%%\%*}"; n="${n##*[!0-9]}"
+      case "$n" in '') ;; *) _WNORM="weekly $((10#$n))%" ;; esac ;;
   esac
 }
 
@@ -1513,7 +1514,9 @@ _home_codex_status_readv() {
   _CODEX_NOTE=""
   _home_codex_segv "$_LCS_PU" "$_LCS_PW" && _CODEX_NOTE="$_CSEG"
   _home_codex_segv "$_LCS_SU" "$_LCS_SW" && _CODEX_NOTE="${_CODEX_NOTE:+$_CODEX_NOTE · }$_CSEG"
-  [ "$_LCS_LIGHT" = green ] || [ -z "$_LCS_RESET" ] || _CODEX_NOTE="${_CODEX_NOTE:+$_CODEX_NOTE · }resets $_LCS_RESET"
+  # $_LCS_RESET is already the rendered phrase, "resets 05:14" (pre-release
+  # red team: a literal "resets " here printed "resets resets 05:14").
+  [ "$_LCS_LIGHT" = green ] || [ -z "$_LCS_RESET" ] || _CODEX_NOTE="${_CODEX_NOTE:+$_CODEX_NOTE · }$_LCS_RESET"
   [ -n "$_CODEX_NOTE" ] || return 1
   return 0
 }
@@ -1714,7 +1717,6 @@ _home_fuel_dotv_compute() {
       # only here. Guarded rather than carried forward. Same `&&`-list shape
       # as the other two call sites; errexit exempts every command in an
       # `&&` list but the last, so a missing function is a no-op, not a death.
-      declare -F _human_age >/dev/null 2>&1 && [ "$age" -ge "$ttl" ] && _FNOTE="$_FNOTE · $(_human_age "$cached_at" "$now")"
       # #149: a binding per-model row (vendor-named, pct above the tank's
       # weekly) rides in the note as "<name> <pct>%". One at 100% or more
       # turns a tank that would otherwise read green yellow: it can run, but
@@ -1727,6 +1729,8 @@ _home_fuel_dotv_compute() {
         _FNOTE="$_FNOTE · ${_bind_one%:*} ${_bind_pct}%"
         case "$_bind_pct" in ''|*[!0-9]*) ;; *) [ "$_bind_pct" -lt 100 ] || _bind_spent=1 ;; esac
       done
+      # The age comes after the model segment (grammar: model, then age).
+      declare -F _human_age >/dev/null 2>&1 && [ "$age" -ge "$ttl" ] && _FNOTE="$_FNOTE · $(_human_age "$cached_at" "$now")"
       # Judged separately, not by peak = max(window,weekly) — see the
       # constants' own header just above _home_weekly_pathv. A full window
       # costs a couple of hours; a full week costs days, so weekly's own
@@ -1759,7 +1763,7 @@ _home_fuel_dotv_compute() {
         _uca="${_uline##*\"cached_at\":}"; _uca="${_uca%%[!0-9]*}"
         if [ -n "$_uca" ] && [ $(( now - _uca )) -lt 86400 ]; then
           _FDOT="${__C_DIM}·$__C_RESET"; _FNOTE="expired"
-          _FREMEDY="clikae usage --wake $profile"
+          _FREMEDY="clikae usage $cli --wake $profile"   # engine named: two engines can share a tank name
           # #149: the last number it had, with its age, beats the remedy
           # alone — the full remedy sentence is `clikae usage`'s.
           # A vendor-stamped number with its age beside it is a measurement,
@@ -2796,19 +2800,15 @@ EOF
   fi
   # An expired sign-in's remedy, one line per tank, here instead of on the
   # row (there is no cursor on this board to hide it behind). Same shape as
-  # the over-quota line above; wraps below 60 columns like it.
+  # the over-quota line above; always wrapped — fr-FR is 61 columns before
+  # the tank name, so a 70-column terminal would cut it otherwise.
   if [ -n "$any_expired" ]; then
     local _rem
     while IFS= read -r _rem; do
       [ -n "$_rem" ] || continue
-      if [ "$_HOME_NARROW" = 1 ]; then
-        # shellcheck disable=SC2059  # T_EXPIRED_HINT is a printf template by contract
-        _home_wrap_prefixed "$(printf "$T_EXPIRED_HINT" "$_rem")" \
-          "$(printf '  %b!%b ' "$__C_YELLOW" "$__C_RESET")" 4 "" ""
-      else
-        # shellcheck disable=SC2059
-        printf '  %b!%b %s\n' "$__C_YELLOW" "$__C_RESET" "$(printf "$T_EXPIRED_HINT" "$_rem")"
-      fi
+      # shellcheck disable=SC2059  # T_EXPIRED_HINT is a printf template by contract
+      _home_wrap_prefixed "$(printf "$T_EXPIRED_HINT" "$_rem")" \
+        "$(printf '  %b!%b ' "$__C_YELLOW" "$__C_RESET")" 4 "" ""
     done <<< "$any_expired"
   fi
 

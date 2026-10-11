@@ -1251,6 +1251,7 @@ _seed_burn_flood_agy() {
   [[ "$output" == *"window 10%"* ]] || { echo "$output"; false; }
   [[ "$output" == *"weekly 96%"* ]] || { echo "$output"; false; }
   [[ "$output" == *"· resets "* ]]  || { echo "$output"; false; }
+  [[ "$output" != *"resets resets"* ]] || { echo "$output"; false; }
   [[ "$output" != *"left"* ]]       || { echo "$output"; false; }
   # An existing hard-dry marker still outranks the proactive reading — a real
   # persisted dry event is worth more than a vendor "N% left" snapshot.

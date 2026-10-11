@@ -149,7 +149,7 @@ STUB
     "$now" "$now" "$(( now - 18000 ))" > "$CLIKAE_HOME/state/usage/claude/goby.json"
   _home_fuel_dotv_compute "" claude goby "$now"
   [ "$_FNOTE" = "weekly 85% · 5h ago · expired" ] || { echo "note: $_FNOTE"; false; }
-  [ "$_FREMEDY" = "clikae usage --wake goby" ] || { echo "remedy: $_FREMEDY"; false; }
+  [ "$_FREMEDY" = "clikae usage claude --wake goby" ] || { echo "remedy: $_FREMEDY"; false; }
   printf '{"window_pct":null,"weekly_pct":null,"window_resets_at":null,"weekly_resets_at":null,"source":"unknown","cached_at":%s,"scanned_at":%s,"last_good":{"window_pct":null,"weekly_pct":40,"at":%s}}\n' \
     "$now" "$now" "$(( now - 3600 ))" > "$CLIKAE_HOME/state/usage/codex/marlin.json" 2>/dev/null ||
     { mkdir -p "$CLIKAE_HOME/state/usage/codex"; printf '{"window_pct":null,"weekly_pct":null,"window_resets_at":null,"weekly_resets_at":null,"source":"unknown","cached_at":%s,"scanned_at":%s,"last_good":{"window_pct":null,"weekly_pct":40,"at":%s}}\n' "$now" "$now" "$(( now - 3600 ))" > "$CLIKAE_HOME/state/usage/codex/marlin.json"; }
@@ -355,14 +355,23 @@ _lg_cache() {
   _home_fuel_dotv_compute "" claude goby "$now"
   [ "$_FNOTE" = "window 8% · weekly 85% · Fable 97%" ] || { echo "note: $_FNOTE"; false; }
   [ -z "$_FREMEDY" ] || { echo "remedy on a healthy tank: $_FREMEDY"; false; }
+  # Older than the TTL: the age comes AFTER the model segment, as the grammar says.
+  printf '{"window_pct":8,"weekly_pct":85,"window_resets_at":"2099-01-01T00:00:00Z","weekly_resets_at":"2099-01-07T00:00:00Z","source":"vendor","models":[{"name":"Fable","pct":97,"resets_at":"2099-01-07T00:00:00Z"}],"cached_at":%s,"scanned_at":%s}\n' \
+    "$(( now - 10800 ))" "$(( now - 10800 ))" > "$CLIKAE_HOME/state/usage/claude/goby.json"
+  _home_fuel_dotv_compute "" claude goby "$now"
+  [ "$_FNOTE" = "window 8% · weekly 85% · Fable 97% · 3h ago" ] || { echo "note: $_FNOTE"; false; }
   # expired with no last number: the word, and the remedy beside it (not in it).
   _lg_cache claude tuna expired "$now" ""
   _home_fuel_dotv_compute "" claude tuna "$now"
   [ "$_FNOTE" = "expired" ] || { echo "note: $_FNOTE"; false; }
-  [ "$_FREMEDY" = "clikae usage --wake tuna" ] || { echo "remedy: $_FREMEDY"; false; }
+  [ "$_FREMEDY" = "clikae usage claude --wake tuna" ] || { echo "remedy: $_FREMEDY"; false; }
   # the weekly-BETA cache: vendor sentence in, board grammar out; unknown shape stays verbatim.
+  _home_weekly_normv "85% of your weekly limit"     # what limit_weekly_marker writes
+  [ "$_WNORM" = "weekly 85%" ] || { echo "norm: $_WNORM"; false; }
   _home_weekly_normv "used 85% of your weekly limit"
   [ "$_WNORM" = "weekly 85%" ] || { echo "norm: $_WNORM"; false; }
+  _home_weekly_normv "7% of your week limit"
+  [ "$_WNORM" = "weekly 7%" ] || { echo "norm: $_WNORM"; false; }
   _home_weekly_normv "something the parser never saw"
   [ "$_WNORM" = "something the parser never saw" ] || { echo "norm: $_WNORM"; false; }
   # codex segments: spent %, rounded UP on a fraction like the light itself; 5h is "window".
@@ -400,5 +409,5 @@ _lg_cache() {
   [ "$status" -eq 0 ]
   [[ "$output" == *"tuna"*"weekly 85% · 5h ago · expired"* ]] || { echo "$output"; false; }
   [[ "$output" != *"to renew"* ]] || { echo "$output"; false; }
-  [[ "$output" == *"! sign-in expired — renew it:  clikae usage --wake tuna"* ]] || { echo "$output"; false; }
+  [[ "$output" == *"! sign-in expired — renew it: clikae usage claude --wake tuna"* ]] || { echo "$output"; false; }
 }
