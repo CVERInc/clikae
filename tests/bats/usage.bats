@@ -1636,7 +1636,7 @@ _usage107_calls() { if [ -f "$USAGE_CALLS" ]; then wc -l < "$USAGE_CALLS" | tr -
   [[ "$stderr" != *"⏳"* ]] || { echo "the old glyph is back: $stderr"; false; }
 }
 
-@test "#107: the board says an expired tank is expired, with the remedy, instead of a green ready dot" {
+@test "#107: the board says an expired tank is expired, and hands the renderer the remedy, instead of a green ready dot" {
   usage_fixture
   export CLIKAE_LIB="$CLIKAE_TEST_ROOT/lib"
   source "$CLIKAE_LIB/core/log.sh"
@@ -1658,7 +1658,11 @@ _usage107_calls() { if [ -f "$USAGE_CALLS" ]; then wc -l < "$USAGE_CALLS" | tr -
   [ "$_FDOT" = 'D·' ] || { echo "dot: $_FDOT"; false; }
   # No emoji on this delivery surface (2026-09-22 correction — the note used
   # to lead with `⏳`, which breached the standing no-emoji rule).
-  [ "$_FNOTE" = "expired · usage --wake work" ] || { echo "note: $_FNOTE"; false; }
+  # The remedy is not in the note (2026-10-11): it is $_FREMEDY, which the
+  # static board prints as a footer line (the interactive one leaves it to
+  # Enter on the row and the `?` page).
+  [ "$_FNOTE" = "expired" ] || { echo "note: $_FNOTE"; false; }
+  [ "$_FREMEDY" = "clikae usage --wake work" ] || { echo "remedy: $_FREMEDY"; false; }
   # It fits the tank row's gutter on an 80-column terminal: 47 columns of
   # row before the note, and the note is plain ASCII now — measured like any
   # other fuel string, no per-glyph width exception.
@@ -1670,6 +1674,7 @@ _usage107_calls() { if [ -f "$USAGE_CALLS" ]; then wc -l < "$USAGE_CALLS" | tr -
     > "$CLIKAE_HOME/state/usage/claude/work.json"
   _home_fuel_dotv_compute '' claude work "$now"
   [[ "$_FNOTE" != *"expired"* ]] || { echo "24h-old note: $_FNOTE"; false; }
+  [ -z "$_FREMEDY" ] || { echo "24h-old remedy: $_FREMEDY"; false; }
 
   # An unknown reading is not dressed up as expired.
   jq -cn --argjson at "$(( now - 300 ))" \
