@@ -688,7 +688,7 @@ things (#136):
 | --- | --- |
 | a reading | back to the base interval |
 | `rate-limited` (HTTP 429) | waits the vendor's own `Retry-After`, clamped to the base interval and to `CLIKAE_WATCH_USAGE_MAX_BACKOFF` (default 1800s). A missing, negative, zero, non-numeric, HTTP-date or out-of-range header is not a hint — it falls back to the row below. |
-| `expired-token` / `no-credentials` | straight to `CLIKAE_WATCH_USAGE_MAX_BACKOFF` and marked. Neither starts working because we waited a little longer, so there is no ramp to climb. The board says so immediately either way — a cached expired reading draws `expired · usage --wake <tank>` the moment it lands. |
+| `expired-token` / `no-credentials` | straight to `CLIKAE_WATCH_USAGE_MAX_BACKOFF` and marked. Neither starts working because we waited a little longer, so there is no ramp to climb. The board says so immediately either way — a cached expired reading draws `expired` on the row the moment it lands. On the interactive board Enter on that row is the fix (a session renews the token); the static board's footer and the `?` page name the headless one, `clikae usage --wake <tank>`. |
 | anything else (no connection, a timeout, a 5xx, an unreadable body) | doubles, capped at `CLIKAE_WATCH_USAGE_MAX_BACKOFF` |
 
 ### Warm `/compact` before the prompt cache goes cold (#131)

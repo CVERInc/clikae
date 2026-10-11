@@ -762,8 +762,9 @@ cannot be banned outright) — so the mark got through the lint gate onto
 a delivery surface it was never allowed on. The fix has two parts: the
 status row's fuel slot now renders the plain word <code>expired</code>
 (<code>tmux_status_fuelv</code>, <code>lib/core/tmux.sh</code>) instead of the glyph — same
-vocabulary the board already uses (<code>usage_expired_board_notev</code>,
-<code>lib/core/usage.sh</code>), just no longer an emoji — and the lint scan was
+vocabulary the board's fuel note already uses (it carries the word
+<code>expired</code>; see <code>DESIGN-board-fuel-dots.md</code>, &quot;One grammar for the note;
+the account behind the cursor&quot;), just no longer an emoji — and the lint scan was
 extended to the emoji-presentation code points actually in that block
 (<code>U+231A–231B</code>, <code>U+23E9–23FA</code>, which covers <code>⏳</code>/<code>⌛</code>/<code>⏰</code>/<code>⏱</code>/<code>⏲</code>) so the
 same gap cannot reopen with a different glyph from it. <code>○</code>/<code>·</code> remain

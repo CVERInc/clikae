@@ -709,8 +709,9 @@ ok 2 called from inside tmux, switch moves the client instead of nesting
      a delivery surface it was never allowed on. The fix has two parts: the
      status row's fuel slot now renders the plain word `expired`
      (`tmux_status_fuelv`, `lib/core/tmux.sh`) instead of the glyph — same
-     vocabulary the board already uses (`usage_expired_board_notev`,
-     `lib/core/usage.sh`), just no longer an emoji — and the lint scan was
+     vocabulary the board's fuel note already uses (it carries the word
+     `expired`; see `DESIGN-board-fuel-dots.md`, "One grammar for the note;
+     the account behind the cursor"), just no longer an emoji — and the lint scan was
      extended to the emoji-presentation code points actually in that block
      (`U+231A–231B`, `U+23E9–23FA`, which covers `⏳`/`⌛`/`⏰`/`⏱`/`⏲`) so the
      same gap cannot reopen with a different glyph from it. `○`/`·` remain

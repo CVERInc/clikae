@@ -270,12 +270,14 @@ adds nothing. A reading with no numbers shows the last one that had them,
 aged, with a reason word (`expired`, `no-probe`, `no-signal`); see
 docs/usage.md.
 On the board an expired reading under 24h old draws the no-reading `·` with
-the note `expired · usage --wake <tank>` (the word lives in the note, not the
-dot — no emoji on any delivery surface, so the note carries a word and costs
-no special width handling; and the note is the short form because a tank row
-leaves 33 columns for it on an 80-column terminal — `clikae usage` prints the
-full sentence, `token expired — run a session or 'clikae usage --wake
-<tank>'`). The tmux status row, which has a fuel SLOT rather than a padded
+the note `expired` (the word lives in the note, not the dot — no emoji on any
+delivery surface, so the note carries a word and costs no special width
+handling). The remedy, `clikae usage --wake <tank>`, is not on the row since
+2026-10-11 (see "One grammar for the note" below): the static board prints it
+as a footer line per expired tank; the interactive one leaves it to Enter on
+the row and names `--wake` on the `?` page;
+`clikae usage` prints the full sentence, `token expired — run a session or
+'clikae usage --wake <tank>'`. The tmux status row, which has a fuel SLOT rather than a padded
 grid, draws the word `expired` in that slot instead of the dot, on the same
 24h ceiling, measured like any other ASCII fuel string
 (`docs/DESIGN-tmux.md` Rule 11 §6/§7). The optional
@@ -542,3 +544,75 @@ timeouts bound failures; HTTP errors and network failures become unknown
 (or expired, above) without printing response bodies. `--fail` stays; the
 HTTP status alone is written by `-w '%{stderr}%{http_code}'` to a private
 temp file, which is what makes a 401 observable rather than inferred (#107).
+
+## One grammar for the note; the account behind the cursor (2026-10-11)
+
+Pasted from a real board with fourteen tanks, the Tanks section read like this
+(one line per engine family, abridged):
+
+```
+◐ tuna    claude   hello@cver.net          weekly 99.0% · 17h ago · expired · clikae usage --wake tuna to renew
+◐ salmon  codex    xiaoyacomic@gmail.com   5h 100% left · weekly 12% left (resets 03:21 on 15 Oct)
+● chromis agy      chodaict@gmail.com      weekly 21.7% · 8d ago · no-signal
+```
+
+Three defects, found by reading it cold rather than by any test:
+
+1. **Three dialects in one column.** claude rows counted what was *spent*
+   (`weekly 85.0%`), codex rows what was *left* (`weekly 12% left`), agy rows
+   did not say. `goby 85%` and `salmon 12%` were the same situation and looked
+   like opposites; the reader had to know the engine to know whether a big
+   number was good news. codex's dialect was deliberate — `_limit_codex_left`
+   matches the words codex's own `/status` panel uses — but that is `clikae
+   usage`'s surface, where one engine speaks at a time. A column shared by
+   three engines has to speak one language, and the one every threshold in
+   this file is written in is *spent*.
+2. **The tail was free text.** Numbers, a model cap, the reading's age, a state
+   word and a remedy command were concatenated in whatever order the branch
+   that produced them happened to use. The remedy (`clikae usage --wake tuna
+   to renew`) was the widest thing on the board.
+3. **Every note was bold yellow**, whether the tank was at 1% or dry. Ten rows
+   of alert colour for nine tanks that were fine is a wall, not a signal; the
+   dot already carries the band.
+
+The fix is a grammar, not a layout — stated once above
+`_home_fuel_dotv_compute` in `lib/commands/home.sh`:
+
+```
+<window N%> · <weekly N%> [· <Model N%>] [· <age>] [· <state>]
+```
+
+- **Spent, whole percents, window before weekly, for every engine.** codex's
+  row is built from the vendor's raw sides (`limit_codex_status_cachedv`), with
+  the same round-up a fraction gets in `_limit_codex_left`, so a tank the light
+  calls red never reads 99%. The weekly-BETA sentence is read into the same
+  shape when it is the one shape clikae knows (`used 85% of your weekly limit`
+  → `weekly 85%`); any other phrase stays verbatim. `clikae usage` and
+  `burn --json` are untouched — the human note and the `% left` dialect live
+  on there, per engine.
+- **A state word is the last thing on the row** (`expired`, `no-signal`,
+  `no-probe`, `reset passed · unverified`, `last used 13d ago`); a codex reset
+  instant appears only when the light is not green.
+- **The remedy is `$_FREMEDY`, not part of the note.** The renderer places it:
+  the static board (no cursor) prints one footer line per expired tank, in the
+  over-quota line's shape. The interactive board does not print it at all:
+  there, Enter on the row *is* the remedy — opening a session renews the token
+  (`docs/usage.md`, "start a session on that tank") — and `--wake` is the
+  headless / other-machine path, stated once on the `?` page under the dots
+  legend (`T_DOT_EXPIRED`).
+- **The note's colour is the dot's band, one step quieter** (`$_FTAILC`,
+  derived once in `_home_fuel_dotv` from the glyph's own colour prefix, so no
+  branch can disagree with its dot): red for dry, plain yellow for a caution,
+  dim for healthy or unread. Bold yellow is for the one-line alerts.
+
+And the account column is gone from the **interactive** board. The tank's name
+already says whose account it is, the email was the widest field on every row,
+and the narrow board (#155) had already shown the section reads fine without
+it. The address now lives on the cursor line, and only the address — the
+same hover-detail shape a Live or Resume row uses for its age. Every detail
+line on the wide interactive board (tank, Live, Resume) now starts at the name
+column instead of two columns right of it: the detail belongs to the name, and
+the old offset read as a column of its own. The static board keeps its account
+column: it has no cursor to put the detail behind, and a pipe or the GUI reads
+it as a table.
+
