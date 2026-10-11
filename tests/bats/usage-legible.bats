@@ -34,7 +34,7 @@ _board_env() {
   source "$CLIKAE_LIB/core/duration.sh"
   source "$CLIKAE_LIB/core/usage.sh"
   source "$CLIKAE_LIB/commands/home.sh"
-  __C_YELLOW=YELLOW; __C_DIM=DIM; __C_GREEN=GREEN; __C_RED=RED; __C_RESET=""
+  __C_YELLOW=YELLOW; __C_YELLOW_SOFT=SOFT; __C_DIM=DIM; __C_GREEN=GREEN; __C_RED=RED; __C_RESET=""
 }
 _agy_tank() {
   local d="$CLIKAE_HOME/profiles/antigravity/$1"
@@ -148,7 +148,8 @@ STUB
   printf '{"window_pct":null,"weekly_pct":null,"window_resets_at":null,"weekly_resets_at":null,"source":"expired","reason":"expired-token","cached_at":%s,"scanned_at":%s,"last_good":{"window_pct":10,"weekly_pct":85,"at":%s}}\n' \
     "$now" "$now" "$(( now - 18000 ))" > "$CLIKAE_HOME/state/usage/claude/goby.json"
   _home_fuel_dotv_compute "" claude goby "$now"
-  [ "$_FNOTE" = "weekly 85% · 5h ago · expired · clikae usage --wake goby to renew" ] || { echo "note: $_FNOTE"; false; }
+  [ "$_FNOTE" = "weekly 85% · 5h ago · expired" ] || { echo "note: $_FNOTE"; false; }
+  [ "$_FREMEDY" = "clikae usage --wake goby" ] || { echo "remedy: $_FREMEDY"; false; }
   printf '{"window_pct":null,"weekly_pct":null,"window_resets_at":null,"weekly_resets_at":null,"source":"unknown","cached_at":%s,"scanned_at":%s,"last_good":{"window_pct":null,"weekly_pct":40,"at":%s}}\n' \
     "$now" "$now" "$(( now - 3600 ))" > "$CLIKAE_HOME/state/usage/codex/marlin.json" 2>/dev/null ||
     { mkdir -p "$CLIKAE_HOME/state/usage/codex"; printf '{"window_pct":null,"weekly_pct":null,"window_resets_at":null,"weekly_resets_at":null,"source":"unknown","cached_at":%s,"scanned_at":%s,"last_good":{"window_pct":null,"weekly_pct":40,"at":%s}}\n' "$now" "$now" "$(( now - 3600 ))" > "$CLIKAE_HOME/state/usage/codex/marlin.json"; }
@@ -289,7 +290,7 @@ _lg_cache() {
   _lg_cache claude goby expired "$now" "{\"window_pct\":10,\"weekly_pct\":19,\"at\":$at}"
   _home_fuel_dotv_compute "" claude goby "$now"
   [ "$_FDOT" = "DIM●" ] || { echo "dot: $_FDOT"; false; }
-  [ "$_FNOTE" = "weekly 19% · 21h ago · expired · clikae usage --wake goby to renew" ] || { echo "note: $_FNOTE"; false; }
+  [ "$_FNOTE" = "weekly 19% · 21h ago · expired" ] || { echo "note: $_FNOTE"; false; }
   _lg_cache claude goby expired "$now" "{\"window_pct\":10,\"weekly_pct\":88,\"at\":$at}"
   _home_fuel_dotv_compute "" claude goby "$now"
   [ "$_FDOT" = "DIM◐" ] || { echo "dot: $_FDOT"; false; }
@@ -342,4 +343,62 @@ _lg_cache() {
   # The stub never clears its marker = still in flight: a re-open fires nothing.
   run _home_usage_refresh_on_open "$now"
   [ "$output" = 0 ] || { echo "re-open fired: $output"; false; }
+}
+
+@test "tank note (2026-10-11): one grammar for every engine — spent %, whole numbers, state word last, remedy off the row" {
+  _board_env
+  local now; now="$(date +%s)"
+  mkdir -p "$CLIKAE_HOME/state/usage/claude"
+  # claude: the vendor's "99.0" / "21.7" read as whole percents.
+  printf '{"window_pct":8.0,"weekly_pct":85.4,"window_resets_at":"2099-01-01T00:00:00Z","weekly_resets_at":"2099-01-07T00:00:00Z","source":"vendor","models":[{"name":"Fable","pct":97.2,"resets_at":"2099-01-07T00:00:00Z"}],"cached_at":%s,"scanned_at":%s}\n' \
+    "$now" "$now" > "$CLIKAE_HOME/state/usage/claude/goby.json"
+  _home_fuel_dotv_compute "" claude goby "$now"
+  [ "$_FNOTE" = "window 8% · weekly 85% · Fable 97%" ] || { echo "note: $_FNOTE"; false; }
+  [ -z "$_FREMEDY" ] || { echo "remedy on a healthy tank: $_FREMEDY"; false; }
+  # expired with no last number: the word, and the remedy beside it (not in it).
+  _lg_cache claude tuna expired "$now" ""
+  _home_fuel_dotv_compute "" claude tuna "$now"
+  [ "$_FNOTE" = "expired" ] || { echo "note: $_FNOTE"; false; }
+  [ "$_FREMEDY" = "clikae usage --wake tuna" ] || { echo "remedy: $_FREMEDY"; false; }
+  # the weekly-BETA cache: vendor sentence in, board grammar out; unknown shape stays verbatim.
+  _home_weekly_normv "used 85% of your weekly limit"
+  [ "$_WNORM" = "weekly 85%" ] || { echo "norm: $_WNORM"; false; }
+  _home_weekly_normv "something the parser never saw"
+  [ "$_WNORM" = "something the parser never saw" ] || { echo "norm: $_WNORM"; false; }
+  # codex segments: spent %, rounded UP on a fraction like the light itself; 5h is "window".
+  _home_codex_segv 11.5 300;   [ "$_CSEG" = "window 12%" ] || { echo "seg: $_CSEG"; false; }
+  _home_codex_segv 88 10080;   [ "$_CSEG" = "weekly 88%" ] || { echo "seg: $_CSEG"; false; }
+  _home_codex_segv 40 43200;   [ "$_CSEG" = "30d 40%" ]    || { echo "seg: $_CSEG"; false; }
+  ! _home_codex_segv "" 300 || false
+}
+
+@test "tank note colour (2026-10-11): follows the dot's band one step quieter — red / soft yellow / dim, never the bold alert yellow" {
+  _board_env
+  local now; now="$(date +%s)"
+  mkdir -p "$CLIKAE_HOME/state/usage/claude"
+  _seed() { printf '{"window_pct":%s,"weekly_pct":%s,"window_resets_at":"2099-01-01T00:00:00Z","weekly_resets_at":"2099-01-07T00:00:00Z","source":"vendor","cached_at":%s,"scanned_at":%s}\n' "$1" "$2" "$now" "$now" > "$CLIKAE_HOME/state/usage/claude/$3.json"; }
+  _seed 30 22 fine; _seed 8 85 warm; _seed 100 40 gone
+  _home_fuel_memo_reset
+  _home_fuel_dotv "" claude fine; [ "$_FTAILC" = DIM ]  || { echo "fine: $_FTAILC"; false; }
+  _home_fuel_dotv "" claude warm; [ "$_FTAILC" = SOFT ] || { echo "warm: $_FTAILC"; false; }
+  _home_fuel_dotv "" claude gone; [ "$_FTAILC" = RED ]  || { echo "gone: $_FTAILC"; false; }
+  # The memo hands the colour back too (a tank's Live row and Tank row agree).
+  _home_fuel_dotv "" claude warm; [ "$_FTAILC" = SOFT ] || { echo "memo: $_FTAILC"; false; }
+  # No colours at all (NO_COLOR / a pipe): the tail carries none either.
+  __C_RED=""; __C_YELLOW=""; __C_YELLOW_SOFT=""; __C_DIM=""
+  _home_fuel_memo_reset
+  _home_fuel_dotv "" claude gone; [ -z "$_FTAILC" ] || { echo "nocolour: [$_FTAILC]"; false; }
+}
+
+@test "static board (2026-10-11): an expired tank's row says expired; the remedy is one footer line per tank, not on the row" {
+  clikae init claude tuna >/dev/null
+  local now; now="$(date +%s)"
+  mkdir -p "$CLIKAE_HOME/state/usage/claude"
+  printf '{"window_pct":null,"weekly_pct":null,"window_resets_at":null,"weekly_resets_at":null,"source":"expired","reason":"expired-token","cached_at":%s,"scanned_at":%s,"last_good":{"window_pct":10,"weekly_pct":85,"at":%s}}\n' \
+    "$now" "$now" "$(( now - 18000 ))" > "$CLIKAE_HOME/state/usage/claude/tuna.json"
+  CLIKAE_NO_INTERACTIVE=1 CLIKAE_LANG=en-US run clikae
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"tuna"*"weekly 85% · 5h ago · expired"* ]] || { echo "$output"; false; }
+  [[ "$output" != *"to renew"* ]] || { echo "$output"; false; }
+  [[ "$output" == *"! sign-in expired — renew it:  clikae usage --wake tuna"* ]] || { echo "$output"; false; }
 }

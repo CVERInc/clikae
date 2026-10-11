@@ -7,6 +7,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- **The board's Tanks section speaks one language.** Every tank's fuel note
+  now reads `window N% · weekly N% [· Model N%] [· age] [· state]` — spent,
+  whole percents, for claude, codex and agy alike. codex rows no longer say
+  `5h 100% left · weekly 12% left (…)` (that dialect stays on `clikae usage`
+  and `burn --json`, where one engine speaks at a time); the weekly-BETA
+  sentence reads `weekly 85%`; `99.0%` reads `99%`. The expired remedy
+  (`clikae usage --wake <tank>`) left the row: the static board prints it as a
+  footer line per expired tank; the interactive board does not print it, since
+  Enter on the row is the fix there (a session renews the token) — the `?`
+  page names `--wake` as the headless path. The
+  note's colour follows the dot's band one step quieter (red / plain yellow /
+  dim) instead of bold yellow on every row.
+- **The interactive board shows a tank's account only on the cursor row**, on a
+  detail line under the name (the shape Live and Resume rows already use), so
+  the section is no longer a column of email addresses. Detail lines on the
+  wide interactive board (tank, Live, Resume) now start at the name column,
+  not two columns right of it. The static (piped,
+  GUI) board keeps its account column. `docs/DESIGN-board-fuel-dots.md` has
+  the reasoning.
+
 ## [0.40.0] — 2026-10-08
 
 ### Fixed

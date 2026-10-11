@@ -200,7 +200,7 @@ _n155_setup() {
     echo "wide:   $(_skel "$wide")"; echo "narrow: $(_skel "$narrow")"; false; }
 }
 
-@test "wide board (#155): at 100 columns the board is unchanged from before the narrow layout" {
+@test "wide board (#155): at 100 columns the board matches its golden (tests/fixtures/home-narrow-100.txt)" {
   _n155_setup
   command -v jq >/dev/null 2>&1 || skip "jq not installed (the golden carries a usage reading)"
   _n155_render 100
@@ -208,4 +208,55 @@ _n155_setup() {
   got="$(printf '%s\n' "$N155_OUT" | sed "s|$N155_PHRASE|@PHRASE@|g")"
   want="$(cat "$CLIKAE_TEST_ROOT/tests/fixtures/home-narrow-100.txt")"
   [ "$got" = "$want" ] || { diff <(printf '%s\n' "$want") <(printf '%s\n' "$got"); false; }
+}
+
+@test "interactive board (2026-10-11): the account email is shown on the cursor row only, under the name" {
+  _n155_setup
+  command -v jq >/dev/null 2>&1 || skip "jq not installed"
+  _n155_render 100
+  # The cursor starts on `busy`: its address is the detail line; the others' are not drawn.
+  [[ "$N155_OUT" == *"busy.person@example-company.com"* ]] || { echo "$N155_OUT"; false; }
+  [[ "$N155_OUT" != *"dry.person@"* ]]  || { echo "$N155_OUT"; false; }
+  [[ "$N155_OUT" != *"work.person@"* ]] || { echo "$N155_OUT"; false; }
+  # The detail sits on its own line, starting AT the name column — not in a column of its own.
+  local row det
+  row="$(grep -F ' busy ' <<< "$N155_OUT" | head -n 1)"
+  det="$(grep -F 'busy.person@' <<< "$N155_OUT" | head -n 1)"
+  [[ "$row" != *"@"* ]] || { echo "email on the row: $row"; false; }
+  [ "$(_n155_col "$det" "busy.person@")" -eq "$(_n155_col "$row" "busy")" ] || { echo "$row"; echo "$det"; false; }
+  # Move the cursor: the detail follows it, and the address it left is gone again.
+  _n155_render 100 Down
+  [[ "$N155_OUT" == *"dry.person@example-company.com"* ]] || { echo "$N155_OUT"; false; }
+  [[ "$N155_OUT" != *"busy.person@"* ]] || { echo "$N155_OUT"; false; }
+}
+
+@test "interactive board (2026-10-11): an expired tank's cursor line is its email only; the headless remedy is on the ? page" {
+  _n155_setup
+  command -v jq >/dev/null 2>&1 || skip "jq not installed"
+  local now row det
+  now="$(date -u +%s)"
+  printf '{"window_pct":null,"weekly_pct":null,"window_resets_at":null,"weekly_resets_at":null,"source":"expired","reason":"expired-token","cached_at":%s,"scanned_at":%s}\n' \
+    "$now" "$now" > "$CLIKAE_HOME/state/usage/claude/work.json"
+  _n155_render 100 Down Down
+  row="$(grep -m1 '❯' <<< "$N155_OUT")"
+  det="$(grep -A1 -m1 '❯' <<< "$N155_OUT" | sed -n 2p)"
+  [[ "$row" == *" work "*"expired"* ]] || { echo "cursor is not on the expired tank: $row"; echo "$N155_OUT"; false; }
+  [[ "$det" == *"work.person@example-company.com"* ]] || { echo "$N155_OUT"; false; }
+  # Enter on the row is the fix on this board; the remedy is nowhere on it.
+  [[ "$N155_OUT" != *"usage --wake"* ]] || { echo "$N155_OUT"; false; }
+  _n155_render 100 '?'
+  [[ "$N155_OUT" == *"clikae usage --wake <tank>"* ]] || { echo "$N155_OUT"; false; }
+}
+
+@test "wide board (2026-10-11): a Resume row's hover line starts at the name column" {
+  _n155_setup
+  _n155_render 100 Down Down Down Down Down
+  local row next ncol lead
+  row="$(grep -m1 '❯' <<< "$N155_OUT")"
+  next="$(grep -A1 -m1 '❯' <<< "$N155_OUT" | sed -n 2p)"
+  [[ "$row" == *Refactor* ]] || { echo "cursor is not on the session: $row"; echo "$N155_OUT"; false; }
+  ncol="$(_n155_col "$row" work)"
+  lead="${next%%[! ]*}"
+  [ "${#lead}" -eq "$ncol" ] && [[ "$next" == *"Enter to resume"* ]] || {
+    echo "hover line at col ${#lead}, name at col $ncol:"; echo "$row"; echo "$next"; false; }
 }

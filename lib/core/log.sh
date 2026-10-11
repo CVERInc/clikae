@@ -5,13 +5,17 @@ if [ -t 1 ] && [ -z "${NO_COLOR:-}" ]; then
   __C_RESET='\033[0m'
   __C_GREEN='\033[0;32m'
   __C_YELLOW='\033[1;33m'
+  # Plain (non-bold) yellow: a tank row's caution reading. Bold yellow is for
+  # the one-line alerts (over quota, update available); ten rows of it at once
+  # was a wall, not a signal (2026-10-11 board review).
+  __C_YELLOW_SOFT='\033[0;33m'
   __C_RED='\033[0;31m'
   __C_DIM='\033[2m'
   __C_BOLD='\033[1m'
   __C_CYAN='\033[36m'
   __C_BCYAN='\033[96m'
 else
-  __C_RESET='' __C_GREEN='' __C_YELLOW='' __C_RED='' __C_DIM='' __C_BOLD='' __C_CYAN='' __C_BCYAN=''
+  __C_RESET='' __C_GREEN='' __C_YELLOW='' __C_YELLOW_SOFT='' __C_RED='' __C_DIM='' __C_BOLD='' __C_CYAN='' __C_BCYAN=''
 fi
 
 # The narration prefixes ARE the family's badges (signet/packages/cli/SPEC.md).

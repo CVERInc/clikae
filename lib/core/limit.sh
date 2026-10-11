@@ -1594,8 +1594,19 @@ limit_codex_status_note() {
 # and "both windows expired" correctly reads green/100%/no-reset rather than
 # an honest-sounding but wrong red held over from hours ago.
 _limit_codex_status_render() {
+  _limit_codex_status_renderv "$@" || return 1
+  printf '%s\037%s\037%s' "$_LCS_LIGHT" "$_LCS_NOTE" "$_LCS_RESET"
+}
+
+# _limit_codex_status_renderv — the same, into variables: $_LCS_LIGHT /
+# $_LCS_NOTE / $_LCS_RESET, plus the two sides AFTER the expiry refill above
+# ($_LCS_PU $_LCS_PW / $_LCS_SU $_LCS_SW — used %, window minutes). The board
+# renders its tank row from those raw sides, in the same words every other
+# engine's row uses, instead of re-parsing the human note (2026-10-11).
+_limit_codex_status_renderv() {
   local pu="$1" pw="$2" pr="$3" su="$4" sw="$5" sr="$6" now="$7"
   local light note reset pl sl other
+  _LCS_LIGHT=""; _LCS_NOTE=""; _LCS_RESET=""; _LCS_PU=""; _LCS_PW=""; _LCS_SU=""; _LCS_SW=""
   # P3 (2026-09-12 round-2 review): a side can carry a `resets_at` with NO
   # `used_percent` at all (codex sent a reset instant but no reading for that
   # window yet) — the OLD guard here was `[ -n "$pr" ]` alone, so an expired
@@ -1620,7 +1631,8 @@ _limit_codex_status_render() {
   # or simply missing on disk) while the OTHER side still has a real one —
   # fall back to it rather than reporting an empty reset when one exists.
   [ -n "$reset" ] || reset="$(_limit_codex_render_reset "$other" "$now" 2>/dev/null || true)"
-  printf '%s\037%s\037%s' "$light" "$note" "$reset"
+  _LCS_LIGHT="$light"; _LCS_NOTE="$note"; _LCS_RESET="$reset"
+  _LCS_PU="$pu"; _LCS_PW="$pw"; _LCS_SU="$su"; _LCS_SW="$sw"
 }
 
 # limit_codex_status <config_dir> <now_epoch> -> "<light>\037<note>\037
@@ -1846,6 +1858,13 @@ EOF
 # activity since the last call never re-scans rollout content. This is what
 # _home_fuel_dotv/_home_codex_status_readv call — see P2-1 above.
 limit_codex_status_cached() {
+  limit_codex_status_cachedv "$@" || return 1
+  printf '%s\037%s\037%s' "$_LCS_LIGHT" "$_LCS_NOTE" "$_LCS_RESET"
+}
+
+# limit_codex_status_cachedv — the same, into the $_LCS_* variables (see
+# _limit_codex_status_renderv). The board's row reader calls this one.
+limit_codex_status_cachedv() {
   local dir="$1" now="$2" cache="$3" fields pu pw pr su sw sr
   if [ "${_CLIKAE_BOARD:-0}" = 1 ]; then
     fields="$(board_read codex "$dir" codex-usage)"
@@ -1856,7 +1875,7 @@ limit_codex_status_cached() {
   IFS=$'\037' read -r pu pw pr su sw sr <<EOF
 $fields
 EOF
-  _limit_codex_status_render "$pu" "$pw" "$pr" "$su" "$sw" "$sr" "$now"
+  _limit_codex_status_renderv "$pu" "$pw" "$pr" "$su" "$sw" "$sr" "$now"
 }
 
 # ONE spelling of how a rate-limit reading is EXTRACTED from transcript lines,

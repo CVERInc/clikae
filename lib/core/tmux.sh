@@ -911,7 +911,8 @@ tmux_status_fuelv() {
     # `reason:"expired-token"` — see usage_unknown, lib/core/usage.sh), and the
     # remedy is one a person can act on: run a session, or `clikae usage --wake
     # <tank>`. So the row says so with the word (no emoji on a delivery surface
-    # — see usage_expired_board_notev) rather than the glyph that means
+    # — the board's fuel note says `expired` too, see DESIGN-board-fuel-dots.md
+    # "One grammar for the note") rather than the glyph that means
     # "nobody has read this tank yet".
     #
     # 🔴 THE SAME FRESHNESS CEILING AS A READING, on purpose: `fresh` is already

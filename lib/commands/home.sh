@@ -1442,6 +1442,20 @@ _home_weekly_read() {
   printf '%s' "$_WEEKLY"
 }
 
+# _home_weekly_normv <verbatim phrase> -> $_WNORM, the phrase in the board's
+# grammar when it is the one shape clikae knows ("used 85% of your weekly
+# limit" -> "weekly 85%"), else verbatim — a phrase the parser cannot read
+# is still the vendor's word, and better long than guessed.
+_home_weekly_normv() {
+  local n
+  _WNORM="$1"
+  case "$1" in
+    *used\ *%\ of\ your\ weekly\ limit*)
+      n="${1#*used }"; n="${n%%\%*}"; n="${n%%.*}"
+      case "$n" in ''|*[!0-9]*) ;; *) _WNORM="weekly ${n}%" ;; esac ;;
+  esac
+}
+
 # _home_fuel_dot <dry_set> <cli> <profile>  ->  echoes  "<colored-glyph>\037<note>"
 # note carries the dry reset phrase / weekly-% string (may be empty). Priority is
 # mutually exclusive: dry → weekly(BETA) → detectable-ready → no-reading.
@@ -1473,24 +1487,61 @@ _home_fuel_dot() {
 # The cache lives at $CLIKAE_HOME/cache/codex/<profile>, the same shape as
 # the weekly cache a few lines up.
 _home_codex_status_readv() {
-  local profile="$1" dir now cache fields light note
+  local profile="$1" dir now cache
   _CODEX_DOT=""; _CODEX_NOTE=""
   dir="$(profile_dir codex "$profile")"
-  now="$(date +%s 2>/dev/null || echo 0)"
+  now="${_FUEL_MEMO_NOW:-}"; [ -n "$now" ] || now="$(date +%s 2>/dev/null || echo 0)"
   cache="$CLIKAE_HOME/cache/codex/$profile"
-  fields="$(limit_codex_status_cached "$dir" "$now" "$cache" 2>/dev/null)" || return 1
-  IFS=$'\037' read -r light note _ <<< "$fields"
+  limit_codex_status_cachedv "$dir" "$now" "$cache" 2>/dev/null || return 1
   # Glyph = which state (matches the existing shapes exactly — dry is ALWAYS
   # ○, weekly-warn is ALWAYS ◐, ready is ALWAYS ● — see the legend a few
   # hundred lines down and DESIGN-board-fuel-dots.md's "glyph carries the
   # meaning, colour only reinforces it"); colour is redundant on purpose.
-  case "$light" in
+  case "$_LCS_LIGHT" in
     red)    _CODEX_DOT="${__C_RED}○$__C_RESET" ;;
     yellow) _CODEX_DOT="${__C_YELLOW}◐$__C_RESET" ;;
     green)  _CODEX_DOT="${__C_GREEN}●$__C_RESET" ;;
     *)      return 1 ;;
   esac
-  _CODEX_NOTE="$note"
+  # The note is the board's one tank-row grammar (see _home_fuel_dotv_compute),
+  # built from the vendor's raw sides — NOT limit_codex_status_note's human
+  # line, which speaks codex's own dialect ("5h 12% left (resets 05:14)").
+  # Three dialects in one column meant the reader had to know the engine to
+  # know whether a big number was good news (2026-10-11 board review). The
+  # reset is the tighter side's, and only when the light is not green: a
+  # healthy tank's reset instant is noise next to its neighbours.
+  _CODEX_NOTE=""
+  _home_codex_segv "$_LCS_PU" "$_LCS_PW" && _CODEX_NOTE="$_CSEG"
+  _home_codex_segv "$_LCS_SU" "$_LCS_SW" && _CODEX_NOTE="${_CODEX_NOTE:+$_CODEX_NOTE · }$_CSEG"
+  [ "$_LCS_LIGHT" = green ] || [ -z "$_LCS_RESET" ] || _CODEX_NOTE="${_CODEX_NOTE:+$_CODEX_NOTE · }resets $_LCS_RESET"
+  [ -n "$_CODEX_NOTE" ] || return 1
+  return 0
+}
+
+# _home_codex_segv <used_percent> <window_minutes> -> $_CSEG, one segment of
+# a codex tank's note in the board's grammar: "window 12%", "weekly 88%", or
+# "30d 40%" for a window that is neither. Used %, not the "% left" the codex
+# panel itself prints — every other row on the board counts what is SPENT,
+# and the dot's thresholds are in that unit. Same rounding as
+# _limit_codex_left (a fraction rounds UP to the next whole percent, so a
+# tank the light calls red never reads 99%), inlined so a redraw pays no
+# fork for it. rc=1 when there is no reading for that side.
+_home_codex_segv() {
+  local raw="$1" win="$2" ip dp u label
+  _CSEG=""
+  case "$raw" in ''|*[!0-9.]*) return 1 ;; esac
+  ip="${raw%%.*}"; dp=""; case "$raw" in *.*) dp="${raw#*.}" ;; esac
+  case "$ip" in ''|*[!0-9]*) return 1 ;; esac
+  case "$dp" in *[!0-9]*) return 1 ;; esac
+  u=$((10#$ip)); case "$dp" in *[!0]*) u=$((u + 1)) ;; esac
+  [ "$u" -le 100 ] || u=100
+  # Same boundaries as _limit_codex_window_label; "5h" is the board's "window".
+  case "$win" in ''|*[!0-9]*) label="usage" ;;
+    *) if   [ "$win" -le 360 ];   then label="window"
+       elif [ "$win" -le 10080 ]; then label="weekly"
+       else label="$((win / 1440))d"; fi ;;
+  esac
+  _CSEG="$label ${u}%"
   return 0
 }
 
@@ -1547,22 +1598,37 @@ _home_fuel_dotv() {
     for (( _i = 0; _i < _n; _i++ )); do
       if [ "${_FUEL_MEMO_KEYS[_i]}" = "$_key" ]; then
         _FDOT="${_FUEL_MEMO_DOT[_i]}"; _FNOTE="${_FUEL_MEMO_NOTE[_i]}"
+        _FTAILC="${_FUEL_MEMO_TAILC[_i]}"; _FREMEDY="${_FUEL_MEMO_REMEDY[_i]}"
         return 0
       fi
     done
   fi
   [ -n "$_FUEL_MEMO_NOW" ] || _FUEL_MEMO_NOW="$(date +%s 2>/dev/null || echo 0)"
   _home_fuel_dotv_compute "$dry" "$cli" "$profile" "$_FUEL_MEMO_NOW"
+  # The note's colour follows the dot's band, one step quieter: red stays red
+  # (can't burn), a caution reads plain yellow (not the bold alert yellow),
+  # and a healthy or unread tank's numbers are dim. Before this every row
+  # with a note was bold yellow — ten rows of alert for nine tanks that were
+  # fine (2026-10-11 board review). Derived here, once, from the glyph's own
+  # colour prefix, so no branch of the computation can disagree with its dot.
+  case "$_FDOT" in
+    "$__C_RED"*)    _FTAILC="$__C_RED" ;;
+    "$__C_YELLOW"*) _FTAILC="$__C_YELLOW_SOFT" ;;
+    *)              _FTAILC="$__C_DIM" ;;
+  esac
+  [ -n "$__C_RED" ] || _FTAILC=""
   _FUEL_MEMO_KEYS[_n]="$_key"; _FUEL_MEMO_DOT[_n]="$_FDOT"; _FUEL_MEMO_NOTE[_n]="$_FNOTE"
+  _FUEL_MEMO_TAILC[_n]="$_FTAILC"; _FUEL_MEMO_REMEDY[_n]="$_FREMEDY"
 }
 
 # _home_fuel_memo_reset — clear the per-redraw fuel-dot memo. Called once at
 # the top of each redraw entry point (_home_render_static, _home_pick_draw_body),
 # right beside _home_cols_prime — the same "one per render, not one per row"
 # shape that function already established.
-_FUEL_MEMO_KEYS=(); _FUEL_MEMO_DOT=(); _FUEL_MEMO_NOTE=(); _FUEL_MEMO_NOW=""
+_FUEL_MEMO_KEYS=(); _FUEL_MEMO_DOT=(); _FUEL_MEMO_NOTE=(); _FUEL_MEMO_TAILC=(); _FUEL_MEMO_REMEDY=(); _FUEL_MEMO_NOW=""
+_FTAILC=""; _FREMEDY=""
 _home_fuel_memo_reset() {
-  _FUEL_MEMO_KEYS=(); _FUEL_MEMO_DOT=(); _FUEL_MEMO_NOTE=(); _FUEL_MEMO_NOW=""
+  _FUEL_MEMO_KEYS=(); _FUEL_MEMO_DOT=(); _FUEL_MEMO_NOTE=(); _FUEL_MEMO_TAILC=(); _FUEL_MEMO_REMEDY=(); _FUEL_MEMO_NOW=""
 }
 
 # The actual computation _home_fuel_dotv used to do inline — unchanged logic,
@@ -1595,9 +1661,18 @@ _home_fuel_memo_reset() {
 # round 3) let any <24h cached reading paper over a dry tank, silently eating
 # its reset string — round-2's own receipt found four real tanks all carrying
 # a vendor reading, so that ordering was the common case, not an edge one.
+# THE NOTE'S GRAMMAR (2026-10-11), one for every engine:
+#   <window N%> · <weekly N%> [· <Model N%>] [· <age>] [· <state>]
+# Numbers are what is SPENT, whole percents, window before weekly; a model row
+# that binds comes next; then how old the reading is, only when it is older
+# than the TTL; then a state word (expired · no-signal · no-probe · reset
+# passed · unverified · last used …). Nothing else rides on the row: the
+# remedy for an expired tank goes to $_FREMEDY and the renderer decides where
+# it lives (the static board's footer; on the interactive one Enter on the row
+# is the remedy, and the `?` page names the headless one).
 _home_fuel_dotv_compute() {
   local dry="$1" cli="$2" profile="$3" now="${4:-}"
-  _FNOTE=""
+  _FNOTE=""; _FREMEDY=""
   [ -n "$now" ] || now="$(date +%s 2>/dev/null || echo 0)"
   if _home_is_dryv "$dry" "$cli" "$profile"; then
     _FDOT="${__C_RED}○$__C_RESET"; _FNOTE="${_DRY_RESET:-over quota}"; return 0
@@ -1624,9 +1699,11 @@ _home_fuel_dotv_compute() {
     if [ "$age" -lt 86400 ]; then
       ttl="${CLIKAE_USAGE_TTL:-120}"; case "$ttl" in ''|*[!0-9]*) ttl=120 ;; esac
       # #149: an axis the vendor does not report reads "-" (never 0).
-      if [ "$up" = - ]; then _FNOTE="weekly ${uw}%"; up=0
-      elif [ "$uw" = - ]; then _FNOTE="window ${up}%"; uw=0
-      else _FNOTE="window ${up}% · weekly ${uw}%"; fi
+      # Whole percents: the vendor sends "99.0" and "21.7"; the board does
+      # not (the dot's own thresholds truncate the same way, _home_fuel_glyphv).
+      if [ "$up" = - ]; then _FNOTE="weekly ${uw%%.*}%"; up=0
+      elif [ "$uw" = - ]; then _FNOTE="window ${up%%.*}%"; uw=0
+      else _FNOTE="window ${up%%.*}% · weekly ${uw%%.*}%"; fi
       # 🔴 The `declare -F` is on THIS line on purpose. `_human_age` lives in
       # lib/core/duration.sh and 20+ test files source home.sh on its own, so
       # tests/bats/home.bats ("every _human_age call in home.sh is guarded by
@@ -1646,8 +1723,8 @@ _home_fuel_dotv_compute() {
       while [ -n "$_bind_rest" ]; do
         _bind_one="${_bind_rest%%,*}"
         [ "$_bind_one" != "$_bind_rest" ] && _bind_rest="${_bind_rest#*,}" || _bind_rest=""
-        _FNOTE="$_FNOTE · ${_bind_one%:*} ${_bind_one##*:}%"
         _bind_pct="${_bind_one##*:}"; _bind_pct="${_bind_pct%%.*}"
+        _FNOTE="$_FNOTE · ${_bind_one%:*} ${_bind_pct}%"
         case "$_bind_pct" in ''|*[!0-9]*) ;; *) [ "$_bind_pct" -lt 100 ] || _bind_spent=1 ;; esac
       done
       # Judged separately, not by peak = max(window,weekly) — see the
@@ -1661,14 +1738,15 @@ _home_fuel_dotv_compute() {
     # 24h or older: too stale to trust — fall through as if unread, below.
   fi
   if _home_weekly_readv "$cli" "$profile"; then
-    _FDOT="${__C_YELLOW}◐$__C_RESET"; _FNOTE="$_WEEKLY"; return 0
+    _home_weekly_normv "$_WEEKLY"
+    _FDOT="${__C_YELLOW}◐$__C_RESET"; _FNOTE="$_WNORM"; return 0
   fi
   # #107: a cached "expired" reading (under 24h, same ceiling as a number) is
   # said out loud instead of falling through to a green "ready" — an idle tank
   # at 99% weekly used to look exactly like a fresh one. The dot is the
   # honest "no reading" `·` (there are no numbers), and the note carries the
-  # word "expired" and the remedy, cut to fit the gutter
-  # (usage_expired_board_notev; the full sentence is `clikae usage`'s). No
+  # word "expired"; the remedy is $_FREMEDY, for the renderer to place (it
+  # used to ride on the row, and was the widest thing on the board). No
   # emoji anywhere on this row (no delivery surface prints one) — the note is
   # a word, not a glyph, so it costs no special width handling. Fork-free:
   # one `read` of a one-line file, the same technique lib/core/tmux.sh's
@@ -1679,16 +1757,16 @@ _home_fuel_dotv_compute() {
     case "$_uline" in
       *'"source":"expired"'*)
         _uca="${_uline##*\"cached_at\":}"; _uca="${_uca%%[!0-9]*}"
-        if [ -n "$_uca" ] && [ $(( now - _uca )) -lt 86400 ] && declare -F usage_expired_board_notev >/dev/null 2>&1; then
-          usage_expired_board_notev "$profile"
-          _FDOT="${__C_DIM}·$__C_RESET"; _FNOTE="$_UEH"
+        if [ -n "$_uca" ] && [ $(( now - _uca )) -lt 86400 ]; then
+          _FDOT="${__C_DIM}·$__C_RESET"; _FNOTE="expired"
+          _FREMEDY="clikae usage --wake $profile"
           # #149: the last number it had, with its age, beats the remedy
           # alone — the full remedy sentence is `clikae usage`'s.
           # A vendor-stamped number with its age beside it is a measurement,
           # not a guess: it draws the band it fell in, dimmed, instead of the
           # no-reading `·` (which stays for "no number on record at all").
           if _home_last_goodv "$_uline" "$now"; then
-            _FNOTE="$_LGN · expired · clikae usage --wake $profile to renew"; _home_fuel_glyphv "$_LGW" "$_LGK" 0 dim; _FDOT="$_FGLYPH"
+            _FNOTE="$_LGN · expired"; _home_fuel_glyphv "$_LGW" "$_LGK" 0 dim; _FDOT="$_FGLYPH"
           fi
           return 0
         fi ;;
@@ -1762,8 +1840,8 @@ _home_last_goodv() {
   [ -n "$at" ] && [ $(( $2 - at )) -lt 1209600 ] || return 1
   case "$w" in ''|null) ;; *) _LGW="$w" ;; esac
   case "$k" in ''|null) ;; *) _LGK="$k" ;; esac
-  if [ "$k" != null ] && [ -n "$k" ]; then _LGN="weekly ${k}%"
-  elif [ "$w" != null ] && [ -n "$w" ]; then _LGN="window ${w}%"
+  if [ "$k" != null ] && [ -n "$k" ]; then _LGN="weekly ${k%%.*}%"
+  elif [ "$w" != null ] && [ -n "$w" ]; then _LGN="window ${w%%.*}%"
   else return 1; fi
   local _lg_age=""
   declare -F _human_agev >/dev/null 2>&1 && _human_agev _lg_age "$at" "$2" && _LGN="$_LGN · $_lg_age"
@@ -2353,7 +2431,7 @@ _home_status_narrowv() {
   _SNOTE="$out"
 }
 
-# _home_tank_narrow <head> <name-field> <engine> <note> <name-col>
+# _home_tank_narrow <head> <name-field> <engine> <note> <name-col> [note-colour]
 # One narrow tank row: <head> is everything left of the name, already styled
 # ("❯ ● " on the interactive board, "  ● " on the static one), <name-field> the
 # padded (and possibly bold) name, <name-col> the ABSOLUTE column the name
@@ -2364,7 +2442,7 @@ _home_status_narrowv() {
 # that fills the last column leaves the cursor in the pending-wrap state, where
 # the interactive frame's erase-to-end-of-line eats the final character.
 _home_tank_narrow() {
-  local head="$1" nmf="$2" eng="$3" note="$4" ncol="$5" cols en
+  local head="$1" nmf="$2" eng="$3" note="$4" ncol="$5" nc="${6:-$__C_YELLOW_SOFT}" cols en
   cols="$(_home_cols)"
   _home_truncv "$eng" 8; en="$_TRUNC"
   if [ -z "$note" ]; then
@@ -2376,11 +2454,11 @@ _home_tank_narrow() {
   if [ $(( ncol + 7 + 1 + 8 + 2 + _DW_W )) -lt "$cols" ]; then
     _home_lpadv "$en" 8
     printf '%s%s %b%s%b  %b%s%b\n' "$head" "$nmf" "$__C_DIM" "$_LPAD" "$__C_RESET" \
-      "$__C_YELLOW" "$_SNOTE" "$__C_RESET"
+      "$nc" "$_SNOTE" "$__C_RESET"
   else
     printf '%s%s %b%s%b\n' "$head" "$nmf" "$__C_DIM" "$en" "$__C_RESET"
     _home_truncv "$_SNOTE" $(( cols - ncol - 1 ))
-    printf '    %b%s%b\n' "$__C_YELLOW" "$_TRUNC" "$__C_RESET"
+    printf '    %b%s%b\n' "$nc" "$_TRUNC" "$__C_RESET"
   fi
 }
 
@@ -2533,7 +2611,7 @@ _home_trunc_mid() {
 _home_render_static() {
   _home_cols_prime          # one width question per render, not one per row
   _home_fuel_memo_reset     # one date/jq fork per TANK this render, not per row (P2-1)
-  local items="$1" dry="$2" any_dry=""
+  local items="$1" dry="$2" any_dry="" any_expired=""
   # Two numbers for one headline used to cost nine processes — two awks, a sort, a
   # uniq-by-grep and the pipes to feed them — over a string the loop below is
   # about to walk anyway. Count them here instead; the engines are de-duplicated
@@ -2654,11 +2732,12 @@ EOF
         # mark "this shell's tank": with many tanks open at once across terminals, the
         # current-shell tank is an artifact of where you typed clikae, not useful info.)
         local _nm _en _ac _tail="" _sep="" _flds
-        if [ -n "$_reset" ]; then _tail="$(printf '%b%s%b' "$__C_YELLOW" "$_reset" "$__C_RESET")"; _sep="  "; fi
+        if [ -n "$_reset" ]; then _tail="$(printf '%b%s%b' "$_FTAILC" "$_reset" "$__C_RESET")"; _sep="  "; fi
+        [ -z "$_FREMEDY" ] || any_expired="$any_expired$_FREMEDY"$'\n'
         _home_tank_fieldsv "$profile" "$_eng" "${label:--}" "$_tail"
         _nm="$_TF_NM"; _en="$_TF_EN"; _ac="$_TF_AC"
         if [ "$_HOME_NARROW" = 1 ]; then
-          _home_tank_narrow "$(printf '  %b ' "$_dot")" "$_nm" "$_eng" "$_reset" 4
+          _home_tank_narrow "$(printf '  %b ' "$_dot")" "$_nm" "$_eng" "$_reset" 4 "$_FTAILC"
         else
           printf '    %b %s %b%s%b %b%s%b%s%s\n' \
             "$_dot" "$_nm" "$__C_DIM" "$_en" "$__C_RESET" "$__C_DIM" "$_ac" "$__C_RESET" "$_sep" "$_tail"
@@ -2714,6 +2793,23 @@ EOF
       printf '  %b! %s%b — %s\n' \
         "$__C_YELLOW" "$T_OVER_QUOTA" "$__C_RESET" "$T_OVER_QUOTA_HINT"
     fi
+  fi
+  # An expired sign-in's remedy, one line per tank, here instead of on the
+  # row (there is no cursor on this board to hide it behind). Same shape as
+  # the over-quota line above; wraps below 60 columns like it.
+  if [ -n "$any_expired" ]; then
+    local _rem
+    while IFS= read -r _rem; do
+      [ -n "$_rem" ] || continue
+      if [ "$_HOME_NARROW" = 1 ]; then
+        # shellcheck disable=SC2059  # T_EXPIRED_HINT is a printf template by contract
+        _home_wrap_prefixed "$(printf "$T_EXPIRED_HINT" "$_rem")" \
+          "$(printf '  %b!%b ' "$__C_YELLOW" "$__C_RESET")" 4 "" ""
+      else
+        # shellcheck disable=SC2059
+        printf '  %b!%b %s\n' "$__C_YELLOW" "$__C_RESET" "$(printf "$T_EXPIRED_HINT" "$_rem")"
+      fi
+    done <<< "$any_expired"
   fi
 
   if [ -n "$launch_cli" ]; then
@@ -3305,6 +3401,13 @@ _home_help_overlay() {
     "$__C_DIM"    "$__C_RESET" "$T_DOT_NONE")"
   printf '\n'
   _home_wrap_prefixed "$_dots_legend" "$_dots_prefix" "$_dots_hang" "" ""
+  # The word `expired` on a tank's note (no glyph of its own: the dot is the
+  # last band it read, or `·`) and what fixes it. On the board Enter on the
+  # row is the fix — a session renews the token — so the row and its cursor
+  # line carry no remedy; --wake is the headless / other-machine path.
+  # Hang 2, not the legend's hang: under the legend the command broke across
+  # two lines at 100 columns, and a command you cannot copy is no remedy.
+  _home_wrap_prefixed "$T_DOT_EXPIRED" "  " 2 "$__C_DIM" "$__C_RESET"
   # T_HELP_AGY is a full sentence (109 cols even in en-US) that used to be
   # printf'd raw with no wrap at all.
   printf '\n'
@@ -3664,13 +3767,14 @@ LIVEACT
               _home_wrap_prefixed "$_lage · $T_LIVE_ENTER" "    " 4 "$__C_DIM" "$__C_RESET" 2
             fi
           else
+          # Hover lines sit under the name column (the frame's 2 + these 6).
           if [ -n "$_lphrase" ]; then
-            printf '        %b%s%b\n' "$__C_DIM" "$_lphrase" "$__C_RESET"
+            printf '      %b%s%b\n' "$__C_DIM" "$_lphrase" "$__C_RESET"
           fi
           if [ -n "$_lwake" ]; then
-            printf '        %b-> %s %s%b\n' "$__C_DIM" "$T_LIVE_RESUMING" "$_lwake" "$__C_RESET"
+            printf '      %b-> %s %s%b\n' "$__C_DIM" "$T_LIVE_RESUMING" "$_lwake" "$__C_RESET"
           elif [ "$_lhard" -eq 0 ]; then
-            printf '        %b%s · %s%b\n' "$__C_DIM" "$_lage" "$T_LIVE_ENTER" "$__C_RESET"
+            printf '      %b%s · %s%b\n' "$__C_DIM" "$_lage" "$T_LIVE_ENTER" "$__C_RESET"
           fi
           fi
         else
@@ -3699,10 +3803,11 @@ LIVEACT
             if [ -n "$alias" ]; then _home_wrap_prefixed "$alias" "    -> " 7 "$__C_DIM" "$__C_RESET" 2
             else _home_wrap_prefixed "$rage · $T_ENTER_RESUME" "    " 4 "$__C_DIM" "$__C_RESET" 2; fi
           elif [ -n "$alias" ]; then
-            # recap, wrapped with a hanging indent. extra=2 for the wrapper's `  ` prefix.
-            _home_wrap_prefixed "$alias" "        -> " 11 "$__C_DIM" "$__C_RESET" 2
+            # recap, wrapped with a hanging indent, the arrow under the name
+            # column. extra=2 for the wrapper's `  ` prefix.
+            _home_wrap_prefixed "$alias" "      -> " 9 "$__C_DIM" "$__C_RESET" 2
           else
-            printf '        %b%s · %s%b\n' "$__C_DIM" "$rage" "$T_ENTER_RESUME" "$__C_RESET"
+            printf '      %b%s · %s%b\n' "$__C_DIM" "$rage" "$T_ENTER_RESUME" "$__C_RESET"
           fi
         else
           printf '%s%b %b %s %b%b"%s"%b\n' "$_ld" "$mark" "$rdot" "$_rnm" "$_ren" "$__C_DIM" "$_ttl" "$__C_RESET"
@@ -3733,23 +3838,37 @@ LIVEACT
         # its dot paid the fork again here instead of hitting the memo).
         _home_fuel_dotv "$dry" "$cli" "$profile"
         dot="$_FDOT"; _reset="$_FNOTE"
-        # Aligned columns (display-width padded): name · engine · account, then a
-        # right gutter holding the reset time when the tank is dry. (No "this shell"
-        # marker — see _home_render_static: with many tanks open at once it's noise.)
-        local _nm _en _ac _tail="" _sep="" _flds
-        if [ -n "$_reset" ]; then _tail="$(printf '%b%s%b' "$__C_YELLOW" "$_reset" "$__C_RESET")"; _sep="  "; fi
-        _home_tank_fieldsv "$profile" "$_eng" "${label:--}" "$_tail"
-        _nm="$_TF_NM"; _en="$_TF_EN"; _ac="$_TF_AC"
+        # Aligned columns (display-width padded): name · engine, then the fuel
+        # note. The account is NOT a column here (2026-10-11): the tank's name
+        # already says whose it is, the email was the widest field on every
+        # row, and a wall of addresses is what made the section unreadable.
+        # It lives on the cursor line instead, under the name column — the
+        # same hover-detail shape a Live or Resume row uses for its age. The
+        # email only: an expired tank's remedy is NOT here, because on this
+        # board Enter on the row IS the remedy (opening a session renews the
+        # token); `clikae usage --wake` is the headless path and lives in the
+        # `?` page ($_FREMEDY stays for the static board's footer). The static
+        # board keeps its account column: it has no cursor to put the detail
+        # behind. (No "this shell" marker either — see _home_render_static:
+        # with many tanks open at once it's noise.)
+        local _nm _en _tail="" _sep="" _detail
+        if [ -n "$_reset" ]; then _tail="$(printf '%b%s%b' "$_FTAILC" "$_reset" "$__C_RESET")"; _sep="  "; fi
+        _home_tank_fieldsv "$profile" "$_eng" "" ""
+        _nm="$_TF_NM"; _en="$_TF_EN"
+        [ -n "$_tail" ] || _en="${_en%"${_en##*[! ]}"}"   # padded only when something follows
+        _detail="${label:--}"
         if [ "$_HOME_NARROW" = 1 ]; then
-          # #155: no account column; the status on the row or under the name.
+          # #155: the status on the row or under the name; no cursor line at
+          # all (rule 1: no email on a narrow board; the remedy is Enter).
           if [ "$idx" -eq "$sel" ]; then _nm="$__C_BOLD$_nm$__C_RESET"; fi
-          _home_tank_narrow "$(printf '%b %b ' "$mark" "$dot")" "$(printf '%b' "$_nm")" "$_eng" "$_reset" 6
+          _home_tank_narrow "$(printf '%b %b ' "$mark" "$dot")" "$(printf '%b' "$_nm")" "$_eng" "$_reset" 6 "$_FTAILC"
         elif [ "$idx" -eq "$sel" ]; then
-          printf '  %b %b %b%s%b %b%s%b %b%s%b%s%s\n' \
-            "$mark" "$dot" "$__C_BOLD" "$_nm" "$__C_RESET" "$__C_DIM" "$_en" "$__C_RESET" "$__C_DIM" "$_ac" "$__C_RESET" "$_sep" "$_tail"
+          printf '  %b %b %b%s%b %b%s%b%s%s\n' \
+            "$mark" "$dot" "$__C_BOLD" "$_nm" "$__C_RESET" "$__C_DIM" "$_en" "$__C_RESET" "$_sep" "$_tail"
+          printf '      %b%s%b\n' "$__C_DIM" "$_detail" "$__C_RESET"
         else
-          printf '  %b %b %s %b%s%b %b%s%b%s%s\n' \
-            "$mark" "$dot" "$_nm" "$__C_DIM" "$_en" "$__C_RESET" "$__C_DIM" "$_ac" "$__C_RESET" "$_sep" "$_tail"
+          printf '  %b %b %s %b%s%b%s%s\n' \
+            "$mark" "$dot" "$_nm" "$__C_DIM" "$_en" "$__C_RESET" "$_sep" "$_tail"
         fi
         ;;
       target)

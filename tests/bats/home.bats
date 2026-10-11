@@ -1245,8 +1245,13 @@ _seed_burn_flood_agy() {
   run _home_fuel_dot "" codex cheap
   [[ "$output" == *"◐"* ]] || false
   [[ "$output" != *"●"* ]] || false
-  [[ "$output" == *"5h"* ]]     || false   # both windows named in the note
-  [[ "$output" == *"weekly"* ]] || false
+  # Both windows named in the note, in the board's one grammar (spent %,
+  # "window"/"weekly") — not codex's own "5h 90% left" dialect; the tighter
+  # side's reset follows because the light is not green.
+  [[ "$output" == *"window 10%"* ]] || { echo "$output"; false; }
+  [[ "$output" == *"weekly 96%"* ]] || { echo "$output"; false; }
+  [[ "$output" == *"· resets "* ]]  || { echo "$output"; false; }
+  [[ "$output" != *"left"* ]]       || { echo "$output"; false; }
   # An existing hard-dry marker still outranks the proactive reading — a real
   # persisted dry event is worth more than a vendor "N% left" snapshot.
   run _home_fuel_dot "$(printf 'codex\037cheap\037x')" codex cheap
@@ -1270,7 +1275,10 @@ _seed_burn_flood_agy() {
   printf "used 85%% of your weekly limit\n" > "$CLIKAE_HOME/cache/weekly/claude-work"
   run _home_fuel_dot "" claude work
   [[ "$output" == *"◐"* ]] || false
-  [[ "$output" == *"85% of your weekly limit"* ]] || false
+  # The vendor's sentence is cached verbatim; the ROW says it in the board's
+  # grammar (a phrase the parser does not know would stay verbatim).
+  [[ "$output" == *"weekly 85%"* ]] || { echo "$output"; false; }
+  [[ "$output" != *"of your weekly limit"* ]] || { echo "$output"; false; }
 }
 
 # P2-1, round-3 review: home.sh:1012-1026 (the usage_board_fields block) used
