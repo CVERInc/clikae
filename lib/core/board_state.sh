@@ -287,7 +287,11 @@ _board_entry_key() {
 # silently empty until the tank changes again instead of triggering the one
 # rebuild that fixes it. A mismatch is treated exactly like a stale generation
 # (board_stale) and like no previous generation at all (board_state_refresh).
-_BOARD_GEN_FORMAT=8
+# 9: the claude-usage / codex-dry readings carry two more fields (the
+# per-model / credits side fact, lib/core/limit.sh's _LIMIT_READING_AWK), and a
+# per-model limit no longer counts as the tank's — an 8 generation would keep
+# serving the old false-dry reading for every transcript that did not change.
+_BOARD_GEN_FORMAT=9
 _board_gen_format_ok() {
   local v=""
   [ -f "$1/format" ] || return 1
@@ -1485,12 +1489,7 @@ board_state_refresh() (
         && mv -f "$gen/.tmp/manifest2" "$gen/manifest"
     fi
     if [ -n "$window" ]; then
-      cut -d$'\036' -f5 "$gen/manifest" | awk -F $'\037' '
-        $0 == "" { next }
-        $1 > l { l = $1; r = $3 }
-        $2 > s { s = $2 }
-        END { printf "%s\037%s\037%s\n", l, s, r }
-      ' > "$gen/$([ "$engine" = claude ] && printf claude-usage || printf codex-dry)"
+      cut -d$'\036' -f5 "$gen/manifest" | awk -F $'\037' "$_LIMIT_FOLD_AWK" > "$gen/$([ "$engine" = claude ] && printf claude-usage || printf codex-dry)"
     fi
   else
     # Incremental rebuild (round-6 fix review P1-2): a previous generation's
@@ -1714,12 +1713,7 @@ board_state_refresh() (
       {
         printf '%s\n' "${reading_lines[@]}"
         [ ! -f "$unchanged_f" ] || cut -d$'\036' -f5 "$unchanged_f" 2>/dev/null
-      } | awk -F $'\037' '
-        $0 == "" { next }
-        $1 > l { l = $1; r = $3 }
-        $2 > s { s = $2 }
-        END { printf "%s\037%s\037%s\n", l, s, r }
-      ' > "$gen/$([ "$engine" = claude ] && printf claude-usage || printf codex-dry)"
+      } | awk -F $'\037' "$_LIMIT_FOLD_AWK" > "$gen/$([ "$engine" = claude ] && printf claude-usage || printf codex-dry)"
     fi
 
     rm -f "$unchanged_f" "$changed_f" "$removed_f"

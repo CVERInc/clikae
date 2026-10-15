@@ -21,12 +21,20 @@ _reading_cache_keyv() {
   fi
 }
 
+# READING_CACHE_FORMAT — part of every entry's key. Bump it whenever a parser
+# whose output is cached here changes what it MEANS for the same bytes: the
+# key is the file's identity, so an unchanged transcript would otherwise keep
+# answering with the old parser's verdict forever. 2: _LIMIT_READING_AWK stopped
+# counting per-model limits and non-limit api errors as a dry tank, and grew
+# fields 4-5 (lib/core/limit.sh). A mismatch is a plain miss: re-read, rewrite.
+READING_CACHE_FORMAT=2
+
 reading_cache_run() {
   local kind="$1" f="$2"; shift 2
   local key id root cache saved rc value tmp
   [ -f "$f" ] || { "$@"; return $?; }
   key="$(_reading_cache_keyv "$f")" || { "$@"; return $?; }
-  key="$f:$key"
+  key="v$READING_CACHE_FORMAT:$f:$key"
   id="$(printf '%s' "$kind:$f" | cksum)"; id="${id%% *}"
   root="${CLIKAE_HOME:-$HOME/.clikae}/state/readings"
   cache="$root/$kind-$id"

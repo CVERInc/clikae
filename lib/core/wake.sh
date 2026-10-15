@@ -351,10 +351,14 @@ wake_turn_since() {
   files="$(find "$dir/projects" -name '*.jsonl' -mmin -300 2>/dev/null)"
   [ -n "$files" ] || return 1
   out="$(_limit_claude_readings "$files")"
-  IFS=$'\037' read -r maxL maxS reset <<EOF
+  local maxM _tag
+  IFS=$'\037' read -r maxL maxS reset maxM _tag <<EOF
 $out
 EOF
-  : "$reset"
+  : "$reset" "$_tag"
+  # A per-model limit no longer counts as the tank's limit (_LIMIT_READING_AWK),
+  # but it is still the vendor refusing the turn this nudge asked for.
+  if [ -n "$maxM" ] && { [ -z "$maxL" ] || [ "$maxM" \> "$maxL" ]; }; then maxL="$maxM"; fi
   [ -n "$maxS" ] && s="$(_limit_iso_epoch "$maxS" 0)"
   [ -n "$maxL" ] && l="$(_limit_iso_epoch "$maxL" 0)"
   # A success newer than the send AND newer than any limit: the nudge took.

@@ -477,7 +477,7 @@ _limit_codex_dry() {
   local sess_root="$dir/sessions"
   [ -d "$sess_root" ] || return 1
 
-  local out maxL maxS reset files updated
+  local out maxL maxS reset maxM mtag files updated
   if [ "${_CLIKAE_BOARD:-0}" = 1 ]; then
     # board_read's own board_generation call keeps this fresh as of THIS
     # render (see board_stale, lib/core/board_state.sh) — no separate age
@@ -493,10 +493,14 @@ _limit_codex_dry() {
     [ -n "$files" ] || return 1
     out="$(_limit_codex_readings "$files")"
   fi
-  IFS=$'\037' read -r maxL maxS reset <<EOF
+  IFS=$'\037' read -r maxL maxS reset maxM mtag <<EOF
 $out
 EOF
   [ -n "$maxL" ] || return 1
+  # The newest limit was the workspace running out of CREDITS (billing), not
+  # plan quota: report that state by name. It never carries a reset phrase;
+  # _limit_tank_dry_self ages it like any other phrase-less codex limit.
+  [ "$mtag" = credits ] && [ "$maxM" = "$maxL" ] && reset="$LIMIT_STATE_CREDITS"
 
   if [ -n "$maxS" ]; then
     local newer
@@ -549,7 +553,7 @@ limit_profile_dry() {
   # structural matches tolerate optional whitespace after each colon (`: *`) so a
   # pretty-printed JSONL can't silently break detection. Reads only the TAIL of
   # each (100+ MB) transcript — the newest limit/success are the most-recent lines.
-  local out maxL maxS reset
+  local out maxL maxS reset maxM mtag
   if [ "${_CLIKAE_BOARD:-0}" = 1 ]; then
     # See _limit_codex_dry's twin comment: board_read is kept fresh per-render
     # by board_generation itself now, so no separate age gate belongs here.
@@ -563,10 +567,24 @@ limit_profile_dry() {
   # \037 (Unit Separator), NOT a tab: tab is IFS-whitespace, so `read` would
   # COLLAPSE the empty maxS field between two tabs and shift reset into maxS
   # (the exact footgun status.sh's delimiter comment warns about).
-  IFS=$'\037' read -r maxL maxS reset <<EOF
+  IFS=$'\037' read -r maxL maxS reset maxM mtag <<EOF
 $out
 EOF
-  [ -n "$maxL" ] || return 1
+  # rc=3 — the tank is NOT dry, but ONE MODEL on it is (a per-model limit, see
+  # _LIMIT_READING_AWK). Echoes that model's name. Only when no tank-level
+  # limit is live and nothing succeeded after it; every caller that tests
+  # `rc != 0` (or `rc == 2`) reads it as "not dry", which is the point.
+  local _model_live=0
+  if [ -n "$maxM" ]; then
+    _model_live=1
+    if [ -n "$maxS" ] && [ "$(printf '%s\n%s\n' "$maxM" "$maxS" | sort | tail -n 1)" = "$maxS" ] && [ "$maxS" != "$maxM" ]; then
+      _model_live=0
+    fi
+  fi
+  if [ -z "$maxL" ]; then
+    [ "$_model_live" = 1 ] && { printf '%s' "$mtag"; return 3; }
+    return 1
+  fi
 
   # Dry only if nothing succeeded AFTER the newest limit (self-clearing). ISO
   # stamps sort lexicographically, so a later success sorting last cleared it.
@@ -583,6 +601,7 @@ EOF
     local newer
     newer="$(printf '%s\n%s\n' "$maxL" "$maxS" | sort | tail -n 1)"
     if [ "$newer" = "$maxS" ] && [ "$maxS" != "$maxL" ]; then
+      [ "$_model_live" = 1 ] && { printf '%s' "$mtag"; return 3; }
       [ "${_LIMIT_WITH_STAMP:-0}" = 1 ] && printf '%s' "$maxS"
       return 2
     fi
@@ -633,6 +652,11 @@ _limit_tank_dry_raw() {
     if [ "$pd_rc" -eq 0 ]; then
       printf '%s' "$reset"; return 0
     fi
+    # rc=3: not dry, one MODEL is (claude's per-model limit). Passed through
+    # with the model's name so the board can say so; never a dry verdict.
+    if [ "$pd_rc" -eq 3 ]; then
+      printf '%s' "$reset"; return 3
+    fi
     # claude stops here on purpose: NEVER consult dry_store for it, or a stale 6h
     # marker masks a real recovery. codex falls through — a headless `codex exec`
     # can hit the limit in a shape the rollout doesn't carry, and burn persists
@@ -681,13 +705,48 @@ _limit_tank_dry_raw() {
 # that observation, not after each redraw (which would roll them forward forever).
 # A successful transcript turn still removes the evidence in the raw scanner.
 LIMIT_RESET_UNVERIFIED='reset passed · unverified'
+# LIMIT_STATE_CREDITS — the reset slot's value when codex's newest limit was the
+# WORKSPACE running out of credits ("Your workspace is out of credits. Add
+# credits to continue.", codex_error_info usage_limit_exceeded). Billing, not
+# plan quota, so the board labels it on its own (T_FUEL_CREDITS) and never as
+# "over quota". It is a state name, not a vendor phrase: nothing parses it.
+LIMIT_STATE_CREDITS='workspace out of credits'
+# LIMIT_MODEL_DRY_TAG — the reset slot's prefix on a `limit_dry_set
+# --include-unverified` row whose tank is NOT dry but one of its models is
+# (claude's per-model limit): "<tag><Model>". A caution like
+# LIMIT_RESET_UNVERIFIED: the selector form (no flag) never emits it, so
+# next_tank and everything else that skips dry tanks never skips this one.
+LIMIT_MODEL_DRY_TAG='model dry: '
+# LIMIT_CODEX_UNPHRASED_SEC — how long a codex limit that carries NO reset
+# phrase (a bare "usage limit", or the credits state) is believed. codex's
+# shortest window is 5h; past that, with no phrase to resolve, the honest
+# answer is "reset passed · unverified", never a red that only a new turn
+# could clear (codex/salmon: red for six days with nobody on the tank).
+LIMIT_CODEX_UNPHRASED_SEC=18000
 _limit_tank_dry_self() {
-  local raw reset stamp now at anchor
+  local raw reset stamp now at anchor rrc=0
   local _LIMIT_WITH_STAMP=1
-  raw="$(_limit_tank_dry_raw "$1" "$2")" || return 1
+  raw="$(_limit_tank_dry_raw "$1" "$2")" || rrc=$?
+  # rc=3: not dry, a model is. Pass it through (the model's name) as rc=3.
+  if [ "$rrc" -eq 3 ]; then printf '%s' "$raw"; return 3; fi
+  [ "$rrc" -eq 0 ] || return 1
   reset="${raw%%$'\037'*}"; stamp="${raw#*$'\037'}"
   now="$(date +%s)"; anchor="$now"
   [ "$stamp" != "$raw" ] && anchor="$(_limit_iso_epoch "$stamp" "$now")"
+  # A codex limit seen in a transcript (ISO stamp) with no reset phrase this
+  # file can resolve: it is good for one 5h window from when it was seen, and
+  # no longer. Computed against `now` on every call, so it heals with nobody
+  # touching the tank. (A dry_store marker has a numeric stamp and its own
+  # TTL below; claude never gets here without a phrase in practice — its scan
+  # window is the 5h itself.)
+  if [ "$1" = codex ] && [ "$stamp" != "$raw" ] && [ "$anchor" != "$now" ] \
+     && case "$stamp" in *T*) true ;; *) false ;; esac \
+     && ! limit_reset_epoch "$reset" "$anchor" >/dev/null 2>&1 \
+     && [ "$((now - anchor))" -gt "$LIMIT_CODEX_UNPHRASED_SEC" ]; then
+    _limit_read_after "$1" "$2" "$((anchor + LIMIT_CODEX_UNPHRASED_SEC))" && return 1
+    printf '%s' "$LIMIT_RESET_UNVERIFIED"
+    return 0
+  fi
   if at="$(limit_reset_epoch "$reset" "$anchor")" && [ "$at" -lt "$now" ]; then
     # #149: a usage reading with numbers taken AFTER the reset instant is the
     # vendor's own word on the window since then — recovery evidence as good
@@ -765,10 +824,39 @@ EOF
   return 1
 }
 
+# limit_tank_model_dry <engine> <tank> -> 0 + echo the model's name (e.g.
+# "Fable") when this tank is NOT dry but one of its models hit its own limit
+# (claude's per-model limit — see _LIMIT_READING_AWK); 1 otherwise, including
+# when the whole tank is dry (then the model is not the news). A separate fact
+# from limit_tank_dry on purpose: a tank with one spent model still runs every
+# other model, so nothing that picks a tank may treat it as dry. Same account
+# contagion as limit_tank_dry: a sibling on the same login shares the model's
+# quota too.
+limit_tank_model_dry() {
+  local engine="$1" tank="$2" m rc=0 acct sib_e sib_t _p sib_acct
+  m="$(_limit_tank_dry_self "$engine" "$tank")" || rc=$?
+  [ "$rc" -eq 3 ] && { printf '%s' "$m"; return 0; }
+  [ "$rc" -eq 0 ] && [ "$m" != "$LIMIT_RESET_UNVERIFIED" ] && return 1
+  acct="$(_limit_tank_account "$engine" "$tank")"
+  [ -n "$acct" ] || return 1
+  while IFS=$'\t' read -r sib_e sib_t _p; do
+    [ "$sib_e" = "$engine" ] && [ "$sib_t" != "$tank" ] || continue
+    sib_acct="$(_limit_tank_account "$sib_e" "$sib_t")"
+    [ -n "$sib_acct" ] && [ "$sib_acct" = "$acct" ] || continue
+    rc=0; m="$(_limit_tank_dry_self "$sib_e" "$sib_t")" || rc=$?
+    [ "$rc" -eq 3 ] && { printf '%s' "$m"; return 0; }
+  done <<EOF
+$(list_all_profiles)
+EOF
+  return 1
+}
+
 # limit_dry_set — the BATCH form of limit_tank_dry for the whole board. Reads a
 # profile list (engine<TAB>tank<TAB>path per line) on stdin and emits one row
 #   engine␟tank␟reset
-# per tank that is out of fuel (--include-unverified also emits reset cautions).
+# per tank that is out of fuel (--include-unverified also emits reset cautions,
+# and a "<LIMIT_MODEL_DRY_TAG><Model>" row for a tank that is not dry but one
+# of its models is — see limit_tank_model_dry).
 # Same verdict as calling limit_tank_dry on each
 # tank, but it computes each tank's OWN signal (_limit_tank_dry_self) EXACTLY ONCE
 # and then resolves account contagion from that cache — so a board with several
@@ -777,16 +865,19 @@ EOF
 # associative arrays — bash 3.2).
 limit_dry_set() {
   local include_unverified="${1:-}"
-  local -a _e=() _t=() _a=() _sd=() _sr=()   # engine, tank, account, self-dry(0/1), self-reset
-  local cli profile path sreset
+  local -a _e=() _t=() _a=() _sd=() _sr=() _sm=()   # engine, tank, account, self-dry(0/1), self-reset, self model-dry
+  local cli profile path sreset src
   # Pass 1 — each tank's OWN signal + account, computed ONCE.
   while IFS=$'\t' read -r cli profile path; do
     [ -n "$cli" ] || continue
     : "$path"
-    if sreset="$(_limit_tank_dry_self "$cli" "$profile")"; then
-      _sd+=(1); _sr+=("$sreset")
+    src=0; sreset="$(_limit_tank_dry_self "$cli" "$profile")" || src=$?
+    if [ "$src" -eq 0 ]; then
+      _sd+=(1); _sr+=("$sreset"); _sm+=("")
+    elif [ "$src" -eq 3 ]; then
+      _sd+=(0); _sr+=(""); _sm+=("$sreset")
     else
-      _sd+=(0); _sr+=("")
+      _sd+=(0); _sr+=(""); _sm+=("")
     fi
     _e+=("$cli"); _t+=("$profile")
     _a+=("$(_limit_tank_account "$cli" "$profile")")
@@ -812,7 +903,21 @@ limit_dry_set() {
       done
     fi
     if [ "$reset" = "$LIMIT_RESET_UNVERIFIED" ] && [ "$include_unverified" != --include-unverified ]; then continue; fi
-    [ "$hit" = "1" ] && printf '%s\037%s\037%s\n' "${_e[i]}" "${_t[i]}" "$reset"
+    if [ "$hit" = "1" ]; then
+      printf '%s\037%s\037%s\n' "${_e[i]}" "${_t[i]}" "$reset"
+      continue
+    fi
+    # Not dry: a spent MODEL is a caution, emitted only on request — the
+    # selector form must never see it (it would skip a tank that still runs).
+    [ "$include_unverified" = --include-unverified ] || continue
+    reset="${_sm[i]}"
+    if [ -z "$reset" ] && [ -n "${_a[i]}" ]; then
+      for ((j = 0; j < n; j++)); do
+        [ "$j" -ne "$i" ] && [ -n "${_sm[j]}" ] && [ "${_e[j]}" = "${_e[i]}" ] && [ "${_a[j]}" = "${_a[i]}" ] || continue
+        reset="${_sm[j]}"; break
+      done
+    fi
+    [ -z "$reset" ] || printf '%s\037%s\037%s%s\n' "${_e[i]}" "${_t[i]}" "$LIMIT_MODEL_DRY_TAG" "$reset"
   done
   return 0
 }
@@ -1907,7 +2012,7 @@ EOF
 # claude's synthetic + isApiErrorMessage pair) — never the vendor's English
 # copy, which is theirs to change. See limit_profile_dry / _limit_codex_dry.
 _LIMIT_READING_AWK='
-function lreset() { maxL = ""; maxS = ""; rphrase = "" }
+function lreset() { maxL = ""; maxS = ""; rphrase = ""; maxM = ""; mtag = "" }
 function ts(s,   t) {
   if (match(s, /"timestamp": *"[^"]*"/)) {
     t = substr(s, RSTART, RLENGTH); sub(/.*"timestamp": *"/, "", t); sub(/".*/, "", t)
@@ -1915,7 +2020,15 @@ function ts(s,   t) {
   }
   return ""
 }
-function scan(s,   t) {
+# THE SIDE FACT (fields 4-5, maxM/mtag). A reading used to be three fields; it
+# is five now, and the two new ones carry an event that is NOT "this tank is
+# out of fuel" but must not be lost either:
+#   · claude — a PER-MODEL limit (stamp + the model name the vendor wrote).
+#   · codex  — a limit that says the WORKSPACE IS OUT OF CREDITS (stamp +
+#     "credits"). It is still a limit event (it also sets maxL); the side fact
+#     only says which kind the newest one was: maxM == maxL.
+function side(t, tag) { if (t != "" && (maxM == "" || t > maxM)) { maxM = t; mtag = tag } }
+function scan(s,   t, m) {
   if (engine == "codex") {
     if (s ~ /"codex_error_info": *"usage_limit_exceeded"/) {
       t = ts(s)
@@ -1923,6 +2036,10 @@ function scan(s,   t) {
         maxL = t; rphrase = ""
         if (match(s, /try again at [^".]*/)) rphrase = substr(s, RSTART, RLENGTH)
       }
+      # Billing, not plan quota (codex/salmon 2026-10-09): the same structured
+      # marker, but the message is the workspace running out of credits. It
+      # carries no reset phrase, so it must never be shown as one.
+      if (s ~ /out of credits/) side(t, "credits")
       return
     }
     if (s ~ /"type": *"agent_message"/) {
@@ -1932,6 +2049,29 @@ function scan(s,   t) {
   }
   if (s ~ /"model": *"<synthetic>"/ && s ~ /"isApiErrorMessage": *true/) {
     t = ts(s)
+    # 🔴 A synthetic api-error line is NOT a limit by itself. Three shapes are
+    # real, and only the first one means the tank is out of fuel:
+    #   · "You have hit your session limit · resets 11pm (Asia/Tokyo)" — the
+    #     account limit; every one of the 262 real limit events in
+    #     tests/fixtures/limit-reset-phrases.tsv carries a reset phrase.
+    #   · "You have reached your Fable limit. Run /usage-credits …" with
+    #     apiError model_requires_usage_credits and NO reset phrase — ONE model
+    #     (claude/wrasse 2026-10-15: vendor usage said window 0%, weekly 79%,
+    #     Fable 100%; every other model still ran). A side fact, not dry.
+    #   · overloaded (529), a dropped connection, an interrupt — no limit at
+    #     all. Counting those used to paint a working tank red.
+    # This is the same line limit_line_is_real draws for `clikae watch`; the
+    # two rulers used to disagree.
+    m = ""
+    if (match(s, /reached your [A-Z][A-Za-z0-9 ._-]* limit/)) {
+      m = substr(s, RSTART + 13, RLENGTH - 19)
+      if (tolower(m) ~ /^(session|usage|weekly)$/) m = ""
+    }
+    if (m != "" || s ~ /"apiError": *"model_requires_usage_credits"/) {
+      side(t, m == "" ? "model" : m)
+      return
+    }
+    if (tolower(s) !~ /(hit|reached) your [a-z]+ limit/ && s !~ /[Rr]esets /) return
     if (t != "" && (maxL == "" || t > maxL)) {
       maxL = t; rphrase = ""
       if (match(s, /[Rr]esets [^"]*/)) rphrase = substr(s, RSTART, RLENGTH)
@@ -1963,7 +2103,20 @@ function scan(s,   t) {
     t = ts(s); if (t != "" && (maxS == "" || t > maxS)) maxS = t
   }
 }
-function reading(   U) { U = sprintf("%c", 31); return maxL U maxS U rphrase }
+function reading(   U) { U = sprintf("%c", 31); return maxL U maxS U rphrase U maxM U mtag }
+'
+
+# _LIMIT_FOLD_AWK — fold many per-file readings (one per line) into one, the
+# same way everywhere: newest limit wins with its phrase, newest success wins,
+# newest side fact wins with its tag. Shared by _limit_readings and the board's
+# two writers (lib/core/board_state.sh), which used to each carry a 3-field copy.
+# A 3-field line from an older cache has empty fields 4-5 and folds as before.
+_LIMIT_FOLD_AWK='
+  $0 == "" { next }
+  $1 > l { l = $1; r = $3 }
+  $2 > s { s = $2 }
+  $4 > m { m = $4; t = $5 }
+  END { printf "%s\037%s\037%s\037%s\037%s\n", l, s, r, m, t }
 '
 
 # Raw timestamp/reset readings preserve the original bounded-tail parser.
@@ -1988,11 +2141,7 @@ _limit_readings() {
       "$parser" "$f"
     fi
     printf '\n'
-  done <<< "$reading_files" | awk -F '\037' '
-    $1 > l { l=$1; r=$3 }
-    $2 > s { s=$2 }
-    END { printf "%s\037%s\037%s\n", l, s, r }
-  '
+  done <<< "$reading_files" | awk -F '\037' "$_LIMIT_FOLD_AWK"
 }
 
 _limit_codex_reading() {
