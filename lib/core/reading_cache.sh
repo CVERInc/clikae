@@ -27,6 +27,9 @@ _reading_cache_keyv() {
 # answering with the old parser's verdict forever. 2: _LIMIT_READING_AWK stopped
 # counting per-model limits and non-limit api errors as a dry tank, and grew
 # fields 4-5 (lib/core/limit.sh). A mismatch is a plain miss: re-read, rewrite.
+# 🔴 It rides INSIDE the size field ("<path>:v2-<size>:<mtime>"), never ahead of
+# the path: clean's _clean_readings_gc recovers the path by stripping the last
+# two ":"-fields, and a "v2:" prefix made every live entry read as orphaned.
 READING_CACHE_FORMAT=2
 
 reading_cache_run() {
@@ -34,7 +37,7 @@ reading_cache_run() {
   local key id root cache saved rc value tmp
   [ -f "$f" ] || { "$@"; return $?; }
   key="$(_reading_cache_keyv "$f")" || { "$@"; return $?; }
-  key="v$READING_CACHE_FORMAT:$f:$key"
+  key="$f:v$READING_CACHE_FORMAT-$key"
   id="$(printf '%s' "$kind:$f" | cksum)"; id="${id%% *}"
   root="${CLIKAE_HOME:-$HOME/.clikae}/state/readings"
   cache="$root/$kind-$id"
