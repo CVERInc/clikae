@@ -7,6 +7,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **A per-model limit no longer reads as the whole tank over quota.** Claude's
+  "You've reached your Fable limit" (`apiError: model_requires_usage_credits`,
+  no reset phrase) was counted as the tank running dry, although every other
+  model on the account still worked. The tank now stays usable — carry-onward
+  (`next_tank`) no longer skips it — and the board row says which model is
+  spent: `Fable dry · window 0% · weekly 79%`. `limit_tank_model_dry` exposes
+  the model on its own. Other synthetic API errors (overloaded 529, a dropped
+  connection) no longer count as a limit at all.
+- **A codex limit no longer stays red past its own reset.** A usage limit
+  with no reset phrase is believed for one 5h window from when it was seen,
+  then reads `reset passed · unverified`, computed against now on every
+  render — it heals with nobody touching the tank.
+- **"Your workspace is out of credits" is its own state.** codex reports it
+  with the same `usage_limit_exceeded` marker as plan quota; the board now
+  labels it "workspace out of credits" (localised) instead of "over quota".
+- Readings cached by the previous parser (`state/readings`, the board's
+  generations) are re-read once instead of serving the old verdict.
+
 ## [0.41.0] — 2026-10-11
 
 ### Changed
