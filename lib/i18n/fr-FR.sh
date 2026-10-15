@@ -41,6 +41,7 @@ T_LAUNCH="lancer"
 T_MORE="plus"
 T_OVER_QUOTA="quota épuisé"
 T_OVER_QUOTA_HINT="transférez la session vers le réservoir suivant :  clikae to"
+T_FUEL_CREDITS="crédits de l'espace de travail épuisés"
 T_EXPIRED_HINT="connexion expirée — renouvelez-la :  %s"
 # footer key hints
 T_K_MOVE="aller"                             # terser than "déplacer" (common Apple French for arrow-key navigation, e.g. "Aller à") — the compact footer needed the columns

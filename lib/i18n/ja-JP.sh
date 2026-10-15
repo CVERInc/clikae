@@ -36,6 +36,7 @@ T_LAUNCH="起動"
 T_MORE="その他"
 T_OVER_QUOTA="上限到達"
 T_OVER_QUOTA_HINT="次のタンクへセッションを引き継ぐ:  clikae to"
+T_FUEL_CREDITS="ワークスペースのクレジット切れ"
 T_EXPIRED_HINT="サインインの期限切れ — 更新する:  %s"
 # footer key hints
 T_K_MOVE="移動"

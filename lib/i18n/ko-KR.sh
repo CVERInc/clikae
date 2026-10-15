@@ -40,6 +40,7 @@ T_LAUNCH="실행"
 T_MORE="더 보기"
 T_OVER_QUOTA="한도 초과"
 T_OVER_QUOTA_HINT="세션을 다음 탱크로 이어가기:  clikae to"
+T_FUEL_CREDITS="워크스페이스 크레딧 소진"
 T_EXPIRED_HINT="로그인이 만료됨 — 갱신하기:  %s"
 # footer key hints
 T_K_MOVE="이동"

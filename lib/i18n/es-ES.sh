@@ -37,6 +37,7 @@ T_LAUNCH="iniciar"
 T_MORE="más"
 T_OVER_QUOTA="cuota agotada"
 T_OVER_QUOTA_HINT="pasa tu sesión al siguiente tanque:  clikae to"
+T_FUEL_CREDITS="créditos del espacio de trabajo agotados"
 T_EXPIRED_HINT="sesión caducada — renuévala:  %s"
 # footer key hints
 T_K_MOVE="mover"

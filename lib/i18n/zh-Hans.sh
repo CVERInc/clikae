@@ -38,6 +38,7 @@ T_LAUNCH="启动"
 T_MORE="更多"
 T_OVER_QUOTA="已达上限"
 T_OVER_QUOTA_HINT="把会话接到下一个油箱：clikae to"
+T_FUEL_CREDITS="工作区点数已用完"
 T_EXPIRED_HINT="登录已过期，重新连上：%s"
 # footer key hints
 T_K_MOVE="移动"

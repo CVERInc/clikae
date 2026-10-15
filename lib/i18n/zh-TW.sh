@@ -39,6 +39,7 @@ T_LAUNCH="啟動"
 T_MORE="更多"
 T_OVER_QUOTA="已達上限"
 T_OVER_QUOTA_HINT="把 session 接到下一顆油箱：clikae to"
+T_FUEL_CREDITS="工作區點數已用完"
 T_EXPIRED_HINT="登入已過期，重新連上：%s"
 # footer key hints
 T_K_MOVE="移動"

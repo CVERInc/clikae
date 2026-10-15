@@ -92,6 +92,8 @@ _status_fuel_note() {
   local e t note
   while IFS=$'\037' read -r e t note; do
     if [ "$e" = "$1" ] && [ "$t" = "$2" ]; then
+      # A spent model on a tank that still runs (limit_dry_set's model row).
+      case "$note" in "${LIMIT_MODEL_DRY_TAG:-model dry: }"?*) note="${note#"${LIMIT_MODEL_DRY_TAG:-model dry: }"} dry" ;; esac
       printf '%s' "${note:-over quota}"; return 0
     fi
   done <<EOF

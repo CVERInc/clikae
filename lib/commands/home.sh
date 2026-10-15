@@ -1209,6 +1209,7 @@ _home_dry_set() {
     # the engine said when we last caught it headless — annotate WHEN we observed
     # it (see dry_seen_suffix) so a stale/off-timezone time reads honestly. claude
     # has no store marker (its dry is a live transcript scan), so it's never tagged.
+    case "$reset" in "${LIMIT_MODEL_DRY_TAG:-model dry: }"*) printf '%s\037%s\037%s\n' "$cli" "$profile" "$reset"; continue ;; esac
     if [ -n "$reset" ] && [ "$reset" != "${LIMIT_RESET_UNVERIFIED:-reset passed · unverified}" ] && ep="$(dry_store_epoch "$cli" "$profile" 2>/dev/null)"; then
       reset="$reset$(dry_seen_suffix "$ep")"
     fi
@@ -1391,7 +1392,10 @@ _home_is_dryv() {
   case "$set" in *"$key"*) ;; *) return 1 ;; esac
   rest="${set#*"$key"}"
   _DRY_RESET="${rest%%$'\n'*}"
-  [ "$_DRY_RESET" != "${LIMIT_RESET_UNVERIFIED:-reset passed · unverified}" ]
+  [ "$_DRY_RESET" != "${LIMIT_RESET_UNVERIFIED:-reset passed · unverified}" ] || return 1
+  # A spent MODEL on a tank that still runs is a caution, never dry.
+  case "$_DRY_RESET" in "${LIMIT_MODEL_DRY_TAG:-model dry: }"*) return 1 ;; esac
+  return 0
 }
 
 # The echoing form, for callers that want the phrase in a $( ). Kept so the
@@ -1608,6 +1612,17 @@ _home_fuel_dotv() {
   fi
   [ -n "$_FUEL_MEMO_NOW" ] || _FUEL_MEMO_NOW="$(date +%s 2>/dev/null || echo 0)"
   _home_fuel_dotv_compute "$dry" "$cli" "$profile" "$_FUEL_MEMO_NOW"
+  # A tank that runs, with ONE model spent (claude's per-model limit): the
+  # model leads the note — "Fable dry · window 0% · weekly 79%" — and a green
+  # dot turns yellow, the same rule #149 applies to a vendor model row at
+  # 100%. Red and yellow states already say more and are left alone.
+  if ! _home_is_dryv "$dry" "$cli" "$profile"; then
+    case "$_DRY_RESET" in "${LIMIT_MODEL_DRY_TAG:-model dry: }"?*)
+      _FNOTE="${_DRY_RESET#"${LIMIT_MODEL_DRY_TAG:-model dry: }"} dry${_FNOTE:+ · $_FNOTE}"
+      # By glyph, not colour: under NO_COLOR every colour prefix is empty.
+      case "$_FDOT" in *●*) _FDOT="${__C_YELLOW}◐$__C_RESET" ;; esac ;;
+    esac
+  fi
   # The note's colour follows the dot's band, one step quieter: red stays red
   # (can't burn), a caution reads plain yellow (not the bold alert yellow),
   # and a healthy or unread tank's numbers are dim. Before this every row
@@ -1678,7 +1693,13 @@ _home_fuel_dotv_compute() {
   _FNOTE=""; _FREMEDY=""
   [ -n "$now" ] || now="$(date +%s 2>/dev/null || echo 0)"
   if _home_is_dryv "$dry" "$cli" "$profile"; then
-    _FDOT="${__C_RED}○$__C_RESET"; _FNOTE="${_DRY_RESET:-over quota}"; return 0
+    _FDOT="${__C_RED}○$__C_RESET"; _FNOTE="${_DRY_RESET:-over quota}"
+    # codex's workspace ran out of CREDITS: billing, not plan quota — named as
+    # such, in the board's language, never "over quota".
+    case "$_DRY_RESET" in "${LIMIT_STATE_CREDITS:-workspace out of credits}"*)
+      _FNOTE="${T_FUEL_CREDITS:-workspace out of credits}${_DRY_RESET#"${LIMIT_STATE_CREDITS:-workspace out of credits}"}" ;;
+    esac
+    return 0
   fi
   if [ "$_DRY_RESET" = "${LIMIT_RESET_UNVERIFIED:-reset passed · unverified}" ]; then
     _FDOT="${__C_YELLOW}◐$__C_RESET"; _FNOTE="$_DRY_RESET"; return 0

@@ -43,6 +43,8 @@ T_LAUNCH="launch"
 T_MORE="more"
 T_OVER_QUOTA="over quota"
 T_OVER_QUOTA_HINT="carry your session on to the next tank:  clikae to"
+# A codex workspace out of CREDITS (billing), never "over quota" (plan).
+T_FUEL_CREDITS="workspace out of credits"
 T_EXPIRED_HINT="sign-in expired — renew it:  %s"
 # footer key hints
 T_K_MOVE="move"

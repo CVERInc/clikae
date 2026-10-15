@@ -36,6 +36,7 @@ T_LAUNCH="iniciar"
 T_MORE="mais"
 T_OVER_QUOTA="cota esgotada"
 T_OVER_QUOTA_HINT="leve a sessão para o próximo tanque:  clikae to"
+T_FUEL_CREDITS="créditos do workspace esgotados"
 T_EXPIRED_HINT="login expirado — renove:  %s"
 # footer key hints
 T_K_MOVE="mover"

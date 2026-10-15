@@ -40,6 +40,7 @@ T_LAUNCH="starten"
 T_MORE="mehr"
 T_OVER_QUOTA="Limit erreicht"
 T_OVER_QUOTA_HINT="nimm deine Sitzung zum nächsten Tank mit:  clikae to"
+T_FUEL_CREDITS="Workspace-Guthaben aufgebraucht"
 T_EXPIRED_HINT="Anmeldung abgelaufen — erneuern:  %s"
 # footer key hints
 T_K_MOVE="bewegen"
