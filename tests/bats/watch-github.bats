@@ -27,6 +27,14 @@ dir="${GH_STUB_DIR:?}"
 if [ "${1:-}" = "auth" ] && [ "${2:-}" = "status" ]; then
   rc=0
   [ -f "$dir/auth_rc" ] && rc="$(cat "$dir/auth_rc")"
+  # #166: an optional per-call sequence (one rc per line, popped in order;
+  # the last line sticks) so a test can pass at startup and fail later.
+  if [ -s "$dir/auth_rc_seq" ]; then
+    rc="$(head -n1 "$dir/auth_rc_seq")"
+    if [ "$(wc -l < "$dir/auth_rc_seq")" -gt 1 ]; then
+      tail -n +2 "$dir/auth_rc_seq" > "$dir/auth_rc_seq.tmp" && mv -f "$dir/auth_rc_seq.tmp" "$dir/auth_rc_seq"
+    fi
+  fi
   exit "$rc"
 fi
 
@@ -146,6 +154,37 @@ case "${1:-}/${2:-}" in
     fi
     exit 0
     ;;
+  api/repos/*/issues/*/comments)
+    # #166: the issue-comments fallback _wg_latest_actor takes when the
+    # timeline page carries no actor at all. $dir/comments.<repo>.<number>.json
+    # is the raw array; absent -> `[]`. Records the `since=` it was sent.
+    path="$2"
+    repo="$(printf '%s' "$path" | cut -d/ -f3)"
+    number="$(printf '%s' "$path" | cut -d/ -f5)"
+    shift 2
+    since=""
+    while [ $# -gt 0 ]; do
+      case "$1" in
+        -f) shift; case "${1:-}" in since=*) since="${1#since=}" ;; esac ;;
+      esac
+      shift
+    done
+    cf="$dir/comments.calls"
+    n=0
+    [ -f "$cf" ] && n="$(cat "$cf")"
+    n=$((n + 1))
+    printf '%s' "$n" > "$cf"
+    printf '%s\n' "$since" > "$dir/comments.$repo.$number.$n.sent_since"
+    printf 'HTTP/2.0 200 OK\r\n'
+    printf 'x-ratelimit-remaining: 5000\r\n'
+    printf '\r\n'
+    if [ -f "$dir/comments.$repo.$number.json" ]; then
+      cat "$dir/comments.$repo.$number.json"
+    else
+      printf '[]\n'
+    fi
+    exit 0
+    ;;
 esac
 
 exit 1
@@ -235,6 +274,14 @@ dir="${GH_STUB_DIR:?}"
 if [ "${1:-}" = "auth" ] && [ "${2:-}" = "status" ]; then
   rc=0
   [ -f "$dir/auth_rc" ] && rc="$(cat "$dir/auth_rc")"
+  # #166: an optional per-call sequence (one rc per line, popped in order;
+  # the last line sticks) so a test can pass at startup and fail later.
+  if [ -s "$dir/auth_rc_seq" ]; then
+    rc="$(head -n1 "$dir/auth_rc_seq")"
+    if [ "$(wc -l < "$dir/auth_rc_seq")" -gt 1 ]; then
+      tail -n +2 "$dir/auth_rc_seq" > "$dir/auth_rc_seq.tmp" && mv -f "$dir/auth_rc_seq.tmp" "$dir/auth_rc_seq"
+    fi
+  fi
   exit "$rc"
 fi
 
@@ -289,6 +336,37 @@ case "${1:-}/${2:-}" in
     printf 'x-ratelimit-remaining: 5000\r\n'
     printf '\r\n'
     printf '[]\n'
+    exit 0
+    ;;
+  api/repos/*/issues/*/comments)
+    # #166: the issue-comments fallback _wg_latest_actor takes when the
+    # timeline page carries no actor at all. $dir/comments.<repo>.<number>.json
+    # is the raw array; absent -> `[]`. Records the `since=` it was sent.
+    path="$2"
+    repo="$(printf '%s' "$path" | cut -d/ -f3)"
+    number="$(printf '%s' "$path" | cut -d/ -f5)"
+    shift 2
+    since=""
+    while [ $# -gt 0 ]; do
+      case "$1" in
+        -f) shift; case "${1:-}" in since=*) since="${1#since=}" ;; esac ;;
+      esac
+      shift
+    done
+    cf="$dir/comments.calls"
+    n=0
+    [ -f "$cf" ] && n="$(cat "$cf")"
+    n=$((n + 1))
+    printf '%s' "$n" > "$cf"
+    printf '%s\n' "$since" > "$dir/comments.$repo.$number.$n.sent_since"
+    printf 'HTTP/2.0 200 OK\r\n'
+    printf 'x-ratelimit-remaining: 5000\r\n'
+    printf '\r\n'
+    if [ -f "$dir/comments.$repo.$number.json" ]; then
+      cat "$dir/comments.$repo.$number.json"
+    else
+      printf '[]\n'
+    fi
     exit 0
     ;;
 esac
@@ -2679,4 +2757,148 @@ _not_run_dir() {
   _not_run_dir foo /logs/watch-github-foo-abc
   _not_run_dir foo /logs/watch-github-foo-12-34-56
   _not_run_dir CVERInc /logs/watch-github-CVERInc-labs-1789538639
+}
+
+# --- #166: a live process is not a working one -----------------------------
+#
+# 2026-09-29: the launchd watcher stayed alive (pid up, state running) while
+# events.jsonl stopped for an hour of real activity, and comment events
+# carried `login: unknown` with no body. Three fixes, each with its own red:
+# a per-poll heartbeat file (last_ok_at), a loud STALL event after N failed
+# polls that `clikae wait --latest` returns on, and comment events that
+# carry who said what (timeline body; issue-comments fallback when the
+# timeline page has no actor at all).
+
+_hb() { printf '%s/state/watch-github/CVERInc.heartbeat.json' "$CLIKAE_HOME"; }
+
+@test "watch github --once: every poll writes a heartbeat with last_ok_at (#166)" {
+  _gh_stub_install
+  run clikae watch github --org CVERInc --once
+  [ "$status" -eq 0 ]
+  [ -f "$(_hb)" ]
+  [[ "$(cat "$(_hb)")" == *'"last_ok_at":'[0-9]* ]] || false
+  [[ "$(cat "$(_hb)")" == *'"consecutive_failures":0'* ]] || false
+  [[ "$(cat "$(_hb)")" == *'"last_poll_at":'[0-9]* ]] || false
+}
+
+@test "watch github --once: a failed poll counts in the heartbeat and never moves last_ok_at (#166)" {
+  _gh_stub_install
+  run clikae watch github --org CVERInc --once
+  [ "$status" -eq 0 ]
+  local ok1; ok1="$(sed -E 's/.*"last_ok_at":([0-9]+).*/\1/' "$(_hb)")"
+  [ -n "$ok1" ]
+  _gh_stub_fail org 2 1 "HTTP 500: boom"
+  run clikae watch github --org CVERInc --once
+  [ "$status" -eq 1 ]
+  [[ "$(cat "$(_hb)")" == *'"consecutive_failures":1'* ]] || false
+  [[ "$(cat "$(_hb)")" == *"\"last_ok_at\":$ok1"* ]] || false
+  [[ "$(cat "$(_hb)")" == *'"last_error":"'* ]] || false
+}
+
+@test "watch github --once: three failed polls in a row raise a STALL event clikae wait returns on (#166)" {
+  _gh_stub_install
+  _gh_stub_fail org 1 1 "HTTP 500: boom"
+  _gh_stub_fail org 2 1 "HTTP 500: boom"
+  _gh_stub_fail org 3 1 "HTTP 500: boom"
+  run clikae watch github --org CVERInc --once
+  [ "$status" -eq 1 ]
+  [[ "$output" != *"stalled"* ]] || false
+  run clikae watch github --org CVERInc --once
+  [ "$status" -eq 1 ]
+  [[ "$output" != *"stalled"* ]] || false
+  run clikae watch github --org CVERInc --once
+  [ "$status" -eq 1 ]
+  [[ "$output" == *"stalled"* ]] || false
+  local status_file
+  status_file="$(find "$CLIKAE_HOME/logs" -maxdepth 2 -path '*/watch-github-CVERInc-*/status.json' | head -n1)"
+  [ -n "$status_file" ]
+  [[ "$(cat "$status_file")" == *'"state":"fail"'* ]] || false
+  [[ "$(cat "$status_file")" == *'stalled'* ]] || false
+  run clikae wait --latest watch-github-CVERInc --timeout 5
+  [ "$status" -eq 1 ]
+  [[ "$output" == *'"state":"fail"'* ]] || false
+}
+
+@test "watch github --once: a successful poll resets the failure count (#166)" {
+  _gh_stub_install
+  _gh_stub_fail org 1 1 "HTTP 500: boom"
+  run clikae watch github --org CVERInc --once
+  [ "$status" -eq 1 ]
+  run clikae watch github --org CVERInc --once
+  [ "$status" -eq 0 ]
+  [[ "$(cat "$(_hb)")" == *'"consecutive_failures":0'* ]] || false
+}
+
+@test "watch github --once: losing gh auth after a failed poll says so and exits 1 (#166)" {
+  _gh_stub_install
+  _gh_stub_fail org 1 1 "HTTP 401: Bad credentials"
+  # The stub pops one rc per `gh auth status` call: startup passes, the
+  # re-check after the failed poll finds the login gone.
+  printf '0\n1\n' > "$GH_STUB_DIR/auth_rc_seq"
+  run clikae watch github --org CVERInc --once
+  [ "$status" -eq 1 ]
+  [[ "$output" == *"no longer logged in"* ]] || false
+}
+
+@test "watch github --once: a comment event carries the commenter's login AND the body (#166)" {
+  _gh_stub_install
+  _gh_stub_page org 1 \
+    "$(_row 100 2026-09-07T04:00:00Z alice reef https://x/100 0 "First issue")"
+  run clikae watch github --org CVERInc --once
+  [ "$status" -eq 0 ]
+  _gh_stub_timeline_page reef 100 1 \
+    '[{"event":"commented","actor":{"login":"carol"},"user":{"login":"carol"},"body":"Looks good, merge when CI is green"}]'
+  _gh_stub_page org 2 \
+    "$(_row 100 2026-09-07T09:00:00Z alice reef https://x/100 0 "First issue")"
+  run clikae watch github --org CVERInc --once
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"#100 comment by carol: First issue"* ]] || false
+  [[ "$output" == *"Looks good, merge when CI is green"* ]] || false
+  local events="$CLIKAE_HOME/logs/watch-github-CVERInc/events.jsonl"
+  local last; last="$(tail -n1 "$events")"
+  [[ "$last" == *'"login":"carol"'* ]] || false
+  [[ "$last" == *'"body":"Looks good, merge when CI is green"'* ]] || false
+}
+
+@test "watch github --once: a comment body is cut to 200 characters in the event (#166)" {
+  _gh_stub_install
+  _gh_stub_page org 1 \
+    "$(_row 100 2026-09-07T04:00:00Z alice reef https://x/100 0 "First issue")"
+  run clikae watch github --org CVERInc --once
+  local long; long="$(printf 'x%.0s' $(seq 1 300))"
+  _gh_stub_timeline_page reef 100 1 \
+    "[{\"event\":\"commented\",\"actor\":{\"login\":\"carol\"},\"body\":\"$long\"}]"
+  _gh_stub_page org 2 \
+    "$(_row 100 2026-09-07T09:00:00Z alice reef https://x/100 0 "First issue")"
+  run clikae watch github --org CVERInc --once
+  [ "$status" -eq 0 ]
+  local events="$CLIKAE_HOME/logs/watch-github-CVERInc/events.jsonl"
+  local body; body="$(tail -n1 "$events" | sed -E 's/.*"body":"([^"]*)".*/\1/')"
+  [[ "$body" == x* ]] || false
+  [[ "$body" == *"…" ]] || false
+  [ "$(printf '%s' "$body" | tr -d '…' | wc -c | tr -d ' ')" -eq 200 ]
+}
+
+@test "watch github --once: a timeline with no actor falls back to issue comments for login and body (#166)" {
+  _gh_stub_install
+  _gh_stub_page org 1 \
+    "$(_row 100 2026-09-07T04:00:00Z alice reef https://x/100 0 "First issue")"
+  run clikae watch github --org CVERInc --once
+  # The real 2026-09-29 shape: a timeline tail of commits only, nothing
+  # carrying actor/user, so the lookup used to give up as "unknown".
+  _gh_stub_timeline_page reef 100 1 \
+    '[{"event":"committed","sha":"abc","author":{"name":"n","email":"e"}}]'
+  printf '%s\n' '[{"user":{"login":"dave"},"body":"from the comments endpoint"}]' \
+    > "$GH_STUB_DIR/comments.reef.100.json"
+  _gh_stub_page org 2 \
+    "$(_row 100 2026-09-07T09:00:00Z alice reef https://x/100 0 "First issue")"
+  run clikae watch github --org CVERInc --once
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"#100 comment by dave: First issue"* ]] || false
+  [[ "$output" != *"by unknown"* ]] || false
+  # The fallback asked only for comments since the cursor: one bounded call.
+  [ "$(cat "$GH_STUB_DIR/comments.calls")" = "1" ]
+  [ "$(cat "$GH_STUB_DIR/comments.reef.100.1.sent_since")" = "2026-09-07T04:00:00Z" ]
+  local events="$CLIKAE_HOME/logs/watch-github-CVERInc/events.jsonl"
+  [[ "$(tail -n1 "$events")" == *'"body":"from the comments endpoint"'* ]] || false
 }

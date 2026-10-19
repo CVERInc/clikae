@@ -628,9 +628,48 @@ _wg_latest_actor() {
   if _wg_last_actor_in_body "$body"; then
     return 0
   fi
+  # #166: the 2026-09-29 shape — a timeline tail of `committed` events only
+  # (no actor/user anywhere on the page) used to end here as "unknown", for
+  # an hour of real comments. One more bounded call: the issue's own
+  # comments since this poll's cursor, newest last. Still the same ONE unit
+  # against the lookup budget.
+  if _wg_comments_fallback "$org" "$repo" "$number"; then
+    return 0
+  fi
   __WG_LOOKUP_LAST_KIND="transient"
-  __WG_LOOKUP_LAST_REASON="timeline: no actor in the last page fetched (page ${last_page:-1})"
+  __WG_LOOKUP_LAST_REASON="timeline: no actor in the last page fetched (page ${last_page:-1}); no comments since ${__WG_SINCE:-?}"
   return 1
+}
+
+# _wg_comments_fallback <org> <repo> <number> -> 0 with $__WG_LOOKUP_ACTOR /
+# $__WG_LOOKUP_KIND (`comment`) / $__WG_LOOKUP_BODY from the NEWEST issue
+# comment since $__WG_SINCE (this poll's cursor); 1 if there is none or the
+# call failed. `issues/<n>/comments` lists ascending and honours `since`, so
+# one page's last element is the newest comment this poll could be about.
+# Review comments and reviews are not here (that is what the timeline is
+# for); this answers the question the timeline could not.
+_wg_comments_fallback() {
+  local org="$1" repo="$2" number="$3" errfile raw rc body events last actor evbody us
+  errfile="$(mktemp "${TMPDIR:-/tmp}/clikae-watch-github.XXXXXX")"
+  raw="$(gh api "repos/$org/$repo/issues/$number/comments" --method GET \
+    -f per_page=100 ${__WG_SINCE:+-f "since=$__WG_SINCE"} -i 2>"$errfile")"
+  rc=$?
+  rm -f "$errfile"
+  [ "$rc" -eq 0 ] || return 1
+  body="$(printf '%s\n' "$raw" | awk 'f{print} /^\r?$/{f=1}')"
+  body="$(printf '%s' "$body" | tr -d '\n')"
+  [ -n "$body" ] || return 1
+  events="$(_wg_timeline_events "$body")"
+  [ -n "$events" ] || return 1
+  last="$(printf '%s\n' "$events" | tail -n1)"
+  us="$(printf '\037')"
+  evbody="${last%%"$us"*}"
+  actor="$(printf '%s' "${last#*"$us"}" | grep -oE '"user":\{"login":"[^"]*"' | head -n1 | sed -E 's/.*"login":"([^"]*)"$/\1/')"
+  [ -n "$actor" ] || return 1
+  __WG_LOOKUP_ACTOR="$actor"
+  __WG_LOOKUP_KIND="comment"
+  __WG_LOOKUP_BODY="$evbody"
+  return 0
 }
 
 # _wg_timeline_events <json-array-text> -> one line per top-level array
@@ -984,15 +1023,25 @@ _wg_process() {
       fi
     else
       actor="unknown"; kind="comment"   # never dropped — see _wg_lookup_and_count
+      __WG_LOOKUP_BODY=""               # never a previous row's body
     fi
 
+    # #166: what was SAID travels with who said it — the first 200
+    # characters of the comment/review body (plain text, `…` when cut), in
+    # the record as `body` and on the wake line, so a downstream reader can
+    # filter on author and content instead of re-fetching the issue.
+    local excerpt=""
+    case "$kind" in
+      comment|review|mention) excerpt="$(_wg_body_excerpt "${__WG_LOOKUP_BODY:-}")" ;;
+    esac
+
     local line json_rec
-    line="$(printf 'github %s/%s#%s %s by %s: %s' "$org" "$repo" "$number" "$kind" "$actor" "$title")"
+    line="$(printf 'github %s/%s#%s %s by %s: %s%s' "$org" "$repo" "$number" "$kind" "$actor" "$title" "${excerpt:+ · \"$excerpt\"}")"
     log_done "$line"
 
-    json_rec="$(printf '{"kind":%s,"org":%s,"repo":%s,"number":%s,"login":%s,"title":%s,"updated_at":%s,"html_url":%s,"is_pr":%s,"line":%s}' \
+    json_rec="$(printf '{"kind":%s,"org":%s,"repo":%s,"number":%s,"login":%s,"title":%s,"body":%s,"updated_at":%s,"html_url":%s,"is_pr":%s,"line":%s}' \
       "$(json_str "$kind")" "$(json_str "$org")" "$(json_str "$repo")" "$number" \
-      "$(json_str "$actor")" "$(json_str "$title")" "$(json_str "$updated")" \
+      "$(json_str "$actor")" "$(json_str "$title")" "$(json_str "$excerpt")" "$(json_str "$updated")" \
       "$(json_str "$html_url")" "$([ "$is_pr" = "1" ] && printf true || printf false)" \
       "$(json_str "$line")")"
     printf '%s\n' "$json_rec" >> "$events_file"
@@ -1078,6 +1127,97 @@ _wg_status_write() {
       "$(json_str "done")" "$now" "$now" "$$" "$(json_str "$summary")"
   } > "$run_dir/status.json.tmp" 2>/dev/null && mv -f "$run_dir/status.json.tmp" "$run_dir/status.json" 2>/dev/null || true
   _wg_runs_rotate "$org"
+}
+
+# --- #166: heartbeat, stall event, body excerpt -------------------------------
+
+# _wg_heartbeat_file <org> -> $CLIKAE_HOME/state/watch-github/<org>.heartbeat.json
+# — in the STATE dir on purpose, not the durable log dir: a status.json
+# there would make the log dir look like a run directory to
+# _wg_runs_rotate / `clikae wait --latest` (see _wg_is_run_dir).
+_wg_heartbeat_file() { printf '%s/%s.heartbeat.json\n' "$(_wg_state_dir)" "$1"; }
+
+# _wg_heartbeat_write <org> <ok:1|0> <error-kind> <error-reason> -> rewrite
+# the heartbeat: `last_poll_at` moves every poll, `last_ok_at` only on a
+# successful one, `consecutive_failures` counts up on failure and resets to
+# 0 on success (persisted, so `--once` under cron counts across runs).
+# Sets $__WG_FAILS to the new count. Never fatal.
+_wg_heartbeat_write() {
+  local org="$1" ok="$2" ekind="$3" ereason="$4" f prev now fails=0 last_ok=null events
+  f="$(_wg_heartbeat_file "$org")"
+  now="$(date +%s 2>/dev/null || echo 0)"
+  prev="$(cat "$f" 2>/dev/null || true)"
+  if [ -n "$prev" ]; then
+    fails="$(printf '%s' "$prev" | sed -nE 's/.*"consecutive_failures":([0-9]+).*/\1/p')"
+    last_ok="$(printf '%s' "$prev" | sed -nE 's/.*"last_ok_at":([0-9]+|null).*/\1/p')"
+    case "$fails" in ''|*[!0-9]*) fails=0 ;; esac
+    case "$last_ok" in ''|*[!0-9]*) [ "$last_ok" = "null" ] || last_ok=null ;; esac
+  fi
+  if [ "$ok" = 1 ]; then fails=0; last_ok="$now"; else fails=$((fails + 1)); fi
+  __WG_FAILS="$fails"
+  events="${__WG_EVENTS:-0}"
+  mkdir -p "$(_wg_state_dir)" 2>/dev/null || true
+  {
+    printf '{"org":%s,"pid":%s,"last_poll_at":%s,"last_ok_at":%s,"consecutive_failures":%s,"events_this_poll":%s,"last_error":%s,"last_error_kind":%s}\n' \
+      "$(json_str "$org")" "$$" "$now" "$last_ok" "$fails" "$events" \
+      "$([ "$ok" = 1 ] && printf null || json_str "$ereason")" \
+      "$([ "$ok" = 1 ] && printf null || json_str "$ekind")"
+  } > "$f.tmp" 2>/dev/null && mv -f "$f.tmp" "$f" 2>/dev/null || true
+  return 0
+}
+
+# _wg_stall_write <org> <reason> -> ONE burn-status-shaped run directory
+# saying `state: fail` — the same file `clikae wait --latest
+# watch-github-<org>` already reads for events, so the stall is an event
+# a cockpit returns on (rc 1), not a line in a log nobody tails.
+_wg_stall_write() {
+  local org="$1" reason="$2" now run_id run_dir n=1
+  now="$(date +%s 2>/dev/null || echo 0)"
+  run_id="watch-github-$org-$now"
+  while [ -d "$(burn_status_dir "$run_id")" ]; do
+    n=$((n + 1))
+    run_id="watch-github-$org-$now-$n"
+  done
+  run_dir="$(burn_status_dir "$run_id")"
+  mkdir -p "$run_dir" 2>/dev/null || return 0
+  {
+    printf '{"ok":false,"engine":%s,"tank":%s,"artifact":null,"artifact_bytes":null,"reason":%s,"reset":null,"rerouted_from":[],"elapsed_s":0,"run_id":%s,"state":%s,"started_at":%s,"updated_at":%s,"pid":%s,"log":%s,"reset_at":null,"summary":%s}\n' \
+      "$(json_str "github")" "$(json_str "$org")" "$(json_str "$reason")" \
+      "$(json_str "$run_id")" "$(json_str "fail")" "$now" "$now" "$$" \
+      "$(json_str "$(_wg_heartbeat_file "$org")")" "$(json_str "$reason")"
+  } > "$run_dir/status.json.tmp" 2>/dev/null && mv -f "$run_dir/status.json.tmp" "$run_dir/status.json" 2>/dev/null || true
+  _wg_runs_rotate "$org"
+}
+
+# _wg_body_excerpt <raw-json-string-content> -> the first 200 characters as
+# plain text (JSON escapes undone, newlines folded to spaces), with `…`
+# appended when cut. Cut on a UTF-8 character boundary, never inside one:
+# bytes are counted under C, then a trailing partial sequence is dropped.
+_wg_body_excerpt() {
+  local raw="$1" s n=200 b c
+  [ -n "$raw" ] || { printf ''; return 0; }
+  s="$(printf '%s' "$raw" | sed -E 's/\\r//g; s/\\[nt]/ /g; s/\\\//\//g; s/\\"/"/g; s/\\\\/\\/g')"
+  local LC_ALL=C
+  if [ "${#s}" -le "$n" ]; then printf '%s' "$s"; return 0; fi
+  b="${s:0:n}"
+  # Drop continuation bytes (10xxxxxx) at the cut, then the lead byte they
+  # belonged to if its sequence is now incomplete.
+  local stripped=0
+  while [ -n "$b" ]; do
+    c="$(printf '%d' "'${b: -1}")"
+    [ "$c" -ge 128 ] && [ "$c" -lt 192 ] || break
+    b="${b%?}"; stripped=$((stripped + 1))
+  done
+  if [ -n "$b" ]; then
+    c="$(printf '%d' "'${b: -1}")"
+    if [ "$c" -ge 192 ]; then
+      local need=2
+      [ "$c" -ge 224 ] && need=3
+      [ "$c" -ge 240 ] && need=4
+      [ "$stripped" -ge $((need - 1)) ] && b="$b${s:$((n - stripped)):$stripped}" || b="${b%?}"
+    fi
+  fi
+  printf '%s…' "$b"
 }
 
 # _wg_is_run_dir <org> <path> -> 0 when <path>'s BASENAME is exactly
@@ -1634,6 +1774,7 @@ _wg_poll() {
   if ! _wg_lock_acquire "$org"; then
     __WG_OK=0
     log_warn "github:$org — could not acquire the poll lock (another watch github --once running concurrently?); skipping this poll."
+    _wg_heartbeat_write "$org" 0 "lock" "could not acquire the poll lock"   # #166: counted, never silent
     return 0
   fi
   # P3-4 (2026-09-14 fix-round-7 review): a poll killed mid-read (Ctrl-C,
@@ -1686,6 +1827,7 @@ _wg_poll() {
   # path) must read as cold start, never as "no time bound at all" (which
   # used to mean a full org replay — see _wg_query_org's history above).
   [ -n "$since" ] || since="${since_override:-$(_wg_since_default)}"
+  __WG_SINCE="$since"   # #166: the comments fallback bounds its one call on this
 
   # P2-2 (2026-09-13 fix-round-3 review): ONE query now — see WHY POLL, NOT
   # STREAM in the file header for why the separate `mentions:<self>` query
@@ -1775,6 +1917,34 @@ _wg_poll() {
     _wg_status_write "$org" "$__WG_EVENT_JSON_LINES" "$(_wg_build_summary "$__WG_SUMMARY_LINES" "$__WG_EVENTS")"
   fi
 
+  # #166: a live process is not a working one. EVERY poll — quiet, busy or
+  # failed — leaves a heartbeat (`last_ok_at`, consecutive failures), and a
+  # run of failed polls becomes an EVENT a watcher returns on, instead of a
+  # pid that stays up while events.jsonl goes silent for an hour.
+  if [ "$__WG_OK" -eq 1 ]; then
+    _wg_heartbeat_write "$org" 1 "" ""
+  else
+    # A failed poll re-asks the one question that explains the 2026-09-29
+    # silence: is gh still logged in? If not, this is permanent — the live
+    # loop exits (launchd restarts it into the startup check, which says
+    # so) rather than spinning on an auth it will never get back.
+    if ! gh auth status >/dev/null 2>&1; then
+      __WG_PERMANENT=1
+      __WG_PERMANENT_REASON="gh is no longer logged in (gh auth status failed); not retrying"
+      __WG_LAST_KIND="permanent"
+      __WG_LAST_REASON="$__WG_PERMANENT_REASON"
+    fi
+    _wg_heartbeat_write "$org" 0 "${__WG_LAST_KIND:-}" "${__WG_LAST_REASON:-}"
+    local stall_n="${CLIKAE_WATCH_GITHUB_STALL_POLLS:-3}"
+    case "$stall_n" in ''|*[!0-9]*|0) stall_n=3 ;; esac
+    if [ "$__WG_PERMANENT" -eq 1 ]; then
+      _wg_stall_write "$org" "github:$org — giving up: ${__WG_PERMANENT_REASON}"
+    elif [ "${__WG_FAILS:-0}" -ge "$stall_n" ] && [ $(( __WG_FAILS % stall_n )) -eq 0 ]; then
+      log_err "github:$org — stalled: ${__WG_FAILS} consecutive failed polls (last: ${__WG_LAST_KIND:-?}: ${__WG_LAST_REASON:-?}); heartbeat at $(_wg_heartbeat_file "$org")"
+      _wg_stall_write "$org" "github:$org — stalled: ${__WG_FAILS} consecutive failed polls (last: ${__WG_LAST_KIND:-?}: ${__WG_LAST_REASON:-?})"
+    fi
+  fi
+
   _wg_lock_release "$org"
   trap - INT TERM HUP EXIT
 }
@@ -1793,6 +1963,21 @@ comment/review whose own text @-mentions you is reported as kind `mention`
   github <org>/<repo>#<n> <opened|comment|review|activity|mention> by <login>: <title>
 
 Printed live (a foreground run) and appended, as flat JSON, to
+Heartbeat (#166): every poll — quiet, busy or failed — rewrites
+$CLIKAE_HOME/state/watch-github/<org>.heartbeat.json with `last_poll_at`,
+`last_ok_at` (moves only on success), `consecutive_failures` and the last
+error. A pid being alive says nothing; this file does. After
+$CLIKAE_WATCH_GITHUB_STALL_POLLS (default 3) failed polls in a row, a
+`state: fail` run directory is written (reason "stalled …") so
+`clikae wait --latest watch-github-<org>` returns on it with rc 1; the
+count resets on the next good poll. A failed poll also re-checks
+`gh auth status` — a login that is gone is permanent: say so and exit 1.
+
+Comment / review / mention events carry `login` (who) and `body` (the first
+200 characters of what they wrote, plain text) — from the timeline event
+itself, or, when the timeline page carries no actor at all (a tail of
+commits), from the issue's own comments since the cursor.
+
 $CLIKAE_HOME/logs/watch-github-<org>/events.jsonl — durable, so a cron job or
 a Stop hook calling --once has something to read even with nobody watching.
 
