@@ -59,7 +59,9 @@
 # keys stay `window_pct` / `weekly_pct` (a contract, not a label). chodaict
 # 2026-10-18 chose the vendor's own durations over abstract words — change
 # them here, together, if the vendor's windows ever change.
+# shellcheck disable=SC2034  # read by home.sh, tmux.sh, limit.sh, usage.sh
 USAGE_LABEL_WINDOW="5h"
+# shellcheck disable=SC2034
 USAGE_LABEL_WEEKLY="7d"
 
 # #177: may THIS reader refresh an expired token by running the engine for
