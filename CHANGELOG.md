@@ -7,6 +7,36 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **A `--no-reroute` burn that runs dry is paused, not silently stopped**
+  (#178). The quota window closing is a normal outcome of a pinned burn: it
+  now writes `state: dry-paused` (with `reset` / `reset_at`) to its status
+  file, leaves a one-line pause note at the artifact path when nothing is
+  there (so a waiter that only polls for the report wakes up and reads
+  why), and `clikae wait` returns on it at once with rc 2. By default the
+  burn then waits the reset out in place and re-fires the same tank
+  (`--wait-for-reset <dur>` sets the window, `0` never waits,
+  `$CLIKAE_BURN_DRY_PAUSE_WAIT` sets the 6h default); the note is removed
+  on re-fire and the file goes `running` → `done`.
+- **`clikae watch github` can no longer be alive but not working** (#166).
+  Every poll rewrites `state/watch-github/<org>.heartbeat.json`
+  (`last_poll_at`, `last_ok_at`, `consecutive_failures`, last error); three
+  failed polls in a row (`$CLIKAE_WATCH_GITHUB_STALL_POLLS`) write a
+  `state: fail` run that `clikae wait --latest watch-github-<org>` returns
+  on and say so loudly; a failed poll re-checks `gh auth status` and a
+  login that is gone exits 1 instead of spinning. Comment/review/mention
+  events now carry `login` and `body` (first 200 characters, plain text) —
+  from the timeline event itself, or from the issue's own comments since
+  the cursor when the timeline page has no actor at all (the shape that
+  produced an hour of `by unknown` on 2026-09-29).
+- **The wake watcher reloads itself after an upgrade and is never the window
+  a human lands on** (#168). Once a tick it checks whether its own binary
+  carries a different version or is gone (brew removed the Cellar) and
+  re-execs the installed `clikae`; creating the watcher window ends by
+  selecting the engine window; the status line says `ctrl-b 0 returns to
+  claude`.
+
 ## [0.42.0] — 2026-10-15
 
 ### Fixed

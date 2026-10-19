@@ -59,6 +59,11 @@ Three dispatch shapes — full field guide in
   itself failed) and `infra` (tool-host infrastructure failure after
   same-tank retries are exhausted). Only `reason` tells the two dry shapes
   apart — rc alone does not, on purpose (wait/add fuel either way).
+  A `--no-reroute` burn that runs dry publishes `state: dry-paused` in its
+  status file (with `reset_at`), leaves a one-line pause note at the
+  artifact path if nothing is there, and by default waits the reset out and
+  re-fires the same tank (#178) — `clikae wait` returns on the pause (rc 2)
+  and again on the eventual `done`.
 - **`clikae conduct --leg <e>/<t> … --prompt-file <f>`** — fan ONE read-only prompt
   across N accounts in parallel (best-of-N audits/analyses); collect every leg's
   output. clikae never judges — you pick the winner, which is exactly why

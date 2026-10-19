@@ -41,7 +41,9 @@ Usage: clikae wait <run_id|status-file>... [--any|--all] [--timeout <dur>]
        clikae wait --latest <prefix> [--any|--all] [--timeout <dur>]
 
 Block until one (or every) named burn reaches a TERMINAL state — done, dry,
-fail, infra, or stale (a `running`/`waiting-reset` row whose recorded pid is
+dry-paused (#178: a --no-reroute burn whose tank ran dry; `reset_at` says
+when it is back, and the burn itself may re-fire after that), fail, infra,
+or stale (a `running`/`waiting-reset` row whose recorded pid is
 no longer alive, synthesized here at read time, never written to disk — see
 #41's status.json contract, documented in docs/orchestration.md) — and print
 each one's status object as one JSON line on stdout, in the order it
@@ -75,7 +77,7 @@ refusing.
 
 Exit code — 0 only when the REQUESTED condition is met:
   --any (default): 0 if at least one target is done; 2 if none are done and
-                   every one that finished is dry; 1 otherwise (a
+                   every one that finished is dry or dry-paused; 1 otherwise (a
                    fail/infra/stale among them, an unresolved target, or a
                    timeout).
   --all:           0 only if EVERY target is done; 2 only if EVERY target is
@@ -201,15 +203,19 @@ cmd_wait() {
           ;;
       esac
 
+      # #178: `dry-paused` — a --no-reroute burn whose tank ran dry. Terminal
+      # for a reader (ok:false, nothing more comes out of this attempt;
+      # `reset_at` says when the tank is back), and the dry class for the rc:
+      # "is anything left to do" has the same answer as a plain `dry`.
       case "$st" in
-        done|dry|fail|infra|stale)
+        done|dry|dry-paused|fail|infra|stale)
           printf '%s\n' "$json"
           reported[i]=1
           terminal_count=$((terminal_count + 1))
           case "$st" in
-            done) any_done=1 ;;
-            dry)  any_dry=1 ;;
-            *)    any_other=1 ;;   # fail, infra, stale
+            done)           any_done=1 ;;
+            dry|dry-paused) any_dry=1 ;;
+            *)              any_other=1 ;;   # fail, infra, stale
           esac
           ;;
       esac

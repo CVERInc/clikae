@@ -265,7 +265,7 @@ object can't give it:
   "rerouted_from": [],      // ["codex/T1", …] — every tank tried before this one
   "elapsed_s": 4,
   "run_id": "burn-28186",   // stable across this burn's whole reroute walk
-  "state": "running",       // running | waiting-reset | done | dry | fail | infra
+  "state": "running",       // running | waiting-reset | done | dry | dry-paused | fail | infra
   "started_at": 1757400000, "updated_at": 1757400004,
   "pid": 28186,
   "log": "/Users/…/.clikae/logs/codex-T1-burn-28186.log",  // this attempt's own capture log, or null
@@ -356,10 +356,25 @@ or `dry` among the others):
 a burn that exhausted its whole auto-reroute reserve (`reason:
 no-tank-available`) and a burn that stopped after ONE dry tank because
 `--no-reroute` said to (`reason: "tank ran dry and --no-reroute is set"`).
-Both write `state: dry` and both give burn's own process rc 2 — `wait`'s rc
-above answers "is anything left to do", which is the same question either
-way. A caller that needs to tell the two apart reads `reason` off the
-printed status object, not `wait`'s own exit code.
+Both give burn's own process rc 2 — `wait`'s rc above answers "is anything
+left to do", which is the same question either way. A caller that needs to
+tell the two apart reads `reason` off the printed status object, not
+`wait`'s own exit code.
+
+**`dry-paused` (#178) is the `--no-reroute` shape's own state.** A pinned
+burn whose tank runs dry is a normal, designed-for outcome — the quota
+window closed — so it is published as `state: dry-paused` (ok:false, the
+same `reason`, with `reset` and `reset_at` saying when the tank is back),
+and a one-line pause note is left AT THE ARTIFACT PATH if nothing is there
+yet, so a waiter that only polls "does the report exist" wakes up and reads
+why. `wait` returns on it immediately, rc 2 (the dry class). It is an event
+on the way, not necessarily the end: when the reset parses and lands inside
+the window (`--wait-for-reset <dur>`, default `$CLIKAE_BURN_DRY_PAUSE_WAIT`
+= 6h; `0` = never wait) the burn sleeps here and re-fires the SAME tank, the
+note is taken away, and the file goes `running` → `done` — a reader that
+returned on `dry-paused` can `wait` on the same run id again. Outside the
+window, or with no parseable reset, the process exits rc 2 and the file
+stays `dry-paused`: re-run the same burn after the reset.
 
 **A dead burn can never hang `wait` (2026-09-09 round-1 review, P1-1.)** A
 `running` status whose recorded `pid` is no longer alive is read as a
