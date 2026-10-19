@@ -15,16 +15,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   session's own transcript (the id clikae stamps at launch). A background
   subagent's reply, or another session on the same tank, no longer makes the
   watcher miss the limit or the waiter skip the nudge. With no stamped id the
-  read is the whole tank, as before.
+  read is the whole tank, as before. After `/clear` the pane's new
+  conversation is followed instead of the launch id, and a conversation the
+  pane moved on to that is not parked is never nudged; when the transcripts
+  cannot say which conversation the pane is on, the read is the whole tank
+  and the trace says it was ambiguous.
 - **The watcher's own usage refresh no longer hides a parked session (#163).**
   A post-reset usage reading still clears the tank on the board, but on the
   watcher's path it no longer answers "this conversation moved", so the
   hand-over at `reset passed · unverified` is seen.
-- **The wake trace records the screen it typed into, and a menu is closed
-  first (#163).** The last 15 lines of the pane are written to the trace
-  before the nudge. A numbered menu with a cursor on it gets Escape before
-  typing; if it stays open, nothing is typed (Enter would pick an option) and
-  the waiter gives up visibly.
+- **The wake trace records what kind of screen it typed into, and a menu is
+  closed first (#163).** Before the nudge the trace gets the screen's class
+  (`prompt`, `menu(3 options, cursor on 1)`, `limit-text`, `unknown`) and a
+  short hash, never the text on it, and the trace is private (0600 in a
+  0700 directory). The screen counts as a menu only when it ends in one, so a
+  numbered list in the conversation above the prompt is not one. A menu gets
+  Escape before typing; if it stays open, nothing is typed (Enter would pick
+  an option) and the waiter gives up visibly. A picker with only its selected
+  row visible gets neither Escape nor the nudge.
 
 ## [0.42.0] — 2026-10-15
 
