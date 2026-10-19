@@ -22,6 +22,8 @@ _src_wake() {
   # shellcheck source=/dev/null
   . "$CLIKAE_TEST_ROOT/lib/core/limit.sh"
   # shellcheck source=/dev/null
+  . "$CLIKAE_TEST_ROOT/lib/core/live.sh"
+  # shellcheck source=/dev/null
   . "$CLIKAE_TEST_ROOT/lib/core/wake.sh"
   # Compress the production timings. The VALUES are asserted in wake.bats; here
   # we are testing the loop's shape, and an honest 60s buffer would just make
@@ -846,4 +848,246 @@ _phrase_minutes_ago() {
   [ "$status" -eq 0 ] || { echo "$output"; false; }
   [[ "$output" == *"resumed on its own"* ]] || { echo "$output"; false; }
   [ ! -f "$out" ] || { echo "typed anyway: $(cat "$out")"; false; }
+}
+
+# --- #162: the evidence is the PARKED SESSION's, not the tank's ---------------
+#
+# A usage limit hits the account, but the question the waiter asks is narrower:
+# "is THIS conversation still sitting on its limit". Every transcript on the
+# tank used to answer it — a background subagent's reply, or another session
+# working on the same tank, read as "the vendor resumed", and the session that
+# was actually parked was never nudged. The id clikae stamped at launch
+# (tmux_set_session_id) is what names the parked session's own jsonl.
+
+_LIMIT_LINE='{"type":"assistant","isApiErrorMessage":true,"message":{"model":"<synthetic>","content":[{"type":"text","text":"You have hit your session limit · %s"}]},"timestamp":"%s"}\n'
+_TURN_LINE='{"type":"assistant","message":{"model":"claude-opus","content":[{"type":"text","text":"Done."}]},"timestamp":"%s"}\n'
+
+# _parked_sid <tank> <sid> <phrase> <limit-stamp> -> the parked session's own
+# transcript, named by its id the way Claude Code names it; prints its path.
+_parked_sid() {
+  local proj="$CLIKAE_HOME/profiles/claude/$1/projects/p"
+  mkdir -p "$proj"
+  # shellcheck disable=SC2059  # the format IS the fixture
+  printf "$_LIMIT_LINE" "$3" "$4" > "$proj/$2.jsonl"
+  printf '%s' "$proj/$2.jsonl"
+}
+
+# _subagent_turn <tank> <sid> <stamp> -> a background subagent of that session
+# answering at <stamp>, where Claude Code keeps it (<sid>/subagents/*.jsonl).
+_subagent_turn() {
+  local d="$CLIKAE_HOME/profiles/claude/$1/projects/p/$2/subagents"
+  mkdir -p "$d"
+  # shellcheck disable=SC2059
+  printf "$_TURN_LINE" "$3" > "$d/agent-a1.jsonl"
+}
+
+@test "#162 sit: a subagent's reply after the parked session's limit is NOT 'the vendor resumed'" {
+  command -v tmux >/dev/null 2>&1 || skip "tmux not installed"
+  [ -z "${TMUX:-}" ] && [ -n "${TMUX_TMPDIR:-}" ] || { echo "not on the suite's own tmux server"; false; }
+  _src_wake
+  local tank sid; tank="$(_tankname)"; sid="11111111-1111-4111-8111-111111111111"
+  _parked_sid "$tank" "$sid" "resets 8:20pm (Asia/Tokyo)" "2026-09-16T13:37:00.000Z" >/dev/null
+  _subagent_turn "$tank" "$sid" "2026-09-16T13:40:00.000Z"
+  local out="$BATS_TEST_TMPDIR/typed"
+  tmux new-session -d -s "$(_sess)" "read -r line; printf '%s' \"\$line\" > '$out'; sleep 10"
+  tmux set-option -t "=$(_sess):" @clikae_session_id "$sid"
+  sleep 1
+  run wake_sit "$(_sess)" "$(date +%s)" claude "$tank"
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  [[ "$output" != *"resumed on its own"* ]] || { echo "$output"; false; }
+  sleep 1
+  [ "$(cat "$out" 2>/dev/null)" = "go" ] || { echo "not nudged: $output"; false; }
+}
+
+@test "#162 sit: another session's turn on the same tank does not skip the parked one either" {
+  command -v tmux >/dev/null 2>&1 || skip "tmux not installed"
+  _src_wake
+  local tank sid; tank="$(_tankname)"; sid="22222222-2222-4222-8222-222222222222"
+  _parked_sid "$tank" "$sid" "resets 8:20pm (Asia/Tokyo)" "2026-09-16T13:37:00.000Z" >/dev/null
+  # shellcheck disable=SC2059
+  printf "$_TURN_LINE" "2026-09-16T15:00:00.000Z" \
+    > "$CLIKAE_HOME/profiles/claude/$tank/projects/p/33333333-3333-4333-8333-333333333333.jsonl"
+  local out="$BATS_TEST_TMPDIR/typed"
+  tmux new-session -d -s "$(_sess)" "read -r line; printf '%s' \"\$line\" > '$out'; sleep 10"
+  tmux set-option -t "=$(_sess):" @clikae_session_id "$sid"
+  sleep 1
+  run wake_sit "$(_sess)" "$(date +%s)" claude "$tank"
+  [[ "$output" != *"resumed on its own"* ]] || { echo "$output"; false; }
+  sleep 1
+  [ "$(cat "$out" 2>/dev/null)" = "go" ] || { echo "not nudged: $output"; false; }
+}
+
+@test "#162 sit: the parked session's OWN continuation is still a skip (the scope's control)" {
+  # Without this, a scope that read nothing at all would pass the two above.
+  command -v tmux >/dev/null 2>&1 || skip "tmux not installed"
+  _src_wake
+  local tank sid; tank="$(_tankname)"; sid="44444444-4444-4444-8444-444444444444"
+  local tx; tx="$(_parked_sid "$tank" "$sid" "resets 8:20pm (Asia/Tokyo)" "2026-09-16T13:37:00.000Z")"
+  # shellcheck disable=SC2059
+  printf "$_TURN_LINE" "2026-09-16T15:00:40.000Z" >> "$tx"
+  local out="$BATS_TEST_TMPDIR/typed"
+  tmux new-session -d -s "$(_sess)" "read -r line; printf '%s' \"\$line\" > '$out'; sleep 10"
+  tmux set-option -t "=$(_sess):" @clikae_session_id "$sid"
+  sleep 1
+  run wake_sit "$(_sess)" "$(date +%s)" claude "$tank"
+  [[ "$output" == *"resumed on its own"* ]] || { echo "$output"; false; }
+  [ ! -f "$out" ] || { echo "typed anyway: $(cat "$out")"; false; }
+}
+
+@test "#162 watch: a subagent's later success still leaves the main session parked, so the watcher hands over" {
+  command -v tmux >/dev/null 2>&1 || skip "tmux not installed"
+  _src_wake
+  # shellcheck disable=SC2034  # read by the wake loop sourced above
+  WAKE_WATCH_INTERVAL=1
+  local phrase; phrase="$(_phrase_minutes_ago 10)" || skip "no named zone on this host"
+  local tank sid; tank="$(_tankname)"; sid="55555555-5555-4555-8555-555555555555"
+  local now; now="$(date -u '+%Y-%m-%dT%H:%M:%S')"
+  _parked_sid "$tank" "$sid" "$phrase" "$now.000Z" >/dev/null
+  _subagent_turn "$tank" "$sid" "$now.900Z"
+  local out="$BATS_TEST_TMPDIR/typed"
+  tmux new-session -d -s "$(_sess)" "read -r line; printf '%s' \"\$line\" > '$out'; sleep 60"
+  tmux set-option -t "=$(_sess):" @clikae_session_id "$sid"
+  sleep 1
+  wake_watch claude "$tank" "$(_sess)" >/dev/null &
+  local w=$! i
+  for ((i = 0; i < 20; i++)); do [ -s "$out" ] && break; sleep 1; done
+  { kill "$w"; wait "$w"; } 2>/dev/null || true
+  [ -s "$out" ] || { echo "nothing was typed within 20s: the watcher kept watching"; false; }
+  [ "$(cat "$out")" = "go" ]
+}
+
+@test "#163 watch: the watcher's own post-reset usage reading does not swallow 'parked'" {
+  # The watcher refreshes the usage cache every 300s (wake_usage_refresh). A
+  # reading taken after the reset instant is fine evidence that the ACCOUNT has
+  # fuel — and no evidence at all that this conversation moved. Read on the
+  # watcher's path it made _limit_tank_dry_self answer "not dry" before the
+  # hand-over (`reset passed · unverified`) could be seen.
+  command -v tmux >/dev/null 2>&1 || skip "tmux not installed"
+  _src_wake
+  # shellcheck disable=SC2034  # read by the wake loop sourced above
+  WAKE_WATCH_INTERVAL=1
+  local phrase; phrase="$(_phrase_minutes_ago 10)" || skip "no named zone on this host"
+  local tank sid; tank="$(_tankname)"; sid="66666666-6666-4666-8666-666666666666"
+  _parked_sid "$tank" "$sid" "$phrase" "$(date -u '+%Y-%m-%dT%H:%M:%S.000Z')" >/dev/null
+  mkdir -p "$CLIKAE_HOME/state/usage/claude"
+  printf '{"source":"vendor","window_pct":4,"weekly_pct":31,"cached_at":%s}\n' "$(date +%s)" \
+    > "$CLIKAE_HOME/state/usage/claude/$tank.json"
+  # The reading still counts where it was meant to: the board's question.
+  ! _limit_tank_dry_self claude "$tank" >/dev/null || { echo "precondition: the reading should clear the tank"; false; }
+  local out="$BATS_TEST_TMPDIR/typed"
+  tmux new-session -d -s "$(_sess)" "read -r line; printf '%s' \"\$line\" > '$out'; sleep 60"
+  tmux set-option -t "=$(_sess):" @clikae_session_id "$sid"
+  sleep 1
+  wake_watch claude "$tank" "$(_sess)" >/dev/null &
+  local w=$! i
+  for ((i = 0; i < 20; i++)); do [ -s "$out" ] && break; sleep 1; done
+  { kill "$w"; wait "$w"; } 2>/dev/null || true
+  [ -s "$out" ] || { echo "nothing was typed within 20s: the reading swallowed 'parked'"; false; }
+  [ "$(cat "$out")" = "go" ]
+}
+
+@test "#162 verify: a subagent's turn after the nudge is not the nudge landing" {
+  _src_wake
+  local tank sid s; tank="$(_tankname)"; sid="77777777-7777-4777-8777-777777777777"
+  s="$(_sess)"
+  mkdir -p "$HOME/.clikae/state"
+  printf '%s\n' "$sid" > "$HOME/.clikae/state/$s.session_id"
+  _parked_sid "$tank" "$sid" "resets 8:20pm (Asia/Tokyo)" "2026-09-16T13:37:00.000Z" >/dev/null
+  local sent; sent="$(( $(date +%s) - 5 ))"
+  _subagent_turn "$tank" "$sid" "$(date -u '+%Y-%m-%dT%H:%M:%S.000Z')"
+  run wake_turn_since claude "$tank" "$sent" "$s"
+  [ "$status" -eq 1 ] || { echo "rc=$status out=$output"; false; }
+}
+
+# --- #163: what was on the screen, and a menu that would eat the nudge --------
+
+@test "#163 trace: the screen at send time is written down before typing" {
+  command -v tmux >/dev/null 2>&1 || skip "tmux not installed"
+  _src_wake
+  wake_tank_recovered() { return 1; }
+  local tank; tank="$(_tankname)"
+  local out="$BATS_TEST_TMPDIR/typed"
+  tmux new-session -d -s "$(_sess)" "printf 'banner-one\nbanner-two\n'; read -r line; printf '%s' \"\$line\" > '$out'; sleep 10"
+  sleep 1
+  run wake_sit "$(_sess)" "$(date +%s)" claude "$tank"
+  local log="$CLIKAE_HOME/state/wake/claude-$tank.log"
+  grep $'\tscreen\t' "$log" | grep -q 'banner-one.*banner-two' || { cat "$log"; false; }
+  # Written BEFORE the keystroke: the screen line precedes `typed`.
+  [ "$(grep -n $'\tscreen\t' "$log" | head -1 | cut -d: -f1)" -lt \
+    "$(grep -n $'\ttyped\t' "$log" | head -1 | cut -d: -f1)" ] || { cat "$log"; false; }
+  # A plain screen is not a menu: nothing but the nudge was typed.
+  sleep 1
+  [ "$(cat "$out")" = "go" ]
+}
+
+# _menu_pane <out> <closes:1|0> -> a pane that shows a numbered menu with a
+# cursor, the shape Claude Code draws at a limit. With closes=1 an Escape
+# dismisses it back to a prompt that takes a line; otherwise every key is
+# recorded and the menu stays.
+_menu_pane() {
+  local f="$BATS_TEST_TMPDIR/menu.sh"
+  {
+    printf '#!/bin/bash\nout=%q; closes=%q\n' "$1" "$2"
+    cat <<'SH'
+printf ' What do you want to do?\n\n ❯ 1. Stop and wait for limit to reset\n   2. Switch to extra usage\n   3. Upgrade your plan\n'
+while IFS= read -rsn1 k; do
+  if [ "$closes" = 1 ] && [ "$k" = $'\e' ]; then
+    clear; printf '> '
+    IFS= read -r line; printf 'ESC+%s' "$line" > "$out"; sleep 30; exit 0
+  fi
+  printf 'KEY:%q\n' "$k" >> "$out"
+done
+SH
+  } > "$f"
+  chmod +x "$f"
+  printf '%s' "$f"
+}
+
+@test "#163 modal: a menu on screen is dismissed with Escape BEFORE the nudge is typed" {
+  command -v tmux >/dev/null 2>&1 || skip "tmux not installed"
+  _src_wake
+  wake_tank_recovered() { return 1; }
+  local tank; tank="$(_tankname)"
+  local out="$BATS_TEST_TMPDIR/typed"
+  tmux new-session -d -s "$(_sess)" "$(_menu_pane "$out" 1)"
+  sleep 1
+  run wake_sit "$(_sess)" "$(date +%s)" claude "$tank"
+  sleep 1
+  [ "$(cat "$out" 2>/dev/null)" = "ESC+go" ] || { echo "pane got: $(cat "$out" 2>/dev/null) / $output"; false; }
+  grep -q $'\tmodal\t' "$CLIKAE_HOME/state/wake/claude-$tank.log" \
+    || { cat "$CLIKAE_HOME/state/wake/claude-$tank.log"; false; }
+}
+
+@test "#163 modal: a menu that will not close is never typed into" {
+  # Enter on a menu picks its highlighted option, and at a limit one of the
+  # options can be "switch to extra usage". If Escape did not close it, the
+  # only safe nudge is none.
+  command -v tmux >/dev/null 2>&1 || skip "tmux not installed"
+  _src_wake
+  wake_tank_recovered() { return 1; }
+  local tank; tank="$(_tankname)"
+  local out="$BATS_TEST_TMPDIR/typed"
+  tmux new-session -d -s "$(_sess)" "$(_menu_pane "$out" 0)"
+  sleep 1
+  run wake_sit "$(_sess)" "$(date +%s)" claude "$tank"
+  [ "$status" -ne 0 ] || { echo "$output"; false; }
+  [[ "$output" == *"gave up"* ]] || { echo "$output"; false; }
+  sleep 1
+  # Escape reached the menu, and nothing else did — not "go", not Enter.
+  [ -f "$out" ] || { echo "not even Escape reached the pane"; false; }
+  [ -z "$(grep -v -F "KEY:\$'\\E'" "$out")" ] || { echo "typed into the menu: $(cat "$out")"; false; }
+  grep -q 'menu' "$CLIKAE_HOME/state/wake/claude-$tank.log"
+}
+
+@test "#163 modal: the menu shape is a cursor on a numbered option plus another option" {
+  _src_wake
+  wake_screen_menu $' What now?\n ❯ 1. Stop and wait\n   2. Switch to extra usage' || false
+  wake_screen_menu $'  > 1. Yes\n    2. No' || false
+  wake_screen_menu $'│ ❯ 1. Yes │\n│   2. No  │' || false
+  # A numbered list in the conversation, with no cursor on it, is not a menu.
+  ! wake_screen_menu $' 1. first step\n 2. second step\n\n❯ ' || false
+  # The bare prompt is not a menu.
+  ! wake_screen_menu $'────\n❯ \n────' || false
+  # One option is not a choice.
+  ! wake_screen_menu $' ❯ 1. Continue' || false
 }

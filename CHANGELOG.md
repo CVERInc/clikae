@@ -7,6 +7,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **Waking a limited session reads that session, not the whole tank (#162).**
+  The watcher's "is it parked?", the waiter's "did the vendor already
+  continue it?" and the post-nudge "did it land?" now read the parked
+  session's own transcript (the id clikae stamps at launch). A background
+  subagent's reply, or another session on the same tank, no longer makes the
+  watcher miss the limit or the waiter skip the nudge. With no stamped id the
+  read is the whole tank, as before.
+- **The watcher's own usage refresh no longer hides a parked session (#163).**
+  A post-reset usage reading still clears the tank on the board, but on the
+  watcher's path it no longer answers "this conversation moved", so the
+  hand-over at `reset passed · unverified` is seen.
+- **The wake trace records the screen it typed into, and a menu is closed
+  first (#163).** The last 15 lines of the pane are written to the trace
+  before the nudge. A numbered menu with a cursor on it gets Escape before
+  typing; if it stays open, nothing is typed (Enter would pick an option) and
+  the waiter gives up visibly.
+
 ## [0.42.0] — 2026-10-15
 
 ### Fixed

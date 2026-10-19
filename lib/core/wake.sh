@@ -178,17 +178,76 @@ wake_ident() {
   esac
 }
 
-# wake_tank_recovered <engine> <tank> -> 0 when the transcript carries POSITIVE
-# evidence that this account already came back: a successful turn, or the
-# vendor's own `auto-continuation` line, newer than the newest limit.
+# --- whose evidence: the parked session's (#162) ------------------------------
+#
+# 🔴 A usage limit hits the ACCOUNT, but every question this file asks of a
+# transcript is about ONE conversation: is it still sitting on its limit, did
+# the vendor continue it, did the nudge land. All three used to be answered by
+# the newest line across EVERY transcript on the tank — `subagents/*.jsonl`
+# and other sessions included — so a background subagent replying after the
+# main session's limit made the watcher never see the tank dry, and made the
+# waiter take it for "the vendor already resumed" and skip the nudge. The same
+# shape, one layer over: the usage reading the watcher writes itself every
+# WAKE_USAGE_INTERVAL is ACCOUNT evidence, and it too was answering for the
+# conversation (#163's note; see _limit_parked_is in limit.sh).
+#
+# _wake_scopev <engine> <tank> <session> -> set the three `_LIMIT_PARKED_*`
+# variables limit.sh reads. Callers declare them `local` first, so the scope
+# lives exactly as long as the question and never leaks into a board render.
+#   _LIMIT_PARKED_TANK   always "<engine>/<tank>": the question is about a
+#                        parked session, so account readings do not count
+#   _LIMIT_PARKED_DIR /  the tank dir and that session's own jsonl, when the
+#   _LIMIT_PARKED_FILES  id clikae stamped at launch (tmux_set_session_id,
+#                        read back by live_session_id) names a transcript
+#                        touched inside the 5h window
+# No stamped id, or its transcript is not in the window (an engine with no
+# launch id, a waiter from an older binary, a conversation the person
+# replaced with /clear): the files stay empty and the read is the whole tank,
+# as before. Degrading to the old answer, never to silence — a scope that
+# found nothing must not become "never parked".
+_wake_scopev() {
+  local engine="$1" tank="$2" session="$3" sid dir
+  _LIMIT_PARKED_TANK="$engine/$tank"; _LIMIT_PARKED_DIR=""; _LIMIT_PARKED_FILES=""
+  [ "$engine" = "claude" ] && [ -n "$tank" ] && [ -n "$session" ] || return 0
+  declare -F live_session_id >/dev/null 2>&1 || return 0
+  declare -F profile_dir >/dev/null 2>&1 || return 0
+  sid="$(live_session_id "${session%%:*}" 2>/dev/null)" || return 0
+  case "$sid" in ''|*[!A-Za-z0-9_-]*) return 0 ;; esac
+  dir="$(profile_dir "$engine" "$tank" 2>/dev/null)" || return 0
+  [ -n "$dir" ] && [ -d "$dir/projects" ] || return 0
+  _LIMIT_PARKED_FILES="$(find "$dir/projects" -mindepth 2 -maxdepth 2 \
+    -name "$sid.jsonl" -mmin -300 2>/dev/null)"
+  [ -n "$_LIMIT_PARKED_FILES" ] && _LIMIT_PARKED_DIR="$dir"
+  return 0
+}
+
+# wake_evidence_label <engine> <tank> <session> -> which transcripts the
+# questions above will read, for the trace: "session <id8>" or "whole tank".
+wake_evidence_label() {
+  local _LIMIT_PARKED_TANK _LIMIT_PARKED_DIR _LIMIT_PARKED_FILES f
+  _wake_scopev "$1" "$2" "$3"
+  if [ -n "$_LIMIT_PARKED_FILES" ]; then
+    f="${_LIMIT_PARKED_FILES##*/}"
+    printf 'session %s' "$(printf '%s' "${f%.jsonl}" | cut -c1-8)"
+  else
+    printf 'whole tank'
+  fi
+}
+
+# wake_tank_recovered <engine> <tank> [session] -> 0 when the transcript carries
+# POSITIVE evidence that this conversation already came back: a successful
+# turn, or the vendor's own `auto-continuation` line, newer than the newest
+# limit. With a session, only that session's transcript is read (#162).
 #
 # 🔴 Only rc=2 counts. limit_profile_dry's rc=1 means "found nothing", which is
 # also what a tank whose transcripts fell out of the 5h window looks like — and
 # that is precisely the case the nudge exists for. Treating "no evidence" as
 # "recovered" would turn this guard into the silence it was added to remove.
 wake_tank_recovered() {
-  local engine="$1" tank="$2" dir rc=0
+  local engine="$1" tank="$2" session="${3:-}" dir rc=0
   [ -n "$engine" ] && [ -n "$tank" ] || return 1
+  local _LIMIT_PARKED_TANK _LIMIT_PARKED_DIR _LIMIT_PARKED_FILES
+  _wake_scopev "$engine" "$tank" "$session"
   declare -F limit_profile_dry >/dev/null 2>&1 || return 1
   declare -F profile_dir >/dev/null 2>&1 || return 1
   dir="$(profile_dir "$engine" "$tank" 2>/dev/null)" || return 1
@@ -321,6 +380,60 @@ wake_send() {
   return 0
 }
 
+# --- what was on the screen when it typed (#163) -----------------------------
+#
+# wake_pane_idle deliberately never reads the screen's CONTENT, and that rule
+# stands for deciding whether to type. But it left the trace saying `typed`
+# with nothing to check it against: when Claude Code shows a menu at the
+# limit, "go" is swallowed and Enter picks the highlighted option, and the
+# record of that night reads exactly like a nudge that worked. So the screen
+# is now WRITTEN DOWN at send time — evidence, not a gate — and one shape is
+# acted on: a numbered menu with a cursor on it, which is a mechanism (a
+# picker that takes Enter) rather than vendor copy, and which Escape closes.
+
+# WAKE_SCREEN_LINES — how much of the bottom of the pane the trace keeps. A
+# limit menu, its question and the prompt box fit in well under this; the
+# conversation above it is not this record's business.
+WAKE_SCREEN_LINES=15
+# WAKE_MODAL_SETTLE — seconds between Escape and the look that asks whether
+# the menu closed. A redraw lands in milliseconds; one second is generous.
+WAKE_MODAL_SETTLE=1
+
+# wake_screen <target> -> the last WAKE_SCREEN_LINES lines of the pane, with
+# the blank rows tmux pads a short screen with dropped from the bottom.
+wake_screen() {
+  local _WT_SESS _WT_PANE; _wake_targetsv "$1"
+  tmux capture-pane -p -t "$_WT_PANE" 2>/dev/null \
+    | awk -v n="$WAKE_SCREEN_LINES" '{ l[NR] = $0; if ($0 ~ /[^ \t]/) last = NR }
+           END { for (i = (last > n ? last - n + 1 : 1); i <= last; i++) print l[i] }'
+}
+
+# wake_escape <target> -> press Escape in the pane (the one key, besides the
+# nudge itself, this file ever sends).
+wake_escape() {
+  local _WT_SESS _WT_PANE; _wake_targetsv "$1"
+  tmux send-keys -t "$_WT_PANE" Escape 2>/dev/null
+}
+
+# wake_screen_oneline <text> -> the screen as ONE trace field: the trace is a
+# tab-separated line per event, so rows are joined with " ⏎ " and tabs become
+# spaces.
+wake_screen_oneline() {
+  printf '%s\n' "$1" | tr '\t' ' ' | awk 'NR > 1 { printf " ⏎ " } { printf "%s", $0 }'
+}
+
+# wake_screen_menu <text> -> 0 when the text ends in a picker: a cursor glyph
+# on a numbered option, and at least one other numbered option. Box-drawing
+# borders are ignored. A numbered list with no cursor on it (the conversation)
+# and a bare prompt are not menus; neither is a single option.
+wake_screen_menu() {
+  printf '%s\n' "$1" | awk '
+    { l = $0; gsub(/│/, " ", l); sub(/^[ \t]+/, "", l); cur = 0
+      if (sub(/^(❯|›|>|▶)[ \t]*/, "", l)) cur = 1
+      if (l ~ /^[0-9]+[.)][ \t]+[^ \t]/) { n++; if (cur) c++ } }
+    END { exit !(c >= 1 && n >= 2) }'
+}
+
 # wake_turn_since <engine> <tank> <epoch> -> what the transcript says happened
 # AFTER <epoch>: echoes `confirmed` (a real turn, or the vendor's own
 # auto-continuation, is the newest event) or `refused` (a genuine limit line is
@@ -328,27 +441,28 @@ wake_send() {
 # transcript this can read for that tank (unknown tank, an engine whose limit
 # never lands in a file here, no projects dir) — "cannot tell", not "no".
 #
-# Reads the same readings wake_tank_recovered does (the tank's transcripts
-# touched in the 5h window, folded by _limit_claude_readings), because that is
-# the association the waiter already has between itself and a conversation.
-# 🔴 That is the WHOLE TANK, not the parked session: a subagent's or another
-# session's turn on the same tank can read as `confirmed`. #162 narrows both
-# callers to the parked session's own jsonl; this deliberately does not fork a
-# second notion of "which transcript" in the meantime.
+# Reads the same transcripts wake_tank_recovered does, through the same
+# _wake_scopev: the parked session's own jsonl when its id is known, the whole
+# tank (touched in the 5h window) otherwise. One notion of "which transcript"
+# for all three questions — a subagent's turn landing after the send is not
+# the nudge landing (#162).
 #
 # Stamps are compared as epochs, `>=` the send second: the send instant is
 # floored to a whole second, and a refusal can land inside that same second.
 # Nothing older can: the limit that parked the session is hours old, and a
 # previous attempt's refusal is a whole WAKE_RETRY_BACKOFF behind.
 wake_turn_since() {
-  local engine="$1" tank="$2" since="$3" dir files out maxL maxS reset s=0 l=0
+  local engine="$1" tank="$2" since="$3" session="${4:-}" dir files out maxL maxS reset s=0 l=0
   [ "$engine" = "claude" ] && [ -n "$tank" ] || return 3
   case "$since" in ''|*[!0-9]*) return 3 ;; esac
   declare -F profile_dir >/dev/null 2>&1 || return 3
   declare -F _limit_claude_readings >/dev/null 2>&1 || return 3
   dir="$(profile_dir "$engine" "$tank" 2>/dev/null)" || return 3
   [ -n "$dir" ] && [ -d "$dir/projects" ] || return 3
-  files="$(find "$dir/projects" -name '*.jsonl' -mmin -300 2>/dev/null)"
+  local _LIMIT_PARKED_TANK _LIMIT_PARKED_DIR _LIMIT_PARKED_FILES
+  _wake_scopev "$engine" "$tank" "$session"
+  files="$_LIMIT_PARKED_FILES"
+  [ -n "$files" ] || files="$(find "$dir/projects" -name '*.jsonl' -mmin -300 2>/dev/null)"
   [ -n "$files" ] || return 1
   out="$(_limit_claude_readings "$files")"
   local maxM _tag
@@ -372,14 +486,14 @@ EOF
   return 1
 }
 
-# wake_verify <engine> <tank> <sent-epoch> -> echo the nudge's outcome:
+# wake_verify <engine> <tank> <sent-epoch> [session] -> echo the nudge's outcome:
 # confirmed | refused | no-effect | unverified. Always rc 0; the word is the
 # answer. Polls wake_turn_since every WAKE_VERIFY_INTERVAL for at most
 # WAKE_VERIFY_SECONDS, and returns the moment the transcript answers.
 wake_verify() {
-  local engine="$1" tank="$2" sent="$3" waited=0 v rc
+  local engine="$1" tank="$2" sent="$3" session="${4:-}" waited=0 v rc
   while :; do
-    rc=0; v="$(wake_turn_since "$engine" "$tank" "$sent")" || rc=$?
+    rc=0; v="$(wake_turn_since "$engine" "$tank" "$sent" "$session")" || rc=$?
     case "$rc" in
       0) printf '%s' "$v"; return 0 ;;
       3) printf 'unverified'; return 0 ;;
@@ -493,9 +607,9 @@ wake_sit() {
   local attempt=0 now left
   # Why the next retry is being spent. Reset each pass, so a pass that finds no
   # pane after an earlier refusal reports the pane, not the stale refusal.
-  local _no_pane="no live pane to type into" _reason
+  local _no_pane="no live pane to type into" _reason _menu=0
   wake_trace "$engine" "$tank" "$session" "attached" \
-    "reset $(wake_stamp "$reset") +${WAKE_BUFFER_SECONDS}s"
+    "reset $(wake_stamp "$reset") +${WAKE_BUFFER_SECONDS}s · evidence: $(wake_evidence_label "$engine" "$tank" "$session")"
 
   while :; do
     # Two different endings, and they are not the same event.
@@ -531,7 +645,7 @@ wake_sit() {
     # (1) The vendor may have continued by itself while we counted down. Asked
     # here, at the last possible moment, because the answer only becomes true in
     # the minute we are about to act in.
-    if wake_tank_recovered "$engine" "$tank"; then
+    if wake_tank_recovered "$engine" "$tank" "$session"; then
       printf '\r\033[K'
       wake_trace "$engine" "$tank" "$session" "skipped" "vendor auto-continued; nothing typed"
       log_done "$(printf '%s — %s/%s resumed on its own; nothing sent.' "$session" "$engine" "$tank")"
@@ -541,19 +655,36 @@ wake_sit() {
     # Target the ENGINE window, not whatever window is focused — the waiter's own
     # `wake` window may be the active one (the user was told to watch it here).
     local _etgt; _etgt="$(wake_engine_target "$session")"
-    _reason="$_no_pane"
+    _reason="$_no_pane"; _menu=0
     # (2) Something to type into. Not waivable, and the only thing the retries
     # below are still for.
     if wake_pane_live "$_etgt"; then
       # (3) Settle — and only a settle. wake_pane_idle sleeps for the settle
       # window either way; its VERDICT is now a note in the trace rather than a
       # gate, because a dry tank cannot be mid-turn (see its header).
-      local _bypassed=0 _sent
+      local _bypassed=0 _sent _scr
       wake_pane_idle "$_etgt" 2 || _bypassed=1
+      # (3b) #163: a menu takes Enter as "pick the highlighted option", so the
+      # nudge would choose for the person instead of continuing. Escape first,
+      # look again, and if the menu is still there type NOTHING — this spends
+      # a retry like a missing pane does, and gives up visibly in the end.
+      _scr="$(wake_screen "$_etgt")"
+      if wake_screen_menu "$_scr"; then
+        wake_trace "$engine" "$tank" "$session" "modal" \
+          "a menu was on screen; Escape sent before typing: $(wake_screen_oneline "$_scr")"
+        wake_escape "$_etgt" || true
+        sleep "$WAKE_MODAL_SETTLE"
+        _scr="$(wake_screen "$_etgt")"
+        wake_screen_menu "$_scr" && _menu=1
+      fi
+      # The screen the nudge is typed into (or refused over), written down
+      # BEFORE the keystrokes so the trace can be read against it.
+      wake_trace "$engine" "$tank" "$session" "screen" "$(wake_screen_oneline "$_scr")"
+      [ "$_menu" = 1 ] && _reason="a menu stayed on screen after Escape; nothing typed into it"
       # Taken BEFORE the keystrokes: an answer to the nudge can only be newer
       # than this, and a refusal lands within a second of it.
       _sent="$(date +%s)"
-      if wake_send "$_etgt"; then
+      if [ "$_menu" = 0 ] && wake_send "$_etgt"; then
         # The countdown line is overwritten in place, so clear it first and then
         # let the badge speak: sending the nudge changed something, which is the
         # question `[ DONE ]` answers.
@@ -569,7 +700,7 @@ wake_sit() {
         fi
         # (4) Did it land? `typed` is what we did; this is what it caused.
         local _verdict
-        _verdict="$(wake_verify "$engine" "$tank" "$_sent")"
+        _verdict="$(wake_verify "$engine" "$tank" "$_sent" "$session")"
         case "$_verdict" in
           confirmed)
             wake_trace "$engine" "$tank" "$session" "confirmed" \
@@ -610,6 +741,11 @@ wake_sit() {
           "no live pane after $attempt attempt(s); nothing sent"
         printf '   The pane was not there to type into (the engine exited, or it died).\n'
         printf '   Nothing was sent. Attach and continue by hand.\n'
+      elif [ "$_menu" = 1 ]; then
+        wake_trace "$engine" "$tank" "$session" "gave-up" \
+          "a menu stayed on screen after Escape, $attempt attempt(s); nothing sent"
+        printf '   A menu was on screen and Escape did not close it; Enter would have picked an option.\n'
+        printf '   Nothing was sent. Attach and choose by hand.\n'
       else
         wake_trace "$engine" "$tank" "$session" "gave-up" \
           "last nudge refused after $attempt attempt(s)"
@@ -924,6 +1060,12 @@ wake_watch() {
     # This window is attached for either feature now (switch.sh). One opened
     # ONLY for the warm /compact (wake was not on at launch) leaves the limit
     # half alone until waking is what the person asked for.
+    # #162/#163: the question below is "is MY session parked", so it reads
+    # this session's own transcript and ignores account-level readings
+    # (_wake_scopev). Re-resolved every pass: the transcript enters the 5h
+    # window when it is written, not when the watcher started.
+    local _LIMIT_PARKED_TANK _LIMIT_PARKED_DIR _LIMIT_PARKED_FILES
+    _wake_scopev "$engine" "$tank" "$session"
     if [ "${CLIKAE_WATCH_COMPACT_ONLY:-}" = 1 ] && ! wake_enabled; then
       :
     elif reset="$(limit_tank_dry "$engine" "$tank" 2>/dev/null)"; then
