@@ -158,14 +158,22 @@ case "${1:-}/${2:-}" in
     # #166: the issue-comments fallback _wg_latest_actor takes when the
     # timeline page carries no actor at all. $dir/comments.<repo>.<number>.json
     # is the raw array; absent -> `[]`. Records the `since=` it was sent.
+    # Multi-page (#183 round 2): comments.<repo>.<number>.page<N>.json is
+    # page N's body and comments.<repo>.<number>.last the rel="last" page
+    # number advertised on page 1, exactly like the timeline stub.
     path="$2"
     repo="$(printf '%s' "$path" | cut -d/ -f3)"
     number="$(printf '%s' "$path" | cut -d/ -f5)"
     shift 2
     since=""
+    page=1
     while [ $# -gt 0 ]; do
       case "$1" in
-        -f) shift; case "${1:-}" in since=*) since="${1#since=}" ;; esac ;;
+        -f) shift
+            case "${1:-}" in
+              since=*) since="${1#since=}" ;;
+              page=*)  page="${1#page=}" ;;
+            esac ;;
       esac
       shift
     done
@@ -175,10 +183,19 @@ case "${1:-}/${2:-}" in
     n=$((n + 1))
     printf '%s' "$n" > "$cf"
     printf '%s\n' "$since" > "$dir/comments.$repo.$number.$n.sent_since"
+    printf '%s\n' "$page" > "$dir/comments.$repo.$number.$n.sent_page"
+    last=1
+    [ -f "$dir/comments.$repo.$number.last" ] && last="$(cat "$dir/comments.$repo.$number.last")"
     printf 'HTTP/2.0 200 OK\r\n'
     printf 'x-ratelimit-remaining: 5000\r\n'
+    if [ "$page" = "1" ] && [ "$last" != "1" ]; then
+      printf 'link: <https://api.github.com/repositories/1/issues/%s/comments?per_page=100&page=2>; rel="next", <https://api.github.com/repositories/1/issues/%s/comments?per_page=100&page=%s>; rel="last"\r\n' \
+        "$number" "$number" "$last"
+    fi
     printf '\r\n'
-    if [ -f "$dir/comments.$repo.$number.json" ]; then
+    if [ -f "$dir/comments.$repo.$number.page$page.json" ]; then
+      cat "$dir/comments.$repo.$number.page$page.json"
+    elif [ "$page" = "1" ] && [ -f "$dir/comments.$repo.$number.json" ]; then
       cat "$dir/comments.$repo.$number.json"
     else
       printf '[]\n'
@@ -342,14 +359,22 @@ case "${1:-}/${2:-}" in
     # #166: the issue-comments fallback _wg_latest_actor takes when the
     # timeline page carries no actor at all. $dir/comments.<repo>.<number>.json
     # is the raw array; absent -> `[]`. Records the `since=` it was sent.
+    # Multi-page (#183 round 2): comments.<repo>.<number>.page<N>.json is
+    # page N's body and comments.<repo>.<number>.last the rel="last" page
+    # number advertised on page 1, exactly like the timeline stub.
     path="$2"
     repo="$(printf '%s' "$path" | cut -d/ -f3)"
     number="$(printf '%s' "$path" | cut -d/ -f5)"
     shift 2
     since=""
+    page=1
     while [ $# -gt 0 ]; do
       case "$1" in
-        -f) shift; case "${1:-}" in since=*) since="${1#since=}" ;; esac ;;
+        -f) shift
+            case "${1:-}" in
+              since=*) since="${1#since=}" ;;
+              page=*)  page="${1#page=}" ;;
+            esac ;;
       esac
       shift
     done
@@ -359,10 +384,19 @@ case "${1:-}/${2:-}" in
     n=$((n + 1))
     printf '%s' "$n" > "$cf"
     printf '%s\n' "$since" > "$dir/comments.$repo.$number.$n.sent_since"
+    printf '%s\n' "$page" > "$dir/comments.$repo.$number.$n.sent_page"
+    last=1
+    [ -f "$dir/comments.$repo.$number.last" ] && last="$(cat "$dir/comments.$repo.$number.last")"
     printf 'HTTP/2.0 200 OK\r\n'
     printf 'x-ratelimit-remaining: 5000\r\n'
+    if [ "$page" = "1" ] && [ "$last" != "1" ]; then
+      printf 'link: <https://api.github.com/repositories/1/issues/%s/comments?per_page=100&page=2>; rel="next", <https://api.github.com/repositories/1/issues/%s/comments?per_page=100&page=%s>; rel="last"\r\n' \
+        "$number" "$number" "$last"
+    fi
     printf '\r\n'
-    if [ -f "$dir/comments.$repo.$number.json" ]; then
+    if [ -f "$dir/comments.$repo.$number.page$page.json" ]; then
+      cat "$dir/comments.$repo.$number.page$page.json"
+    elif [ "$page" = "1" ] && [ -f "$dir/comments.$repo.$number.json" ]; then
       cat "$dir/comments.$repo.$number.json"
     else
       printf '[]\n'
@@ -2901,4 +2935,30 @@ _hb() { printf '%s/state/watch-github/CVERInc.heartbeat.json' "$CLIKAE_HOME"; }
   [ "$(cat "$GH_STUB_DIR/comments.reef.100.1.sent_since")" = "2026-09-07T04:00:00Z" ]
   local events="$CLIKAE_HOME/logs/watch-github-CVERInc/events.jsonl"
   [[ "$(tail -n1 "$events")" == *'"body":"from the comments endpoint"'* ]] || false
+}
+
+@test "watch github --once: the comments fallback follows pagination to the NEWEST comment — >100 since the cursor, the 100th mine, the newest a collaborator's (#183 round 2)" {
+  _gh_stub_install
+  _gh_stub_page org 1 \
+    "$(_row 100 2026-09-07T04:00:00Z alice reef https://x/100 0 "First issue")"
+  run clikae watch github --org CVERInc --once
+  _gh_stub_timeline_page reef 100 1 \
+    '[{"event":"committed","sha":"abc","author":{"name":"n","email":"e"}}]'
+  # Page 1: 100 comments, ascending, the last of them by me (self).
+  local p1="[" i
+  for i in $(seq 1 99); do p1="$p1{\"user\":{\"login\":\"bob\"},\"body\":\"old $i\"},"; done
+  p1="$p1{\"user\":{\"login\":\"me\"},\"body\":\"my own reply\"}]"
+  printf '%s\n' "$p1" > "$GH_STUB_DIR/comments.reef.100.page1.json"
+  printf '%s\n' '[{"user":{"login":"carol"},"body":"the newest word, from a collaborator"}]' \
+    > "$GH_STUB_DIR/comments.reef.100.page2.json"
+  printf '2\n' > "$GH_STUB_DIR/comments.reef.100.last"
+  _gh_stub_page org 2 \
+    "$(_row 100 2026-09-07T09:00:00Z alice reef https://x/100 0 "First issue")"
+  run clikae watch github --org CVERInc --once
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"#100 comment by carol: First issue"* ]] || false
+  [ "$(cat "$GH_STUB_DIR/comments.reef.100.2.sent_page")" = "2" ]
+  [ "$(cat "$GH_STUB_DIR/comments.reef.100.2.sent_since")" = "2026-09-07T04:00:00Z" ]
+  local events="$CLIKAE_HOME/logs/watch-github-CVERInc/events.jsonl"
+  [[ "$(tail -n1 "$events")" == *'"body":"the newest word, from a collaborator"'* ]] || false
 }

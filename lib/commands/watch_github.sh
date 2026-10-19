@@ -645,17 +645,33 @@ _wg_latest_actor() {
 # $__WG_LOOKUP_KIND (`comment`) / $__WG_LOOKUP_BODY from the NEWEST issue
 # comment since $__WG_SINCE (this poll's cursor); 1 if there is none or the
 # call failed. `issues/<n>/comments` lists ascending and honours `since`, so
-# one page's last element is the newest comment this poll could be about.
+# the LAST page's last element is the newest comment this poll could be
+# about. #183 round 2: with more than 100 comments since the cursor, page 1's
+# last element is merely the 100th — attributing the update to whoever wrote
+# that one (self → silently dropped as our own) — so page 1's `Link:
+# rel="last"` is followed exactly as _wg_latest_actor does for the timeline.
 # Review comments and reviews are not here (that is what the timeline is
 # for); this answers the question the timeline could not.
 _wg_comments_fallback() {
-  local org="$1" repo="$2" number="$3" errfile raw rc body events last actor evbody us
+  local org="$1" repo="$2" number="$3" errfile raw rc body events last actor evbody us last_page
   errfile="$(mktemp "${TMPDIR:-/tmp}/clikae-watch-github.XXXXXX")"
   raw="$(gh api "repos/$org/$repo/issues/$number/comments" --method GET \
-    -f per_page=100 ${__WG_SINCE:+-f "since=$__WG_SINCE"} -i 2>"$errfile")"
+    -f per_page=100 -f page=1 ${__WG_SINCE:+-f "since=$__WG_SINCE"} -i 2>"$errfile")"
   rc=$?
   rm -f "$errfile"
   [ "$rc" -eq 0 ] || return 1
+  # Same rel="last" isolation as the timeline lookup: never misread the
+  # `per_page=100` in the URL as a page number.
+  last_page="$(printf '%s\n' "$raw" | grep -iE '^link:' | head -n1 \
+    | grep -oE '<[^>]*>; *rel="last"' | grep -oE '[?&]page=[0-9]+' | head -n1 | grep -oE '[0-9]+$')"
+  if [ -n "$last_page" ] && [ "$last_page" != "1" ]; then
+    errfile="$(mktemp "${TMPDIR:-/tmp}/clikae-watch-github.XXXXXX")"
+    raw="$(gh api "repos/$org/$repo/issues/$number/comments" --method GET \
+      -f per_page=100 -f page="$last_page" ${__WG_SINCE:+-f "since=$__WG_SINCE"} -i 2>"$errfile")"
+    rc=$?
+    rm -f "$errfile"
+    [ "$rc" -eq 0 ] || return 1
+  fi
   body="$(printf '%s\n' "$raw" | awk 'f{print} /^\r?$/{f=1}')"
   body="$(printf '%s' "$body" | tr -d '\n')"
   [ -n "$body" ] || return 1
