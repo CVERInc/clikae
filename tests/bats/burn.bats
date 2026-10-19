@@ -3385,13 +3385,16 @@ STUB
   export STUB_STDERR81
   STUB_STDERR81="$(awk -F '\t' '/^1789200000\tERROR:/ {print $2}' "$CLIKAE_TEST_ROOT/tests/fixtures/limit-reset-phrases.tsv")"
   clikae init codex T1
-  run clikae burn codex T1 --json --no-reroute --artifact "$BATS_TEST_TMPDIR/out" --prompt x
+  # --wait-for-reset 0: this is about classifying the dry, not #178's
+  # default wait-and-re-fire (whose past-reset re-fire would run it twice).
+  run clikae burn codex T1 --json --no-reroute --wait-for-reset 0 --artifact "$BATS_TEST_TMPDIR/out" --prompt x
   [ "$status" -ne 0 ]
   [[ "$output" == *'"reason":"tank ran dry and --no-reroute is set"'* ]] || false
   [[ "$output" == *'"reset":"try again at Sep 13th, 2026 2:13 AM"'* ]] || false
   [[ "$output" != *'no fresh artifact and no limit'* ]] || false
-  [[ "$output" == *'Dry, and --no-reroute is set. Stopping.'* ]] || false
-  [ ! -e "$BATS_TEST_TMPDIR/out" ]
+  [[ "$output" == *'Dry, and --no-reroute is set. Stopping (dry-paused).'* ]] || false
+  # Nothing from the engine: at most #178's one-line pause note.
+  [ ! -e "$BATS_TEST_TMPDIR/out" ] || [[ "$(cat "$BATS_TEST_TMPDIR/out")" == "clikae burn: dry-paused"* ]] || false
   local reset
   reset="$(cut -f2 "$CLIKAE_HOME/dry/codex/T1")"
   [ "$reset" = "try again at Sep 13th, 2026 2:13 AM" ]
@@ -3483,12 +3486,14 @@ exit 0
 STUB
   chmod +x "$BATS_TEST_TMPDIR/bin/codex"
   clikae init codex T1
-  run clikae burn codex T1 --json --no-reroute --artifact "$BATS_TEST_TMPDIR/out" --prompt x
+  # --wait-for-reset 0: classification only, not #178's wait-and-re-fire.
+  run clikae burn codex T1 --json --no-reroute --wait-for-reset 0 --artifact "$BATS_TEST_TMPDIR/out" --prompt x
   [ "$status" -ne 0 ]
   [[ "$output" == *'"reason":"tank ran dry and --no-reroute is set"'* ]] || false
   [[ "$output" == *'"reset":"try again at Sep 13th, 2026 2:13 AM"'* ]] || false
   [[ "$output" != *'no fresh artifact and no limit'* ]] || false
-  [ ! -e "$BATS_TEST_TMPDIR/out" ]
+  # Nothing from the engine: at most #178's one-line pause note.
+  [ ! -e "$BATS_TEST_TMPDIR/out" ] || [[ "$(cat "$BATS_TEST_TMPDIR/out")" == "clikae burn: dry-paused"* ]] || false
   local reset
   reset="$(cut -f2 "$CLIKAE_HOME/dry/codex/T1")"
   [ "$reset" = "try again at Sep 13th, 2026 2:13 AM" ]
@@ -5308,7 +5313,9 @@ STUB
   # corpus phrase burn #45 (this file, above) already proved
   # `limit_output_dry claude` recognizes as dry, and assert --json's own
   # dry verdict, not just a nonzero exit.
-  run clikae burn claude dry1 --artifact "$A" --no-reroute --json --prompt "do it"
+  # --wait-for-reset 0: ONE dry attempt (#178's default would re-fire once
+  # on this past reset, and each attempt refreshes usage).
+  run clikae burn claude dry1 --artifact "$A" --no-reroute --wait-for-reset 0 --json --prompt "do it"
   [ "$status" -ne 0 ]
   [[ "$output" == *'"reason":"tank ran dry and --no-reroute is set"'* ]] || false
   [ "$(wc -l < "$CURL_CALLS" | tr -d ' ')" = 1 ]

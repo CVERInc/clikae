@@ -41,8 +41,9 @@ Usage: clikae wait <run_id|status-file>... [--any|--all] [--timeout <dur>]
        clikae wait --latest <prefix> [--any|--all] [--timeout <dur>]
 
 Block until one (or every) named burn reaches a TERMINAL state — done, dry,
-dry-paused (#178: a --no-reroute burn whose tank ran dry; `reset_at` says
-when it is back, and the burn itself may re-fire after that), fail, infra,
+dry-paused (#178: a --no-reroute burn whose tank ran dry and that will NOT
+retry; `reset_at` says when it is back — one that will re-fire says
+`waiting-reset` meanwhile, which is not terminal), fail, infra,
 or stale (a `running`/`waiting-reset` row whose recorded pid is
 no longer alive, synthesized here at read time, never written to disk — see
 #41's status.json contract, documented in docs/orchestration.md) — and print
@@ -203,8 +204,10 @@ cmd_wait() {
           ;;
       esac
 
-      # #178: `dry-paused` — a --no-reroute burn whose tank ran dry. Terminal
-      # for a reader (ok:false, nothing more comes out of this attempt;
+      # #178: `dry-paused` — a --no-reroute burn whose tank ran dry and that
+      # will NOT retry (#183 round 2: one that will re-fire publishes the
+      # non-terminal `waiting-reset` instead, so this loop keeps waiting and
+      # a killed sleeper still reads as stale above). Terminal (ok:false;
       # `reset_at` says when the tank is back), and the dry class for the rc:
       # "is anything left to do" has the same answer as a plain `dry`.
       case "$st" in

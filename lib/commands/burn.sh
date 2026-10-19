@@ -112,13 +112,14 @@ Give the task in one of two ways:
   --infra-delay <s>   initial retry delay in whole seconds (default 5), doubled
                       for each subsequent retry. --timeout bounds each attempt.
   --no-reroute        on a dry tank, never fall through to another one. (#178)
-                      The dry tank is published as `state: dry-paused` with
-                      its reset, a one-line pause note is left at <artifact>
-                      if nothing is there, and — when the reset parses and
-                      lands inside the window (--wait-for-reset, default
-                      $CLIKAE_BURN_DRY_PAUSE_WAIT = 6h; `0` = never wait) —
-                      the burn waits here and re-fires the SAME tank.
-                      Otherwise it stops with rc 2.
+                      A one-line pause note is left at <artifact> if nothing
+                      is there. When the reset parses and lands inside the
+                      window (--wait-for-reset, default
+                      $CLIKAE_BURN_DRY_PAUSE_WAIT = 6h; `0` = never retry)
+                      the burn waits here — status `waiting-reset`, tank
+                      still busy — and re-fires the SAME tank (a reset
+                      already past: one re-fire). Otherwise the status is
+                      the terminal `dry-paused` and it stops with rc 2.
   --allow-active      let auto-reroute use a tank an interactive session is on,
                       AND (#40) let a burn start on a tank that already has a
                       running burn on it — by default both are refused/skipped:
@@ -1260,8 +1261,9 @@ _agy_burn() {
       # (`wait`, `burn_tank_busy`) for the entire sleep, up to `<dur>`. Decide
       # whether this tank is actually being abandoned FIRST; only write the
       # terminal `dry` on the branches that really do abandon it.
-      # (#178: a --no-reroute burn takes the dry-paused path further down
-      # instead — same sleep, but published as an event first.)
+      # (#178: a --no-reroute burn takes _burn_dry_pause further down
+      # instead — the same `waiting-reset` sleep with a default window, or
+      # the terminal `dry-paused` when it will not retry.)
       if [ "$reroute" -eq 1 ] && [ -n "$wait_for_reset_s" ] && [ -n "$reset" ] \
          && _burn_wait_for_reset "$status_engine" "$cur" "$artifact" "$reset" "$wait_for_reset_s"; then
         log_info "agy/$cur should be reset now — re-firing on the same tank."
@@ -2758,7 +2760,13 @@ _burn_wait_for_reset() {
   at="$(limit_reset_epoch "$reset" "$now")" || return 1
   remain=$(( at - now ))
   [ "$remain" -le "$window_s" ] || return 1
-  [ "$remain" -lt 0 ] && remain=0
+  # #183 round 2: a reset already behind us is the same spin here as in
+  # _burn_dry_pause below — bounded by the same per-burn counter.
+  if [ "$remain" -le 0 ]; then
+    [ "${_BURN_DRY_PAUSE_PAST_REFIRES:-0}" -lt "${_BURN_DRY_PAUSE_PAST_MAX:-1}" ] || return 1
+    _BURN_DRY_PAUSE_PAST_REFIRES=$(( ${_BURN_DRY_PAUSE_PAST_REFIRES:-0} + 1 ))
+    remain=0
+  fi
   deadline=$(( now + window_s ))
 
   log_info "$eng/$tk resets in ${remain}s, within --wait-for-reset ${window_s}s — waiting instead of moving on."
@@ -2786,23 +2794,45 @@ _burn_wait_for_reset() {
 # 2026-10-18, reefbox: six `--no-reroute` lanes ran dry at 08:03Z and simply
 # stopped — status said `dry`, no artifact, no `[ FAIL ]` line — and a waiter
 # that watched for report files found out two hours later from `git status`.
-# The quota window closing is a NORMAL outcome of a pinned burn, so it gets a
-# terminal state of its own plus the two things a watcher reads:
+# The quota window closing is a NORMAL outcome of a pinned burn. What it is
+# published as depends on ONE question, decided before anything is written:
+# will this process fire the same tank again?
 #
-#   · `state: dry-paused` (ok:false — terminal for `clikae wait`, rc 2, the
-#     dry class) with `reset` / `reset_at` saying when the tank is back;
-#   · a one-line pause note AT THE ARTIFACT PATH when nothing is there yet
-#     (a waiter polling "does the report exist" wakes up and reads why) —
-#     never over an artifact that already exists, and never counted as the
-#     engine's work: it predates the next attempt's own timestamp snapshot.
+#   · Yes — the reset parses and lands inside the window (`--wait-for-reset
+#     <dur>`, default `$CLIKAE_BURN_DRY_PAUSE_WAIT` = 6h, one quota window and
+#     a margin). The burn sleeps IN THIS PROCESS and re-fires the same tank,
+#     and for the whole sleep the status file says the NON-terminal
+#     `waiting-reset` (ok:null, `reset_at`, reason "tank ran dry and
+#     --no-reroute is set; waiting for its reset…"). Round 2 of #183's review
+#     (P1/P2): this used to publish the terminal `dry-paused` for the sleep,
+#     which every busy/queue reader takes as "the tank is free" — a second
+#     burn landed on it mid-sleep and both fired at the reset — and which
+#     `clikae wait` returned on at once, every time, until the re-fire.
+#     `waiting-reset` is deliberately NOT a new name: it already means exactly
+#     "sleeping to a reset, will re-fire THIS tank" (--wait-for-reset, #36),
+#     and every reader — burn_tank_busy, burn_status_active_tanks (--queue,
+#     the cockpit guard), `clikae home`'s "resumes at", the tmux badge, clean,
+#     and `wait`'s stale detection for a killed sleeper — already treats it
+#     right. A new state would have to be taught to each of them, and the one
+#     a change forgets is this P1 again. `reason` says it was a dry pause.
+#   · No — `--wait-for-reset 0` (checked FIRST, before the reset is even
+#     looked at), no parseable reset, a reset past the window, or a reset
+#     already behind us that was already re-fired once. Then, and only then,
+#     `state: dry-paused` (ok:false — terminal for `clikae wait`, rc 2, the
+#     dry class) with `reset` / `reset_at`, and the process exits rc 2.
 #
-# Then, by default, the burn waits the reset out IN THIS PROCESS (the same
-# sleep-and-re-fire `--wait-for-reset` already does) when the reset parses
-# and lands inside the window — `--wait-for-reset <dur>` sets that window
-# explicitly (`0` = never wait), `$CLIKAE_BURN_DRY_PAUSE_WAIT` sets the
-# default (6h: one quota window and a margin). The pause is an EVENT on the
-# way, not the end of the run: a reader that returned on `dry-paused` can
-# `wait` on the same run id again and see `running` → `done`.
+# A reset ALREADY IN THE PAST (a dated one, or an undated one inside
+# LIMIT_RESET_PAST_GRACE) gets at most _BURN_DRY_PAUSE_PAST_MAX (= 1) re-fire
+# per burn: a vendor that keeps answering "resets at <a moment that has
+# passed>" would otherwise relaunch the engine back-to-back forever.
+#
+# Either way, a one-line pause note goes AT THE ARTIFACT PATH when nothing is
+# there yet (a waiter polling "does the report exist" wakes up and reads
+# why). It is created exclusively (noclobber — never over anything that is
+# already there, even one that appeared a syscall after a check), this
+# process remembers exactly what it wrote, and before a re-fire it is
+# removed only if the file is still byte-for-byte that note: anything a
+# person or another process appended under it stays.
 
 # _burn_dry_pause_window -> the default wait window in seconds for a
 # --no-reroute burn that ran dry with no explicit --wait-for-reset.
@@ -2812,38 +2842,94 @@ _burn_dry_pause_window() {
   printf '%s' "$s"
 }
 
-# _burn_pause_note <engine> <tank> <artifact> <reset-phrase> -> write the
-# one-line note at <artifact> if, and only if, nothing is there. Never fatal.
+# _BURN_DRY_PAUSE_PAST_MAX — re-fires a burn may spend on a reset that is
+# already behind us (see above). _BURN_DRY_PAUSE_PAST_REFIRES counts them.
+_BURN_DRY_PAUSE_PAST_MAX=1
+_BURN_DRY_PAUSE_PAST_REFIRES=0
+
+# _BURN_PAUSE_NOTE_PATH / _BURN_PAUSE_NOTE_TEXT — the note THIS process
+# created, exactly (path + the line it wrote, without its newline). Empty when
+# it created none. _burn_pause_note_clear trusts nothing else.
+_BURN_PAUSE_NOTE_PATH=""
+_BURN_PAUSE_NOTE_TEXT=""
+
+# _burn_pause_note <engine> <tank> <artifact> <reset-phrase> <waiting|stopped>
+# -> create the one-line note at <artifact> if, and only if, nothing is there
+# — exclusively (`set -C`: O_EXCL, so neither a file that appeared after a
+# check nor a dangling symlink is ever written through). Never fatal.
 _burn_pause_note() {
-  local eng="$1" tk="$2" art="$3" reset="$4" stamp
+  local eng="$1" tk="$2" art="$3" reset="$4" mode="${5:-stopped}" stamp text next
   [ -n "$art" ] || return 0
-  [ -e "$art" ] && return 0
   stamp="$(date -u '+%Y-%m-%dT%H:%M:%SZ' 2>/dev/null || date 2>/dev/null)"
-  printf 'clikae burn: dry-paused — %s/%s ran dry at %s%s. Re-run the same burn once the limit lifts; nothing below this line came from the engine.\n' \
-    "$eng" "$tk" "$stamp" "${reset:+ ($reset)}" > "$art" 2>/dev/null || true
+  if [ "$mode" = "waiting" ]; then
+    next="clikae is waiting for the reset and will re-fire the same tank"
+  else
+    next="Re-run the same burn once the limit lifts"
+  fi
+  text="$(printf 'clikae burn: dry-paused — %s/%s ran dry at %s%s. %s; nothing below this line came from the engine.' \
+    "$eng" "$tk" "$stamp" "${reset:+ ($reset)}" "$next")"
+  if ( set -C; printf '%s\n' "$text" > "$art" ) 2>/dev/null; then
+    _BURN_PAUSE_NOTE_PATH="$art"
+    _BURN_PAUSE_NOTE_TEXT="$text"
+  fi
   return 0
 }
 
+# _burn_pause_note_clear -> remove the note this process created, but only
+# if the file is still byte-for-byte what it wrote. A file someone appended
+# to (or replaced) stays. Forgets the note either way. Never fatal.
+_burn_pause_note_clear() {
+  local p="$_BURN_PAUSE_NOTE_PATH"
+  [ -n "$p" ] || return 0
+  if [ -f "$p" ] && [ ! -L "$p" ] \
+     && printf '%s\n' "$_BURN_PAUSE_NOTE_TEXT" | cmp -s - "$p"; then
+    rm -f "$p" 2>/dev/null || true
+  fi
+  _BURN_PAUSE_NOTE_PATH=""
+  _BURN_PAUSE_NOTE_TEXT=""
+  return 0
+}
+
+# _burn_dry_pause_stop <engine> <tank> <artifact> <reset-phrase> <reset_at>
+# -> the terminal half: `dry-paused` + the "re-run" note. Returns 1 (stop).
+_burn_dry_pause_stop() {
+  local eng="$1" tk="$2" art="$3" reset="$4" at="$5"
+  log_warn "$eng/$tk ran dry and --no-reroute is set — dry-paused${reset:+ ($reset)}."
+  _burn_status_write dry-paused false "$eng" "$tk" "$art" "tank ran dry and --no-reroute is set" "$reset" "$at"
+  _burn_pause_note "$eng" "$tk" "$art" "$reset" stopped
+  return 1
+}
+
 # _burn_dry_pause <engine> <tank> <artifact> <reset-phrase> <window_s> ->
-# publish `dry-paused` (+ the note), then 0 if the reset was waited out
-# inside <window_s> and the caller should re-fire the SAME tank now; 1 if
-# there is nothing to wait for (no parseable reset, or outside the window)
-# and the caller should stop with the dry rc. Same re-check-after-sleep
-# shape as _burn_wait_for_reset above.
+# 0 once the reset was waited out inside <window_s> (status `waiting-reset`
+# meanwhile) and the caller should re-fire the SAME tank now; 1 after
+# publishing the terminal `dry-paused` when this burn will NOT retry, and the
+# caller should stop with the dry rc. Same re-check-after-sleep shape as
+# _burn_wait_for_reset above.
 _burn_dry_pause() {
   local eng="$1" tk="$2" art="$3" reset="$4" window_s="$5"
   local now at="" remain deadline
   now="$(date +%s 2>/dev/null || echo 0)"
   if [ -n "$reset" ]; then at="$(limit_reset_epoch "$reset" "$now" 2>/dev/null)" || at=""; fi
-  log_warn "$eng/$tk ran dry and --no-reroute is set — dry-paused${reset:+ ($reset)}."
-  _burn_status_write dry-paused false "$eng" "$tk" "$art" "tank ran dry and --no-reroute is set" "$reset" "$at"
-  _burn_pause_note "$eng" "$tk" "$art" "$reset"
-  case "$window_s" in ''|*[!0-9]*) return 1 ;; esac
-  [ -n "$at" ] || return 1
+  # Will this process retry? Zero/garbage window first — before the reset.
+  case "$window_s" in ''|*[!0-9]*) window_s=0 ;; esac
+  [ "$window_s" -gt 0 ] || { _burn_dry_pause_stop "$eng" "$tk" "$art" "$reset" "$at"; return 1; }
+  [ -n "$at" ] || { _burn_dry_pause_stop "$eng" "$tk" "$art" "$reset" ""; return 1; }
   remain=$(( at - now ))
-  [ "$remain" -le "$window_s" ] || return 1
-  [ "$remain" -lt 0 ] && remain=0
+  [ "$remain" -le "$window_s" ] || { _burn_dry_pause_stop "$eng" "$tk" "$art" "$reset" "$at"; return 1; }
+  if [ "$remain" -le 0 ]; then
+    if [ "${_BURN_DRY_PAUSE_PAST_REFIRES:-0}" -ge "$_BURN_DRY_PAUSE_PAST_MAX" ]; then
+      log_warn "$eng/$tk: its reset ($reset) is already behind us and was re-fired $_BURN_DRY_PAUSE_PAST_MAX time(s) — not spinning on it."
+      _burn_dry_pause_stop "$eng" "$tk" "$art" "$reset" "$at"; return 1
+    fi
+    _BURN_DRY_PAUSE_PAST_REFIRES=$(( ${_BURN_DRY_PAUSE_PAST_REFIRES:-0} + 1 ))
+    remain=0
+  fi
   deadline=$(( now + window_s ))
+  log_warn "$eng/$tk ran dry and --no-reroute is set — waiting for its reset${reset:+ ($reset)}, then re-firing the same tank."
+  _burn_status_write waiting-reset null "$eng" "$tk" "$art" \
+    "tank ran dry and --no-reroute is set; waiting for its reset, then re-firing the same tank" "$reset" "$at"
+  _burn_pause_note "$eng" "$tk" "$art" "$reset" waiting
   log_info "$eng/$tk resets in ${remain}s, within ${window_s}s — waiting here, then re-firing the same tank (--wait-for-reset 0 to stop instead)."
   sleep "$remain"
   now="$(date +%s 2>/dev/null || echo 0)"
@@ -2853,21 +2939,19 @@ _burn_dry_pause() {
       remain2=$(( at2 - now ))
       [ "$remain2" -lt 0 ] && remain2=0
       log_info "$eng/$tk hasn't reset yet — waiting the remaining ${remain2}s (still inside the window)."
+      _burn_status_write waiting-reset null "$eng" "$tk" "$art" \
+        "tank ran dry and --no-reroute is set; waiting for its reset, then re-firing the same tank" "$reset" "$at2"
       sleep "$remain2"
     else
-      return 1
+      # Gave up after all: the waiting note becomes the stopped one.
+      _burn_pause_note_clear
+      _burn_dry_pause_stop "$eng" "$tk" "$art" "$reset" "$at"; return 1
     fi
   fi
-  # The note's job is done once we re-fire: take it away if it is still ours
-  # (first line is the marker), so the next attempt judges a brand-new
-  # artifact and not a same-second truncate of this file (mtime is whole
-  # seconds). Never touches anything the engine or a person wrote.
-  if [ -f "$art" ] && head -n1 "$art" 2>/dev/null | grep -q '^clikae burn: dry-paused '; then
-    rm -f "$art" 2>/dev/null || true
-  fi
-  # The pause was an event on the way, not the end: the next attempt's own
-  # terminal write (or the exit guard) must be able to speak again.
-  _BURN_TERMINAL_WRITTEN=0
+  # The note's job is done once we re-fire: take it away if it is still
+  # exactly ours, so the next attempt judges a brand-new artifact and not a
+  # same-second truncate of this file (mtime is whole seconds).
+  _burn_pause_note_clear
   return 0
 }
 
@@ -5087,8 +5171,9 @@ KV
       # never gets counted as tried, marked dry on disk, or excluded as a
       # same-account sibling — from the rest of this loop's point of view,
       # nothing happened yet.
-      # (#178: a --no-reroute burn takes the dry-paused path further down
-      # instead — same sleep, but published as an event first.)
+      # (#178: a --no-reroute burn takes _burn_dry_pause further down
+      # instead — the same `waiting-reset` sleep with a default window, or
+      # the terminal `dry-paused` when it will not retry.)
       if [ "$reroute" -eq 1 ] && [ -n "$wait_for_reset_s" ] && [ -n "$reset" ] \
          && _burn_wait_for_reset "$cli" "$cur" "$artifact" "$reset" "$wait_for_reset_s"; then
         log_info "$cli/$cur should be reset now — re-firing on the same tank."

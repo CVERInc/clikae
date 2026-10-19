@@ -10,15 +10,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Fixed
 
 - **A `--no-reroute` burn that runs dry is paused, not silently stopped**
-  (#178). The quota window closing is a normal outcome of a pinned burn: it
-  now writes `state: dry-paused` (with `reset` / `reset_at`) to its status
-  file, leaves a one-line pause note at the artifact path when nothing is
-  there (so a waiter that only polls for the report wakes up and reads
-  why), and `clikae wait` returns on it at once with rc 2. By default the
-  burn then waits the reset out in place and re-fires the same tank
-  (`--wait-for-reset <dur>` sets the window, `0` never waits,
-  `$CLIKAE_BURN_DRY_PAUSE_WAIT` sets the 6h default); the note is removed
-  on re-fire and the file goes `running` → `done`.
+  (#178). The quota window closing is a normal outcome of a pinned burn. By
+  default the burn waits the reset out in place and re-fires the same tank
+  (`--wait-for-reset <dur>` sets the window, `0` never retries,
+  `$CLIKAE_BURN_DRY_PAUSE_WAIT` sets the 6h default); while it sleeps the
+  status file says the non-terminal `waiting-reset`, so the tank stays busy
+  to other burns and `--queue`, and `clikae wait` keeps waiting for the real
+  outcome. A burn that will not retry writes the terminal `state:
+  dry-paused` (with `reset` / `reset_at`), on which `clikae wait` returns at
+  once with rc 2. A reset already in the past gets one re-fire, never a
+  spin. Either way a one-line pause note is left at the artifact path when
+  nothing is there (so a waiter that only polls for the report wakes up and
+  reads why) — created exclusively, and removed before a re-fire only if it
+  is still exactly as written.
 - **`clikae watch github` can no longer be alive but not working** (#166).
   Every poll rewrites `state/watch-github/<org>.heartbeat.json`
   (`last_poll_at`, `last_ok_at`, `consecutive_failures`, last error); three
@@ -26,7 +30,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `state: fail` run that `clikae wait --latest watch-github-<org>` returns
   on and say so loudly; a failed poll re-checks `gh auth status` and a
   login that is gone exits 1 instead of spinning. Comment/review/mention
-  events now carry `login` and `body` (first 200 characters, plain text) —
+  events now carry `login` and `body` (first 200 bytes, cut on a UTF-8 boundary) —
   from the timeline event itself, or from the issue's own comments since
   the cursor when the timeline page has no actor at all (the shape that
   produced an hour of `by unknown` on 2026-09-29).
