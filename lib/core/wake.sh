@@ -892,9 +892,48 @@ wake_installed_version() {
   printf '%s' "$v"
 }
 
-# wake_watch_stale_bin -> 0 and the path to re-exec when this watcher's code
-# is no longer what is installed; 1 otherwise. Two shapes, both measured on
-# 2026-10-01:
+# wake_reexec_check <path> -> 0 when <path> is a replacement fit to exec; 1
+# with the reason in $_WAKE_REEXEC_WHY otherwise. #183 review round 2: `exec`
+# is irreversible — a wrapper whose target is not installed (yet, or any
+# more: a failed upgrade) exits at once and takes the working watcher with
+# it. So: an executable file; if it is brew's one-line wrapper, its exec
+# target resolves to an executable file too; the code that will actually
+# run carries a CLIKAE_VERSION that reads as a version; and both parse
+# (`bash -n` — a file caught mid-write is cut mid-statement).
+_WAKE_REEXEC_WHY=""
+wake_reexec_check() {
+  local p="$1" real t v
+  _WAKE_REEXEC_WHY=""
+  if [ ! -f "$p" ] || [ ! -x "$p" ]; then
+    _WAKE_REEXEC_WHY="$p is not an executable file"; return 1
+  fi
+  real="$p"
+  t="$(sed -nE 's/^exec "([^"]+)".*/\1/p' "$p" 2>/dev/null | head -n1)"
+  if [ -n "$t" ]; then
+    if [ ! -f "$t" ] || [ ! -x "$t" ]; then
+      _WAKE_REEXEC_WHY="$p execs $t, which is not installed"; return 1
+    fi
+    real="$t"
+  fi
+  v="$(grep -m1 '^CLIKAE_VERSION=' "$real" 2>/dev/null | sed -E 's/^CLIKAE_VERSION="?([^"]*)"?[[:space:]]*$/\1/')"
+  case "$v" in
+    [0-9]*.[0-9]*) case "$v" in *[!0-9A-Za-z.+-]*) v="" ;; esac ;;
+    *) v="" ;;
+  esac
+  if [ -z "$v" ]; then
+    _WAKE_REEXEC_WHY="$real carries no readable CLIKAE_VERSION"; return 1
+  fi
+  if ! bash -n "$p" 2>/dev/null || ! bash -n "$real" 2>/dev/null; then
+    _WAKE_REEXEC_WHY="$real does not parse (still being written?)"; return 1
+  fi
+  return 0
+}
+
+# wake_watch_stale_bin -> 0 and the path to re-exec (also in
+# $_WAKE_REEXEC_PATH) when this watcher's code is no longer what is installed
+# AND the replacement passes wake_reexec_check; 2 when it is stale but the
+# replacement is not fit to exec ($_WAKE_REEXEC_WHY says why); 1 when there
+# is nothing to do. Two shapes, both measured on 2026-10-01:
 #   · our own binary ($CLIKAE_BIN) is GONE — brew removed the old Cellar —
 #     so the installed `clikae` on PATH is the one to become (a FILE: the
 #     test suite defines a shell function by that name, and `type -P`
@@ -903,18 +942,46 @@ wake_installed_version() {
 #     (updated in place, e.g. a git checkout) — re-exec that same path.
 # A different clikae elsewhere on PATH while our own binary is intact at our
 # version is NOT a reason: a dev tree would otherwise exec the brew install.
+_WAKE_REEXEC_PATH=""
 wake_watch_stale_bin() {
-  local own="${CLIKAE_BIN:-}" inst v
+  local own="${CLIKAE_BIN:-}" inst v cand
+  _WAKE_REEXEC_PATH=""
+  _WAKE_REEXEC_WHY=""
   if [ -n "$own" ] && [ -e "$own" ]; then
     v="$(wake_installed_version "$own")" || return 1
     [ "$v" != "${CLIKAE_VERSION:-}" ] || return 1
-    printf '%s' "$own"
+    cand="$own"
+  else
+    inst="$(type -P clikae 2>/dev/null)" || inst=""
+    [ -n "$inst" ] || return 1
+    cand="$inst"
+  fi
+  wake_reexec_check "$cand" || return 2
+  _WAKE_REEXEC_PATH="$cand"
+  printf '%s' "$cand"
+  return 0
+}
+
+# wake_watch_reload_target -> 0 with the path to exec on stdout (and in
+# $_WAKE_REEXEC_PATH) when the watcher should reload now; 1 otherwise. When
+# an upgrade is visible but its replacement is not fit to exec, the running
+# watcher stays and says why on stderr — once per distinct reason, not once
+# a tick — and the next tick looks again (brew may simply not be done yet).
+_WAKE_REEXEC_SAID=""
+wake_watch_reload_target() {
+  local rc=0
+  wake_watch_stale_bin >/dev/null || rc=$?
+  if [ "$rc" -eq 0 ]; then
+    _WAKE_REEXEC_SAID=""
+    printf '%s' "$_WAKE_REEXEC_PATH"
     return 0
   fi
-  inst="$(type -P clikae 2>/dev/null)" || inst=""
-  [ -n "$inst" ] && [ -x "$inst" ] || return 1
-  printf '%s' "$inst"
-  return 0
+  if [ "$rc" -eq 2 ] && [ "$_WAKE_REEXEC_SAID" != "$_WAKE_REEXEC_WHY" ]; then
+    _WAKE_REEXEC_SAID="$_WAKE_REEXEC_WHY"
+    printf '\r\033[K' >&2
+    log_warn "clikae looks upgraded, but the replacement is not fit to run: $_WAKE_REEXEC_WHY — keeping this watcher (${CLIKAE_VERSION:-?}); will look again next tick."
+  fi
+  return 1
 }
 
 # wake_select_engine_window <session> -> make the engine window current. The
@@ -983,9 +1050,11 @@ wake_watch() {
 
     # #168: after an upgrade, become the installed clikae instead of running
     # the code this window was born with. After both guards: a session that
-    # is leaving has nothing to reload for.
+    # is leaving has nothing to reload for. Called in THIS shell (not
+    # `$(…)`): it remembers which refusal it already reported.
     local _fresh
-    if _fresh="$(wake_watch_stale_bin)"; then
+    if wake_watch_reload_target >/dev/null; then
+      _fresh="$_WAKE_REEXEC_PATH"
       printf '\r\033[K'
       log_info "clikae was upgraded ($(wake_installed_version "$_fresh" 2>/dev/null || printf '?') installed, this watcher is ${CLIKAE_VERSION:-?}) — reloading the watcher."
       exec "$_fresh" wake --watch "$engine" "$tank" "$session"

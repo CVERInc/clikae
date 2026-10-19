@@ -121,3 +121,75 @@ teardown() {
   [[ "$output" == *"returns to claude"* ]] || false
   [[ "$output" == *"ctrl-b 0"* ]] || false
 }
+
+# --- #183 review round 2: exec is irreversible, so only a replacement that
+# resolves and reads coherently is ever exec'd; otherwise the running watcher
+# stays, and says why.
+
+@test "wake_watch_stale_bin: own binary gone and the wrapper on PATH execs a target that is not installed -> refuses, names nothing" {
+  _src
+  _no_clikae_on_path
+  _fake_installed 0.2.0
+  rm -f "$TEST_HOME/installed/libexec/bin/clikae"   # mid-upgrade: the target is gone
+  export CLIKAE_VERSION="0.1.0" CLIKAE_BIN="$TEST_HOME/Cellar/clikae/0.1.0/libexec/bin/clikae"
+  run wake_watch_stale_bin
+  [ "$status" -ne 0 ]
+  [ -z "$output" ]
+}
+
+@test "wake_watch_stale_bin: own binary gone and the wrapper's target carries no readable version -> refuses" {
+  _src
+  _no_clikae_on_path
+  _fake_installed 0.2.0
+  printf '#!/usr/bin/env bash\nsleep 30\n' > "$TEST_HOME/installed/libexec/bin/clikae"
+  export CLIKAE_VERSION="0.1.0" CLIKAE_BIN="$TEST_HOME/Cellar/clikae/0.1.0/libexec/bin/clikae"
+  run wake_watch_stale_bin
+  [ "$status" -ne 0 ]
+  [ -z "$output" ]
+}
+
+@test "wake_watch_stale_bin: own binary rewritten in place but not executable / not parseable yet -> refuses" {
+  _src
+  local own="$TEST_HOME/own/bin/clikae"
+  _fake_bin "$own" "0.2.0"
+  export CLIKAE_VERSION="0.1.0" CLIKAE_BIN="$own"
+  # Half-written: the version line landed, the rest is cut mid-statement.
+  printf '#!/usr/bin/env bash\nCLIKAE_VERSION="0.2.0"\nif [ -n "$x" ]; then\n' > "$own"
+  run wake_watch_stale_bin
+  [ "$status" -ne 0 ]
+  [ -z "$output" ]
+  # Complete but not executable.
+  _fake_bin "$own" "0.2.0"
+  chmod -x "$own"
+  run wake_watch_stale_bin
+  [ "$status" -ne 0 ]
+  [ -z "$output" ]
+}
+
+@test "wake_watch_reload_target: a broken install keeps the running watcher and says why — once, not every tick" {
+  _src
+  _no_clikae_on_path
+  _fake_installed 0.2.0
+  rm -f "$TEST_HOME/installed/libexec/bin/clikae"
+  export CLIKAE_VERSION="0.1.0" CLIKAE_BIN="$TEST_HOME/Cellar/clikae/0.1.0/libexec/bin/clikae"
+  local err="$BATS_TEST_TMPDIR/err" out="$BATS_TEST_TMPDIR/out" rc1=0 rc2=0
+  # Both ticks in THIS shell (as wake_watch calls it), so the "already said
+  # it" memory carries from one to the next.
+  wake_watch_reload_target >"$out" 2>>"$err" || rc1=$?
+  wake_watch_reload_target >>"$out" 2>>"$err" || rc2=$?
+  [ "$rc1" -ne 0 ] && [ "$rc2" -ne 0 ]
+  [ ! -s "$out" ]
+  cat "$err"
+  grep -q "keeping this watcher" "$err"
+  [ "$(grep -c "keeping this watcher" "$err")" -eq 1 ]
+}
+
+@test "wake_watch_reload_target: a coherent install is returned for exec" {
+  _src
+  _no_clikae_on_path
+  _fake_installed 0.2.0
+  export CLIKAE_VERSION="0.1.0" CLIKAE_BIN="$TEST_HOME/Cellar/clikae/0.1.0/libexec/bin/clikae"
+  run wake_watch_reload_target
+  [ "$status" -eq 0 ]
+  [ "$output" = "$INST" ]
+}
