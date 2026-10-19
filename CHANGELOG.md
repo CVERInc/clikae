@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- `clikae tanks --available`: list tanks that can take work, ordered by remaining
+  quota per hour until reset. Supports an engine filter, cockpit inclusion, and
+  JSON with scores and skip reasons; reads the current inventory and usage.
+
 ## [0.42.0] — 2026-10-15
 
 ### Fixed

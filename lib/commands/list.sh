@@ -39,14 +39,27 @@ _list_render_json() {
 
 cmd_list() {
   i18n_load "$(clikae_lang)"   # T_* aren't loaded at source time; the agy note below is localised
-  local show_paths=0 as_json=0
+  local show_paths=0 as_json=0 available=0 engine="" order="" include_cockpit=0
   while [ $# -gt 0 ]; do
     case "$1" in
       -p|--paths) show_paths=1; shift ;;
       --json)     as_json=1; shift ;;
+      --available) available=1; shift ;;
+      --include-cockpit) include_cockpit=1; shift ;;
+      --order)
+        [ "${2:-}" = expiring ] || log_fail "--order requires expiring"
+        order="$2"; shift 2 ;;
       -h|--help)
         cat <<'EOF'
 Usage: clikae tanks [-p|--paths] [--json]      (alias: clikae list / ls)
+       clikae tanks --available [engine] [--order expiring] [--include-cockpit] [--json]
+
+--available lists eligible tank names, highest remaining quota per hour to reset
+first. Uses the weekly window, or the single window when no weekly value exists.
+Skips unreadable usage, usage >=90% (>=98% with <24h until reset), a separate
+5h window >=95%, and the cockpit unless --include-cockpit is given. JSON includes
+all tanks in scope: {engine, tank, available, score, reason}. Reasons are
+unreadable / quota / window / cockpit, or null when eligible.
 
 List all tanks across all engines. The ACCOUNT column shows which account each
 tank is logged in to (when the adapter can tell — e.g. the email for claude),
@@ -61,9 +74,18 @@ Options:
 EOF
         return 0
         ;;
-      *) log_fail "Unexpected argument: $1" ;;
+      -*) log_fail "Unexpected argument: $1" ;;
+      *) [ -z "$engine" ] || log_fail "Unexpected argument: $1"
+         engine="$1"; shift ;;
     esac
   done
+
+  if [ "$available" = 1 ]; then
+    [ "$show_paths" = 0 ] || log_fail "--paths does not apply to --available"
+    _list_available "$engine" "$include_cockpit" "$as_json"
+    return
+  fi
+  [ -z "$engine$order" ] && [ "$include_cockpit" = 0 ] || log_fail "Engine, --order and --include-cockpit require --available"
 
   local rows
   rows="$(list_all_profiles || true)"
@@ -113,5 +135,53 @@ EOF
     case $'\n'"$enriched" in
       *$'\n'"agy"$'\037'*) printf '\n%b  %s%b\n' "$__C_DIM" "${T_AGY_BURN_NOTE:-agy login is global (one account at a time, never two in parallel) — clikae burn agy <tank> can reroute it sequentially on dry (Keychain carry, no OAuth needed), or run it headless on the active account with agy -p.}" "$__C_RESET" ;;
     esac
+  fi
+}
+
+# Compose the same inventory and readings as tanks/usage, without launching
+# another clikae process or waking an engine. Readers own freshness (#179).
+_list_available() {
+  local engine="$1" include_cockpit="$2" as_json="$3"
+  local e t path reading row rows="" cockpit now result
+  command -v jq >/dev/null 2>&1 || { log_err "--available requires jq"; return 1; }
+  # shellcheck source=cockpit.sh
+  source "$CLIKAE_LIB/commands/cockpit.sh"
+  [ "$engine" != agy ] || engine=antigravity
+  [ -z "$engine" ] || validate_name engine "$engine"
+  now="$(date +%s)"
+  while IFS=$'\t' read -r e t path; do
+    [ -n "$e" ] || continue
+    [ -z "$engine" ] || [ "$e" = "$engine" ] || continue
+    cockpit=0
+    if [ "$include_cockpit" = 0 ] && _cockpit_is_recorded "$e" "$t"; then cockpit=1; fi
+    reading="$(usage_read "$e" "$t")" || reading='{}'
+    row="$(jq -cn --arg reading "$reading" --arg engine "$(engine_label "$e")" \
+      --arg tank "$t" --argjson cockpit "$cockpit" --argjson now "$now" \
+      "$_USAGE_NORM_STAMP_JQ"'
+      def pct: type == "number" and . >= 0 and . <= 100;
+      ($reading | try fromjson catch {}) as $r |
+      ($r.weekly_pct != null) as $weekly |
+      (if $weekly then $r.weekly_pct else $r.window_pct end) as $used |
+      (if $weekly then $r.weekly_resets_at else $r.window_resets_at end
+       | try norm_stamp catch null) as $reset |
+      (($used|pct) and $reset != null and
+       ($r.window_pct == null or ($r.window_pct|pct))) as $readable |
+      (if $readable then ([($reset-$now)/3600, 0.5]|max) else null end) as $hours |
+      (if $cockpit == 1 then "cockpit"
+       elif ($readable|not) then "unreadable"
+       elif $used >= (if $hours < 24 then 98 else 90 end) then "quota"
+       elif $weekly and $r.window_pct != null and $r.window_pct >= 95 then "window"
+       else null end) as $reason |
+      {engine:$engine,tank:$tank,available:($reason == null),
+       score:(if $readable then (100-$used)/$hours else null end),reason:$reason}' )" || return 1
+    rows="$rows$row"$'\n'
+  done <<EOF_PROFILES
+$(list_all_profiles)
+EOF_PROFILES
+  result="$(printf '%s' "$rows" | jq -s 'sort_by([if .available then 0 else 1 end, -(.score // 0), .engine, .tank])')" || return 1
+  if [ "$as_json" = 1 ]; then
+    printf '%s\n' "$result"
+  else
+    printf '%s' "$result" | jq -r '.[] | select(.available) | .tank'
   fi
 }
