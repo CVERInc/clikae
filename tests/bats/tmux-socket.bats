@@ -379,8 +379,10 @@ _lstart() { ps -o lstart= -p "$1" 2>/dev/null | sed 's/^ *//; s/ *$//'; }
   [ -z "$missing" ] || { echo "lost:$missing"; cat "$rec"; false; }
   [ "$(wc -l < "$rec" | tr -d ' ')" -eq 20 ] || { cat "$rec"; false; }
   # No temp file left behind by any writer.
-  [ -z "$(ls "$CLIKAE_HOME/state/tmux" | grep -v '^servers$' | grep -v '^tmux-' || true)" ] \
-    || { ls -la "$CLIKAE_HOME/state/tmux"; false; }
+  local f
+  for f in "$CLIKAE_HOME/state/tmux"/*; do
+    case "${f##*/}" in servers|tmux-*) ;; *) echo "left behind: $f"; false ;; esac
+  done
 }
 
 @test "endpoints: inside an OLD-server cockpit, the board and the launch still find the new server" {
