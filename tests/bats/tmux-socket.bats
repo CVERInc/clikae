@@ -52,6 +52,9 @@ teardown() {
   fi
   [ -n "${LEGACY_SOCK:-}" ] && tmux -S "$LEGACY_SOCK" kill-server 2>/dev/null
   [ -n "${ORPHAN_SOCK:-}" ] && tmux -S "$ORPHAN_SOCK" kill-server 2>/dev/null
+  # Processes this test started itself, by pid — never a name match.
+  local p
+  for p in ${OWN_PIDS:-}; do kill "$p" 2>/dev/null; done
   [ -n "${TEST_HOME:-}" ] && rm -rf "$TEST_HOME"
   return 0
 }
@@ -196,7 +199,8 @@ teardown() {
   local rec="$CLIKAE_HOME/state/tmux/servers"
   [ -f "$rec" ] || { echo "no record at $rec"; false; }
   local pid; pid="$(tmux display-message -p '#{pid}')"
-  grep -q "^$pid	$(tmux_socket_path)$" "$rec" || { cat "$rec"; false; }
+  # pid, its start time (the incarnation — round 2), socket.
+  grep -q "^$pid	$(_lstart "$pid")	$(tmux_socket_path)$" "$rec" || { cat "$rec"; false; }
 }
 
 @test "orphan: a recorded server whose socket is gone gets it back, and the board sees it again" {
@@ -242,13 +246,232 @@ teardown() {
 @test "orphan: inside a cockpit whose socket vanished, \$TMUX alone is enough to recover it" {
   command -v tmux >/dev/null 2>&1 || skip "tmux not installed"
   _src_tmux
-  tmux new-session -d -s clikae-claude-inside 'sleep 30'
-  local sock pid; sock="$(tmux_socket_path)"; pid="$(tmux display-message -p '#{pid}')"
+  local sock; sock="$(tmux_socket_path)"
   ORPHAN_SOCK="$sock"
-  rm -f "$sock"
+  # The rescue runs INSIDE the cockpit, as a `clikae` typed in its pane would:
+  # $TMUX is the server's own, and the server is this shell's ancestor — the
+  # only proof there is for a pid that has no record (round 2, finding 1).
+  cat > "$TEST_HOME/inside.sh" <<EOF
+while [ -S '$sock' ]; do sleep 0.05; done
+. '$CLIKAE_TEST_ROOT/lib/core/log.sh'
+. '$CLIKAE_TEST_ROOT/lib/core/tmux.sh'
+tmux_rescue_orphans
+: > '$TEST_HOME/rescued'
+sleep 30
+EOF
+  tmux new-session -d -s clikae-claude-inside "bash '$TEST_HOME/inside.sh'"
   # No record file at all — the cockpit predates this release.
   rm -f "$CLIKAE_HOME/state/tmux/servers"
-  TMUX="$sock,$pid,0" tmux_rescue_orphans
+  rm -f "$sock"
+  local i=0
+  while [ "$i" -lt 100 ] && [ ! -e "$TEST_HOME/rescued" ]; do sleep 0.1; i=$((i + 1)); done
+  [ -e "$TEST_HOME/rescued" ] || { echo "the pane never ran the rescue"; false; }
   [ -S "$sock" ]
   tmux has-session -t =clikae-claude-inside
+}
+
+# ── round 2 (PR #181 review): two physical servers, every path ─────────────
+#
+# The class: there are TWO tmux servers a cockpit can be on (the clikae one
+# under $CLIKAE_HOME/state/tmux and the pre-#176 /tmp one), and the caller can
+# be sitting on either. Every path — listing, routing, the launch decision,
+# the inside-tmux switch, the rescue — has to work whichever one that is.
+
+# _lstart <pid> -> the process's start time as ps prints it (its incarnation).
+_lstart() { ps -o lstart= -p "$1" 2>/dev/null | sed 's/^ *//; s/ *$//'; }
+
+@test "rescue: a live non-tmux process named tmux-helper is never signalled" {
+  _src_tmux
+  cd "$TEST_HOME"
+  mkdir -p "$TEST_HOME/fakebin" "$CLIKAE_HOME/state/tmux"
+  cp "$(command -v sleep)" "$TEST_HOME/fakebin/tmux-helper"
+  "$TEST_HOME/fakebin/tmux-helper" 30 & local other=$!
+  OWN_PIDS="$other"
+  sleep 0.2
+  printf '%s\t%s\t%s\n' "$other" "$(_lstart "$other")" "$TEST_HOME/never/default" \
+    > "$CLIKAE_HOME/state/tmux/servers"
+  run tmux_rescue_orphans
+  [ "$status" -eq 0 ]
+  # SIGUSR1's default action is to terminate: alive afterwards = not signalled.
+  kill -0 "$other" 2>/dev/null || { echo "tmux-helper ($other) was signalled"; false; }
+  [ ! -e "$TEST_HOME/never" ]
+}
+
+@test "rescue: a recorded pid now held by a different incarnation is never signalled" {
+  command -v tmux >/dev/null 2>&1 || skip "tmux not installed"
+  _src_tmux
+  cd "$TEST_HOME"
+  local d sock pid; d="$(mktemp -d "$TEST_HOME/reuse.XXXXXX")"; sock="$d/s"
+  tmux -S "$sock" new-session -d -s clikae-claude-reuse 'sleep 30'
+  pid="$(tmux -S "$sock" display-message -p '#{pid}')"
+  OWN_PIDS="$pid"
+  mkdir -p "$CLIKAE_HOME/state/tmux"
+  # The pid on record is right, the incarnation is not: what a reused pid
+  # looks like from here. Same uid, same comm — only the start time differs.
+  printf '%s\t%s\t%s\n' "$pid" "Thu Jan  1 00:00:00 1970" "$sock" > "$CLIKAE_HOME/state/tmux/servers"
+  rm -f "$sock"
+  run tmux_rescue_orphans
+  [ "$status" -eq 0 ]
+  # A signalled tmux server would have re-created its socket.
+  [ ! -e "$sock" ] || { echo "the server was signalled: socket is back"; false; }
+  kill -0 "$pid"
+  ! grep -q "^$pid	" "$CLIKAE_HOME/state/tmux/servers" || false
+}
+
+@test "rescue: \$TMUX names a server we are not inside -> not signalled (no record, no proof)" {
+  command -v tmux >/dev/null 2>&1 || skip "tmux not installed"
+  _src_tmux
+  local d sock pid; d="$(mktemp -d "$TEST_HOME/notours.XXXXXX")"; sock="$d/s"
+  tmux -S "$sock" new-session -d -s x 'sleep 30'
+  pid="$(tmux -S "$sock" display-message -p '#{pid}')"
+  OWN_PIDS="$pid"
+  rm -f "$sock"
+  rm -f "$CLIKAE_HOME/state/tmux/servers"
+  # An inherited $TMUX outlives its server; the pid in it can be anyone's now.
+  TMUX="$sock,$pid,0" tmux_rescue_orphans
+  [ ! -e "$sock" ] || { echo "signalled a server this process is not inside"; false; }
+}
+
+@test "record: recording the same server twice leaves one line" {
+  command -v tmux >/dev/null 2>&1 || skip "tmux not installed"
+  _src_tmux
+  tmux new-session -d -s clikae-claude-twice 'sleep 30'
+  tmux_server_record
+  tmux_server_record
+  local pid; pid="$(tmux display-message -p '#{pid}')"
+  [ "$(grep -c "^$pid	" "$CLIKAE_HOME/state/tmux/servers")" -eq 1 ] \
+    || { cat "$CLIKAE_HOME/state/tmux/servers"; false; }
+}
+
+@test "record: concurrent recorders and rescues lose no server" {
+  command -v tmux >/dev/null 2>&1 || skip "tmux not installed"
+  _src_tmux
+  # One real socket for every record to point at, so a rescue keeps them all.
+  tmux new-session -d -s clikae-claude-many 'sleep 30'
+  local shared_sock; shared_sock="$(tmux_socket_path)"
+  # Twenty live "servers": copies of sleep under the name tmux, our own pids.
+  mkdir -p "$TEST_HOME/fakebin"
+  cp "$(command -v sleep)" "$TEST_HOME/fakebin/tmux"
+  local -a pids=(); local i p
+  for i in $(seq 1 20); do "$TEST_HOME/fakebin/tmux" 30 & pids+=($!); done
+  OWN_PIDS="${pids[*]}"
+  sleep 0.2
+  local -a jobs=()
+  for p in "${pids[@]}"; do
+    (
+      # Stand-in for the server answering "who are you": this pid, that socket.
+      # (Not named $sock: the stub runs inside tmux_server_record, whose own
+      # `local sock` would shadow it — bash scope is dynamic.)
+      tmux() {
+        case "$*" in
+          *'#{pid}'*) echo "$p" ;;
+          *'#{socket_path}'*) echo "$shared_sock" ;;
+          *) command tmux "$@" ;;
+        esac
+      }
+      tmux_server_record
+    ) & jobs+=($!)
+    ( tmux_rescue_orphans ) & jobs+=($!)
+  done
+  for p in "${jobs[@]}"; do wait "$p" || true; done
+  local rec="$CLIKAE_HOME/state/tmux/servers" missing=""
+  for p in "${pids[@]}"; do grep -q "^$p	" "$rec" || missing="$missing $p"; done
+  [ -z "$missing" ] || { echo "lost:$missing"; cat "$rec"; false; }
+  [ "$(wc -l < "$rec" | tr -d ' ')" -eq 20 ] || { cat "$rec"; false; }
+  # No temp file left behind by any writer.
+  [ -z "$(ls "$CLIKAE_HOME/state/tmux" | grep -v '^servers$' | grep -v '^tmux-' || true)" ] \
+    || { ls -la "$CLIKAE_HOME/state/tmux"; false; }
+}
+
+@test "endpoints: inside an OLD-server cockpit, the board and the launch still find the new server" {
+  command -v tmux >/dev/null 2>&1 || skip "tmux not installed"
+  _src_tmux
+  export CLIKAE_SESS_PREFIX="clikae-" CLIKAE_SESS_PREFIX_LEGACY="ck-"
+  tmux new-session -d -s clikae-claude-newb 'sleep 30'
+  local home; home="$(tmux_socket_path)"
+  _legacy_up clikae-claude-olda
+  local lpid; lpid="$(tmux -S "$LEGACY_SOCK" display-message -p '#{pid}')"
+  # Cockpit A is on the /tmp server and this shell is inside it.
+  export TMUX="$LEGACY_SOCK,$lpid,0"
+  run live_session_names
+  [[ "$output" == *"clikae-claude-olda"* ]] || { echo "$output"; false; }
+  [[ "$output" == *"clikae-claude-newb"* ]] || { echo "new server hidden: $output"; false; }
+  run tmux_on clikae-claude-newb display-message -p -t =clikae-claude-newb '#{socket_path}'
+  [ "$output" = "$home" ]
+  tmux_sessv claude-newb
+  [ "$CLIKAE_TMUX_SESS_EXISTS" -eq 1 ]
+  [ "$CLIKAE_TMUX_SESS" = "clikae-claude-newb" ]
+  [ "$CLIKAE_TMUX_SESS_SOCK" = "$home" ]
+  # Current server first: a name on both resolves to the one $TMUX is on.
+  tmux -S "$LEGACY_SOCK" new-session -d -s clikae-claude-newb 'sleep 30'
+  tmux_sessv claude-newb
+  [ "$CLIKAE_TMUX_SESS_SOCK" = "$LEGACY_SOCK" ]
+}
+
+@test "launch: tmux_sessv rescues a swept server BEFORE deciding the session is not there" {
+  command -v tmux >/dev/null 2>&1 || skip "tmux not installed"
+  _src_tmux
+  export CLIKAE_SESS_PREFIX="clikae-"
+  tmux_spawn_session --session clikae-claude-direct -- 'sleep 30'
+  local sock; sock="$(tmux_socket_path)"
+  ORPHAN_SOCK="$sock"
+  rm -rf "$(dirname "$sock")"
+  # No board in between: straight to the launch decision.
+  tmux_sessv claude-direct
+  [ "$CLIKAE_TMUX_SESS_EXISTS" -eq 1 ] || { echo "would spawn a twin"; false; }
+  [ -S "$sock" ]
+}
+
+# Shared by the two binary-level cases: a codex tank whose engine leaves a
+# mark if it is ever started, and no first-run question to block a pty.
+_codex_tank_marking() {
+  local bin="$TEST_HOME/bin"; mkdir -p "$bin"
+  printf '#!/usr/bin/env bash\n: > "%s/engine-started"\nsleep 30\n' "$TEST_HOME" > "$bin/codex"
+  chmod +x "$bin/codex"; PATH="$bin:$PATH"; export PATH
+  clikae init codex T1 >/dev/null
+  printf 'off\n' > "$CLIKAE_HOME/wake-on-reset"
+}
+
+@test "launch: direct \`clikae codex T1\` after a sweep reaches the live cockpit, no twin" {
+  command -v tmux >/dev/null 2>&1 || skip "tmux not installed"
+  command -v python3 >/dev/null 2>&1 || skip "python3 needed for a pty"
+  _src_tmux
+  _codex_tank_marking
+  # The cockpit, born through clikae (so it is on record). Its "engine" ends
+  # on its own so the attach below returns — late enough to outlive the
+  # launch's own startup, which a 3s one did not.
+  tmux_spawn_session --session clikae-codex-T1 -- 'sleep 10'
+  local sock; sock="$(tmux_socket_path)"
+  ORPHAN_SOCK="$sock"
+  rm -rf "$(dirname "$sock")"
+  run _pty_run "$CLIKAE_BIN" codex T1
+  [ ! -e "$TEST_HOME/engine-started" ] || { echo "a second engine was started: $output"; false; }
+}
+
+@test "switch: inside a cockpit on one server, launching a tank whose cockpit is on the OTHER lands there, no twin" {
+  command -v tmux >/dev/null 2>&1 || skip "tmux not installed"
+  command -v python3 >/dev/null 2>&1 || skip "python3 needed for a pty"
+  _src_tmux
+  _codex_tank_marking
+  local home; home="$(tmux_socket_path)"
+  # The tank's cockpit lives on the /tmp (legacy) server…
+  _legacy_up clikae-codex-T1
+  # …and the human is attached to a cockpit on the clikae server, where they
+  # type `clikae codex T1`.
+  local go="$TEST_HOME/go"
+  tmux new-session -d -s outer -x 80 -y 24 \
+    "while [ ! -e '$go' ]; do sleep 0.1; done; '$CLIKAE_BIN' codex T1; sleep 30"
+  _pty_run tmux -S "$home" attach -t =outer >/dev/null 2>&1 & OWN_PIDS="$!"
+  local i=0
+  while [ "$i" -lt 50 ] && [ -z "$(tmux list-clients -t =outer 2>/dev/null)" ]; do sleep 0.1; i=$((i + 1)); done
+  [ -n "$(tmux list-clients -t =outer 2>/dev/null)" ] || { echo "control: no client on outer"; false; }
+  : > "$go"
+  i=0
+  while [ "$i" -lt 100 ] && [ -z "$(tmux -S "$LEGACY_SOCK" list-clients -t =clikae-codex-T1 2>/dev/null)" ]; do
+    sleep 0.1; i=$((i + 1))
+  done
+  [ -n "$(tmux -S "$LEGACY_SOCK" list-clients -t =clikae-codex-T1 2>/dev/null)" ] \
+    || { echo "never landed in the existing cockpit"; tmux capture-pane -p -t =outer: 2>&1; false; }
+  ! tmux has-session -t =clikae-codex-T1 2>/dev/null || { echo "twin on the clikae server"; false; }
+  [ ! -e "$TEST_HOME/engine-started" ] || { echo "a second engine was started"; false; }
 }

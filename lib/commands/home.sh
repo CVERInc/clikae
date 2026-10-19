@@ -2994,8 +2994,16 @@ EOF
       #
       # Inside tmux, moving the current client is the right verb; a nested attach
       # is what `switch-client` exists to prevent.
+      #
+      # The board lists EVERY tmux server (DESIGN-tmux Rule 13), so the row can
+      # be on the other one: tmux_switch_to crosses servers with a handoff, and
+      # the attach names the server the session is actually on.
       if [ -n "${TMUX:-}" ]; then
-        exec tmux switch-client -t "=$note"
+        tmux_switch_to "$note"
+      fi
+      local _note_sock
+      if _note_sock="$(tmux_session_socket "$note")"; then
+        exec tmux -S "$_note_sock" attach -t "=$note"
       fi
       exec tmux attach -t "=$note"
       ;;

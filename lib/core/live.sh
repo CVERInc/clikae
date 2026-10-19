@@ -30,6 +30,7 @@ live_session_names() {
   # clikae#176: a server whose socket was swept is alive and invisible. Give
   # it its socket back BEFORE asking who is there, so the first board after
   # the sweep shows the cockpit rather than a blank (DESIGN-tmux Rule 13).
+  # tmux_sessv does the same before a launch decides; this is the board's.
   declare -F tmux_rescue_orphans >/dev/null 2>&1 && tmux_rescue_orphans
   live_session_names_for "${CLIKAE_SESS_PREFIX:-}"
 }
@@ -44,31 +45,30 @@ live_session_names() {
 # (tests/bats/sess-prefix.bats pins that), and that is a different question
 # from "which live sessions are ours to inspect".
 live_session_names_for() {
-  local prefix="$1" legacy
+  local prefix="$1" sock
   command -v tmux >/dev/null 2>&1 || return 0
   # 🔴 An unset prefix here is WORSE than a no-op: `^(|)` matches every line, so
   # the board would claim every tmux session on the machine — including the ones
   # the human made by hand, which the prefix exists to leave alone. Refuse.
   [ -n "$prefix" ] || return 0
-  # clikae#176 / DESIGN-tmux Rule 13: BOTH sockets. The current one (under
-  # $CLIKAE_HOME/state/tmux, or whatever $TMUX / TMUX_TMPDIR says) and, while
-  # it still has a live server, the pre-#176 /tmp one — a cockpit started by
-  # an older clikae lives there until it is restarted, and a board that does
-  # not read it would once again show nothing for a session that is very much
-  # running. Same name on both: the current socket's row wins, once.
-  legacy="$(tmux_legacy_socket 2>/dev/null)" || legacy=""
-  {
-    _live_rows_on "" "$prefix"
-    [ -n "$legacy" ] && _live_rows_on "$legacy" "$prefix"
-  } | LC_ALL=C awk -F'\t' 'NF && !seen[$1]++' \
-    | sort -t'	' -k2,2 -rn || true
+  # clikae#176 / DESIGN-tmux Rule 13: EVERY server, whichever one this shell
+  # is on. The clikae one (under $CLIKAE_HOME/state/tmux) and the pre-#176 /tmp
+  # one — a cockpit started by an older clikae lives there until it is
+  # restarted — and the caller's own, which inside an old cockpit IS the /tmp
+  # one. Asking only "current + legacy" hid the clikae server from a board run
+  # inside an old cockpit. tmux_endpoints lists the current server first, so
+  # the same name on two servers is one row, the current server's.
+  while IFS= read -r sock; do
+    [ -n "$sock" ] && _live_rows_on "$sock" "$prefix"
+  done <<EOF | LC_ALL=C awk -F'\t' 'NF && !seen[$1]++' | sort -t'	' -k2,2 -rn || true
+$(tmux_endpoints)
+EOF
 }
 
-# _live_rows_on <socket-or-empty> <prefix> -> the rows of ONE server, unsorted.
+# _live_rows_on <socket> <prefix> -> the rows of ONE server, unsorted.
 _live_rows_on() {
   local sock="$1" prefix="$2"
-  local -a t=(tmux)
-  [ -n "$sock" ] && t=(tmux -S "$sock")
+  local -a t=(tmux -S "$sock")
   # 🔴 THE SEPARATOR INSIDE A tmux `-F` FORMAT MUST BE PRINTABLE ASCII.
   # tmux renders a TAB in a format string as `_`, and control characters
   # likewise, whenever the tmux CLIENT's locale is C/POSIX — measured on

@@ -174,7 +174,7 @@ KV
   # and whether it is already up. Sessions started before 0.28.3 are still
   # named `ck-…`, and tmux_sessv finds those too — attaching to the one you
   # already have is the point of keeping the old prefix readable.
-  local CLIKAE_TMUX_SESS CLIKAE_TMUX_SESS_EXISTS
+  local CLIKAE_TMUX_SESS CLIKAE_TMUX_SESS_EXISTS CLIKAE_TMUX_SESS_SOCK
   tmux_sessv "$sess_id"
   # 🔴 EXISTING IS NOT THE SAME AS USABLE. A session whose only window is the
   # wake waiter has no engine to talk to; attaching to it is how a human ends up
@@ -184,6 +184,18 @@ KV
     log_dim "That session had only its wake watcher left — starting the engine again."
     tmux_on "$CLIKAE_TMUX_SESS" kill-session -t "=$CLIKAE_TMUX_SESS" 2>/dev/null
     CLIKAE_TMUX_SESS_EXISTS=0
+    CLIKAE_TMUX_SESS_SOCK=""
+  fi
+  # DESIGN-tmux Rule 13: the cockpit can be on the OTHER tmux server (the
+  # pre-#176 /tmp one, or the clikae one when this shell is inside an old
+  # cockpit). Everything below that talks to the session with a bare `tmux`
+  # (label, id stamp, watcher) would be talking to the wrong server, and
+  # switch-client cannot cross servers — so a session over there is left as
+  # it is and the client is HANDED to it (tmux_switch_to / tmux_attach).
+  local _sess_elsewhere=0
+  if [ "$CLIKAE_TMUX_SESS_EXISTS" -eq 1 ] && [ -n "$CLIKAE_TMUX_SESS_SOCK" ] \
+     && ! [ "$CLIKAE_TMUX_SESS_SOCK" -ef "$(tmux_socket_path)" ]; then
+    _sess_elsewhere=1
   fi
 
   # Deterministic identity, decided BEFORE the engine ever runs — and only when
@@ -275,7 +287,7 @@ EOF
     [ "$CLIKAE_TMUX_SESS_EXISTS" -eq 1 ] || \
       tmux_spawn_session "${spawn_env[@]}" \
         --session "$CLIKAE_TMUX_SESS" --window "$engine" -- "bash -c $(_switch_shquote "$target_cmd")"
-    tmux_label "$CLIKAE_TMUX_SESS" "$engine" "$tank"
+    [ "$_sess_elsewhere" -eq 1 ] || tmux_label "$CLIKAE_TMUX_SESS" "$engine" "$tank"
     # See tmux_set_session_id (lib/core/tmux.sh) and the identity block above:
     # only stamp a session we JUST spawned, with whichever id (resumed or
     # freshly minted) that spawn actually used — never on an attach, which
@@ -285,7 +297,9 @@ EOF
     fi
     # The watcher window now serves two features: waking a limited tank and the
     # warm /compact (#131). Either one is reason enough to put it there.
-    if wake_enabled; then
+    if [ "$_sess_elsewhere" -eq 1 ]; then
+      :
+    elif wake_enabled; then
       wake_attach_watcher "$CLIKAE_TMUX_SESS" "$engine" "$tank"
     elif _switch_compact_wanted "$engine" "$tank"; then
       wake_attach_watcher "$CLIKAE_TMUX_SESS" "$engine" "$tank" compact-only
@@ -300,7 +314,9 @@ EOF
     local clients
     clients="$(tmux list-clients -t "=$current_pane_session" 2>/dev/null || true)"
     if [ -n "$clients" ]; then
-      exec tmux switch-client -t "=$CLIKAE_TMUX_SESS"
+      # Same server: switch-client. The other server: detach-client -E hands
+      # this terminal to an attach there (tmux_switch_to, Rule 13).
+      tmux_switch_to "$CLIKAE_TMUX_SESS" "$CLIKAE_TMUX_SESS_SOCK"
     fi
     # No client on this pane's session to move — we are inside a DETACHED one (a
     # burn wrapper, an agent run, a pane whose client went away). The engine has
@@ -309,7 +325,11 @@ EOF
     # (and spends the account's quota). Say where it went instead. Not an attach:
     # attaching from inside tmux is what `switch-client` exists to avoid.
     log_info "Started $engine/$tank in tmux session $CLIKAE_TMUX_SESS (no client here to switch)."
-    log_dim  "Reach it with:  tmux switch-client -t $CLIKAE_TMUX_SESS   (or: tmux attach -t $CLIKAE_TMUX_SESS)"
+    if [ "$_sess_elsewhere" -eq 1 ]; then
+      log_dim  "Reach it with:  tmux -S $CLIKAE_TMUX_SESS_SOCK attach -t $CLIKAE_TMUX_SESS   (it is on the other tmux server)"
+    else
+      log_dim  "Reach it with:  tmux switch-client -t $CLIKAE_TMUX_SESS   (or: tmux attach -t $CLIKAE_TMUX_SESS)"
+    fi
   else
     local started_here=0
     if [ "$CLIKAE_TMUX_SESS_EXISTS" -eq 0 ]; then
@@ -326,7 +346,11 @@ EOF
     # the old name in its command and exits when that name stops resolving.
     # The watcher window now serves two features: waking a limited tank and the
     # warm /compact (#131). Either one is reason enough to put it there.
-    if wake_enabled; then
+    # Not on a session that is on the other server (bare tmux cannot see it;
+    # tmux_attach below reaches it with tmux_on).
+    if [ "$_sess_elsewhere" -eq 1 ]; then
+      :
+    elif wake_enabled; then
       wake_attach_watcher "$CLIKAE_TMUX_SESS" "$engine" "$tank"
     elif _switch_compact_wanted "$engine" "$tank"; then
       wake_attach_watcher "$CLIKAE_TMUX_SESS" "$engine" "$tank" compact-only
@@ -471,10 +495,10 @@ EOF
     # no file-access grant, which no later call can repair (DESIGN-tmux Rule 7).
     if tmux_usable; then
       local started_here=0
-      local CLIKAE_TMUX_SESS CLIKAE_TMUX_SESS_EXISTS
+      local CLIKAE_TMUX_SESS CLIKAE_TMUX_SESS_EXISTS CLIKAE_TMUX_SESS_SOCK
       tmux_sessv "$tank_id"
       if [ "$CLIKAE_TMUX_SESS_EXISTS" -eq 1 ] && ! tmux_sess_has_engine "$CLIKAE_TMUX_SESS"; then
-        tmux kill-session -t "=$CLIKAE_TMUX_SESS" 2>/dev/null
+        tmux_on "$CLIKAE_TMUX_SESS" kill-session -t "=$CLIKAE_TMUX_SESS" 2>/dev/null
         CLIKAE_TMUX_SESS_EXISTS=0
       fi
       if [ "$CLIKAE_TMUX_SESS_EXISTS" -eq 0 ]; then
