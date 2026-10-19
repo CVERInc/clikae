@@ -37,7 +37,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **The wake watcher reloads itself after an upgrade and is never the window
   a human lands on** (#168). Once a tick it checks whether its own binary
   carries a different version or is gone (brew removed the Cellar) and
-  re-execs the installed `clikae`; creating the watcher window ends by
+  re-execs the installed `clikae` — only once that replacement resolves and
+  reads coherently (a wrapper whose target is not installed yet keeps the
+  running watcher, which says why); creating the watcher window ends by
   selecting the engine window; the status line says `ctrl-b 0 returns to
   claude`.
 
