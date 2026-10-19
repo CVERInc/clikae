@@ -4080,6 +4080,7 @@ EOF
 # prompt, and opening the board must never spend model quota. An expired
 # token's read just fails; the row keeps its dim last-good light and its note
 # names the one manual step. agy is skipped: there is no reading to refresh. Prints the count fired.
+# shellcheck disable=SC2120  # [now] is optional: the board omits it, tests pass it
 _home_usage_refresh_on_open() {
   local now="${1:-}" ttl e t _p f line ca mark n=0
   declare -F usage_read >/dev/null 2>&1 || { printf '0'; return 0; }
