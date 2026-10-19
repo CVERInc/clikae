@@ -12,6 +12,14 @@
 # tablet's. That is not a limitation to apologise for: it is the truth about where
 # a session lives, and seeing it stated makes the mental model right.
 
+# Every per-session tmux call below goes through tmux_on (lib/core/tmux.sh,
+# Rule 13) so a session on the pre-#176 /tmp socket is reached too. A caller
+# that sourced only this file (live.bats does) gets tmux.sh pulled in here,
+# the same way tmux.sh pulls in runtime.sh.
+# shellcheck source=./tmux.sh
+declare -F tmux_on >/dev/null 2>&1 ||
+  source "${CLIKAE_LIB:-$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)}/core/tmux.sh"
+
 # live_session_names -> the clikae-owned tmux sessions, newest first, one per line
 # as: name <TAB> created-epoch <TAB> attached(0/1)
 #
