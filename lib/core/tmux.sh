@@ -83,9 +83,152 @@ CLIKAE_SESS_PREFIX_LEGACY="ck-"
 declare -F runtime_lib >/dev/null 2>&1 ||
   source "${CLIKAE_LIB:-$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)}/core/runtime.sh"
 
+# ── WHERE THE SOCKET LIVES (clikae#176, DESIGN-tmux Rule 13) ─────────────────
+#
+# tmux puts its socket at $TMUX_TMPDIR/tmux-<uid>/default, and with the
+# variable unset that is /tmp/tmux-<uid>/default. /tmp is the one directory on
+# a machine that something else is entitled to sweep. reefbox, 2026-10-17: a
+# cleanup removed /tmp/tmux-1002 (old mtime, looked like a leftover). The
+# two-day-old cockpit inside kept running — the server does not need its
+# socket to keep its panes alive — but from the outside it had ceased to
+# exist: the board listed nothing, attach found nothing, `clikae claude goby
+# -- --resume <id>` dutifully started a SECOND engine on the same transcript
+# (the harness read the old one as "previous session ended" and stopped every
+# background task in it), and `clikae burn` died with "error creating
+# /tmp/tmux-1002/default" because the directory it wanted to make the socket
+# in was gone.
+#
+# The class is "clikae's most important process keeps its only handle in a
+# directory clikae does not own". The fix is to own the directory: the socket
+# goes under $CLIKAE_HOME/state/tmux, the same home as every other state file,
+# which no /tmp sweep reaches. TMUX_TMPDIR, not `-S`: every tmux call in this
+# codebase, the guard shim, the wake waiter inside the session and the user's
+# own `tmux ls` from a clikae shell all follow the variable for free, where a
+# `-S` would have to be threaded through sixty call sites and remembered by
+# the next one.
+#
+# Precedence stays tmux's own: -S > -L > $TMUX > TMUX_TMPDIR. An explicit
+# TMUX_TMPDIR is respected (the test suite isolates itself with exactly that),
+# and an inherited $TMUX wins over everything, so a `clikae` typed inside a
+# cockpit keeps talking to the server that cockpit is on — including a cockpit
+# started by an older clikae on the /tmp socket.
+#
+# 🔴 A tmux SESSION CANNOT MOVE BETWEEN SERVERS. A cockpit born on the /tmp
+# socket stays there until it is restarted. Until then the board reads BOTH
+# sockets (live_session_names_for), per-session commands go to whichever server
+# holds the session (tmux_on), and a launch finds the old-socket session instead
+# of spawning a twin (tmux_sessv). The restart is the migration; nothing here
+# does it for the human, because nothing can.
+#
+# 🔴 A SERVER WHOSE SOCKET WAS DELETED IS NOT DEAD, and tmux knows how to
+# recover one: SIGUSR1 makes the server re-create its socket at the path it was
+# born with. Which needs the pid — so every server born here is written down
+# (pid, socket) in $CLIKAE_HOME/state/tmux/servers, and $TMUX itself carries
+# the pid for a shell inside the orphan. tmux_rescue_orphans does the signal,
+# and the board calls it before listing, so the first `clikae` after a sweep
+# shows the cockpit again instead of a blank.
+
+# tmux_socket_init — decide the socket directory for this process and
+# everything it forks. Called once from bin/clikae, right after CLIKAE_HOME.
+tmux_socket_init() {
+  [ -z "${TMUX_TMPDIR:-}" ] || return 0
+  TMUX_TMPDIR="${CLIKAE_HOME:-$HOME/.clikae}/state/tmux"
+  export TMUX_TMPDIR
+  mkdir -p "$TMUX_TMPDIR" 2>/dev/null || true
+  chmod 0700 "$TMUX_TMPDIR" 2>/dev/null || true
+}
+
+# tmux_socket_path -> the socket a bare `tmux` in this process would talk to.
+tmux_socket_path() {
+  if [ -n "${TMUX:-}" ]; then printf '%s\n' "${TMUX%%,*}"; return 0; fi
+  printf '%s/tmux-%s/default\n' "${TMUX_TMPDIR:-/tmp}" "$(id -u)"
+}
+
+# tmux_legacy_socket -> the pre-#176 socket, printed only when it is a
+# different, live socket from the current one. CLIKAE_TMUX_LEGACY_SOCKET
+# exists for the test suite, which must never point this at the real /tmp one.
+tmux_legacy_socket() {
+  local legacy="${CLIKAE_TMUX_LEGACY_SOCKET:-/tmp/tmux-$(id -u)/default}"
+  [ "$legacy" != "$(tmux_socket_path)" ] || return 1
+  [ -S "$legacy" ] || return 1
+  printf '%s\n' "$legacy"
+}
+
+# tmux_on <session> <tmux args…> — run tmux against whichever server holds
+# <session>: the current socket if it is there (or nowhere), the legacy socket
+# if only that one has it. Same exit code as tmux.
+tmux_on() {
+  local session="$1" legacy; shift
+  if ! tmux has-session -t "=$session" 2>/dev/null \
+     && legacy="$(tmux_legacy_socket)" \
+     && tmux -S "$legacy" has-session -t "=$session" 2>/dev/null; then
+    tmux -S "$legacy" "$@"
+    return $?
+  fi
+  tmux "$@"
+}
+
+# tmux_server_record — write (pid, socket) of the server a bare tmux reaches.
+# One line per pid; re-recording the same server replaces its line.
+tmux_server_record() {
+  local pid sock dir rec
+  pid="$(tmux display-message -p '#{pid}' 2>/dev/null)" || return 0
+  sock="$(tmux display-message -p '#{socket_path}' 2>/dev/null)" || return 0
+  case "$pid" in ''|*[!0-9]*) return 0 ;; esac
+  [ -n "$sock" ] || return 0
+  dir="${CLIKAE_HOME:-$HOME/.clikae}/state/tmux"; rec="$dir/servers"
+  mkdir -p "$dir" 2>/dev/null || return 0
+  {
+    [ -f "$rec" ] && grep -v "^$pid	" "$rec"
+    printf '%s\t%s\n' "$pid" "$sock"
+  } > "$rec.tmp" 2>/dev/null && mv -f "$rec.tmp" "$rec" 2>/dev/null || true
+}
+
+# tmux_rescue_orphans — for every server on record (and the one named by an
+# inherited $TMUX) that is alive but whose socket file is gone, ask it to
+# re-create the socket. Records of pids that are dead, or no longer a tmux
+# server, are dropped: a reused pid must never be signalled.
+tmux_rescue_orphans() {
+  command -v tmux >/dev/null 2>&1 || return 0
+  local dir="${CLIKAE_HOME:-$HOME/.clikae}/state/tmux" rec cands="" keep="" pid sock comm i
+  rec="$dir/servers"
+  [ -f "$rec" ] && cands="$(cat "$rec" 2>/dev/null)"
+  if [ -n "${TMUX:-}" ]; then
+    pid="${TMUX#*,}"; pid="${pid%%,*}"
+    cands="$cands"$'\n'"$pid"$'\t'"${TMUX%%,*}"
+  fi
+  [ -n "$cands" ] || return 0
+  while IFS=$'\t' read -r pid sock; do
+    [ -n "$pid" ] && [ -n "$sock" ] || continue
+    case "$pid" in *[!0-9]*) continue ;; esac
+    kill -0 "$pid" 2>/dev/null || continue
+    comm="$(ps -o comm= -p "$pid" 2>/dev/null || true)"
+    case "${comm##*/}" in tmux*) ;; *) continue ;; esac
+    keep="$keep$pid"$'\t'"$sock"$'\n'
+    [ -S "$sock" ] && continue
+    mkdir -p "$(dirname "$sock")" 2>/dev/null || continue
+    chmod 0700 "$(dirname "$sock")" 2>/dev/null || true
+    kill -USR1 "$pid" 2>/dev/null || continue
+    i=0
+    while [ "$i" -lt 40 ] && [ ! -S "$sock" ]; do sleep 0.05; i=$((i + 1)); done
+    if [ -S "$sock" ]; then
+      declare -F log_dim >/dev/null 2>&1 \
+        && log_dim "Recovered the tmux socket of server $pid at $sock (it had been deleted; the sessions on it were never gone)."
+    fi
+  done <<EOF
+$cands
+EOF
+  if [ -f "$rec" ] || [ -n "$keep" ]; then
+    mkdir -p "$dir" 2>/dev/null || return 0
+    printf '%s' "$keep" | LC_ALL=C awk -F'\t' '!seen[$1]++' > "$rec.tmp" 2>/dev/null \
+      && mv -f "$rec.tmp" "$rec" 2>/dev/null || true
+  fi
+  return 0
+}
+
 tmux_sess_has_engine() {
   command -v tmux >/dev/null 2>&1 || return 1
-  tmux list-windows -t "=$1:" -F '#{window_name}' 2>/dev/null \
+  tmux_on "$1" list-windows -t "=$1:" -F '#{window_name}' 2>/dev/null \
     | grep -qvE '^wake( |$)'
 }
 
@@ -115,7 +258,23 @@ tmux_sessv() {
   # idempotent, so the waiter comes back on the very next launch rather than
   # being silently lost. It is the 3:50am nudge; it does not get to go missing.
   local _legacy="$CLIKAE_SESS_PREFIX_LEGACY$1"
-  tmux has-session -t "=$_legacy" 2>/dev/null || return 0
+  if ! tmux has-session -t "=$_legacy" 2>/dev/null; then
+    # Neither name on this socket. A cockpit started by a pre-#176 clikae is
+    # on the /tmp socket (Rule 13) — find it there, under either name, and
+    # answer to it as-is. Spawning here instead is the "second engine on the
+    # same transcript" failure of 2026-10-17. No rename across sockets: the
+    # old server keeps its names until it is restarted.
+    local _lsock _n
+    _lsock="$(tmux_legacy_socket 2>/dev/null)" || return 0
+    for _n in "$CLIKAE_TMUX_SESS" "$_legacy"; do
+      if tmux -S "$_lsock" has-session -t "=$_n" 2>/dev/null; then
+        CLIKAE_TMUX_SESS="$_n"
+        CLIKAE_TMUX_SESS_EXISTS=1
+        return 0
+      fi
+    done
+    return 0
+  fi
   CLIKAE_TMUX_SESS_EXISTS=1
   if ! tmux rename-session -t "=$_legacy" "$CLIKAE_TMUX_SESS" 2>/dev/null; then
     # Something took the new name between the check above and here, or this tmux
@@ -739,6 +898,9 @@ tmux_spawn_session() {
   tmux set-option -s set-clipboard on 2>/dev/null || true
 
   if [ "$births_server" -eq 1 ]; then tmux_server_born_note; fi
+  # Rule 13: (pid, socket) on record, every spawn, not only at birth — a server
+  # born by an older clikae has no record yet, and this is the first chance.
+  tmux_server_record
   return 0
 }
 
@@ -1577,7 +1739,9 @@ tmux_set_session_id() {
 # and a session nobody can see still spends the account's quota.
 tmux_attach() {
   local session="$1" started_here="$2" scrollback_file="$3"
-  if tmux attach -t "=$session"; then
+  # tmux_on: a cockpit still on the pre-#176 /tmp socket is attached where it
+  # is (Rule 13). Inside it $TMUX takes over and every later call is local.
+  if tmux_on "$session" attach -t "=$session"; then
     if [ -s "$scrollback_file" ]; then
       awk '/^$/{b=b "\n"; next} {printf "%s%s\n", b, $0; b=""}' "$scrollback_file"
       rm -f "$scrollback_file"
@@ -1601,11 +1765,11 @@ tmux_attach() {
   # A session that simply ENDED is not either of these: measured rc=0, with and
   # without other sessions on the server, so it never reaches this line. That
   # matters — a wrong 2 here would relaunch an engine the human just quit.
-  if ! tmux has-session -t "=$session" 2>/dev/null && ! tmux list-sessions >/dev/null 2>&1; then
+  if ! tmux_on "$session" has-session -t "=$session" 2>/dev/null && ! tmux list-sessions >/dev/null 2>&1; then
     rm -f "$scrollback_file"
     return 2
   fi
-  [ "$started_here" -eq 1 ] && tmux kill-session -t "=$session" 2>/dev/null
+  [ "$started_here" -eq 1 ] && tmux_on "$session" kill-session -t "=$session" 2>/dev/null
   rm -f "$scrollback_file"
   return 1
 }

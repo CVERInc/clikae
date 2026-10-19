@@ -182,7 +182,7 @@ KV
   # lost, the waiter is the only thing in there, and it re-attaches on launch.
   if [ "$CLIKAE_TMUX_SESS_EXISTS" -eq 1 ] && ! tmux_sess_has_engine "$CLIKAE_TMUX_SESS"; then
     log_dim "That session had only its wake watcher left — starting the engine again."
-    tmux kill-session -t "=$CLIKAE_TMUX_SESS" 2>/dev/null
+    tmux_on "$CLIKAE_TMUX_SESS" kill-session -t "=$CLIKAE_TMUX_SESS" 2>/dev/null
     CLIKAE_TMUX_SESS_EXISTS=0
   fi
 

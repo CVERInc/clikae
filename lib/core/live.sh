@@ -19,6 +19,10 @@
 # suffix (a digest of the argv, so a resumed conversation is its own session).
 # Anything else in the user's tmux is theirs and is left alone.
 live_session_names() {
+  # clikae#176: a server whose socket was swept is alive and invisible. Give
+  # it its socket back BEFORE asking who is there, so the first board after
+  # the sweep shows the cockpit rather than a blank (DESIGN-tmux Rule 13).
+  declare -F tmux_rescue_orphans >/dev/null 2>&1 && tmux_rescue_orphans
   live_session_names_for "${CLIKAE_SESS_PREFIX:-}"
 }
 
@@ -32,12 +36,31 @@ live_session_names() {
 # (tests/bats/sess-prefix.bats pins that), and that is a different question
 # from "which live sessions are ours to inspect".
 live_session_names_for() {
-  local prefix="$1"
+  local prefix="$1" legacy
   command -v tmux >/dev/null 2>&1 || return 0
   # 🔴 An unset prefix here is WORSE than a no-op: `^(|)` matches every line, so
   # the board would claim every tmux session on the machine — including the ones
   # the human made by hand, which the prefix exists to leave alone. Refuse.
   [ -n "$prefix" ] || return 0
+  # clikae#176 / DESIGN-tmux Rule 13: BOTH sockets. The current one (under
+  # $CLIKAE_HOME/state/tmux, or whatever $TMUX / TMUX_TMPDIR says) and, while
+  # it still has a live server, the pre-#176 /tmp one — a cockpit started by
+  # an older clikae lives there until it is restarted, and a board that does
+  # not read it would once again show nothing for a session that is very much
+  # running. Same name on both: the current socket's row wins, once.
+  legacy="$(tmux_legacy_socket 2>/dev/null)" || legacy=""
+  {
+    _live_rows_on "" "$prefix"
+    [ -n "$legacy" ] && _live_rows_on "$legacy" "$prefix"
+  } | LC_ALL=C awk -F'\t' 'NF && !seen[$1]++' \
+    | sort -t'	' -k2,2 -rn || true
+}
+
+# _live_rows_on <socket-or-empty> <prefix> -> the rows of ONE server, unsorted.
+_live_rows_on() {
+  local sock="$1" prefix="$2"
+  local -a t=(tmux)
+  [ -n "$sock" ] && t=(tmux -S "$sock")
   # 🔴 THE SEPARATOR INSIDE A tmux `-F` FORMAT MUST BE PRINTABLE ASCII.
   # tmux renders a TAB in a format string as `_`, and control characters
   # likewise, whenever the tmux CLIENT's locale is C/POSIX — measured on
@@ -59,7 +82,7 @@ live_session_names_for() {
   # The rows this function HANDS BACK are still tab-separated
   # (name <TAB> created <TAB> attached) — that tab is ours, written by awk,
   # and every caller's `IFS=$'\t' read` is unchanged.
-  tmux list-sessions -F '#{session_created}|#{session_attached}|#{session_name}' 2>/dev/null \
+  "${t[@]}" list-sessions -F '#{session_created}|#{session_attached}|#{session_name}' 2>/dev/null \
     | LC_ALL=C awk -v p="$prefix" '
         {
           i = index($0, "|"); if (i == 0) next
@@ -76,8 +99,7 @@ live_session_names_for() {
           if (length(name) <= length(p)) next
           if (substr(name, 1, length(p)) != p) next
           print name "\t" created "\t" attached
-        }' \
-    | sort -t'	' -k2,2 -rn || true
+        }' || true
 }
 
 # live_split <session-name> -> "engine<TAB>tank", or nothing if it names no tank
@@ -128,7 +150,7 @@ live_split() {
 live_wake_note() {
   local name="$1" w
   command -v tmux >/dev/null 2>&1 || return 0
-  w="$(tmux list-windows -t "=$name:" -F '#{window_name}' 2>/dev/null | grep -E '^wake( |$)' | head -n 1)"
+  w="$(tmux_on "$name" list-windows -t "=$name:" -F '#{window_name}' 2>/dev/null | grep -E '^wake( |$)' | head -n 1)"
   [ -n "$w" ] || return 0
   # `wake 13h38m` -> `13h38m`; a bare `wake` has not started counting yet.
   case "$w" in wake\ *) printf '%s' "${w#wake }" ;; esac
@@ -160,7 +182,7 @@ live_wake_note() {
 live_session_id() {
   local name="$1" v=""
   if command -v tmux >/dev/null 2>&1; then
-    v="$(tmux show-options -t "=$name:" -v '@clikae_session_id' 2>/dev/null || true)"
+    v="$(tmux_on "$name" show-options -t "=$name:" -v '@clikae_session_id' 2>/dev/null || true)"
   fi
   if [ -z "$v" ]; then
     v="$(cat "$HOME/.clikae/state/${name}.session_id" 2>/dev/null || true)"
@@ -217,7 +239,7 @@ live_engine_alive() {
   local name="$1" out
   [ -n "$name" ] || return 0
   command -v tmux >/dev/null 2>&1 || return 0
-  out="$(tmux list-windows -t "=$name:" -F '#{window_name} #{pane_dead}' 2>/dev/null)" || return 0
+  out="$(tmux_on "$name" list-windows -t "=$name:" -F '#{window_name} #{pane_dead}' 2>/dev/null)" || return 0
   [ -n "$out" ] || return 0
   # $1, not the whole line: window_name itself can carry spaces (the wake
   # watcher renames itself to "wake 3h 20m left" — wake.sh's countdown), and
