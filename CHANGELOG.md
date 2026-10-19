@@ -18,10 +18,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   still wins). A cockpit started by an older clikae stays on the `/tmp`
   socket until it is restarted — a tmux session cannot move between servers —
   and until then the board lists it, `clikae <tank>` attaches to it instead
-  of spawning a twin, and per-session reads reach it. A server whose socket
-  file was deleted is recovered the next time the board renders: clikae
-  records each server's pid at spawn and asks it (SIGUSR1) to re-create its
-  socket. **To migrate a running cockpit:** quit the engine and start it
+  of spawning a twin, and per-session reads reach it — whichever of the two
+  servers you type the command on: inside an old cockpit the board still
+  lists the new server's sessions, and when the cockpit you asked for is on
+  the other server your terminal is handed over to it (tmux cannot
+  `switch-client` across servers). A server whose socket file was deleted is
+  recovered before the board lists and before a launch decides, so a direct
+  `clikae <engine> <tank>` lands in it instead of starting a second engine:
+  clikae records each server's pid and start time at spawn and asks it
+  (SIGUSR1) to re-create its socket — only after checking that the pid is
+  still that same tmux server of yours. **To migrate a running cockpit:** quit the engine and start it
   again with the same `clikae <engine> <tank>`; the new session is born on
   the new socket. (DESIGN-tmux Rule 13.)
 
