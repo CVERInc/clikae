@@ -858,3 +858,50 @@ ok 2 called from inside tmux, switch moves the client instead of nesting
   ⚠️ 那兩條要用 `"$CLIKAE_BIN"` 不能用 `env LC_ALL=C clikae`——`clikae` 在測試裡是
   **shell function**，`env` 只能 exec 真的檔案，於是會安靜地跑到 PATH 上那一份裝好的
   clikae 去。
+
+### Rule 13: socket 住在 `~/.clikae/state/tmux`，不住 `/tmp`（The Socket Lives Where clikae Owns the Directory, clikae#176）
+
+- **症狀**（reefbox，2026-10-17）：一支 `/tmp` 清理把 `/tmp/tmux-1002` 刪了（目錄 mtime 老，看起來
+  像殘留）。跑了兩天的座艙（tmux session 內的 `claude --resume`）**還活著**——server 不需要 socket
+  也能養著 pane——但從外面看它已經不存在：`clikae` 列不到、attach 不到；使用者再
+  `clikae claude goby -- --resume <同一 id>`，clikae 開了**第二個** tmux server＋第二個 claude 在同一個
+  transcript 上（harness 把舊的當「上一個 session 結束」、背景任務全標 stopped）；`clikae burn` 則
+  rc=255 `error creating /tmp/tmux-1002/default`，因為它要放 socket 的目錄沒了。
+- **診斷**：tmux 的 socket 預設在 `$TMUX_TMPDIR/tmux-<uid>/default`，變數沒設就是 `/tmp`。`/tmp` 是
+  機器上**唯一一個別人有權清掃**的目錄，而 clikae 最重要的那個行程把它唯一的把手放在那裡。這不是
+  「清理腳本太兇」，是「把手放錯地方」。
+- **規範**：
+  1. `bin/clikae` 載入 `lib/core/tmux.sh` 之後**立刻**呼叫 `tmux_socket_init`：`TMUX_TMPDIR` 沒設就
+     設成 `$CLIKAE_HOME/state/tmux`（0700）。走 `TMUX_TMPDIR` 不走 `-S`：整個 codebase 的裸 `tmux`、
+     guard shim、session 裡的 wake waiter、使用者在 clikae shell 裡自己打的 `tmux ls`，全部免費跟著走；
+     `-S` 得穿過六十個呼叫點，而且下一個人會忘。
+  2. **優先序照 tmux 自己的**：`-S` > `-L` > `$TMUX` > `TMUX_TMPDIR`。明確設了 `TMUX_TMPDIR` 的（測試
+     套件就是靠這個隔離）照舊；繼承到 `$TMUX` 的（座艙裡面打 `clikae`）繼續跟那顆 server 講話——包含
+     還在 `/tmp` socket 上、由舊版 clikae 開的座艙。
+  3. 🔴 **tmux session 搬不了 server。** 舊 socket 上的座艙會一直留在那裡，直到人重開它；**重開就是
+     遷移**，clikae 沒有替人做這件事，因為做不到。過渡期三件事讓它不變孤兒：
+     - `live_session_names_for` 讀**兩個** socket（現在的＋`/tmp/tmux-<uid>/default`，後者只在真的有活
+       server 時），同名以現在這顆為準、只列一次（`_live_rows_on` 是單一 server 的那一半）；
+     - `tmux_on <session> <args…>`：逐 session 的指令送到「持有那個 session 的 server」——現在這顆有
+       就走現在這顆、只有舊的有才 `-S` 舊的。`live_session_id`／`live_wake_note`／`live_engine_alive`／
+       `tmux_sess_has_engine`／`tmux_attach`、以及 switch.sh 的「只剩 waiter 就 kill-session」都走它；
+     - `tmux_sessv` 兩個名字在現在這顆都找不到時，再到舊 socket 找一次——找到就 `EXISTS=1`、attach
+       過去，不會再開一個雙胞胎（10-17 的第二個 claude 就是這裡）。舊 socket 上**不做** `ck-` → `clikae-`
+       的 rename，舊 server 的名字歸它自己。
+  4. 🔴 **socket 被刪的 server 沒死，而且 tmux 知道怎麼救**：`SIGUSR1` 會讓 server 在出生時的路徑
+     重建 socket。要的只是 pid——所以每次 `tmux_spawn_session` 都把 `(pid, socket_path)` 寫進
+     `$CLIKAE_HOME/state/tmux/servers`（`tmux_server_record`，每個 pid 一行、重寫覆蓋；**每次 spawn
+     都寫**不只出生時，因為舊版 clikae 生的 server 沒有紀錄，這是第一個機會）；而 `$TMUX`
+     本身就帶 pid（`socket,pid,idx`），所以站在孤兒座艙裡面的 shell 不需要紀錄。
+     `tmux_rescue_orphans` 對每個「pid 活著、`ps -o comm=` 是 tmux、socket 檔不在」的紀錄：先
+     `mkdir -p` 回 socket 的目錄（0700）、`kill -USR1`、等最多 2 秒；pid 已死或已被別的程式重用
+     的紀錄**丟掉、絕不送訊號**。`live_session_names` 列表之前先呼叫它，所以清理之後第一次
+     `clikae` 看到的是座艙回來了，不是一片空白。
+- **收據**：`tests/bats/tmux-socket.bats`（14 條）。紅的時候：`tmux_socket_init: command not found`、
+  `no server appeared on …/.clikae/state/tmux/tmux-1002/default`（真 binary 的 burn 把 server 生在
+  `/tmp`）、`missing legacy row`、`no record at …/state/tmux/servers`。
+- 🔴 **測試套件的隔離要跟著補**：`TMUX_TMPDIR` 擋得住現在這顆、擋不住 `/tmp/tmux-<uid>/default`——
+  那在任何 dogfood 的機器上都是真的，2026-10-19 reefbox 第一輪 gate，`doctor.bats`／`home-narrow.bats`／
+  `live.bats` 的輸出裡出現了維護者五個活的 `clikae-claude-*-burn-*`。讀到已經不對，`tmux_on … kill-session`
+  碰得到才可怕。`tests/helpers.bash` 現在把 `CLIKAE_TMUX_LEGACY_SOCKET` 指到一個不存在的路徑；這個變數
+  只為測試存在，正式環境永遠是 `/tmp/tmux-<uid>/default`。

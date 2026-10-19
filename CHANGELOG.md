@@ -7,6 +7,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **The cockpit's tmux socket no longer lives in `/tmp`** (#176). A `/tmp`
+  sweep that removed `/tmp/tmux-<uid>` left a two-day-old cockpit running but
+  invisible: the board listed nothing, attach found nothing, a resume of the
+  same transcript started a second engine, and `burn` died with "error
+  creating /tmp/tmux-<uid>/default". The socket now defaults to
+  `~/.clikae/state/tmux` (an explicit `TMUX_TMPDIR` or an inherited `$TMUX`
+  still wins). A cockpit started by an older clikae stays on the `/tmp`
+  socket until it is restarted — a tmux session cannot move between servers —
+  and until then the board lists it, `clikae <tank>` attaches to it instead
+  of spawning a twin, and per-session reads reach it. A server whose socket
+  file was deleted is recovered the next time the board renders: clikae
+  records each server's pid at spawn and asks it (SIGUSR1) to re-create its
+  socket. **To migrate a running cockpit:** quit the engine and start it
+  again with the same `clikae <engine> <tank>`; the new session is born on
+  the new socket. (DESIGN-tmux Rule 13.)
+
 ## [0.42.0] — 2026-10-15
 
 ### Fixed

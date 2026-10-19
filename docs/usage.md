@@ -68,6 +68,15 @@ start on the desktop, pick it up from a tablet over ssh.
 Two clients can stay attached at once; clikae does not kick anyone off. If you
 want the other one gone, `tmux attach -d` does that.
 
+The tmux socket lives under `~/.clikae/state/tmux`, not `/tmp`, so a `/tmp`
+cleanup cannot make a running session vanish from the board (it did once —
+the session kept running, nothing could reach it). A session started by an
+older clikae stays on the `/tmp` socket until you restart it: the board still
+lists it and `clikae <engine> <tank>` still lands in it, but the migration is
+the restart — quit the engine, run the same command again. If a cleanup does
+delete the socket file of a running server, the next `clikae` asks that
+server to re-create it and the session is back on the board.
+
 **The bottom row is the command back, the fuel, and what is red** — e.g.
 `clikae resume a52bdc12 │ 5h 42% · 7d 65% │ !2`. The fuel is this tank's
 vendor usage (how much of the 5-hour and 7-day window is spent), and the
