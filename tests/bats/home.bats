@@ -1248,8 +1248,8 @@ _seed_burn_flood_agy() {
   # Both windows named in the note, in the board's one grammar (spent %,
   # "window"/"weekly") — not codex's own "5h 90% left" dialect; the tighter
   # side's reset follows because the light is not green.
-  [[ "$output" == *"window 10%"* ]] || { echo "$output"; false; }
-  [[ "$output" == *"weekly 96%"* ]] || { echo "$output"; false; }
+  [[ "$output" == *"5h 10%"* ]] || { echo "$output"; false; }
+  [[ "$output" == *"7d 96%"* ]] || { echo "$output"; false; }
   [[ "$output" == *"· resets "* ]]  || { echo "$output"; false; }
   [[ "$output" != *"resets resets"* ]] || { echo "$output"; false; }
   [[ "$output" != *"left"* ]]       || { echo "$output"; false; }
@@ -1278,7 +1278,7 @@ _seed_burn_flood_agy() {
   [[ "$output" == *"◐"* ]] || false
   # The vendor's sentence is cached verbatim; the ROW says it in the board's
   # grammar (a phrase the parser does not know would stay verbatim).
-  [[ "$output" == *"weekly 85%"* ]] || { echo "$output"; false; }
+  [[ "$output" == *"7d 85%"* ]] || { echo "$output"; false; }
   [[ "$output" != *"of your weekly limit"* ]] || { echo "$output"; false; }
 }
 
@@ -1336,7 +1336,7 @@ _seed_burn_flood_agy() {
   # the board to a genuinely healthy tank's real reading.
   run _home_fuel_dot "$dry_set" claude healthy
   [[ "$output" == *"●"* ]] || false
-  [[ "$output" == *"window 40%"* ]] || false
+  [[ "$output" == *"5h 40%"* ]] || false
 }
 
 @test "_home_fuel_dot: window and weekly are judged on SEPARATE thresholds, not peak = max(window,weekly) (2026-09-22 decision)" {
@@ -1384,8 +1384,8 @@ _seed_burn_flood_agy() {
   _fdot_seed 89 84 bothok
   run _home_fuel_dot "" claude bothok
   [[ "$output" == *"●"* ]] || false
-  [[ "$output" == *"window 89%"* ]] || false
-  [[ "$output" == *"weekly 84%"* ]] || false
+  [[ "$output" == *"5h 89%"* ]] || false
+  [[ "$output" == *"7d 84%"* ]] || false
 
   # the transcript-dry path (unrelated to the vendor-percentage thresholds
   # above) is still red — unchanged by this split.

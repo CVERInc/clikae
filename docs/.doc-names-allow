@@ -68,6 +68,9 @@ last_window_pct    a JSON field name in `clikae usage --json` (#149)
 last_weekly_pct    a JSON field name in `clikae usage --json` (#149)
 last_at            a JSON field name in `clikae usage --json` (#149)
 last_age_sec       a JSON field name in `clikae usage --json` (#149)
+age_sec            a JSON field name in `clikae usage --json` (#174/#179): the reading's own age
+window_reset_passed a JSON field name in `clikae usage --json` (#174/#179): that axis's reset is behind now
+weekly_reset_passed ditto
 dry_marked_at      a JSON field name in `clikae usage --json` (#149)
 last_used_at       a JSON field name in `clikae usage --json` (#149)
 headline_group     a JSON field name in `clikae usage --json` (#151): which agy quota group the top-level numbers are

@@ -1550,8 +1550,10 @@ limit_codex_status_light() {
 _limit_codex_window_label() {
   local win="$1"
   case "$win" in ''|*[!0-9]*) printf 'usage'; return ;; esac
-  if   [ "$win" -le 360 ];   then printf '5h'
-  elif [ "$win" -le 10080 ]; then printf 'weekly'
+  # #179: the labels are lib/core/usage.sh's (5h / 7d), defined once; this
+  # leaf may be sourced without it, so the same two words are the fallback.
+  if   [ "$win" -le 360 ];   then printf '%s' "${USAGE_LABEL_WINDOW:-5h}"
+  elif [ "$win" -le 10080 ]; then printf '%s' "${USAGE_LABEL_WEEKLY:-7d}"
   else printf '%dd' "$((win / 1440))"; fi
 }
 

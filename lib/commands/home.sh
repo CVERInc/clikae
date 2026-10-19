@@ -1457,7 +1457,7 @@ _home_weekly_normv() {
   case "$1" in
     *%\ of\ your\ week*limit*)
       n="${1%%\%*}"; n="${n##*[!0-9]}"
-      case "$n" in '') ;; *) _WNORM="weekly $((10#$n))%" ;; esac ;;
+      case "$n" in '') ;; *) _WNORM="${USAGE_LABEL_WEEKLY:-7d} $((10#$n))%" ;; esac ;;
   esac
 }
 
@@ -1544,8 +1544,8 @@ _home_codex_segv() {
   [ "$u" -le 100 ] || u=100
   # Same boundaries as _limit_codex_window_label; "5h" is the board's "window".
   case "$win" in ''|*[!0-9]*) label="usage" ;;
-    *) if   [ "$win" -le 360 ];   then label="window"
-       elif [ "$win" -le 10080 ]; then label="weekly"
+    *) if   [ "$win" -le 360 ];   then label="${USAGE_LABEL_WINDOW:-5h}"
+       elif [ "$win" -le 10080 ]; then label="${USAGE_LABEL_WEEKLY:-7d}"
        else label="$((win / 1440))d"; fi ;;
   esac
   _CSEG="$label ${u}%"
@@ -1725,9 +1725,10 @@ _home_fuel_dotv_compute() {
       # #149: an axis the vendor does not report reads "-" (never 0).
       # Whole percents: the vendor sends "99.0" and "21.7"; the board does
       # not (the dot's own thresholds truncate the same way, _home_fuel_glyphv).
-      if [ "$up" = - ]; then _FNOTE="weekly ${uw%%.*}%"; up=0
-      elif [ "$uw" = - ]; then _FNOTE="window ${up%%.*}%"; uw=0
-      else _FNOTE="window ${up%%.*}% · weekly ${uw%%.*}%"; fi
+      # #179: the labels are lib/core/usage.sh's (5h / 7d), defined once.
+      if [ "$up" = - ]; then _FNOTE="${USAGE_LABEL_WEEKLY:-7d} ${uw%%.*}%"; up=0
+      elif [ "$uw" = - ]; then _FNOTE="${USAGE_LABEL_WINDOW:-5h} ${up%%.*}%"; uw=0
+      else _FNOTE="${USAGE_LABEL_WINDOW:-5h} ${up%%.*}% · ${USAGE_LABEL_WEEKLY:-7d} ${uw%%.*}%"; fi
       # 🔴 The `declare -F` is on THIS line on purpose. `_human_age` lives in
       # lib/core/duration.sh and 20+ test files source home.sh on its own, so
       # tests/bats/home.bats ("every _human_age call in home.sh is guarded by
@@ -1779,19 +1780,31 @@ _home_fuel_dotv_compute() {
   local _ucache="$CLIKAE_HOME/state/usage/$cli/$profile.json" _uline="" _uca
   if [ -f "$_ucache" ]; then
     IFS= read -r _uline < "$_ucache" || true
+    # #179: the word `expired` is retired. The reason names the state —
+    # `needs-refresh` (a session, or `clikae usage`, refreshes the token; the
+    # headless remedy is --wake) or `relogin-required` (the refresh ran and
+    # the vendor still refused: a person has to sign in again). A cache from
+    # a previous version still saying source:"expired" is read as unknown.
     case "$_uline" in
-      *'"source":"expired"'*)
+      *'"reason":"needs-refresh"'*|*'"reason":"relogin-required"'*)
+        local _ureason="${_uline#*\"reason\":\"}"; _ureason="${_ureason%%\"*}"
         _uca="${_uline##*\"cached_at\":}"; _uca="${_uca%%[!0-9]*}"
         if [ -n "$_uca" ] && [ $(( now - _uca )) -lt 86400 ]; then
-          _FDOT="${__C_DIM}·$__C_RESET"; _FNOTE="expired"
-          _FREMEDY="clikae usage $cli --wake $profile"   # engine named: two engines can share a tank name
+          _FDOT="${__C_DIM}·$__C_RESET"; _FNOTE="$_ureason"
+          # engine named: two engines can share a tank name. The footer
+          # (T_REFRESH_HINT / T_EXPIRED_HINT) is chosen by the word in front.
+          if [ "$_ureason" = relogin-required ]; then
+            _FREMEDY="relogin clikae $cli $profile"
+          else
+            _FREMEDY="refresh clikae usage $cli --wake $profile"
+          fi
           # #149: the last number it had, with its age, beats the remedy
           # alone — the full remedy sentence is `clikae usage`'s.
           # A vendor-stamped number with its age beside it is a measurement,
           # not a guess: it draws the band it fell in, dimmed, instead of the
           # no-reading `·` (which stays for "no number on record at all").
           if _home_last_goodv "$_uline" "$now"; then
-            _FNOTE="$_LGN · expired"; _home_fuel_glyphv "$_LGW" "$_LGK" 0 dim; _FDOT="$_FGLYPH"
+            _FNOTE="$_LGN · $_ureason"; _home_fuel_glyphv "$_LGW" "$_LGK" 0 dim; _FDOT="$_FGLYPH"
           fi
           return 0
         fi ;;
@@ -1865,8 +1878,8 @@ _home_last_goodv() {
   [ -n "$at" ] && [ $(( $2 - at )) -lt 1209600 ] || return 1
   case "$w" in ''|null) ;; *) _LGW="$w" ;; esac
   case "$k" in ''|null) ;; *) _LGK="$k" ;; esac
-  if [ "$k" != null ] && [ -n "$k" ]; then _LGN="weekly ${k%%.*}%"
-  elif [ "$w" != null ] && [ -n "$w" ]; then _LGN="window ${w%%.*}%"
+  if [ "$k" != null ] && [ -n "$k" ]; then _LGN="${USAGE_LABEL_WEEKLY:-7d} ${k%%.*}%"
+  elif [ "$w" != null ] && [ -n "$w" ]; then _LGN="${USAGE_LABEL_WINDOW:-5h} ${w%%.*}%"
   else return 1; fi
   local _lg_age=""
   declare -F _human_agev >/dev/null 2>&1 && _human_agev _lg_age "$at" "$2" && _LGN="$_LGN · $_lg_age"
@@ -2824,11 +2837,18 @@ EOF
   # the over-quota line above; always wrapped — fr-FR is 61 columns before
   # the tank name, so a 70-column terminal would cut it otherwise.
   if [ -n "$any_expired" ]; then
-    local _rem
+    local _rem _hint
     while IFS= read -r _rem; do
       [ -n "$_rem" ] || continue
-      # shellcheck disable=SC2059  # T_EXPIRED_HINT is a printf template by contract
-      _home_wrap_prefixed "$(printf "$T_EXPIRED_HINT" "$_rem")" \
+      # #179: `_FREMEDY` is "<kind> <command>" — `refresh` (the token lapsed,
+      # the login is fine) or `relogin` (the refresh ran and was refused).
+      case "$_rem" in
+        "refresh "*) _hint="$T_REFRESH_HINT"; _rem="${_rem#refresh }" ;;
+        "relogin "*) _hint="$T_EXPIRED_HINT"; _rem="${_rem#relogin }" ;;
+        *) _hint="$T_EXPIRED_HINT" ;;
+      esac
+      # shellcheck disable=SC2059  # the hints are printf templates by contract
+      _home_wrap_prefixed "$(printf "$_hint" "$_rem")" \
         "$(printf '  %b!%b ' "$__C_YELLOW" "$__C_RESET")" 4 "" ""
     done <<< "$any_expired"
   fi
@@ -4091,7 +4111,9 @@ EOF_ROO
 # _home_usage_refresh_one <engine> <tank> <marker> -> the body of one
 # background refresh (a plain usage_read); always clears its in-flight marker.
 _home_usage_refresh_one() {
-  usage_read "$1" "$2" || true
+  # #179: opening the board must never spend model quota (the rule stated
+  # above this function), now that a plain usage_read can refresh (#177).
+  CLIKAE_USAGE_AUTO_WAKE=0 usage_read "$1" "$2" || true
   rmdir "$3" 2>/dev/null || true
 }
 

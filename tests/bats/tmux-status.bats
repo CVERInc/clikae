@@ -276,7 +276,7 @@ _usage_expired_cache() {
   local engine="$1" tank="$2" age="${3:-0}" now
   now=$(( $(date +%s) - age ))
   mkdir -p "$CLIKAE_HOME/state/usage/$engine"
-  printf '{"window_pct":null,"weekly_pct":null,"window_resets_at":null,"weekly_resets_at":null,"source":"expired","reason":"expired-token","cached_at":%s,"scanned_at":%s}\n' \
+  printf '{"window_pct":null,"weekly_pct":null,"window_resets_at":null,"weekly_resets_at":null,"source":"unknown","reason":"needs-refresh","cached_at":%s,"scanned_at":%s}\n' \
     "$now" "$now" > "$CLIKAE_HOME/state/usage/$engine/$tank.json"
 }
 
@@ -291,7 +291,7 @@ _usage_expired_cache() {
   _src
   _usage_expired_cache claude wrasse
   run tmux_status_render claude wrasse '' '' 120
-  [[ "$output" == *"expired"* ]] || { echo "$output"; false; }
+  [[ "$output" == *"refresh"* ]] || { echo "$output"; false; }
   [[ "$output" != *"⏳"* ]] || { echo "the old glyph is back: $output"; false; }
   [[ "$output" != *"·"* ]] || { echo "no-reading dot alongside the word: $output"; false; }
   [[ "$output" != *"%"* ]] || { echo "$output"; false; }
@@ -304,7 +304,7 @@ _usage_expired_cache() {
   _src
   run tmux_status_render codex goby '' '' 120
   [[ "$output" == *"·"* ]] || { echo "$output"; false; }
-  [[ "$output" != *"expired"* ]] || { echo "$output"; false; }
+  [[ "$output" != *"refresh"* ]] || { echo "$output"; false; }
 }
 
 @test "fuel: an expired reading older than 24h ages out like any other" {
@@ -313,7 +313,7 @@ _usage_expired_cache() {
   _src
   _usage_expired_cache claude wrasse 90000
   run tmux_status_render claude wrasse '' '' 120
-  [[ "$output" != *"expired"* ]] || { echo "$output"; false; }
+  [[ "$output" != *"refresh"* ]] || { echo "$output"; false; }
   [[ "$output" == *"·"* ]] || { echo "$output"; false; }
 }
 

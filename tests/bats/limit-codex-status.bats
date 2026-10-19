@@ -134,7 +134,7 @@ PY
   [ "$light" = "yellow" ]                       # 5h refilled to 100% left; weekly's genuine 5% left is tighter
   [[ "$note" == *"5h 100% left"* ]] || false     # refilled side shows 100% left, no reset text
   [[ "$note" != *"5h 100% left (resets"* ]] || false
-  [[ "$note" == *"weekly"*"% left (resets"* ]] || false
+  [[ "$note" == *"7d"*"% left (resets"* ]] || false
   [[ "$reset" == "resets"*"on 17 Sep"* ]] || false
 }
 
@@ -287,7 +287,7 @@ _codex_token_count_line() {
   run limit_codex_status_note 24.0 43200 1791471936 "" "" "" 1700000000
   [[ "$output" == *"30d"* ]] || false
   [[ "$output" != *"5h"* ]] || false
-  [[ "$output" != *"weekly"* ]] || false
+  [[ "$output" != *"7d"* ]] || false
 }
 
 @test "codex rate_limits: no codex sessions at all -> not detectable, never a guessed reading" {
@@ -313,7 +313,7 @@ _codex_token_count_line() {
   IFS=$'\037' read -r light note reset <<< "$output"
   [ "$light" = "red" ]                       # weekly (0% left) is the tighter window
   [[ "$note" == *"5h"* ]] || false
-  [[ "$note" == *"weekly"* ]] || false
+  [[ "$note" == *"7d"* ]] || false
   [[ "$reset" == "resets"*"on 17 Sep"* ]] || false   # the WEEKLY window's own reset, not the 5h one
 }
 
@@ -554,7 +554,7 @@ _codex_token_count_line() {
   local light note reset
   IFS=$'\037' read -r light note reset <<< "$output"
   [[ "$note" != *"5h "* ]] || false        # no fabricated primary reading
-  [[ "$note" == *"weekly 4% left"* ]] || false
+  [[ "$note" == *"7d 4% left"* ]] || false
 }
 
 # --- P3-1 (2026-09-12 round-1 review): rounding must not be optimistic ------
@@ -582,7 +582,7 @@ _codex_token_count_line() {
   _src_limit
   run _limit_codex_window_label 10080
   [ "$status" -eq 0 ]
-  [ "$output" = "weekly" ]
+  [ "$output" = "7d" ]
   run _limit_codex_window_label 10081
   [ "$status" -eq 0 ]
   [ "$output" = "7d" ]

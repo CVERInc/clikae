@@ -81,7 +81,8 @@ readings — closing the session ends it. What you see when there is no number:
 | `· 3h ago` | the reading is over an hour old — the row says so rather than presenting it as now |
 | `·` | no reading (this tank has never been read, or the last one is over 24h old) |
 | `○` | this tank is out of fuel right now |
-| `expired` | the access token expired — start a session on that tank, or run `clikae usage --wake <tank>` |
+| `refresh` | the access token lapsed, the login is fine — a session on that tank refreshes it, so does `clikae usage <engine> <tank>` (#177) |
+| `relogin` | a refresh ran and the vendor still refused — sign in again on that tank |
 
 Reading it costs nothing: the row never calls a vendor, it only draws what is
 already on disk. `clikae usage <engine> <tank>` fills the same reading by hand.
@@ -92,11 +93,20 @@ numbers and how old it is, plus one word for why there is no new one:
 
 | word | what it means | what to do |
 |---|---|---|
-| `expired` | the access token lapsed (or the token on this machine is a stale copy; clikae cannot tell which) | start a session on that tank, or `clikae usage --wake <tank>` on the machine that holds its login |
+| `needs-refresh` | the access token lapsed, the login is fine, and THIS reader was not allowed to refresh it (the board, a live session's wake window, burn's ranking and `clikae watch` never spend a prompt to read a meter; or the refresh burn was refused — the recorded cockpit, a running burn) | start a session on that tank, or run `clikae usage <engine> <tank>` from a terminal — it refreshes before it measures (#177) |
+| `relogin-required` | the refresh RAN (one trivial prompt) and the vendor still refused the token | `clikae <engine> <tank>`, then `/login` |
+| `keychain-denied` | macOS: this process may not read the tank's Keychain item (a tmux-hosted wake window, no ACL, interaction not allowed) — nothing is known either way, so the last numbers are kept and the cache is not written | `clikae usage <engine> <tank>` from a terminal reads it |
 | `no-probe` | clikae has nothing it can ask: codex with no rollout reading in the last 7 days and its live probe off or unavailable | use the aged number, or check the vendor's page |
 | `no-signal` | a probe was asked and answered nothing usable, or (agy) there was no live access token to ask with | use the aged number, or fill it in by hand |
 
-On the board that reads `weekly 85% · 5h ago · expired`. An agy tank whose
+Every reading also carries `age_sec` — how old its evidence is — and, when an
+axis's own `resets_at` is already behind now, `window_reset_passed` /
+`weekly_reset_passed: true`: the percentage beside it is from before a reset and
+says nothing about the current window (#174). The summary line prints the age
+past an hour (`claude 92 3h ago`) and says `reset` instead of a percentage
+whose window has since reset.
+
+On the board that reads `7d 85% · 5h ago · needs-refresh`. An agy tank whose
 saved access token is still live (Linux file backend; the token lives an hour
 and only agy refreshes it) is read through agy's own
 `v1internal:retrieveUserQuotaSummary`, `source:"quota-api"`: each quota bucket
@@ -688,7 +698,7 @@ things (#136):
 | --- | --- |
 | a reading | back to the base interval |
 | `rate-limited` (HTTP 429) | waits the vendor's own `Retry-After`, clamped to the base interval and to `CLIKAE_WATCH_USAGE_MAX_BACKOFF` (default 1800s). A missing, negative, zero, non-numeric, HTTP-date or out-of-range header is not a hint — it falls back to the row below. |
-| `expired-token` / `no-credentials` | straight to `CLIKAE_WATCH_USAGE_MAX_BACKOFF` and marked. Neither starts working because we waited a little longer, so there is no ramp to climb. The board says so immediately either way — a cached expired reading draws `expired` on the row the moment it lands. On the interactive board Enter on that row is the fix (a session renews the token); the static board's footer and the `?` page name the headless one, `clikae usage --wake <tank>`. |
+| `needs-refresh` / `relogin-required` / `keychain-denied` / `no-credentials` | straight to `CLIKAE_WATCH_USAGE_MAX_BACKOFF` and marked. None starts working because we waited a little longer, so there is no ramp to climb (the poll never spends a prompt to read a meter — `CLIKAE_USAGE_AUTO_WAKE=0` — so a lapsed token stays `needs-refresh` here until a session, or a person's `clikae usage`, refreshes it). The board says so immediately either way — the reason word draws on the row the moment it lands. On the interactive board Enter on that row is the fix (a session renews the token); the static board's footer and the `?` page name the headless one, `clikae usage --wake <tank>`. |
 | anything else (no connection, a timeout, a 5xx, an unreadable body) | doubles, capped at `CLIKAE_WATCH_USAGE_MAX_BACKOFF` |
 
 ### Warm `/compact` before the prompt cache goes cold (#131)

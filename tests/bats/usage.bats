@@ -92,7 +92,7 @@ live_usage() {
   [ "$(wc -l < "$USAGE_CALLS" | tr -d ' ')" = 1 ]
   run clikae
   [ "$status" -eq 0 ]
-  [[ "$output" == *'window 65% · weekly 92%'* ]] || false
+  [[ "$output" == *'5h 65% · 7d 92%'* ]] || false
   printf '%s\n' "$output" >> "$TEST_HOME/output.log"
   run clikae usage --fresh --json
   [ "$status" -eq 0 ]
@@ -612,7 +612,7 @@ STUB
   # Green under the 2026-09-22 thresholds (window 65 < 90, weekly 20 < 85);
   # this case is about the reading being SHOWN with its age, not its colour.
   [ "$_FDOT" = G● ]
-  [ "$_FNOTE" = 'window 65% · weekly 20% · 3h ago' ]
+  [ "$_FNOTE" = '5h 65% · 7d 20% · 3h ago' ]
 
   # 25h old — past the 24h line: too stale to show as a number at all, falls
   # through to whatever the rest of the chain says below (weekly/codex/
@@ -656,9 +656,9 @@ STUB
   jq -cn --argjson exp "$(( ($(date +%s) - 86400) * 1000 ))" \
     '{claudeAiOauth:{accessToken:"stub-secret-usage72",refreshToken:"rt-stub",expiresAt:$exp}}' \
     > "$CLIKAE_HOME/profiles/claude/work/.credentials.json"
-  USAGE_FAIL=1 run clikae usage claude work --fresh --json
+  USAGE_FAIL=1 CLIKAE_USAGE_AUTO_WAKE=0 run clikae usage claude work --fresh --json
   [ "$status" -eq 0 ]
-  echo "$output" | jq -e '.source == "expired" and .window_pct == null and .reason == "expired-token"' \
+  echo "$output" | jq -e '.source == "unknown" and .window_pct == null and .reason == "needs-refresh"' \
     || { echo "got: $output"; false; }
 
   # 3. No credentials at all -> reason "no-credentials", and zero curl calls.
@@ -767,7 +767,7 @@ STUB
   # (age 0 is inside the 120s TTL), which is what the ranking ruler now
   # agrees with rather than contradicting.
   _home_fuel_dotv_compute '' claude work "$now"
-  [ "$_FNOTE" = 'window 30% · weekly 30%' ] || { echo "board note: $_FNOTE"; false; }
+  [ "$_FNOTE" = '5h 30% · 7d 30%' ] || { echo "board note: $_FNOTE"; false; }
 
   # Skew cannot LAUNDER a genuinely old reading: a stamp 30 minutes in the
   # past is still past the 900s ceiling and still unknown for ranking.
@@ -1555,16 +1555,16 @@ _usage107_calls() { if [ -f "$USAGE_CALLS" ]; then wc -l < "$USAGE_CALLS" | tr -
   usage_fixture
   # No recorded expiry: the HTTP status alone has to prove it.
   _usage107_creds rt-stub-value
-  USAGE_HTTP=401 run clikae usage claude work --json
+  USAGE_HTTP=401 CLIKAE_USAGE_AUTO_WAKE=0 run clikae usage claude work --json
   [ "$status" -eq 0 ]
-  echo "$output" | jq -e '.source == "expired" and .reason == "expired-token" and .window_pct == null and .weekly_pct == null' \
+  echo "$output" | jq -e '.source == "unknown" and .reason == "needs-refresh" and .window_pct == null and .weekly_pct == null' \
     || { echo "got: $output"; false; }
   [ "$(_usage107_calls)" = 1 ]
 
   # 30s old: inside the 60s auth-failure ceiling -> served from cache.
   _usage107_age 30
-  USAGE_HTTP=401 run clikae usage claude work --json
-  echo "$output" | jq -e '.source == "expired"'
+  USAGE_HTTP=401 CLIKAE_USAGE_AUTO_WAKE=0 run clikae usage claude work --json
+  echo "$output" | jq -e '.reason == "needs-refresh"'
   [ "$(_usage107_calls)" = 1 ] || { echo "a 30s-old expired reading was not served from cache"; false; }
 
   # 61s old: past 60s but well inside the default 120s TTL -> read again.
@@ -1581,8 +1581,8 @@ _usage107_calls() { if [ -f "$USAGE_CALLS" ]; then wc -l < "$USAGE_CALLS" | tr -
   [ "$(_usage107_calls)" = 2 ] || { echo "the shorter ceiling leaked onto a vendor reading"; false; }
 
   # 403 is the same verdict.
-  USAGE_HTTP=403 run clikae usage claude work --fresh --json
-  echo "$output" | jq -e '.source == "expired" and .reason == "expired-token"' || { echo "403 got: $output"; false; }
+  USAGE_HTTP=403 CLIKAE_USAGE_AUTO_WAKE=0 run clikae usage claude work --fresh --json
+  echo "$output" | jq -e '.source == "unknown" and .reason == "needs-refresh"' || { echo "403 got: $output"; false; }
 
   # Neither token's value reaches output or cache.
   [[ "$output" != *rt-stub-value* ]] || false
@@ -1620,19 +1620,20 @@ _usage107_calls() { if [ -f "$USAGE_CALLS" ]; then wc -l < "$USAGE_CALLS" | tr -
 @test "#107/#149: --json shape of an expired reading is exactly the reading keys plus engine, tank, reason and the #149 gap fields" {
   usage_fixture
   _usage107_creds rt-stub-value
-  USAGE_HTTP=401 run --separate-stderr clikae usage claude work --json
+  # #179: a reader that may not spend (the shape under test is the no-number one).
+  USAGE_HTTP=401 CLIKAE_USAGE_AUTO_WAKE=0 run --separate-stderr clikae usage claude work --json
   [ "$status" -eq 0 ]
-  echo "$output" | jq -e '(keys | sort) == (["engine","tank","window_pct","weekly_pct","window_resets_at","weekly_resets_at","source","reason","gap","last_window_pct","last_weekly_pct","last_at","last_age_sec","dry_marked_at"] | sort)' \
+  echo "$output" | jq -e '(keys | sort) == (["engine","tank","window_pct","weekly_pct","window_resets_at","weekly_resets_at","source","reason","age_sec","gap","last_window_pct","last_weekly_pct","last_at","last_age_sec","dry_marked_at"] | sort)' \
     || { echo "got: $output"; false; }
   [ "$(printf '%s\n' "$output" | wc -l | tr -d ' ')" = 1 ]
   # --json never carries the human hint; the plain form puts it on stderr, so
   # its stdout keeps the "<engine>/<tank> <reading>" line shape.
-  [[ "$stderr" != *"token expired"* ]] || false
-  USAGE_HTTP=401 run --separate-stderr clikae usage claude work
+  [[ "$stderr" != *"token lapsed"* ]] || false
+  USAGE_HTTP=401 CLIKAE_USAGE_AUTO_WAKE=0 run --separate-stderr clikae usage claude work
   [ "$status" -eq 0 ]
-  [[ "$output" == 'claude/work {'*'"source":"expired"'* ]] || { echo "stdout: $output"; false; }
+  [[ "$output" == 'claude/work {'*'"reason":"needs-refresh"'* ]] || { echo "stdout: $output"; false; }
   # No emoji on this delivery surface — the hint is words only.
-  [[ "$stderr" == *"token expired — run a session or 'clikae usage --wake work'"* ]] || { echo "stderr: $stderr"; false; }
+  [[ "$stderr" == *"token lapsed, not the login — a session refreshes it, or 'clikae usage claude --wake work'"* ]] || { echo "stderr: $stderr"; false; }
   [[ "$stderr" != *"⏳"* ]] || { echo "the old glyph is back: $stderr"; false; }
 }
 
@@ -1652,7 +1653,7 @@ _usage107_calls() { if [ -f "$USAGE_CALLS" ]; then wc -l < "$USAGE_CALLS" | tr -
   mkdir -p "$CLIKAE_HOME/state/usage/claude"
   local now=1789400000
   jq -cn --argjson at "$(( now - 300 ))" \
-    '{window_pct:null,weekly_pct:null,window_resets_at:null,weekly_resets_at:null,source:"expired",reason:"expired-token",cached_at:$at,scanned_at:$at}' \
+    '{window_pct:null,weekly_pct:null,window_resets_at:null,weekly_resets_at:null,source:"unknown",reason:"needs-refresh",cached_at:$at,scanned_at:$at}' \
     > "$CLIKAE_HOME/state/usage/claude/work.json"
   _home_fuel_dotv_compute '' claude work "$now"
   [ "$_FDOT" = 'D·' ] || { echo "dot: $_FDOT"; false; }
@@ -1661,8 +1662,8 @@ _usage107_calls() { if [ -f "$USAGE_CALLS" ]; then wc -l < "$USAGE_CALLS" | tr -
   # The remedy is not in the note (2026-10-11): it is $_FREMEDY, which the
   # static board prints as a footer line (the interactive one leaves it to
   # Enter on the row and the `?` page).
-  [ "$_FNOTE" = "expired" ] || { echo "note: $_FNOTE"; false; }
-  [ "$_FREMEDY" = "clikae usage claude --wake work" ] || { echo "remedy: $_FREMEDY"; false; }
+  [ "$_FNOTE" = "needs-refresh" ] || { echo "note: $_FNOTE"; false; }
+  [ "$_FREMEDY" = "refresh clikae usage claude --wake work" ] || { echo "remedy: $_FREMEDY"; false; }
   # It fits the tank row's gutter on an 80-column terminal: 47 columns of
   # row before the note, and the note is plain ASCII now — measured like any
   # other fuel string, no per-glyph width exception.
@@ -1670,10 +1671,10 @@ _usage107_calls() { if [ -f "$USAGE_CALLS" ]; then wc -l < "$USAGE_CALLS" | tr -
 
   # Past 24h it is too old to say anything about: falls through, no hint.
   jq -cn --argjson at "$(( now - 90000 ))" \
-    '{window_pct:null,weekly_pct:null,window_resets_at:null,weekly_resets_at:null,source:"expired",reason:"expired-token",cached_at:$at,scanned_at:$at}' \
+    '{window_pct:null,weekly_pct:null,window_resets_at:null,weekly_resets_at:null,source:"unknown",reason:"needs-refresh",cached_at:$at,scanned_at:$at}' \
     > "$CLIKAE_HOME/state/usage/claude/work.json"
   _home_fuel_dotv_compute '' claude work "$now"
-  [[ "$_FNOTE" != *"expired"* ]] || { echo "24h-old note: $_FNOTE"; false; }
+  [[ "$_FNOTE" != *"needs-refresh"* ]] || { echo "24h-old note: $_FNOTE"; false; }
   [ -z "$_FREMEDY" ] || { echo "24h-old remedy: $_FREMEDY"; false; }
 
   # An unknown reading is not dressed up as expired.
@@ -1681,7 +1682,7 @@ _usage107_calls() { if [ -f "$USAGE_CALLS" ]; then wc -l < "$USAGE_CALLS" | tr -
     '{window_pct:null,weekly_pct:null,window_resets_at:null,weekly_resets_at:null,source:"unknown",reason:"network",cached_at:$at,scanned_at:$at}' \
     > "$CLIKAE_HOME/state/usage/claude/work.json"
   _home_fuel_dotv_compute '' claude work "$now"
-  [[ "$_FNOTE" != *"expired"* ]] || { echo "unknown note: $_FNOTE"; false; }
+  [[ "$_FNOTE" != *"needs-refresh"* ]] || { echo "unknown note: $_FNOTE"; false; }
 }
 
 # _usage107_wake_stubs — a claude that "refreshes the token" (touches
@@ -1738,8 +1739,8 @@ STUB
   _usage107_creds rt-stub-value
   _usage107_wake_stubs
   # A fresh expired reading on disk, and a TTL that would serve it forever.
-  run clikae usage claude work --json
-  echo "$output" | jq -e '.source == "expired"'
+  CLIKAE_USAGE_AUTO_WAKE=0 run clikae usage claude work --json
+  echo "$output" | jq -e '.reason == "needs-refresh"'
   [ "$(_usage107_calls)" = 1 ]
   : > "$USAGE_CALLS"
 
@@ -1809,20 +1810,20 @@ STUB
   # (a) The auth class was NOT collapsed into one "reauth" word: the remedy
   # differs, so the word does. This is the regression #117 exists to prevent.
   _usage107_creds rt-stub-value
-  USAGE_HTTP=401 USAGE_RETRY_AFTER=45 run clikae usage claude work --fresh --json
-  echo "$output" | jq -e '.source == "expired" and .reason == "expired-token" and (has("retry_after") | not)' \
+  USAGE_HTTP=401 USAGE_RETRY_AFTER=45 CLIKAE_USAGE_AUTO_WAKE=0 run clikae usage claude work --fresh --json
+  echo "$output" | jq -e '.source == "unknown" and .reason == "needs-refresh" and (has("retry_after") | not)' \
     || { echo "401 got: $output"; false; }
-  USAGE_HTTP=403 USAGE_RETRY_AFTER=45 run clikae usage claude work --fresh --json
-  echo "$output" | jq -e '.source == "expired" and .reason == "expired-token"' || { echo "403 got: $output"; false; }
+  USAGE_HTTP=403 USAGE_RETRY_AFTER=45 CLIKAE_USAGE_AUTO_WAKE=0 run clikae usage claude work --fresh --json
+  echo "$output" | jq -e '.source == "unknown" and .reason == "needs-refresh"' || { echo "403 got: $output"; false; }
   _usage107_creds
-  USAGE_HTTP=401 run clikae usage claude work --fresh --json
+  USAGE_HTTP=401 CLIKAE_USAGE_AUTO_WAKE=0 run clikae usage claude work --fresh --json
   echo "$output" | jq -e '.source == "unknown" and .reason == "no-credentials"' || { echo "401/no-rt got: $output"; false; }
   # (b) Precedence, unchanged from #107: a token already past its OWN recorded
   # expiry would not have worked on a healthy connection either, so it stays
   # "expired" even when the status we got back was a 429.
   _usage107_creds rt-stub-value "$(( ($(date +%s) - 3600) * 1000 ))"
-  USAGE_HTTP=429 USAGE_RETRY_AFTER=45 run clikae usage claude work --fresh --json
-  echo "$output" | jq -e '.source == "expired" and .reason == "expired-token"' \
+  USAGE_HTTP=429 USAGE_RETRY_AFTER=45 CLIKAE_USAGE_AUTO_WAKE=0 run clikae usage claude work --fresh --json
+  echo "$output" | jq -e '.source == "unknown" and .reason == "needs-refresh"' \
     || { echo "expired+429 got: $output"; false; }
 }
 
@@ -1906,4 +1907,198 @@ STUB
     || { echo "got: $output"; false; }
   # Nothing but name/pct/resets_at survives into the cache.
   run ! grep -R 'tok-leak\|severity\|TooHigh\|Negative\|NotANumber' "$CLIKAE_HOME/state"
+}
+
+# --- #179 group A (#177, #174, the Keychain-denied finding) -------------------
+# The reader used to print "old / needs a refresh" as "now / broken":
+#   #177  an access token past its expiry with a refresh token beside it read
+#         `expired` — a terminal word — and a fleet dispatcher rerouted six
+#         lanes off a tank that needed eleven seconds of refresh.
+#   #174  a cached reading printed its old percentage with no age, and a
+#         window whose reset had already passed still showed 100%.
+#   Mac   a background Keychain read that was DENIED was written as
+#         `no-credentials`, overwriting the last good numbers.
+
+# _usage179_wake_stubs — a claude that refreshes the token when it runs (the
+# curl 401s until it has), as the real engine does. Same shape as
+# _usage107_wake_stubs; kept separate so this block reads on its own.
+_usage179_wake_stubs() { _usage107_wake_stubs; }
+
+# _usage179_reset_stamp <epoch> -> ISO-8601 UTC, GNU date first, BSD second.
+_usage179_reset_stamp() {
+  date -u -d "@$1" +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || date -u -r "$1" +%Y-%m-%dT%H:%M:%SZ
+}
+
+@test "#177: an expired access token with a refresh token is refreshed in place — usage prints the vendor's numbers, never expired" {
+  usage_fixture
+  # Expired by the credentials' own record, refresh token present.
+  _usage107_creds rt-stub-value "$(( ($(date +%s) - 3600) * 1000 ))"
+  _usage179_wake_stubs
+  run --separate-stderr clikae usage claude work --json
+  [ "$status" -eq 0 ] || { echo "stderr: $stderr"; false; }
+  echo "$output" | jq -e '.source == "vendor" and .window_pct == 3 and .weekly_pct == 99' \
+    || { echo "got: $output"; false; }
+  [[ "$output" != *expired* ]] || { echo "the retired word is back: $output"; false; }
+  # The refresh ran the engine exactly once, through burn's composed argv.
+  [ "$(wc -l < "$WAKE_ARGV_LOG" | tr -d ' ')" = 1 ] || { echo "argv log: $(cat "$WAKE_ARGV_LOG")"; false; }
+  # And said so on stderr, naming the tank — stdout stays the reading.
+  [[ "$stderr" == *"claude/work"*"refresh"* ]] || { echo "stderr: $stderr"; false; }
+  # The cache holds the vendor reading, not an auth failure.
+  jq -e '.source == "vendor"' "$CLIKAE_HOME/state/usage/claude/work.json" >/dev/null
+}
+
+@test "#177: only a refresh that FAILS is relogin-required — and that word, not expired, reaches stdout and the cache" {
+  usage_fixture
+  _usage107_creds rt-stub-value "$(( ($(date +%s) - 3600) * 1000 ))"
+  _usage179_wake_stubs
+  # The engine runs and writes its artifact, but the vendor keeps refusing
+  # the token: the refresh token itself is dead.
+  printf '#!/usr/bin/env bash\nprintf "call\\n" >> "$USAGE_CALLS"\ncat >/dev/null\nprintf 401 >&2; exit 22\n' \
+    > "$TEST_HOME/.testbin/curl"
+  chmod +x "$TEST_HOME/.testbin/curl"
+  run --separate-stderr clikae usage claude work --json
+  [ "$status" -eq 0 ] || { echo "stderr: $stderr"; false; }
+  echo "$output" | jq -e '.source == "unknown" and .reason == "relogin-required" and .gap == "relogin-required"' \
+    || { echo "got: $output"; false; }
+  [[ "$output" != *expired* ]] || { echo "the retired word is back: $output"; false; }
+  [ "$(wc -l < "$WAKE_ARGV_LOG" | tr -d ' ')" = 1 ]
+  jq -e '.reason == "relogin-required"' "$CLIKAE_HOME/state/usage/claude/work.json" >/dev/null
+  # The plain form says what a person does next, on stderr.
+  run --separate-stderr clikae usage claude work --fresh
+  [[ "$stderr" == *"relogin"*"clikae claude work"* ]] || { echo "stderr: $stderr"; false; }
+  [[ "$stderr" != *"token expired"* ]] || { echo "old hint: $stderr"; false; }
+}
+
+@test "#177: a reader that may not spend (CLIKAE_USAGE_AUTO_WAKE=0, or the cockpit gate) reads needs-refresh and keeps the last numbers with their age" {
+  usage_fixture
+  # A good reading first, then it ages 5h.
+  run clikae usage claude work --json
+  echo "$output" | jq -e '.source == "vendor" and .weekly_pct == 92'
+  _usage107_age 18000
+  _usage107_creds rt-stub-value "$(( ($(date +%s) - 3600) * 1000 ))"
+  _usage179_wake_stubs
+  CLIKAE_USAGE_AUTO_WAKE=0 run --separate-stderr clikae usage claude work --json
+  [ "$status" -eq 0 ]
+  echo "$output" | jq -e '.source == "unknown" and .reason == "needs-refresh" and .gap == "needs-refresh"
+    and .last_weekly_pct == 92 and .last_window_pct == 65 and .last_age_sec >= 18000' \
+    || { echo "got: $output"; false; }
+  [ ! -e "$WAKE_ARGV_LOG" ] || { echo "the engine ran although spending was off"; false; }
+  [[ "$output" != *expired* ]] || false
+  # The recorded cockpit: burn's own gate refuses the refresh, and the
+  # reading says needs-refresh — not relogin-required (nothing was tried).
+  mkdir -p "$CLIKAE_HOME/state"; printf 'claude/work\n' > "$CLIKAE_HOME/state/cockpit"
+  run --separate-stderr clikae usage claude work --fresh --json
+  [ "$status" -eq 0 ]
+  echo "$output" | jq -e '.reason == "needs-refresh" and .last_weekly_pct == 92' || { echo "cockpit got: $output"; false; }
+  [ ! -e "$WAKE_ARGV_LOG" ] || { echo "the engine ran on the cockpit"; false; }
+  # A cache written by a previous version with source:"expired" is read as
+  # "unknown, refresh first": it is never served, whatever the TTL.
+  jq -c '.source = "expired" | .reason = "expired-token"' "$CLIKAE_HOME/state/usage/claude/work.json" > "$TEST_HOME/old.json"
+  mv "$TEST_HOME/old.json" "$CLIKAE_HOME/state/usage/claude/work.json"
+  : > "$USAGE_CALLS"
+  CLIKAE_USAGE_TTL=999999 CLIKAE_USAGE_AUTO_WAKE=0 run clikae usage claude work --json
+  [ "$(_usage107_calls)" = 1 ] || { echo "an old expired cache was served instead of re-read"; false; }
+  [[ "$output" != *'"expired"'* ]] || { echo "got: $output"; false; }
+}
+
+@test "#174: every reading carries age_sec; the summary prints the age once it is an hour old" {
+  usage_fixture
+  run clikae usage claude work --json
+  echo "$output" | jq -e '.source == "vendor" and (.age_sec|type) == "number" and .age_sec < 60' \
+    || { echo "got: $output"; false; }
+  _usage107_age 10800
+  CLIKAE_USAGE_TTL=999999 run --separate-stderr clikae usage claude work --json
+  echo "$output" | jq -e '.source == "vendor" and .weekly_pct == 92 and .age_sec >= 10800 and .age_sec < 10900' \
+    || { echo "aged got: $output"; false; }
+  CLIKAE_USAGE_TTL=999999 run --separate-stderr clikae usage claude work
+  [ "$(printf '%s\n' "$stderr" | tail -n 1)" = "claude 92 3h ago" ] || { echo "summary: $stderr"; false; }
+  # Under an hour the token is bare, as before.
+  _usage107_age 600
+  CLIKAE_USAGE_TTL=999999 run --separate-stderr clikae usage claude work
+  [ "$(printf '%s\n' "$stderr" | tail -n 1)" = "claude 92" ] || { echo "summary: $stderr"; false; }
+}
+
+@test "#174: a window whose reset has passed since the reading is shown as reset, not as its old percentage" {
+  usage_fixture
+  run clikae usage claude work --json
+  echo "$output" | jq -e '.weekly_pct == 92'
+  # The reading is 3h old and both resets were 2h ago.
+  local f="$CLIKAE_HOME/state/usage/claude/work.json" now r; now="$(date +%s)"
+  r="$(_usage179_reset_stamp "$(( now - 7200 ))")"
+  jq -c --argjson at "$(( now - 10800 ))" --arg r "$r" \
+    '.cached_at = $at | .scanned_at = $at | .window_pct = 100 | .weekly_pct = 100 | .window_resets_at = $r | .weekly_resets_at = $r' \
+    "$f" > "$f.tmp" && mv "$f.tmp" "$f"
+  CLIKAE_USAGE_TTL=999999 run --separate-stderr clikae usage claude work --json
+  echo "$output" | jq -e '.window_reset_passed == true and .weekly_reset_passed == true and .age_sec >= 10800' \
+    || { echo "got: $output"; false; }
+  CLIKAE_USAGE_TTL=999999 run --separate-stderr clikae usage claude work
+  [ "$(printf '%s\n' "$stderr" | tail -n 1)" = "claude reset 3h ago" ] || { echo "summary: $stderr"; false; }
+  [[ "$stderr" != *"100"* ]] || { echo "the old percentage is still shown: $stderr"; false; }
+  # Control: a reset still in the future carries no such key.
+  jq -c '.window_resets_at = "2099-01-01T00:00:00Z" | .weekly_resets_at = "2099-01-07T00:00:00Z"' "$f" > "$f.tmp" && mv "$f.tmp" "$f"
+  CLIKAE_USAGE_TTL=999999 run clikae usage claude work --json
+  echo "$output" | jq -e '(has("window_reset_passed") | not) and (has("weekly_reset_passed") | not) and .weekly_pct == 100' \
+    || { echo "control got: $output"; false; }
+}
+
+# _usage179_security <exit-code> — a `security` that fails the Keychain read
+# with that code (44 = item not found; anything else = the read was refused:
+# no ACL for this process, interaction not allowed, a locked keychain).
+_usage179_security() {
+  printf '#!/usr/bin/env bash\nexit %s\n' "$1" > "$TEST_HOME/.testbin/security"
+  chmod +x "$TEST_HOME/.testbin/security"
+}
+
+@test "keychain-denied: a refused background Keychain read keeps the last reading and its age, and never overwrites the cache" {
+  usage_fixture
+  run clikae usage claude work --json
+  echo "$output" | jq -e '.source == "vendor" and .weekly_pct == 92'
+  _usage107_age 10800
+  local f="$CLIKAE_HOME/state/usage/claude/work.json"
+  cp "$f" "$TEST_HOME/before.json"
+  # No credentials file: the Keychain is the only place a token could be, and
+  # the read is refused (not "not found").
+  rm -f "$CLIKAE_HOME/profiles/claude/work/.credentials.json"
+  _usage179_security 36
+  OSTYPE=darwin22 run --separate-stderr clikae usage claude work --fresh --json
+  [ "$status" -eq 0 ] || { echo "stderr: $stderr"; false; }
+  echo "$output" | jq -e '.reason == "keychain-denied" and .window_pct == 65 and .weekly_pct == 92
+    and .source == "vendor" and .age_sec >= 10800' || { echo "got: $output"; false; }
+  cmp -s "$f" "$TEST_HOME/before.json" || { echo "the cache was overwritten:"; cat "$f"; false; }
+  [[ "$output" != *no-credentials* ]] || false
+  # Control: NOT FOUND (44) really is no-credentials, and does write.
+  _usage179_security 44
+  OSTYPE=darwin22 run clikae usage claude work --fresh --json
+  echo "$output" | jq -e '.source == "unknown" and .reason == "no-credentials" and .last_weekly_pct == 92' \
+    || { echo "control got: $output"; false; }
+  ! cmp -s "$f" "$TEST_HOME/before.json" || { echo "no-credentials did not write"; false; }
+  # With no cache at all, keychain-denied is written like any other unknown.
+  rm -f "$f"
+  _usage179_security 36
+  OSTYPE=darwin22 run clikae usage claude work --fresh --json
+  echo "$output" | jq -e '.source == "unknown" and .reason == "keychain-denied" and .gap == "keychain-denied"' \
+    || { echo "no-cache got: $output"; false; }
+  jq -e '.reason == "keychain-denied"' "$f" >/dev/null
+}
+
+@test "#177 labels: 5h / 7d everywhere a person reads them, defined once in lib/core/usage.sh" {
+  usage_fixture
+  run clikae usage claude work --json
+  run clikae
+  [ "$status" -eq 0 ]
+  [[ "$output" == *'5h 65% · 7d 92%'* ]] || { echo "$output"; false; }
+  [[ "$output" != *'window 65%'* ]] || false
+  source "$CLIKAE_TEST_ROOT/lib/core/usage.sh"
+  [ "$USAGE_LABEL_WINDOW" = 5h ] && [ "$USAGE_LABEL_WEEKLY" = 7d ]
+  # One definition: no other file spells a label out beside a percentage.
+  run grep -nE '"(5h|7d) \$|"(window|weekly) \$' "$CLIKAE_TEST_ROOT/lib/commands/home.sh" "$CLIKAE_TEST_ROOT/lib/core/tmux.sh" "$CLIKAE_TEST_ROOT/lib/commands/usage.sh"
+  [ -z "$output" ] || { echo "label spelled out: $output"; false; }
+}
+
+@test "#177: the word expired is retired from every reading the code emits" {
+  # Not a comment scan: these are the code shapes that EMITTED it.
+  # (The shapes carry their quotes, so a comment that MENTIONS the retired
+  # word — like the ones explaining this change — cannot trip the scan.)
+  run grep -rnE '"source":"expired"|_TSTAT_FUEL="expired"|usage_unknown expired-token|unreadable expired-token' "$CLIKAE_TEST_ROOT/lib"
+  [ -z "$output" ] || { echo "still emitted: $output"; false; }
 }
