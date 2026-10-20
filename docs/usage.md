@@ -755,6 +755,7 @@ clikae watch github --org CVERInc              # foreground, polls every 10m, Ct
 clikae watch github --org CVERInc --interval 5m # a tighter poll interval
 clikae watch github --org CVERInc --once        # poll exactly once and exit — cron / a Stop hook
 clikae watch github --org CVERInc --since 2026-09-01T00:00:00Z  # cold-start bound, default 24h ago
+clikae watch github --org CVERInc --status      # failures / last_ok_at counted from the records now (no poll, no gh)
 ```
 
 `--org` defaults to the login `gh repo view` reports for this directory's

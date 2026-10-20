@@ -3364,3 +3364,132 @@ _r6_pause_at_heartbeat_mv() {
   [ -d "$fdir/1789000000-2-new.stall" ]
   [ ! -e "$fdir/1700000000-1-old" ]
 }
+
+# --- #183 round 7 -------------------------------------------------------------
+# The heartbeat JSON is a display cache; the records under
+# <org>.failures.d/ are the only truth, and every reader computes
+# consecutive_failures / last_ok_at from them at read time
+# (`clikae watch github --status`, the stall decision).
+#
+# The review's r6 retry-exhaustion: failure A pauses before EACH of its five
+# heartbeat renames, and before each rename another poll completes. A's
+# fifth rename publishes its older snapshot and the repair budget is spent,
+# so the file stays stale with no poll left to fix it.
+_r7_pause_each_heartbeat_mv() {
+  mv() {
+    local a
+    if [ "${WG_PAUSE:-0}" = 1 ] && [ "${R7_ROUND:-0}" -lt 5 ]; then
+      for a in "$@"; do
+        case "$a" in */CVERInc.heartbeat.json.tmp.*)
+          R7_ROUND=$((${R7_ROUND:-0} + 1))
+          : > "$R6_GATE/at.$R7_ROUND"
+          while [ ! -e "$R6_GATE/go.$R7_ROUND" ]; do sleep 0.05; done ;;
+        esac
+      done
+    fi
+    command mv "$@"
+  }
+}
+_r7_wait_round() {
+  local i=0
+  while [ ! -e "$R6_GATE/at.$1" ] && [ "$i" -lt 200 ]; do sleep 0.05; i=$((i + 1)); done
+  [ -e "$R6_GATE/at.$1" ]
+}
+# _r7_exhaust <last:fail|success> -> A plus four intervening failures, the
+# fifth intervening poll a failure or a success. Leaves $R7_OK_AT set to
+# the success's last_ok_at (success only).
+_r7_exhaust() {
+  _r6_setup
+  _r7_pause_each_heartbeat_mv
+  ( WG_PAUSE=1; R7_ROUND=0; _wg_poll CVERInc 2>>"$BATS_TEST_TMPDIR/poll.err" || true ) &
+  local paused=$! r
+  for r in 1 2 3 4 5; do
+    _r7_wait_round "$r"
+    if [ "$r" = 5 ] && [ "$1" = success ]; then
+      _r6_success
+      R7_OK_AT="$(command cat "$CLIKAE_HOME/state/watch-github/CVERInc.failures.d/streak")"; R7_OK_AT="${R7_OK_AT#* }"
+    else
+      _wg_poll CVERInc 2>>"$BATS_TEST_TMPDIR/poll.err" || true
+    fi
+    : > "$R6_GATE/go.$r"
+  done
+  wait "$paused"
+}
+_r7_field() { # <json> <key> -> the raw value
+  printf '%s\n' "$1" | sed -E "s/.*\"$2\":(\"([^\"\\\\]|\\\\.)*\"|[^,}]*).*/\\1/"
+}
+
+@test "watch github --status: five interleaved renames leave the heartbeat at 5 — the reader still reports the six records (#183 r7)" {
+  _r7_exhaust fail
+  local hb n
+  hb="$(command cat "$(_hb)")"
+  n="$(ls "$CLIKAE_HOME/state/watch-github/CVERInc.failures.d/0" | wc -l | tr -d ' ')"
+  echo "heartbeat cache: $hb"; echo "records: $n"
+  # The scenario reproduced: six records, a stale cache.
+  [ "$n" = 6 ]
+  [[ "$hb" == *'"consecutive_failures":5'* ]] || false
+  run clikae watch github --status --org CVERInc
+  echo "--status: $output"
+  [ "$status" -eq 0 ]
+  [ "$(_r7_field "$output" consecutive_failures)" = 6 ]
+  [ "$(_r7_field "$output" last_ok_at)" = null ]
+  [ "$(_r7_field "$output" last_error_kind)" != null ]
+  [ "$(_r6_n_fail)" = 1 ]
+}
+
+@test "watch github --status: the fifth intervening poll a success — the cache says 5 and null, the reader says 0 and the success time (#183 r7)" {
+  _r7_exhaust success
+  local hb
+  hb="$(command cat "$(_hb)")"
+  echo "heartbeat cache: $hb"; echo "last_ok_at from streak: $R7_OK_AT"
+  [[ "$hb" == *'"consecutive_failures":5'* ]] || false
+  [[ "$hb" == *'"last_ok_at":null'* ]] || false
+  run clikae watch github --status --org CVERInc
+  echo "--status: $output"
+  [ "$status" -eq 0 ]
+  [ "$(_r7_field "$output" consecutive_failures)" = 0 ]
+  [ "$(_r7_field "$output" last_ok_at)" = "$R7_OK_AT" ]
+  [ "$(_r7_field "$output" last_error)" = null ]
+  [ "$(_r7_field "$output" last_error_kind)" = null ]
+  [ "$(_r7_field "$output" last_poll_at)" -ge "$R7_OK_AT" ]
+}
+
+@test "watch github --status: a hand-written stale heartbeat (5, null) over a recorded success reads 0 and the success time (#183 r7)" {
+  _r6_setup
+  _wg_heartbeat_write CVERInc 1 "" ""
+  local ok_at
+  ok_at="$(command cat "$CLIKAE_HOME/state/watch-github/CVERInc.failures.d/streak")"; ok_at="${ok_at#* }"
+  printf '{"org":"CVERInc","pid":1,"last_poll_at":1,"last_ok_at":null,"consecutive_failures":5,"events_this_poll":0,"last_error":"x","last_error_kind":"transient"}\n' > "$(_hb)"
+  run clikae watch github --status --org CVERInc
+  echo "--status: $output"
+  [ "$status" -eq 0 ]
+  [ "$(_r7_field "$output" consecutive_failures)" = 0 ]
+  [ "$(_r7_field "$output" last_ok_at)" = "$ok_at" ]
+  [ "$(_r7_field "$output" last_error)" = null ]
+  [ "$(_r7_field "$output" last_poll_at)" -ge "$ok_at" ]
+}
+
+@test "watch github --status: no state at all reads 0 failures, last_ok_at null, and needs no gh (#183 r7)" {
+  local stub="$BATS_TEST_TMPDIR/nogh"
+  command mkdir -p "$stub"
+  printf '#!/bin/sh\n: > "%s/gh-called"\nexit 1\n' "$stub" > "$stub/gh"
+  chmod +x "$stub/gh"
+  PATH="$stub:$PATH" run clikae watch github --status --org CVERInc
+  echo "--status: $output"
+  [ "$status" -eq 0 ]
+  [ ! -e "$stub/gh-called" ]
+  [ "$(_r7_field "$output" consecutive_failures)" = 0 ]
+  [ "$(_r7_field "$output" last_ok_at)" = null ]
+}
+
+# Control (passes before and after r7 — the decision never read the file):
+# a stale heartbeat claiming 99 failures does not raise a stall on the
+# first real failure.
+@test "watch github: a stale heartbeat claiming 99 failures never raises a stall on one real failure (#183 r7 control)" {
+  _r6_setup
+  command mkdir -p "$CLIKAE_HOME/state/watch-github"
+  printf '{"org":"CVERInc","pid":1,"last_poll_at":1,"last_ok_at":null,"consecutive_failures":99,"events_this_poll":0,"last_error":"x","last_error_kind":"transient"}\n' > "$(_hb)"
+  _wg_poll CVERInc 2>>"$BATS_TEST_TMPDIR/poll.err" || true
+  [ "$(_r6_n_fail)" = 0 ]
+  [[ "$(command cat "$(_hb)")" == *'"consecutive_failures":1'* ]] || false
+}

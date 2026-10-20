@@ -26,7 +26,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   is still exactly as written.
 - **`clikae watch github` can no longer be alive but not working** (#166).
   Every poll rewrites `state/watch-github/<org>.heartbeat.json`
-  (`last_poll_at`, `last_ok_at`, `consecutive_failures`, last error); three
+  (`last_poll_at`, `last_ok_at`, `consecutive_failures`, last error) as a
+  display cache; `clikae watch github --status` prints the same fields
+  counted from the per-failure records at read time, so a cache left stale
+  by overlapping polls never changes what is reported or decided; three
   failed polls in a row (`$CLIKAE_WATCH_GITHUB_STALL_POLLS`; a poll that
   cannot get the org's poll lock counts as failed, and overlapping failures
   are each recorded in a file of their own, so none is lost) write ONE

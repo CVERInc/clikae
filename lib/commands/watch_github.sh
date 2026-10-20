@@ -1179,8 +1179,12 @@ _wg_status_write() {
 # — in the STATE dir on purpose, not the durable log dir: a status.json
 # there would make the log dir look like a run directory to
 # _wg_runs_rotate / `clikae wait --latest` (see _wg_is_run_dir).
-# A DISPLAY of the failure state below, derived from it on every poll;
-# never read back as the source of the count.
+# A best-effort DISPLAY CACHE of the failure state below (#183 r7): no
+# decision and no reported state is ever taken from it. Readers compute
+# consecutive_failures / last_ok_at / the last error from the records at
+# read time (_wg_fail_state; `clikae watch github --status` prints that,
+# _wg_heartbeat_read). A stale file is cosmetic: bounded by the next poll's
+# publication, and never what --status or the stall decision report.
 _wg_heartbeat_file() { printf '%s/%s.heartbeat.json\n' "$(_wg_state_dir)" "$1"; }
 
 # --- #183 r5 (P2): the failure count, one file per failed poll ---------------
@@ -1214,10 +1218,19 @@ _wg_heartbeat_file() { printf '%s/%s.heartbeat.json\n' "$(_wg_state_dir)" "$1"; 
 # nothing (_wg_stall_claim).
 #
 # Residual limit, stated rather than hidden: the re-read and the stall
-# write are two steps, so a success landing in the few microseconds
-# between them can still let at most ONE extra stall event out for a
-# streak that just closed. Never a lost count: the count is always the
-# number of record files, read when it is shown.
+# write are two steps, so a success landing between them (subprocesses and
+# scheduling decide how long that is; no latency bound is claimed) can
+# still let at most ONE extra stall event out for a streak that just
+# closed. Never a lost count: the count is always the number of record
+# files, read when it is shown.
+#
+# #183 r7: the heartbeat JSON is a display cache and nothing reads it back.
+# Its publication can still end stale: a writer that exhausts its five
+# repair renames (each overtaken by another poll) leaves its older snapshot
+# in place. That staleness is cosmetic and lasts until the next poll
+# publishes; every reader (_wg_fail_state: the stall decision, `clikae
+# watch github --status`) counts the records itself, so readers are always
+# correct.
 
 _wg_fail_dir() { printf '%s/%s.failures.d\n' "$(_wg_state_dir)" "$1"; }
 
@@ -1233,13 +1246,63 @@ _wg_streak_read() {
   case "$__WG_LAST_OK" in ''|*[!0-9]*) __WG_LAST_OK=null ;; esac
 }
 
-# _wg_streak_count <org> <token> -> the number of failure records in <token>.
-_wg_streak_count() {
-  local f n=0
-  for f in "$(_wg_fail_dir "$1")/$2"/[0-9]*; do
-    [ -f "$f" ] && n=$((n + 1))
+# _wg_fail_state <org> -> THE reader of the failure state (#183 r7), used by
+# the writer's publication and by every reader alike. Sets $__WG_STREAK,
+# $__WG_LAST_OK (epoch or null), $__WG_FAILS (records in the current
+# streak), and from the streak's newest record (by name: epoch first, so
+# within one second the pick is arbitrary — display only) $__WG_FAIL_KIND,
+# $__WG_FAIL_REASON and $__WG_FAIL_AT (its epoch, or null).
+_wg_fail_state() {
+  local f last="" line name
+  _wg_streak_read "$1"
+  __WG_FAILS=0; __WG_FAIL_KIND=""; __WG_FAIL_REASON=""; __WG_FAIL_AT=null
+  for f in "$(_wg_fail_dir "$1")/$__WG_STREAK"/[0-9]*; do
+    [ -f "$f" ] || continue
+    __WG_FAILS=$((__WG_FAILS + 1)); last="$f"
   done
-  printf '%s\n' "$n"
+  [ -n "$last" ] || return 0
+  line="$(cat "$last" 2>/dev/null || true)"
+  case "$line" in
+    *' '*) __WG_FAIL_KIND="${line%% *}"; __WG_FAIL_REASON="${line#* }" ;;
+    *)     __WG_FAIL_KIND="$line" ;;
+  esac
+  name="${last##*/}"; name="${name%%-*}"
+  case "$name" in ''|*[!0-9]*) ;; *) __WG_FAIL_AT="$name" ;; esac
+  return 0
+}
+
+# _wg_json_num <json> <key> -> the unsigned integer value of "<key>":, or
+# nothing. For the heartbeat cache's own display-only fields.
+_wg_json_num() {
+  local v="$1"
+  case "$v" in *"\"$2\":"*) ;; *) return 0 ;; esac
+  v="${v#*\""$2"\":}"; v="${v%%[!0-9]*}"
+  printf '%s' "$v"
+}
+
+# _wg_heartbeat_read <org> -> the heartbeat as it IS (#183 r7): the
+# heartbeat's shape, with consecutive_failures, last_ok_at and the last
+# error computed from the records now (_wg_fail_state) — never from the
+# cache file. Only pid and events_this_poll come from the cache (they
+# describe the last publication, nothing more); last_poll_at is the latest
+# of the cache's, last_ok_at and the newest record. Needs no gh.
+_wg_heartbeat_read() {
+  local org="$1" cache pid events poll err=null kind=null t
+  cache="$(cat "$(_wg_heartbeat_file "$org")" 2>/dev/null || true)"
+  pid="$(_wg_json_num "$cache" pid)"; [ -n "$pid" ] || pid=null
+  events="$(_wg_json_num "$cache" events_this_poll)"; [ -n "$events" ] || events=0
+  poll="$(_wg_json_num "$cache" last_poll_at)"
+  _wg_fail_state "$org"
+  for t in "$__WG_LAST_OK" "$__WG_FAIL_AT"; do
+    [ "$t" = null ] && continue
+    if [ -z "$poll" ] || [ "$t" -gt "$poll" ]; then poll="$t"; fi
+  done
+  [ -n "$poll" ] || poll=null
+  if [ "$__WG_FAILS" -gt 0 ]; then
+    err="$(json_str "$__WG_FAIL_REASON")"; kind="$(json_str "$__WG_FAIL_KIND")"
+  fi
+  printf '{"org":%s,"pid":%s,"last_poll_at":%s,"last_ok_at":%s,"consecutive_failures":%s,"events_this_poll":%s,"last_error":%s,"last_error_kind":%s}\n' \
+    "$(json_str "$org")" "$pid" "$poll" "$__WG_LAST_OK" "$__WG_FAILS" "$events" "$err" "$kind"
 }
 
 # _wg_fail_record <org> <error-kind> <error-reason> -> add this poll's own
@@ -1258,8 +1321,7 @@ _wg_fail_record() {
     printf '%s %s\n' "$ekind" "$ereason" > "$tmp" 2>/dev/null
     mv -f "$tmp" "$gdir/$now-$$-${tmp##*.}" 2>/dev/null || rm -f "$tmp" 2>/dev/null
   fi
-  _wg_streak_read "$org"
-  __WG_FAILS="$(_wg_streak_count "$org" "$__WG_STREAK")"
+  _wg_fail_state "$org"
 }
 
 # _wg_fail_reset <org> -> a successful poll: name a fresh streak, then
@@ -1323,6 +1385,13 @@ _wg_stall_claim() {
 # all is followed by its own check, so once the polls finish the file
 # describes the current streak. A count of 0 shows no error: the error
 # belongs to a streak that has closed.
+#
+# #183 r7: that "once the polls finish" holds only while the repair budget
+# lasts — five renames each overtaken by another poll leave the older
+# snapshot (see the residual-limit note above). The file is a display cache
+# for exactly that reason: its fields come from the same _wg_fail_state
+# every reader uses (the error shown is the newest record's), and no reader
+# takes anything from the file.
 _wg_heartbeat_write() {
   local org="$1" ok="$2" ekind="$3" ereason="$4" f now events tmp shown tries=0 err kind
   f="$(_wg_heartbeat_file "$org")"
@@ -1334,12 +1403,11 @@ _wg_heartbeat_write() {
   fi
   events="${__WG_EVENTS:-0}"
   while :; do
-    _wg_streak_read "$org"
-    __WG_FAILS="$(_wg_streak_count "$org" "$__WG_STREAK")"
+    _wg_fail_state "$org"
     shown="$__WG_STREAK $__WG_FAILS $__WG_LAST_OK"
     err=null; kind=null
-    if [ "$ok" != 1 ] && [ "$__WG_FAILS" -gt 0 ]; then
-      err="$(json_str "$ereason")"; kind="$(json_str "$ekind")"
+    if [ "$__WG_FAILS" -gt 0 ]; then
+      err="$(json_str "$__WG_FAIL_REASON")"; kind="$(json_str "$__WG_FAIL_KIND")"
     fi
     now="$(date +%s 2>/dev/null || echo 0)"
     tmp="$(mktemp "$f.tmp.XXXXXX" 2>/dev/null)" || return 0
@@ -1350,8 +1418,7 @@ _wg_heartbeat_write() {
       rm -f "$tmp" 2>/dev/null
       return 0
     fi
-    _wg_streak_read "$org"
-    __WG_FAILS="$(_wg_streak_count "$org" "$__WG_STREAK")"
+    _wg_fail_state "$org"
     [ "$__WG_STREAK $__WG_FAILS $__WG_LAST_OK" = "$shown" ] && break
     tries=$((tries + 1))
     [ "$tries" -lt 5 ] || break
@@ -2147,12 +2214,15 @@ _wg_poll() {
 _wg_poll_failed() {
   local org="$1" holds_lock="${2:-1}"
   _wg_heartbeat_write "$org" 0 "${__WG_LAST_KIND:-}" "${__WG_LAST_REASON:-}"
+  # #183 r7: the decision reads the records itself, not anything the
+  # (best-effort) publication above left behind.
+  _wg_fail_state "$org"
   local stall_n="${CLIKAE_WATCH_GITHUB_STALL_POLLS:-3}"
   case "$stall_n" in ''|*[!0-9]*|0) stall_n=3 ;; esac
   if [ "${__WG_PERMANENT:-0}" -eq 1 ]; then
     _wg_stall_write "$org" "github:$org — giving up: ${__WG_PERMANENT_REASON}" "$holds_lock"
   elif [ "${__WG_FAILS:-0}" -ge "$stall_n" ] && _wg_stall_claim "$org" "${__WG_STREAK:-0}" "$__WG_FAILS"; then
-    log_err "github:$org — stalled: ${__WG_FAILS} consecutive failed polls (last: ${__WG_LAST_KIND:-?}: ${__WG_LAST_REASON:-?}); heartbeat at $(_wg_heartbeat_file "$org")"
+    log_err "github:$org — stalled: ${__WG_FAILS} consecutive failed polls (last: ${__WG_LAST_KIND:-?}: ${__WG_LAST_REASON:-?}); state: clikae watch github --status --org $org"
     _wg_stall_write "$org" "github:$org — stalled: ${__WG_FAILS} consecutive failed polls (last: ${__WG_LAST_KIND:-?}: ${__WG_LAST_REASON:-?})" "$holds_lock"
   fi
   return 0
@@ -2163,6 +2233,7 @@ _wg_poll_failed() {
 _watch_github_help() {
   cat <<'EOF'
 Usage: clikae watch github [--org <org>] [--interval <dur>] [--once] [--since <ts>]
+       clikae watch github --status [--org <org>]
 
 Poll GitHub's search API for every issue/PR update in <org> — including
 replies on issues YOU opened — and turn each new one into a wake line; a
@@ -2175,7 +2246,9 @@ Printed live (a foreground run) and appended, as flat JSON, to
 Heartbeat (#166): every poll — quiet, busy or failed — rewrites
 $CLIKAE_HOME/state/watch-github/<org>.heartbeat.json with `last_poll_at`,
 `last_ok_at` (moves only on success), `consecutive_failures` and the last
-error. A pid being alive says nothing; this file does. After
+error. A pid being alive says nothing; the failure records do. The file is
+a display cache that can lag until the next poll; `--status` prints the
+same fields computed from the records at read time (needs no gh). After
 $CLIKAE_WATCH_GITHUB_STALL_POLLS (default 3) failed polls in a row, a
 `state: fail` run directory is written (reason "stalled …") so
 `clikae wait --latest watch-github-<org>` returns on it with rc 1; the
@@ -2214,6 +2287,10 @@ next to it de-dupes (repo, issue number, updated_at) triples.
   --since <ts>      Cold-start lower bound (ISO8601, e.g.
                      2026-09-01T00:00:00Z), used ONLY when there is no
                      persisted cursor yet. Default: 24 hours ago.
+  --status          Print the heartbeat as it is now (JSON, one line):
+                     consecutive_failures, last_ok_at and the last error
+                     counted from the failure records, not the cache file.
+                     Polls nothing; needs no gh with --org.
 
 Each query paginates up to 5 pages of 100 (order=asc, oldest unseen first),
 so a poll that falls behind a busy org always makes forward progress:
@@ -2294,10 +2371,11 @@ _wg_infer_org() {
 }
 
 cmd_watch_github() {
-  local org="" interval_dur="10m" once=0 since_flag="" since_given=0
+  local org="" interval_dur="10m" once=0 since_flag="" since_given=0 status_only=0
   while [ $# -gt 0 ]; do
     case "$1" in
       -h|--help)   _watch_github_help; return 0 ;;
+      --status)    status_only=1; shift ;;
       --org)       shift; [ $# -gt 0 ] || log_fail "--org needs a value"; org="$1"; shift ;;
       --interval)  shift; [ $# -gt 0 ] || log_fail "--interval needs a duration"; interval_dur="$1"; shift ;;
       --once)      once=1; shift ;;
@@ -2307,6 +2385,15 @@ cmd_watch_github() {
       *)           log_fail "Unexpected argument: $1  (try: clikae watch github --help)" ;;
     esac
   done
+
+  # #183 r7: the read-time reader. No poll, no gh unless --org is inferred.
+  if [ "$status_only" -eq 1 ]; then
+    [ -n "$org" ] || org="$(_wg_infer_org)"
+    [ -n "$org" ] || log_fail "No --org given and none could be inferred from this directory's GitHub remote."
+    validate_name org "$org"
+    _wg_heartbeat_read "$org"
+    return 0
+  fi
 
   # P3-15 (2026-09-13 fix-round-2 review): `--since ''` used to be silently
   # ACCEPTED and ignored (falling through to the 24h default) — indistinguishable
