@@ -909,13 +909,27 @@ ok 2 called from inside tmux, switch moves the client instead of nesting
      我們的 server：同 uid、comm **完全等於** tmux 的（Linux `tmux: server`、macOS `tmux` 或 `…/tmux`，
      不是前綴——第一輪的 `tmux*` 讓一個 `tmux-helper` 吃了 USR1，finding 1）、`ps -o lstart=` 跟記錄時
      一樣（incarnation：被重用的 pid 啟動時間不同）。`$TMUX` 來的 pid 沒有紀錄，證明換成「這個行程就跑在
-     它裡面」（server 是祖先）。檢查是 kill 前最後一件事（中間只剩 `mkdir` socket 目錄）；剩下的窗口是
-     pid 在兩個相鄰指令之間整圈繞回，bash 沒有 pidfd 能再收窄。不符的紀錄**丟掉、絕不送訊號**。
-  8. **紀錄只有一個寫手**：`_tmux_rec_update` 在 `mkdir` 鎖裡讀-改-寫、經 `mktemp` 的暫存檔 `mv` 換上
+     它裡面」（server 是祖先）。檢查做兩次：`mkdir`／`chmod` socket 目錄之前一次（不是我們的就什麼都
+     不建），之後再一次，緊接著 `kill`，中間沒有別的指令（第三輪）。uid、comm、lstart 都不是絕對的行程
+     身分：comm 是名字不是執行檔，lstart 只到秒；剩下的窗口是 pid 在兩個相鄰指令之間整圈繞回，bash 沒有
+     pidfd 能再收窄。不符的紀錄**丟掉、絕不送訊號**。
+  8. **紀錄只有一個寫手**：`_tmux_rec_update` 在鎖裡讀-改-寫、經 `mktemp` 的暫存檔 `mv` 換上
      （finding 5：第一輪固定 `servers.tmp`、無鎖，rescue 的快照會蓋掉同時記下的 server）。rescue 不再整份
      重寫，只丟「pid|啟動時間」對得上的那幾行；不是三欄的行（第一輪格式）一律丟，因為它們沒有啟動時間、
      什麼都證明不了。紀錄目錄一律 0700，明確設了 `TMUX_TMPDIR` 時也是。
-- **收據**：`tests/bats/tmux-socket.bats`（23 條）。第一輪紅：`tmux_socket_init: command not found`、
+  9. 🔴 **等太久不等於持鎖的人死了**（第三輪 P2）：第二輪的 `mkdir` 鎖等 5 秒就拆，不問是誰的——持鎖者
+     只是在讀與 rename 之間慢了，醒來就用舊快照蓋掉拆鎖者剛寫的那筆，那顆 server 從紀錄上消失，之後
+     socket 被掃就救不回來。鎖現在是 `servers.lck` 這個 symlink，`ln -s` 一步建好、內容就是持有者
+     `pid|啟動時間|token`。逾時的人只從**已經不在**的持有者手上拿（pid 死了，或同 pid 不同啟動時間）：
+     先 `mv` 到只有自己用的名字，再確認拿到的就是判過死的那一個，不是就放回去；持有者還活著就**跳過這次
+     更新並 `log_warn`**（每次 spawn 都會再記一次，下一次補上）。釋放時只刪仍然寫著自己的鎖。`$$` 在
+     subshell 裡是父行程：有 `$BASHPID` 用它，bash 3.2 沒有，就用父行程——錯也錯在「還活著」那邊，
+     不會錯在搶鎖；同一個 `$$` 的兄弟靠 token（自己的暫存檔名）分開。
+- **收據**：`tests/bats/tmux-socket.bats`（28 條）。第三輪紅（舊碼上跑新測試，都不需要 tmux server）：
+  `B's record lost and nothing said so`（持鎖者被延遲超過等待者的逾時，紀錄剩 {1,2}）、`A's cleanup
+  removed the successor's lock`、`signalled on an identity checked before the mkdir`；突變：拿掉 uid 檢查
+  ⇒ `a server of another uid (…) was signalled`，拿掉鎖 ⇒ 並行測試 5/5 紅（屏障讓每個寫手都先讀完才有人
+  寫，`lost: …` 8 筆掉 7～8 筆；有鎖時屏障看到鎖在就放行）。第一輪紅：`tmux_socket_init: command not found`、
   `no server appeared on …/.clikae/state/tmux/tmux-1002/default`、`missing legacy row`、
   `no record at …/state/tmux/servers`。第二輪紅（舊碼上跑新測試）：`tmux-helper (…) was signalled`、
   `the server was signalled: socket is back`（啟動時間不符仍送）、`signalled a server this process is not
