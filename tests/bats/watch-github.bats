@@ -3002,3 +3002,74 @@ _hb() { printf '%s/state/watch-github/CVERInc.heartbeat.json' "$CLIKAE_HOME"; }
   [ "$status" -eq 1 ]
   [[ "$output" == *'"state":"fail"'* ]] || false
 }
+
+# #183 round 4 (P2): the stall writer runs OUTSIDE the org lock, so it can
+# race the lock holder's event writer for the same
+# `watch-github-<org>-<epoch>` directory. A check-then-`mkdir -p` let both
+# pass the check and then share one directory, the later status.json
+# overwriting the earlier. The review's interleaving, made deterministic:
+# the epoch is frozen, the event writer is paused just before it creates
+# its run directory, the third lock failure writes the stall, then the
+# writer is released. Both events must survive, each in its own directory.
+@test "watch github: a stall written outside the lock and the holder's event in the same second land in two run directories, neither overwriting the other (#183 r4 P2)" {
+  source "$CLIKAE_TEST_ROOT/lib/core/log.sh"
+  source "$CLIKAE_TEST_ROOT/lib/core/json.sh"
+  source "$CLIKAE_TEST_ROOT/lib/core/profile_store.sh"
+  source "$CLIKAE_TEST_ROOT/lib/core/burn_status.sh"
+  source "$CLIKAE_TEST_ROOT/lib/commands/watch_github.sh"
+  date() { if [ "$*" = "+%s" ]; then printf '1789000000\n'; else command date "$@"; fi; }
+  local gate="$BATS_TEST_TMPDIR/gate"
+  mkdir -p "$gate" "$CLIKAE_HOME/logs"
+  # In the paused writer only: block on its first run-directory mkdir.
+  mkdir() {
+    local a
+    if [ "${WG_PAUSE:-0}" = 1 ]; then
+      for a in "$@"; do
+        case "$a" in
+          */watch-github-CVERInc-1789000000*)
+            : > "$gate/at-mkdir"
+            while [ ! -e "$gate/go" ]; do sleep 0.05; done
+            WG_PAUSE=0
+            ;;
+        esac
+      done
+    fi
+    command mkdir "$@"
+  }
+  _wg_lock_acquire() { return 1; }
+  local lock; lock="$(_wg_lock_dir CVERInc)"
+  command mkdir -p "$lock"
+  printf '424242\n' > "$lock/pid"
+  # Two failures already on the heartbeat: the next poll is the third.
+  _wg_poll CVERInc 2>>"$BATS_TEST_TMPDIR/poll.err" || true
+  _wg_poll CVERInc 2>>"$BATS_TEST_TMPDIR/poll.err" || true
+  ( WG_PAUSE=1; _wg_status_write CVERInc '{"kind":"comment","n":100}' "#100 comment by carol" ) &
+  local writer=$! i=0
+  while [ ! -e "$gate/at-mkdir" ] && [ "$i" -lt 200 ]; do sleep 0.05; i=$((i + 1)); done
+  [ -e "$gate/at-mkdir" ]
+  _wg_poll CVERInc 2>>"$BATS_TEST_TMPDIR/poll.err" || true
+  : > "$gate/go"
+  wait "$writer"
+  local f fails=0 dones=0 n=0
+  for f in "$CLIKAE_HOME"/logs/watch-github-CVERInc-1789000000*/status.json; do
+    [ -f "$f" ] || continue
+    n=$((n + 1))
+    echo "$f: $(cat "$f")"
+    case "$(cat "$f")" in
+      *'stalled: 3 consecutive failed polls'*'"state":"fail"'*) fails=$((fails + 1)) ;;
+      *'"reason":"github-events"'*'"state":"done"'*) dones=$((dones + 1)) ;;
+    esac
+  done
+  echo "run dirs with status=$n fail=$fails done=$dones"
+  [ "$n" = 2 ]
+  [ "$fails" = 1 ]
+  [ "$dones" = 1 ]
+  # The event's own events.jsonl sits beside the done status, not the stall's.
+  for f in "$CLIKAE_HOME"/logs/watch-github-CVERInc-1789000000*/status.json; do
+    case "$(cat "$f")" in
+      *'"state":"done"'*) grep -q '"n":100' "${f%/status.json}/events.jsonl" ;;
+      *) [ ! -e "${f%/status.json}/events.jsonl" ] ;;
+    esac
+  done
+  [ "$(cat "$lock/pid")" = "424242" ]
+}

@@ -1091,6 +1091,36 @@ _wg_build_summary() {
   printf '%s\n+%d' "$head" "$((n - cap))"
 }
 
+# _wg_run_dir_reserve <org> <epoch> -> 0 with $__WG_RUN_ID / $__WG_RUN_DIR set
+# to a `watch-github-<org>-<epoch>[-N]` run directory THIS call created; 1
+# when none could be created. Every run-directory writer goes through here.
+#
+# 🔴 #183 r4 P2: the stall writer runs OUTSIDE the org lock (a poll that
+# could not get it), so it races the lock holder's event writer. The old
+# `while [ -d … ]; done; mkdir -p` let both pass the check in the same
+# second and then share one directory, the later status.json overwriting
+# the earlier — a waiter missed the stall or got a failure in place of the
+# comment. A plain `mkdir` (no -p) is the reservation: exactly one caller
+# succeeds per name, and a caller that loses (the name now exists) takes
+# the next suffix. A failure that is NOT "already exists" (permissions, a
+# missing parent we could not make) gives up instead of spinning.
+_wg_run_dir_reserve() {
+  local org="$1" now="$2" n=1 id dir
+  mkdir -p "$(burn_status_dir "")" 2>/dev/null || true
+  id="watch-github-$org-$now"
+  while [ "$n" -le 1000 ]; do
+    dir="$(burn_status_dir "$id")"
+    if mkdir "$dir" 2>/dev/null; then
+      __WG_RUN_ID="$id"; __WG_RUN_DIR="$dir"
+      return 0
+    fi
+    [ -e "$dir" ] || return 1
+    n=$((n + 1))
+    id="watch-github-$org-$now-$n"
+  done
+  return 1
+}
+
 # _wg_status_write <org> <poll_json_lines> <summary> -> write ONE burn-
 # status-SHAPED file to $HOME/.clikae/logs/watch-github-<org>-<epoch>[-N]/
 # status.json — burn_status_dir's OWN layout (lib/core/burn_status.sh), not
@@ -1122,19 +1152,17 @@ _wg_build_summary() {
 # directly; unrelated to this file). A consumer reading `artifact` off a
 # wake should see what just happened, not the org's entire history.
 #
+# The directory itself comes from _wg_run_dir_reserve (#183 r4 P2): an
+# exclusive mkdir, never a check followed by `mkdir -p`.
+#
 # Same field set/escaping as burn's own status.json plus `summary`; write-
 # then-rename so `clikae wait` (polling every second) never reads a
 # half-written file.
 _wg_status_write() {
-  local org="$1" poll_json_lines="$2" summary="$3" now run_id run_dir n=1
+  local org="$1" poll_json_lines="$2" summary="$3" now run_id run_dir
   now="$(date +%s 2>/dev/null || echo 0)"
-  run_id="watch-github-$org-$now"
-  while [ -d "$(burn_status_dir "$run_id")" ]; do
-    n=$((n + 1))
-    run_id="watch-github-$org-$now-$n"
-  done
-  run_dir="$(burn_status_dir "$run_id")"
-  mkdir -p "$run_dir" 2>/dev/null || return 0
+  _wg_run_dir_reserve "$org" "$now" || return 0
+  run_id="$__WG_RUN_ID"; run_dir="$__WG_RUN_DIR"
   [ -n "$poll_json_lines" ] && printf '%s\n' "$poll_json_lines" > "$run_dir/events.jsonl" 2>/dev/null
   {
     printf '{"ok":true,"engine":%s,"tank":%s,"artifact":%s,"artifact_bytes":null,"reason":%s,"reset":null,"rerouted_from":[],"elapsed_s":0,"run_id":%s,"state":%s,"started_at":%s,"updated_at":%s,"pid":%s,"log":null,"reset_at":null,"summary":%s}\n' \
@@ -1188,15 +1216,10 @@ _wg_heartbeat_write() {
 # a cockpit returns on (rc 1), not a line in a log nobody tails. <rotate> 0
 # (a poll that does not hold the org lock) skips _wg_runs_rotate.
 _wg_stall_write() {
-  local org="$1" reason="$2" rotate="${3:-1}" now run_id run_dir n=1
+  local org="$1" reason="$2" rotate="${3:-1}" now run_id run_dir
   now="$(date +%s 2>/dev/null || echo 0)"
-  run_id="watch-github-$org-$now"
-  while [ -d "$(burn_status_dir "$run_id")" ]; do
-    n=$((n + 1))
-    run_id="watch-github-$org-$now-$n"
-  done
-  run_dir="$(burn_status_dir "$run_id")"
-  mkdir -p "$run_dir" 2>/dev/null || return 0
+  _wg_run_dir_reserve "$org" "$now" || return 0
+  run_id="$__WG_RUN_ID"; run_dir="$__WG_RUN_DIR"
   {
     printf '{"ok":false,"engine":%s,"tank":%s,"artifact":null,"artifact_bytes":null,"reason":%s,"reset":null,"rerouted_from":[],"elapsed_s":0,"run_id":%s,"state":%s,"started_at":%s,"updated_at":%s,"pid":%s,"log":%s,"reset_at":null,"summary":%s}\n' \
       "$(json_str "github")" "$(json_str "$org")" "$(json_str "$reason")" \
