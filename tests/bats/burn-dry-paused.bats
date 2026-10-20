@@ -390,3 +390,137 @@ _start_sleeping_burn() {
   [ "$status" -eq 1 ]
   [[ "$output" == *'"state":"stale"'* ]] || false
 }
+
+# --- #183 round 3 (P1): the retry is decided BEFORE any terminal row ---------
+#
+# Round 2 put the sleep under the non-terminal `waiting-reset`, but both engine
+# paths still wrote the terminal `dry` (ok:false) first and only then asked
+# whether to retry. In that window `wait` returned rc 2, `burn_tank_busy` said
+# the tank was free, and _BURN_TERMINAL_WRITTEN stayed 1 through the sleep and
+# the re-fire. Tests that look after the sleep-start marker cannot see it, so
+# these sample the readers AT EACH WRITE: a PATH `mv` that passes the move
+# through, then — only for a burn status.json — records state, ok, what
+# burn_tank_busy says and what `clikae wait --timeout 1` returns, while the
+# writer is still alive (mv is its child).
+_stub_mv_sampler() {
+  local bin="$BATS_TEST_TMPDIR/bin" real
+  real="$(command -v mv)"
+  mkdir -p "$bin"
+  TRACE="$BATS_TEST_TMPDIR/transitions"
+  cat > "$bin/mv" <<STUB
+#!/usr/bin/env bash
+"$real" "\$@" || exit \$?
+dest=""; for dest in "\$@"; do :; done
+case "\$dest" in */logs/burn-*/status.json) ;; *) exit 0 ;; esac
+[ -z "\${_MV_SAMPLING:-}" ] || exit 0
+export _MV_SAMPLING=1
+json="\$(cat "\$dest")"
+st="\$(printf '%s' "\$json" | sed -n 's/.*"state":"\([^"]*\)".*/\1/p')"
+ok="\$(printf '%s' "\$json" | sed -n 's/^{"ok":\([a-z]*\),.*/\1/p')"
+eng="\$(printf '%s' "\$json" | sed -n 's/.*"engine":"\([^"]*\)".*/\1/p')"
+tk="\$(printf '%s' "\$json" | sed -n 's/.*"tank":"\([^"]*\)".*/\1/p')"
+busy=no
+( . "$CLIKAE_TEST_ROOT/lib/core/log.sh"; . "$CLIKAE_TEST_ROOT/lib/core/json.sh"
+  . "$CLIKAE_TEST_ROOT/lib/core/burn_status.sh"; burn_tank_busy "\$eng" "\$tk" ) >/dev/null 2>&1 && busy=yes
+"$CLIKAE_BIN" wait "\$dest" --timeout 1 >/dev/null 2>&1; wrc=\$?
+printf '%s ok=%s busy=%s wait=%s\n' "\$st" "\$ok" "\$busy" "\$wrc" >> "$TRACE"
+exit 0
+STUB
+  chmod +x "$bin/mv"
+  PATH="$bin:$PATH"; export PATH
+}
+
+# _assert_first_terminal_is <state>: every row but the last must be in
+# progress for every reader; the last — the FIRST terminal row — is <state>.
+_assert_first_terminal_is() {
+  cat "$TRACE"
+  local n last
+  n="$(wc -l < "$TRACE" | tr -d ' ')"
+  last="$(tail -n 1 "$TRACE")"
+  [ "${last%% *}" = "$1" ]
+  [ "$(head -n $((n - 1)) "$TRACE" | grep -vc ' ok=null busy=yes wait=1$')" = "0" ]
+}
+
+@test "burn --no-reroute (#183 r3 P1): codex — no reader ever sees a terminal row between the dry and the re-fire" {
+  _stub_codex_dry_then_ok "$WITH_TIME"
+  _stub_sleep_noop
+  clikae init codex T1
+  _stub_mv_sampler
+  local A="$BATS_TEST_TMPDIR/out.md"
+  CLIKAE_BURN_DRY_PAUSE_WAIT=25h run clikae burn codex T1 --artifact "$A" --no-reroute -- run "$A"
+  [ "$status" -eq 0 ]
+  [ "$(cat "$BATS_TEST_TMPDIR/codex_calls")" = "2" ]
+  grep -q '^waiting-reset ' "$TRACE"
+  _assert_first_terminal_is done
+}
+
+# agy: dry on its first call, writes the artifact on the second. agy only ever
+# reports a relative "Resets in …", which limit_reset_epoch does not resolve,
+# so a pinned agy burn takes the STOP branch — the same decision, made before
+# any row: `dry-paused` must be the first terminal thing a reader sees, with
+# no transient `dry` ahead of it.
+_stub_agy_dry_then_ok() {
+  local bin="$BATS_TEST_TMPDIR/bin" counter="$BATS_TEST_TMPDIR/agy_calls"
+  mkdir -p "$bin"
+  cat > "$bin/agy" <<STUB
+#!/usr/bin/env bash
+log=""
+while [ \$# -gt 0 ]; do
+  [ "\$1" = "--log-file" ] && { log="\$2"; break; }
+  shift
+done
+[ -n "\$log" ] || exit 64
+mkdir -p "\$(dirname "\$log")"
+n=0; [ -f "$counter" ] && n=\$(cat "$counter"); n=\$((n + 1)); printf '%s' "\$n" > "$counter"
+if [ "\$n" -eq 1 ]; then
+  echo "RESOURCE_EXHAUSTED (code 429): Individual quota reached. Resets in 3h32m48s." > "\$log"
+  exit 0
+fi
+: > "\$log"
+[ -n "\$STUB_ARTIFACT" ] && : > "\$STUB_ARTIFACT"
+exit 0
+STUB
+  chmod +x "$bin/agy"
+  PATH="$bin:$PATH"; export PATH
+}
+
+@test "burn --no-reroute (#183 r3 P1): agy — the stop is decided before any row; dry-paused is the first terminal one" {
+  _stub_agy_dry_then_ok
+  _stub_sleep_noop
+  mkdir -p "$HOME/.gemini"
+  printf 'y\n' | "$CLIKAE_BIN" init agy default >/dev/null 2>&1
+  _stub_mv_sampler
+  local A="$BATS_TEST_TMPDIR/out.md"
+  STUB_ARTIFACT="$A" run clikae burn agy default --artifact "$A" --no-reroute --prompt "do the thing"
+  echo "$output"
+  [ "$status" -eq 2 ]
+  [ "$(cat "$BATS_TEST_TMPDIR/agy_calls")" = "1" ]
+  _assert_first_terminal_is dry-paused
+}
+
+@test "burn --no-reroute (#183 r3 P1): a pinned burn killed in its reset sleep still gets its exit-guard fail row" {
+  _start_sleeping_burn
+  local f pid
+  f="$(_the_status_file)"
+  pid="$(sed -n 's/.*"pid":\([0-9]*\).*/\1/p' "$f")"
+  [ -n "$pid" ]
+  kill -TERM "$pid"
+  : > "$SLEEP_RELEASE"
+  wait "$APID" || true
+  cat "$f"
+  [[ "$(cat "$f")" == *'"state":"fail"'* ]] || false
+  [[ "$(cat "$f")" == *'without reaching a terminal state'* ]] || false
+  [ "$(cat "$BATS_TEST_TMPDIR/codex_calls")" = "1" ]
+}
+
+@test "_burn_status_write (#183 r3 P1): the terminal flag follows the LAST row — an in-progress row after a terminal one re-arms the exit guard" {
+  _src_burn
+  local run_dir="$BATS_TEST_TMPDIR/run" burn_id="burn-1" started_at=1
+  _BURN_TERMINAL_WRITTEN=0
+  _burn_status_write dry false codex T1 "" "tank ran dry" ""
+  [ "$_BURN_TERMINAL_WRITTEN" -eq 1 ]
+  _burn_status_write waiting-reset null codex T1 "" "waiting" ""
+  [ "$_BURN_TERMINAL_WRITTEN" -eq 0 ]
+  _burn_exit_guard 143
+  [[ "$(cat "$run_dir/status.json")" == *'"state":"fail"'* ]] || false
+}
