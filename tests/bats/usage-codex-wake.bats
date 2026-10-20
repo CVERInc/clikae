@@ -43,6 +43,7 @@ STUB
     || { echo "initial reading: $output"; false; }
 
   CLIKAE_CODEX_USAGE_PROBE=1 CLIKAE_USAGE_TTL=999999 run --separate-stderr clikae usage codex --wake marlin --json
+  # shellcheck disable=SC2154  # $stderr is set by bats run --separate-stderr
   [ "$status" -eq 0 ] || { echo "wake failed: $stderr"; false; }
   [ -e "$WAKE_CODEX_RAN" ]
   [ -s "$WAKE_CODEX_PROBES" ]
