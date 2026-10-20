@@ -2323,6 +2323,135 @@ _usage184_assert_b_skipped() {
   rm -f "$cache.lck"
 }
 
+# --- review of #184 r4: a stolen lock is never put back -----------------------
+#
+# _usage184r4_wait <file> — wait up to ~15 s for a barrier file.
+_usage184r4_wait() {
+  local i=0
+  until [ -e "$1" ]; do i=$((i + 1)); [ "$i" -le 300 ] || { echo "barrier ${1##*/} never came"; return 1; }; sleep 0.05; done
+}
+
+# _usage184r4_finisher — finisher2.sh: one _usage_read_finish claude/work as
+# $ROLE. A: needs-refresh measured 2 s ago, held inside its record jq until
+# $BAR/a-resume, then — published and released — it STAYS ALIVE until
+# $BAR/a-exit (a watcher whose usage read returned). B: vendor 7/8, paused
+# right after it judges a lock's owner dead (b-judged / b-go) and, if it ever
+# reads a lock it moved aside, there too (b-moved / b-resume). C: vendor 9/10
+# measured now, unhooked. HOLD_IN_SUBSHELL=1: take the lock in a subshell
+# with BASHPID unset (bash 3.2) and exit it still held — a crashed reader —
+# then publish as C from the parent, still alive.
+_usage184r4_finisher() {
+  _usage184_finisher
+  cat > "$TEST_HOME/finisher2.sh" <<'SH'
+#!/usr/bin/env bash
+for f in core/log.sh core/i18n.sh core/profile_store.sh core/adapter_loader.sh core/dry_store.sh core/limit.sh core/usage.sh; do
+  source "$CLIKAE_LIB/$f"
+done
+cache="$CLIKAE_HOME/state/usage/claude/work.json"
+if [ "${HOLD_IN_SUBSHELL:-}" = 1 ]; then
+  (
+    unset BASHPID
+    _usage_cache_lock "$cache" || exit 1
+    sleep 30 & s=$!
+    # The subshell's own pid, measured independently: its child's parent.
+    printf '%s %s %s\n' "$(ps -o ppid= -p "$s" | tr -d ' ')" "$$" "$(readlink "$cache.lck")" > "$BAR/sub-lock"
+    kill "$s"
+  )
+  # This process — the subshell's parent — lives on and publishes as C.
+  ROLE=C
+fi
+if [ "$ROLE" = B ]; then
+  eval "_usage184r4_alive() $(declare -f _usage_lock_holder_alive | tail -n +2)"
+  _usage_lock_holder_alive() {
+    _usage184r4_alive "$@" && return 0
+    : > "$BAR/b-judged"
+    local i=0; while [ ! -e "$BAR/b-go" ]; do i=$((i + 1)); [ "$i" -le 600 ] || break; sleep 0.05; done
+    return 1
+  }
+  readlink() {
+    case "${1:-}" in *.stale)
+      : > "$BAR/b-moved"
+      local i=0; while [ ! -e "$BAR/b-resume" ]; do i=$((i + 1)); [ "$i" -le 600 ] || break; sleep 0.05; done ;;
+    esac
+    command readlink "$@"
+  }
+fi
+jq() {
+  if [ "$ROLE" = A ] && [ "${1:-}" = -c ] && [ "${2:-}" = --argjson ] && [ "${3:-}" = now ]; then
+    : > "$BAR/a-paused"
+    local i=0; while [ ! -e "$BAR/a-resume" ]; do i=$((i + 1)); [ "$i" -le 600 ] || break; sleep 0.05; done
+  fi
+  command jq "$@"
+}
+now="$(date +%s)"
+measured_seen="$(cat "$cache")"
+adapter_retry=""
+case "$ROLE" in
+  A) measured_at=$((now - 2)); reading=""; adapter_reason=needs-refresh ;;
+  B) measured_at=$now; reading='{"source":"vendor","window_pct":7,"weekly_pct":8}'; adapter_reason="" ;;
+  C) measured_at=$now; reading='{"source":"vendor","window_pct":9,"weekly_pct":10}'; adapter_reason="" ;;
+esac
+_usage_read_finish claude work "$cache" "$now"
+if [ "$ROLE" = A ]; then
+  : > "$BAR/a-done"
+  i=0; while [ ! -e "$BAR/a-exit" ]; do i=$((i + 1)); [ "$i" -le 1200 ] || break; sleep 0.05; done
+fi
+SH
+  chmod +x "$TEST_HOME/finisher2.sh"
+}
+
+@test "review #184 r4 (1): B judges a dead owner, A reaps, publishes and releases, B then acts — no lock is left that nobody holds, and later writers publish" {
+  usage_fixture
+  _usage184r4_finisher
+  local cache="$CLIKAE_HOME/state/usage/claude/work.json" dead a b i
+  sleep 0 & dead=$!; wait "$dead"
+  ln -s "$dead|Mon Jan  1 00:00:00 2001|tok" "$cache.lck"
+  ROLE=B "$TEST_HOME/finisher2.sh" > "$BAR/b.out" 2> "$BAR/b.err" &
+  b=$!
+  _usage184r4_wait "$BAR/b-judged"
+  # A reaps the same dead lock, takes its own and stops inside publication.
+  ROLE=A "$TEST_HOME/finisher2.sh" > "$BAR/a.out" 2> "$BAR/a.err" &
+  a=$!
+  _usage184r4_wait "$BAR/a-paused"
+  # B acts on its stale judgement while A holds the lock.
+  : > "$BAR/b-go"
+  i=0; while kill -0 "$b" 2>/dev/null && [ ! -e "$BAR/b-moved" ]; do i=$((i + 1)); [ "$i" -le 300 ] || break; sleep 0.05; done
+  # A publishes and releases; B (if it moved A's lock aside) finishes after.
+  : > "$BAR/a-resume"
+  _usage184r4_wait "$BAR/a-done"
+  : > "$BAR/b-resume"
+  wait "$b"
+  kill -0 "$a" 2>/dev/null || { echo "A (the watcher) exited early"; false; }
+  jq -e '.source == "unknown" and .reason == "needs-refresh"' "$cache" >/dev/null \
+    || { echo "A's publication did not stand: $(cat "$cache")"; : > "$BAR/a-exit"; false; }
+  if [ -L "$cache.lck" ]; then
+    echo "lock left that nobody holds: $(readlink "$cache.lck") (A, alive, released already)"
+    : > "$BAR/a-exit"; wait "$a"; false
+  fi
+  # A later writer, with A's process still alive, publishes.
+  ROLE=C "$TEST_HOME/finisher2.sh" > "$BAR/c.out" 2> "$BAR/c.err"
+  : > "$BAR/a-exit"; wait "$a"
+  ! grep -q 'not cached' "$BAR/c.err" || { echo "C: $(cat "$BAR/c.err")"; false; }
+  jq -e '.source == "vendor" and .window_pct == 9' "$cache" >/dev/null || { echo "C not published: $(cat "$cache")"; false; }
+  [ ! -L "$cache.lck" ]
+}
+
+@test "review #184 r4 (2): with no BASHPID (bash 3.2) the lock names the subshell that holds it, not its long-lived parent — so its crash is reaped" {
+  usage_fixture
+  _usage184r4_finisher
+  local cache="$CLIKAE_HOME/state/usage/claude/work.json"
+  # The parent stays alive (a watcher) while its subshell's lock is left behind.
+  HOLD_IN_SUBSHELL=1 "$TEST_HOME/finisher2.sh" > "$BAR/c.out" 2> "$BAR/c.err"
+  output="$(cat "$BAR/c.err")"
+  local sub parent owner
+  read -r sub parent owner < "$BAR/sub-lock"
+  [ -n "$sub" ] && [ "$sub" != "$parent" ] || { echo "subshell pid not measured: $(cat "$BAR/sub-lock")"; false; }
+  [ "${owner%%|*}" = "$sub" ] || { echo "lock names pid ${owner%%|*}; the subshell holding it is $sub, its parent $parent"; false; }
+  ! echo "$output" | grep -q 'not cached' || { echo "C: $output"; false; }
+  jq -e '.source == "vendor" and .window_pct == 9' "$cache" >/dev/null || { echo "C not published: $(cat "$cache")"; false; }
+  [ ! -L "$cache.lck" ]
+}
+
 @test "review #184 (2): a needs-refresh cached by a reader that may not spend is not the final answer for one that may" {
   usage_fixture
   _usage107_creds rt-stub-value

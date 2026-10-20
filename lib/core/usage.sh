@@ -462,18 +462,34 @@ _usage_read_finish() {
 # record lock (#181): the lock is a symlink made by `ln -s`, atomic WITH its
 # content, naming its holder `pid|start time|token`. A live holder keeps it
 # however old it is; after ~3 s a waiter takes it only from a holder proven
-# gone (pid dead, or a different process on that pid), via a rename to a name
-# only it uses that puts back any lock it did not judge. A waiter that still
+# gone (pid dead, or a different process on that pid). A waiter that still
 # cannot get it returns 1 and the caller SKIPS publication — never an
 # unlocked write.
+# Review of #184 r4: a lock is never PUT BACK. Round 3 renamed the judged lock
+# aside and restored whatever it had moved if that was not the one it judged —
+# but the holder it moved may have finished meanwhile, found no lock to
+# release, and lived on (a watcher): the restored lock named a live process
+# that held nothing, and every later writer timed out for that process's
+# lifetime. Now the waiter re-reads the lock and takes it away only while it
+# still names the exact owner judged dead; anything else is left alone and this
+# write is skipped. If another stealer replaced it inside that narrow window,
+# the displaced lock is dropped, not restored — the accepted cost is a rare
+# lost cache update (two writers overlap once), which the next measurement
+# repairs; a lock nobody holds would never be repaired.
 _usage_cache_lock() {
   local lock="$1.lck" i=0 again=0 owner held priv
   _USAGE_LOCK_HOLDER=""
   mkdir -p "${1%/*}" 2>/dev/null || return 1
-  # $BASHPID: in a subshell $$ is the parent. bash 3.2 has none; there a
-  # subshell names its parent, which errs towards "alive", never a steal. The
-  # token (a fresh unique name) tells siblings apart on release.
-  _USAGE_LOCK_ME="${BASHPID:-$$}"
+  # The pid is the process that HOLDS the lock: in a subshell $$ is the parent
+  # (often a long-lived watcher), so a dead subshell's lock would look alive
+  # for as long as the watcher runs. $BASHPID is bash 4+; on 3.2 a fresh sh's
+  # $PPID is this (sub)shell — `exec` makes the sh the `$(…)` child itself
+  # (measured: without it, a redirection on the line costs the implicit exec
+  # and $PPID names that child instead). The token (a fresh unique name) tells
+  # siblings apart on release.
+  _USAGE_LOCK_ME="${BASHPID:-}"
+  [ -n "$_USAGE_LOCK_ME" ] || _USAGE_LOCK_ME="$(exec sh -c 'echo $PPID')"
+  case "$_USAGE_LOCK_ME" in ''|*[!0-9]*) _USAGE_LOCK_ME=$$ ;; esac
   priv="$(mktemp -u "$1.XXXXXX" 2>/dev/null)" || priv="$1.$_USAGE_LOCK_ME.$i"
   _USAGE_LOCK_ME="$_USAGE_LOCK_ME|$(_usage_proc_lstart "$_USAGE_LOCK_ME")|${priv##*/}"
   while ! ln -s "$_USAGE_LOCK_ME" "$lock" 2>/dev/null; do
@@ -481,10 +497,19 @@ _usage_cache_lock() {
     if [ "$i" -gt 30 ]; then
       owner="$(readlink "$lock" 2>/dev/null)" || owner=""
       if [ "$again" = 0 ] && ! _usage_lock_holder_alive "$owner"; then
+        # Judged dead — take it away only while it still names that owner.
+        held="$(readlink "$lock" 2>/dev/null)" || held=""
+        if [ "$held" != "$owner" ]; then
+          _USAGE_LOCK_HOLDER="${held%%|*}"
+          return 1
+        fi
         if mv "$lock" "$priv.stale" 2>/dev/null; then
           held="$(readlink "$priv.stale" 2>/dev/null)" || held=""
-          [ "$held" = "$owner" ] || ln -s "$held" "$lock" 2>/dev/null || true
           rm -f "$priv.stale" 2>/dev/null
+          if [ "$held" != "$owner" ]; then
+            _USAGE_LOCK_HOLDER="${held%%|*}"
+            return 1
+          fi
         fi
         again=1; i=0
         continue
