@@ -13,7 +13,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   (#178). The quota window closing is a normal outcome of a pinned burn. By
   default the burn waits the reset out in place and re-fires the same tank
   (`--wait-for-reset <dur>` sets the window, `0` never retries,
-  `$CLIKAE_BURN_DRY_PAUSE_WAIT` sets the 6h default); while it sleeps the
+  `$CLIKAE_BURN_DRY_PAUSE_WAIT` sets the 6h default). Whether it will retry
+  is decided before anything terminal is written; while it sleeps the
   status file says the non-terminal `waiting-reset`, so the tank stays busy
   to other burns and `--queue`, and `clikae wait` keeps waiting for the real
   outcome. A burn that will not retry writes the terminal `state:
@@ -26,7 +27,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **`clikae watch github` can no longer be alive but not working** (#166).
   Every poll rewrites `state/watch-github/<org>.heartbeat.json`
   (`last_poll_at`, `last_ok_at`, `consecutive_failures`, last error); three
-  failed polls in a row (`$CLIKAE_WATCH_GITHUB_STALL_POLLS`) write a
+  failed polls in a row (`$CLIKAE_WATCH_GITHUB_STALL_POLLS`; a poll that
+  cannot get the org's poll lock counts as failed) write a
   `state: fail` run that `clikae wait --latest watch-github-<org>` returns
   on and say so loudly; a failed poll re-checks `gh auth status` and a
   login that is gone exits 1 instead of spinning. Comment/review/mention
