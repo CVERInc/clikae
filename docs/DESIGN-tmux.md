@@ -901,7 +901,7 @@ ok 2 called from inside tmux, switch moves the client instead of nesting
      watcher（裸 tmux 碰不到它，`set -e` 下 watcher 的 `return 1` 還會把 launch 收掉）。
   6. 🔴 **socket 被刪的 server 沒死，而且 tmux 知道怎麼救**：`SIGUSR1` 會讓 server 在出生時的路徑
      重建 socket。每次 `tmux_spawn_session` 都把 `(pid, 啟動時間, socket_path)` 寫進
-     `$CLIKAE_HOME/state/tmux/servers`（`tmux_server_record`，每個 pid 一行；**每次 spawn 都寫**，舊版
+     `$CLIKAE_HOME/state/tmux/servers.d/<pid>.<啟動時間>`（`tmux_server_record`，一顆 server 一個檔；**每次 spawn 都寫**，舊版
      clikae 生的 server 沒有紀錄，這是第一個機會）。`tmux_rescue_orphans` 由 `tmux_sessv`（finding 4：
      直接 `clikae <engine> <tank>` 不經 board 也要先救，否則被掃掉的 socket 會在原路徑生出第二顆 server）
      和 `live_session_names` 在做決定**之前**呼叫。
@@ -912,20 +912,31 @@ ok 2 called from inside tmux, switch moves the client instead of nesting
      它裡面」（server 是祖先）。檢查做兩次：`mkdir`／`chmod` socket 目錄之前一次（不是我們的就什麼都
      不建），之後再一次，緊接著 `kill`，中間沒有別的指令（第三輪）。uid、comm、lstart 都不是絕對的行程
      身分：comm 是名字不是執行檔，lstart 只到秒；剩下的窗口是 pid 在兩個相鄰指令之間整圈繞回，bash 沒有
-     pidfd 能再收窄。不符的紀錄**丟掉、絕不送訊號**。
-  8. **紀錄只有一個寫手**：`_tmux_rec_update` 在鎖裡讀-改-寫、經 `mktemp` 的暫存檔 `mv` 換上
-     （finding 5：第一輪固定 `servers.tmp`、無鎖，rescue 的快照會蓋掉同時記下的 server）。rescue 不再整份
-     重寫，只丟「pid|啟動時間」對得上的那幾行；不是三欄的行（第一輪格式）一律丟，因為它們沒有啟動時間、
-     什麼都證明不了。紀錄目錄一律 0700，明確設了 `TMUX_TMPDIR` 時也是。
-  9. 🔴 **等太久不等於持鎖的人死了**（第三輪 P2）：第二輪的 `mkdir` 鎖等 5 秒就拆，不問是誰的——持鎖者
-     只是在讀與 rename 之間慢了，醒來就用舊快照蓋掉拆鎖者剛寫的那筆，那顆 server 從紀錄上消失，之後
-     socket 被掃就救不回來。鎖現在是 `servers.lck` 這個 symlink，`ln -s` 一步建好、內容就是持有者
-     `pid|啟動時間|token`。逾時的人只從**已經不在**的持有者手上拿（pid 死了，或同 pid 不同啟動時間）：
-     先 `mv` 到只有自己用的名字，再確認拿到的就是判過死的那一個，不是就放回去；持有者還活著就**跳過這次
-     更新並 `log_warn`**（每次 spawn 都會再記一次，下一次補上）。釋放時只刪仍然寫著自己的鎖。`$$` 在
-     subshell 裡是父行程：有 `$BASHPID` 用它，bash 3.2 沒有，就用父行程——錯也錯在「還活著」那邊，
-     不會錯在搶鎖；同一個 `$$` 的兄弟靠 token（自己的暫存檔名）分開。
-- **收據**：`tests/bats/tmux-socket.bats`（28 條）。第三輪紅（舊碼上跑新測試，都不需要 tmux server）：
+     pidfd 能再收窄。不符的**絕不送訊號**；紀錄本身只有證明已死才刪（第 8 點）。
+  8. 🔴 **紀錄沒有鎖，因為沒有共用的檔**（第四輪）：第一到三輪把每顆 server 寫在**同一個**檔裡讀-改-寫，
+     每一輪的鎖都有競態——第一輪固定 `servers.tmp` 無鎖（finding 5）、第二輪 `mkdir` 鎖等 5 秒就從
+     活著的持有者手上拆、第三輪 `ln -s` 鎖從死掉的持有者手上搶時，第二個搶的人把新持有者的鎖挪開、
+     第三個寫手趁空進來，一筆紀錄被蓋掉（r3 審查用屏障穩定重現，`$BASHPID` 有無皆然）。安全地搶死人的鎖
+     要 `flock`，macOS 沒有。所以拿掉共用的檔：一顆 server 一個檔 `servers.d/<pid>.<啟動時間>`，內容
+     `pid TAB 啟動時間 TAB socket`；寫手先寫自己的 `mktemp` 暫存檔（`.<寫手pid>.XXXXXX`）再 `mv` 到那顆
+     server 自己的名字，原子、而且沒有別的寫手的 server 叫這個名字。讀者列目錄；**只刪證明已死的**——
+     pid 不在了，或同 pid 現在的啟動時間不同（被重用）。這不需要鎖：寫手只會寫一顆活著的 server 的名字，
+     而那個名字正是讀者判死的那個不可能是的。活著但證明不了是我們的（uid、comm 不符）＝不送訊號、**檔留著**
+     （第三輪會丟掉這種紀錄）。同 pid 的其他檔是更早的 incarnation，記錄時順手刪。寫手死在 `mktemp` 與 `mv`
+     之間留下的暫存檔，讀者看寫手 pid 不在才刪（bash 3.2 沒 `$BASHPID`，subshell 用父行程的 pid——錯也
+     錯在「還活著」，留下垃圾、不會刪掉進行中的寫入）。紀錄目錄一律 0700，明確設了 `TMUX_TMPDIR` 時也是。
+  9. **舊的單一檔只轉一次**：`state/tmux/servers`（第一到三輪的格式；只有這個 PR 自己的 build 寫過，main
+     和任何 release 都沒有）存在時，讀者先把它 `mv` 成只有自己用的名字（認領：兩個讀者不會都轉），三欄的行
+     各寫成一個檔（已有的檔較新，不覆蓋），然後刪掉。還在跑的舊版寫手若把它的快照 rename 回原位，
+     下一個讀者再轉一次——同一顆 server 的檔重寫是冪等的。不是三欄的行（第一輪格式）丟掉：沒有啟動時間，
+     什麼都證明不了。
+- **收據（第四輪）**：新測試在第三輪的碼上全紅——`lost: <B> <C>`（A、B、C 三個寫手被屏障放在發佈前
+  同一刻：持鎖的 A 等在 rename，B、C 等滿 5 秒逾時就 `record not updated` 跳過）、`the reused pid's old
+  record was kept`（socket 還在就不看身分，被重用的 pid 的舊紀錄留著）、`the live non-tmux record (…) was
+  removed`、`the old single file is still there`。突變：改回共用檔讀-改-寫無鎖 ⇒ 三筆剩一筆；判死永遠
+  不成立 ⇒ `the dead server's record was kept`；身分不符就刪 ⇒ `the live non-tmux record (…) was
+  removed`；拿掉轉換 ⇒ `the old single file is still there`。
+- **收據（第一到三輪；第三輪的三條鎖測試已隨鎖移除，換成上面第四輪的四條）**：`tests/bats/tmux-socket.bats`（28 條）。第三輪紅（舊碼上跑新測試，都不需要 tmux server）：
   `B's record lost and nothing said so`（持鎖者被延遲超過等待者的逾時，紀錄剩 {1,2}）、`A's cleanup
   removed the successor's lock`、`signalled on an identity checked before the mkdir`；突變：拿掉 uid 檢查
   ⇒ `a server of another uid (…) was signalled`，拿掉鎖 ⇒ 並行測試 5/5 紅（屏障讓每個寫手都先讀完才有人
