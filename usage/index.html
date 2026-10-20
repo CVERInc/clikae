@@ -37,6 +37,7 @@ of the language is in <a href="/grammar">grammar.md</a>.</p>
 <span class="line"><span style="--shiki-light:#6A737D;--shiki-dark:#8B949E">#   ENGINE       TANK</span></span>
 <span class="line"><span style="--shiki-light:#6A737D;--shiki-dark:#8B949E">#   claude       work</span></span>
 <span class="line"><span style="--shiki-light:#6F42C1;--shiki-dark:#FFA657">clikae</span><span style="--shiki-light:#032F62;--shiki-dark:#A5D6FF"> tanks</span><span style="--shiki-light:#005CC5;--shiki-dark:#79C0FF"> -p</span><span style="--shiki-light:#6A737D;--shiki-dark:#8B949E">                 # also print the tank directory paths</span></span>
+<span class="line"><span style="--shiki-light:#6F42C1;--shiki-dark:#FFA657">clikae</span><span style="--shiki-light:#032F62;--shiki-dark:#A5D6FF"> tanks</span><span style="--shiki-light:#005CC5;--shiki-dark:#79C0FF"> --available</span><span style="--shiki-light:#24292E;--shiki-dark:#E6EDF3"> [engine] [--order expiring] [--include-cockpit] [--json]</span></span>
 <span class="line"></span>
 <span class="line"><span style="--shiki-light:#6A737D;--shiki-dark:#8B949E"># Tear it all down (tank dir + alias + .app, asks to confirm)</span></span>
 <span class="line"><span style="--shiki-light:#6F42C1;--shiki-dark:#FFA657">clikae</span><span style="--shiki-light:#032F62;--shiki-dark:#A5D6FF"> remove</span><span style="--shiki-light:#032F62;--shiki-dark:#A5D6FF"> claude</span><span style="--shiki-light:#032F62;--shiki-dark:#A5D6FF"> work</span></span></code></pre>
@@ -669,6 +670,10 @@ rest of the sweep from being cleaned up.</p>
 <tr>
 <td><code>lang [&lt;locale&gt;]</code></td>
 <td>Show or set the interface language (dashboard + prompts) — nine of them: <code>en-US</code>, <code>ja-JP</code>, <code>zh-TW</code>, <code>zh-Hans</code>, <code>ko-KR</code>, <code>es-ES</code>, <code>de-DE</code>, <code>fr-FR</code>, <code>pt-BR</code>. Bare <code>clikae lang</code> lists them. Persists to <code>$CLIKAE_HOME/lang</code>; the board's <code>l</code> key opens a language picker. Resolution when unset: <code>$CLIKAE_LANG</code> &gt; saved choice &gt; <code>$LC_ALL</code> &gt; <code>$LANG</code> &gt; en-US. Adding a tenth is a self-contained PR — see <a href="/adding-a-locale">Adding a language</a>.</td>
+</tr>
+<tr>
+<td><code>tanks --available [engine] [--order expiring] [--include-cockpit] [--json]</code></td>
+<td>List eligible tank names, highest remaining percentage per hour to reset first (minimum half an hour, as in the prototype). Uses the weekly window when present, otherwise the single window and its reset. Skips unreadable readings, usage ≥90% (≥98% with less than 24h until reset), a separate 5h window ≥95%, and the recorded cockpit unless included explicitly. JSON lists every tank in scope as <code>{engine, tank, available, score, reason}</code>; reasons are <code>unreadable</code>, <code>quota</code>, <code>window</code>, <code>cockpit</code>, or null for eligible tanks. Scores are null when unreadable; eligible rows come first.</td>
 </tr>
 <tr>
 <td><code>tanks [-p|--paths] [--json]</code></td>
