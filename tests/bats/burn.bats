@@ -5548,3 +5548,26 @@ _codex_sandbox_argv() {
   [[ "$output" != *'no fresh artifact and no limit'* ]] || false
   [ ! -e "$CLIKAE_HOME/dry/codex/T1" ]
 }
+
+# --- #174: a reroute's failure names the tank that failed ------------------
+# A burn went dry on A, rerouted to B, and B failed with "OAuth session
+# expired". The engine's own lines were printed under the [ FAIL ] line with
+# no tank on them, so the error read as A's login having expired.
+@test "#174: the engine output under a [ FAIL ] line names the tank it came from, and the tank it was rerouted from" {
+  _stub_codex
+  printf '%s\n' '#!/usr/bin/env bash' \
+    'if [ -f "$CODEX_HOME/.dry" ]; then echo "You'"'"'ve hit your usage limit. Try again at Jul 7th, 2026 2:17 PM."; exit 0; fi' \
+    'echo "OAuth session expired"' 'exit 1' > "$BATS_TEST_TMPDIR/bin/codex"
+  chmod +x "$BATS_TEST_TMPDIR/bin/codex"
+  clikae init codex T1
+  clikae init codex T2
+  : > "$CLIKAE_HOME/profiles/codex/T1/.dry"
+  run clikae burn codex T1 --artifact "$BATS_TEST_TMPDIR/out.md" -- noop
+  [ "$status" -ne 0 ]
+  [[ "$output" == *"codex/T2 said (rerouted from codex/T1):"*"OAuth session expired"* ]] || { echo "$output"; false; }
+  # The ordering is the point: the tank is named BEFORE the engine's words.
+  local n_said n_oauth
+  n_said="$(printf '%s\n' "$output" | grep -n 'codex/T2 said' | head -n 1 | cut -d: -f1)"
+  n_oauth="$(printf '%s\n' "$output" | grep -n 'OAuth session expired' | head -n 1 | cut -d: -f1)"
+  [ -n "$n_said" ] && [ -n "$n_oauth" ] && [ "$n_said" -lt "$n_oauth" ] || { echo "$output"; false; }
+}

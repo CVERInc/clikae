@@ -147,7 +147,7 @@ _n155_setup() {
   [[ "$N155_OUT" == *"⟳"[0-9]*[mhd]* ]] || { echo "no relative reset:"; echo "$N155_OUT"; false; }
   [[ "$N155_OUT" != *"Asia/Tokyo"* ]] || { echo "the timezone is still printed:"; echo "$N155_OUT"; false; }
   # …and a status is never split mid-token: the whole reading is on one line.
-  grep -qF 'window 44% · weekly 20% · Fable 100%' <<< "$N155_OUT" || {
+  grep -qF '5h 44% · 7d 20% · Fable 100%' <<< "$N155_OUT" || {
     echo "the usage status was split:"; echo "$N155_OUT"; false; }
 }
 
@@ -177,7 +177,7 @@ _n155_setup() {
   next="$(grep -A1 -m1 ' busy ' <<< "$N155_OUT" | sed -n 2p)"
   ncol="$(_n155_col "$row" busy)"
   lead="${next%%[! ]*}"
-  [ "${#lead}" -eq "$ncol" ] && [[ "$next" == *"window 44%"* ]] || {
+  [ "${#lead}" -eq "$ncol" ] && [[ "$next" == *"5h 44%"* ]] || {
     echo "status continuation at col ${#lead}, name at col $ncol:"; echo "$row"; echo "$next"; false; }
   # The selected resume row's hover line (5 × Down: 4 tanks, then the 2nd session).
   _n155_render 46 Down Down Down Down Down
@@ -235,12 +235,12 @@ _n155_setup() {
   command -v jq >/dev/null 2>&1 || skip "jq not installed"
   local now row det
   now="$(date -u +%s)"
-  printf '{"window_pct":null,"weekly_pct":null,"window_resets_at":null,"weekly_resets_at":null,"source":"expired","reason":"expired-token","cached_at":%s,"scanned_at":%s}\n' \
+  printf '{"window_pct":null,"weekly_pct":null,"window_resets_at":null,"weekly_resets_at":null,"source":"unknown","reason":"needs-refresh","cached_at":%s,"scanned_at":%s}\n' \
     "$now" "$now" > "$CLIKAE_HOME/state/usage/claude/work.json"
   _n155_render 100 Down Down
   row="$(grep -m1 '❯' <<< "$N155_OUT")"
   det="$(grep -A1 -m1 '❯' <<< "$N155_OUT" | sed -n 2p)"
-  [[ "$row" == *" work "*"expired"* ]] || { echo "cursor is not on the expired tank: $row"; echo "$N155_OUT"; false; }
+  [[ "$row" == *" work "*"needs-refresh"* ]] || { echo "cursor is not on the expired tank: $row"; echo "$N155_OUT"; false; }
   [[ "$det" == *"work.person@example-company.com"* ]] || { echo "$N155_OUT"; false; }
   # Enter on the row is the fix on this board; the remedy is nowhere on it.
   [[ "$N155_OUT" != *"usage --wake"* ]] || { echo "$N155_OUT"; false; }

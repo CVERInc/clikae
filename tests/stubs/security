@@ -27,7 +27,9 @@ done
 file="$state/$svc"
 case "$sub" in
   find-generic-password)
-    [ -f "$file" ] || exit 1
+    # 44 = errSecItemNotFound, what the real `security` exits for a missing
+    # item (#179: the claude adapter tells "not found" from "refused" by it).
+    [ -f "$file" ] || exit 44
     if [ "$want_w" -eq 1 ]; then cat "$file"; else echo '    "acct"<blob>="antigravity"'; fi
     exit 0 ;;
   add-generic-password)  printf '%s' "$secret" > "$file"; exit 0 ;;
