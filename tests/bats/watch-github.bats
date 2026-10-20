@@ -3073,3 +3073,90 @@ _hb() { printf '%s/state/watch-github/CVERInc.heartbeat.json' "$CLIKAE_HOME"; }
   done
   [ "$(cat "$lock/pid")" = "424242" ]
 }
+
+# #183 round 5 (P2): the failure count lived in one heartbeat.json that every
+# failed poll read, incremented and rewrote. A poll that fails to get the org
+# lock runs that transaction OUTSIDE the lock, so two of them overlapping
+# both read 1, both wrote 2, and the stall at 3 never fired. The review's
+# interleaving, made deterministic: one failure persisted; the second poll
+# is paused at its first read of the watch-github state dir; the third runs
+# to completion; then the second resumes. Three failures, no success: the
+# count is 3 and exactly one stall exists.
+@test "watch github: three overlapping failed polls count 3 and raise exactly one stall — no increment lost to a read-modify-write (#183 r5 P2)" {
+  source "$CLIKAE_TEST_ROOT/lib/core/log.sh"
+  source "$CLIKAE_TEST_ROOT/lib/core/json.sh"
+  source "$CLIKAE_TEST_ROOT/lib/core/profile_store.sh"
+  source "$CLIKAE_TEST_ROOT/lib/core/burn_status.sh"
+  source "$CLIKAE_TEST_ROOT/lib/commands/watch_github.sh"
+  local gate="$BATS_TEST_TMPDIR/gate"
+  mkdir -p "$gate"
+  # In the paused poll only: its first read of the state dir completes, and
+  # THEN it blocks — holding a snapshot while the third poll runs.
+  cat() {
+    local a snap rc
+    if [ "${WG_PAUSE:-0}" = 1 ]; then
+      for a in "$@"; do
+        case "$a" in
+          "$CLIKAE_HOME"/state/watch-github/*)
+            WG_PAUSE=0
+            snap="$(command cat "$@")"; rc=$?
+            : > "$gate/at-read"
+            while [ ! -e "$gate/go" ]; do sleep 0.05; done
+            [ -n "$snap" ] && printf '%s\n' "$snap"
+            return "$rc"
+            ;;
+        esac
+      done
+    fi
+    command cat "$@"
+  }
+  _wg_lock_acquire() { return 1; }
+  local lock; lock="$(_wg_lock_dir CVERInc)"
+  mkdir -p "$lock"
+  printf '424242\n' > "$lock/pid"
+  _wg_poll CVERInc 2>>"$BATS_TEST_TMPDIR/poll.err" || true
+  ( WG_PAUSE=1; _wg_poll CVERInc 2>>"$BATS_TEST_TMPDIR/poll.err" || true ) &
+  local paused=$! i=0
+  while [ ! -e "$gate/at-read" ] && [ "$i" -lt 200 ]; do sleep 0.05; i=$((i + 1)); done
+  [ -e "$gate/at-read" ]
+  _wg_poll CVERInc 2>>"$BATS_TEST_TMPDIR/poll.err" || true
+  : > "$gate/go"
+  wait "$paused"
+  local f n_fail=0
+  for f in "$CLIKAE_HOME"/logs/watch-github-CVERInc-*/status.json; do
+    [ -f "$f" ] || continue
+    command cat "$f"
+    case "$(command cat "$f")" in *'"state":"fail"'*) n_fail=$((n_fail + 1)) ;; esac
+  done
+  command cat "$(_hb)"
+  echo "stall status files: $n_fail"
+  [[ "$(command cat "$(_hb)")" == *'"consecutive_failures":3'* ]] || false
+  [ "$n_fail" = 1 ]
+  [ "$(command cat "$lock/pid")" = "424242" ]
+}
+
+# #183 round 5: a stall fires exactly ONCE per streak of failures — not again
+# at 6, 9, … — and a success starts a new streak that can stall again.
+@test "watch github: six failed polls raise one stall; after a success, three more raise the second (#183 r5)" {
+  source "$CLIKAE_TEST_ROOT/lib/core/log.sh"
+  source "$CLIKAE_TEST_ROOT/lib/core/json.sh"
+  source "$CLIKAE_TEST_ROOT/lib/core/profile_store.sh"
+  source "$CLIKAE_TEST_ROOT/lib/core/burn_status.sh"
+  source "$CLIKAE_TEST_ROOT/lib/commands/watch_github.sh"
+  _wg_lock_acquire() { return 1; }
+  _n_stalls() { find "$CLIKAE_HOME/logs" -maxdepth 2 -path '*/watch-github-CVERInc-*/status.json' 2>/dev/null | wc -l | tr -d ' '; }
+  local i
+  for i in 1 2 3 4 5 6; do _wg_poll CVERInc 2>/dev/null || true; done
+  cat "$(_hb)"
+  [[ "$(cat "$(_hb)")" == *'"consecutive_failures":6'* ]] || false
+  [ "$(_n_stalls)" = 1 ]
+  _wg_heartbeat_write CVERInc 1 "" ""
+  [[ "$(cat "$(_hb)")" == *'"consecutive_failures":0'* ]] || false
+  # The closed streak's records and stall claim are gone; only the marker.
+  [ "$(ls -A "$CLIKAE_HOME/state/watch-github/CVERInc.failures.d")" = "streak" ]
+  for i in 1 2; do _wg_poll CVERInc 2>/dev/null || true; done
+  [ "$(_n_stalls)" = 1 ]
+  _wg_poll CVERInc 2>/dev/null || true
+  [[ "$(cat "$(_hb)")" == *'"consecutive_failures":3'* ]] || false
+  [ "$(_n_stalls)" = 2 ]
+}

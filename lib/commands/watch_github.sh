@@ -1179,34 +1179,133 @@ _wg_status_write() {
 # — in the STATE dir on purpose, not the durable log dir: a status.json
 # there would make the log dir look like a run directory to
 # _wg_runs_rotate / `clikae wait --latest` (see _wg_is_run_dir).
+# A DISPLAY of the failure state below, derived from it on every poll;
+# never read back as the source of the count.
 _wg_heartbeat_file() { printf '%s/%s.heartbeat.json\n' "$(_wg_state_dir)" "$1"; }
 
-# _wg_heartbeat_write <org> <ok:1|0> <error-kind> <error-reason> -> rewrite
-# the heartbeat: `last_poll_at` moves every poll, `last_ok_at` only on a
-# successful one, `consecutive_failures` counts up on failure and resets to
-# 0 on success (persisted, so `--once` under cron counts across runs).
-# Sets $__WG_FAILS to the new count. Never fatal.
-_wg_heartbeat_write() {
-  local org="$1" ok="$2" ekind="$3" ereason="$4" f prev now fails=0 last_ok=null events
-  f="$(_wg_heartbeat_file "$org")"
+# --- #183 r5 (P2): the failure count, one file per failed poll ---------------
+#
+# The count used to live in heartbeat.json as a number every failed poll
+# read, incremented and rewrote. A poll that cannot get the org lock runs
+# that OUTSIDE the lock, so two overlapping ones both read 1, both wrote 2,
+# and the stall at 3 never fired (and they shared one heartbeat.json.tmp).
+# Now nothing is read-modify-written:
+#
+#   <org>.failures.d/streak          "<token> <last_ok_at>", replaced by
+#                                    rename on every SUCCESS
+#   <org>.failures.d/<token>/        the streak's failure records, one file
+#                                    per failed poll: <epoch>-<pid>-<rand>,
+#                                    a mktemp file renamed into place
+#   <org>.failures.d/<token>.stall/  exclusive mkdir: the stall for this
+#                                    streak was emitted (note inside)
+#
+# consecutive_failures = the number of records under the token `streak`
+# names right now. A success names a fresh token, so every earlier record
+# is in a closed streak — no mtime comparison, so no whole-second ties —
+# then removes the closed streaks, best-effort. No `streak` file yet (no
+# success ever) is token 0.
+
+_wg_fail_dir() { printf '%s/%s.failures.d\n' "$(_wg_state_dir)" "$1"; }
+
+# _wg_streak_read <org> -> sets $__WG_STREAK (token) and $__WG_LAST_OK
+# (epoch or null).
+_wg_streak_read() {
+  local line
+  line="$(cat "$(_wg_fail_dir "$1")/streak" 2>/dev/null || true)"
+  __WG_STREAK=0; __WG_LAST_OK=null
+  case "$line" in *' '*) ;; *) return 0 ;; esac
+  __WG_STREAK="${line%% *}"; __WG_LAST_OK="${line#* }"
+  case "$__WG_STREAK" in ''|*[!0-9A-Za-z-]*) __WG_STREAK=0 ;; esac
+  case "$__WG_LAST_OK" in ''|*[!0-9]*) __WG_LAST_OK=null ;; esac
+}
+
+# _wg_streak_count <org> <token> -> the number of failure records in <token>.
+_wg_streak_count() {
+  local f n=0
+  for f in "$(_wg_fail_dir "$1")/$2"/[0-9]*; do
+    [ -f "$f" ] && n=$((n + 1))
+  done
+  printf '%s\n' "$n"
+}
+
+# _wg_fail_record <org> <error-kind> <error-reason> -> add this poll's own
+# record to the current streak; sets $__WG_STREAK / $__WG_FAILS to the
+# streak it is counted in and that streak's count. Re-reads `streak` after
+# publishing: a success landing in between closed the streak this record
+# went into, and the count is the new streak's.
+_wg_fail_record() {
+  local org="$1" ekind="$2" ereason="$3" fdir gdir now tmp
+  fdir="$(_wg_fail_dir "$org")"
   now="$(date +%s 2>/dev/null || echo 0)"
-  prev="$(cat "$f" 2>/dev/null || true)"
-  if [ -n "$prev" ]; then
-    fails="$(printf '%s' "$prev" | sed -nE 's/.*"consecutive_failures":([0-9]+).*/\1/p')"
-    last_ok="$(printf '%s' "$prev" | sed -nE 's/.*"last_ok_at":([0-9]+|null).*/\1/p')"
-    case "$fails" in ''|*[!0-9]*) fails=0 ;; esac
-    case "$last_ok" in ''|*[!0-9]*) [ "$last_ok" = "null" ] || last_ok=null ;; esac
+  _wg_streak_read "$org"
+  gdir="$fdir/$__WG_STREAK"
+  mkdir -p "$gdir" 2>/dev/null || true
+  if tmp="$(mktemp "$gdir/.tmp.XXXXXX" 2>/dev/null)"; then
+    printf '%s %s\n' "$ekind" "$ereason" > "$tmp" 2>/dev/null
+    mv -f "$tmp" "$gdir/$now-$$-${tmp##*.}" 2>/dev/null || rm -f "$tmp" 2>/dev/null
   fi
-  if [ "$ok" = 1 ]; then fails=0; last_ok="$now"; else fails=$((fails + 1)); fi
-  __WG_FAILS="$fails"
-  events="${__WG_EVENTS:-0}"
+  _wg_streak_read "$org"
+  __WG_FAILS="$(_wg_streak_count "$org" "$__WG_STREAK")"
+}
+
+# _wg_fail_reset <org> -> a successful poll: name a fresh streak, then
+# remove every closed one (records and stall claims), best-effort. Runs only
+# under the org lock, so two resets never race each other.
+_wg_fail_reset() {
+  local org="$1" fdir now tmp token d name
+  __WG_FAILS=0
+  fdir="$(_wg_fail_dir "$org")"
+  now="$(date +%s 2>/dev/null || echo 0)"
+  mkdir -p "$fdir" 2>/dev/null || true
+  tmp="$(mktemp "$fdir/.streak.XXXXXX" 2>/dev/null)" || return 0
+  token="$now-$$-${tmp##*.}"
+  if ! { printf '%s %s\n' "$token" "$now" > "$tmp" && mv -f "$tmp" "$fdir/streak"; } 2>/dev/null; then
+    rm -f "$tmp" 2>/dev/null
+    return 0
+  fi
+  for d in "$fdir"/*; do
+    name="${d##*/}"
+    case "$name" in streak|"$token"|"$token.stall") continue ;; esac
+    [ -d "$d" ] && rm -rf "$d" 2>/dev/null
+  done
+  return 0
+}
+
+# _wg_stall_claim <org> <token> <count> -> 0 exactly once per streak: the
+# exclusive mkdir is the record "stall emitted for streak <token>".
+_wg_stall_claim() {
+  local d
+  d="$(_wg_fail_dir "$1")/$2.stall"
+  mkdir "$d" 2>/dev/null || return 1
+  printf 'stall emitted for streak %s at %s after %s failed polls\n' \
+    "$2" "$(date +%s 2>/dev/null || echo 0)" "$3" > "$d/note" 2>/dev/null || true
+  return 0
+}
+
+# _wg_heartbeat_write <org> <ok:1|0> <error-kind> <error-reason> -> record
+# the poll (success: _wg_fail_reset; failure: _wg_fail_record), then
+# rewrite the heartbeat DISPLAY from that state: `last_poll_at` moves every
+# poll, `last_ok_at` only on a successful one, `consecutive_failures` is the
+# current streak's record count (persisted, so `--once` under cron counts
+# across runs). Sets $__WG_FAILS / $__WG_STREAK. Never fatal.
+_wg_heartbeat_write() {
+  local org="$1" ok="$2" ekind="$3" ereason="$4" f now events tmp
+  f="$(_wg_heartbeat_file "$org")"
   mkdir -p "$(_wg_state_dir)" 2>/dev/null || true
+  if [ "$ok" = 1 ]; then
+    _wg_fail_reset "$org"; _wg_streak_read "$org"
+  else
+    _wg_fail_record "$org" "$ekind" "$ereason"
+  fi
+  now="$(date +%s 2>/dev/null || echo 0)"
+  events="${__WG_EVENTS:-0}"
+  tmp="$(mktemp "$f.tmp.XXXXXX" 2>/dev/null)" || return 0
   {
     printf '{"org":%s,"pid":%s,"last_poll_at":%s,"last_ok_at":%s,"consecutive_failures":%s,"events_this_poll":%s,"last_error":%s,"last_error_kind":%s}\n' \
-      "$(json_str "$org")" "$$" "$now" "$last_ok" "$fails" "$events" \
+      "$(json_str "$org")" "$$" "$now" "$__WG_LAST_OK" "${__WG_FAILS:-0}" "$events" \
       "$([ "$ok" = 1 ] && printf null || json_str "$ereason")" \
       "$([ "$ok" = 1 ] && printf null || json_str "$ekind")"
-  } > "$f.tmp" 2>/dev/null && mv -f "$f.tmp" "$f" 2>/dev/null || true
+  } > "$tmp" 2>/dev/null && mv -f "$tmp" "$f" 2>/dev/null || rm -f "$tmp" 2>/dev/null
   return 0
 }
 
@@ -1987,8 +2086,10 @@ _wg_poll() {
 
 # _wg_poll_failed <org> <holds_lock:1|0> -> the ONE place a failed poll is
 # recorded: heartbeat (failure count up, $__WG_LAST_KIND/_REASON as the last
-# error), then the STALL event every CLIKAE_WATCH_GITHUB_STALL_POLLS (3)
-# consecutive failures, or at once on a permanent one. #183 round 3 (P2):
+# error), then the STALL event once the streak reaches
+# CLIKAE_WATCH_GITHUB_STALL_POLLS (3) consecutive failures — exactly once
+# per streak, whichever overlapping poll claims it first (#183 r5;
+# _wg_stall_claim) — or at once on a permanent one. #183 round 3 (P2):
 # the poll-lock failure used to write its own heartbeat and return early,
 # so a run of them was counted and never announced. <holds_lock> 0 (that
 # path) still writes the stall's own fresh run directory, but leaves
@@ -2000,7 +2101,7 @@ _wg_poll_failed() {
   case "$stall_n" in ''|*[!0-9]*|0) stall_n=3 ;; esac
   if [ "${__WG_PERMANENT:-0}" -eq 1 ]; then
     _wg_stall_write "$org" "github:$org — giving up: ${__WG_PERMANENT_REASON}" "$holds_lock"
-  elif [ "${__WG_FAILS:-0}" -ge "$stall_n" ] && [ $(( __WG_FAILS % stall_n )) -eq 0 ]; then
+  elif [ "${__WG_FAILS:-0}" -ge "$stall_n" ] && _wg_stall_claim "$org" "${__WG_STREAK:-0}" "$__WG_FAILS"; then
     log_err "github:$org — stalled: ${__WG_FAILS} consecutive failed polls (last: ${__WG_LAST_KIND:-?}: ${__WG_LAST_REASON:-?}); heartbeat at $(_wg_heartbeat_file "$org")"
     _wg_stall_write "$org" "github:$org — stalled: ${__WG_FAILS} consecutive failed polls (last: ${__WG_LAST_KIND:-?}: ${__WG_LAST_REASON:-?})" "$holds_lock"
   fi
