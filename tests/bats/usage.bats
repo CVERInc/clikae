@@ -2176,7 +2176,7 @@ STUB
     || { echo "cache: $(cat "$CLIKAE_HOME/state/usage/claude/work.json")"; false; }
   # One wake each: the re-measure never wakes again.
   [ "$(grep -c '^A$' "$BAR/wakes")" = 1 ] && [ "$(grep -c '^B$' "$BAR/wakes")" = 1 ] || { cat "$BAR/wakes"; false; }
-  [ ! -e "$CLIKAE_HOME/state/usage/claude/work.json.lock" ]
+  [ ! -e "$CLIKAE_HOME/state/usage/claude/work.json.lock" ] && [ ! -L "$CLIKAE_HOME/state/usage/claude/work.json.lck" ]
 }
 
 @test "review #184 (1): the compare-and-write lock creates the cache directory private, like the write it guards" {
@@ -2207,7 +2207,120 @@ STUB
     || { echo "the obsolete failure overwrote the newer reading: $(cat "$CLIKAE_HOME/state/usage/claude/work.json")"; false; }
   # B answers with the newer of the two, not its own obsolete one.
   jq -e '.source == "vendor" and .window_pct == 7' "$BAR/b.out" >/dev/null || { echo "B: $(cat "$BAR/b.out")"; false; }
-  [ ! -e "$CLIKAE_HOME/state/usage/claude/work.json.lock" ]
+  [ ! -e "$CLIKAE_HOME/state/usage/claude/work.json.lock" ] && [ ! -L "$CLIKAE_HOME/state/usage/claude/work.json.lck" ]
+}
+
+# --- review of #184 r3: the publication lock is never taken from a live holder --
+#
+# _usage184_finisher — a script that runs ONE _usage_read_finish claude/work
+# in its own process, as $ROLE: A publishes needs-refresh measured 2 s ago, B
+# publishes the vendor's 7/8 measured now. A is held, LOCK IN HAND, inside the
+# jq that builds its record (after its comparison, before its rename) until
+# $BAR/a-resume exists: the slow-but-alive holder the review reproduced.
+# The cache starts as an old vendor 50/60 both of them saw before measuring.
+_usage184_finisher() {
+  export BAR="$TEST_HOME/bar"; mkdir -p "$BAR" "$CLIKAE_HOME/state/usage/claude"
+  printf '%s\n' "{\"source\":\"vendor\",\"window_pct\":50,\"weekly_pct\":60,\"cached_at\":$(( $(date +%s) - 100 )),\"scanned_at\":$(( $(date +%s) - 100 ))}" \
+    > "$CLIKAE_HOME/state/usage/claude/work.json"
+  cat > "$TEST_HOME/finisher.sh" <<'SH'
+#!/usr/bin/env bash
+for f in core/log.sh core/i18n.sh core/profile_store.sh core/adapter_loader.sh core/dry_store.sh core/limit.sh core/usage.sh; do
+  source "$CLIKAE_LIB/$f"
+done
+jq() {
+  if [ "$ROLE" = A ] && [ "${1:-}" = -c ] && [ "${2:-}" = --argjson ] && [ "${3:-}" = now ]; then
+    : > "$BAR/a-paused"
+    local i=0; while [ ! -e "$BAR/a-resume" ]; do i=$((i + 1)); [ "$i" -le 400 ] || break; sleep 0.05; done
+  fi
+  command jq "$@"
+}
+cache="$CLIKAE_HOME/state/usage/claude/work.json"
+now="$(date +%s)"
+measured_seen="$(cat "$cache")"
+adapter_retry=""
+if [ "$ROLE" = A ]; then
+  measured_at=$((now - 2)); reading=""; adapter_reason=needs-refresh
+else
+  measured_at=$now; reading='{"source":"vendor","window_pct":7,"weekly_pct":8}'; adapter_reason=""
+fi
+_usage_read_finish claude work "$cache" "$now"
+SH
+  chmod +x "$TEST_HOME/finisher.sh"
+}
+
+# _usage184_hold_then_race [age] — A takes the lock and stops; B races it
+# (with the lock's mtime pushed years back first when [age] is given); A is
+# released only after B has returned. Leaves $BAR/{a,b}.{out,err},
+# $BAR/after-b (the cache as B left it) and $BAR/a-alive.
+_usage184_hold_then_race() {
+  local cache="$CLIKAE_HOME/state/usage/claude/work.json" i=0 a
+  cp "$cache" "$BAR/seed"
+  ROLE=A "$TEST_HOME/finisher.sh" > "$BAR/a.out" 2> "$BAR/a.err" &
+  a=$!
+  until [ -e "$BAR/a-paused" ]; do i=$((i + 1)); [ "$i" -le 200 ] || { echo "A never paused"; return 1; }; sleep 0.05; done
+  if [ -n "${1:-}" ]; then
+    # Whichever lock this code takes (round 2's directory, round 3's symlink).
+    local l; for l in "$cache.lock" "$cache.lck"; do
+      if [ -e "$l" ] || [ -L "$l" ]; then touch -h -t 202001010000 "$l"; fi
+    done
+  fi
+  ROLE=B "$TEST_HOME/finisher.sh" > "$BAR/b.out" 2> "$BAR/b.err"
+  cp "$cache" "$BAR/after-b"
+  if kill -0 "$a" 2>/dev/null; then echo yes > "$BAR/a-alive"; fi
+  : > "$BAR/a-resume"
+  wait "$a"
+}
+
+_usage184_assert_b_skipped() {
+  local cache="$CLIKAE_HOME/state/usage/claude/work.json"
+  [ "$(cat "$BAR/a-alive" 2>/dev/null)" = yes ] || { echo "A was not alive when B returned"; false; }
+  cmp -s "$BAR/seed" "$BAR/after-b" \
+    || { echo "B wrote while A held the lock: $(cat "$BAR/after-b")"; false; }
+  # B's caller still gets B's own reading, and is told it was not cached.
+  jq -e '.source == "vendor" and .window_pct == 7 and .weekly_pct == 8' "$BAR/b.out" >/dev/null \
+    || { echo "B: $(cat "$BAR/b.out")"; cat "$BAR/b.err"; false; }
+  grep -q 'not cached' "$BAR/b.err" || { echo "B skipped silently: $(cat "$BAR/b.err")"; false; }
+  # A's publication stands, carrying the seed's numbers as last good; the
+  # lock is released by its holder.
+  jq -e '.source == "unknown" and .reason == "needs-refresh" and .last_good.window_pct == 50' "$cache" >/dev/null \
+    || { echo "cache: $(cat "$cache")"; false; }
+  [ ! -e "$cache.lck" ] && [ ! -L "$cache.lck" ] && [ ! -e "$cache.lock" ] || { ls -la "${cache%/*}"; false; }
+}
+
+@test "review #184 r3 (a): a live holder keeps the lock however old it is — B never reaps it, skips its publication, A's stands" {
+  usage_fixture
+  _usage184_finisher
+  _usage184_hold_then_race age
+  _usage184_assert_b_skipped
+}
+
+@test "review #184 r3 (b): a waiter that times out never writes unlocked" {
+  usage_fixture
+  _usage184_finisher
+  _usage184_hold_then_race
+  _usage184_assert_b_skipped
+}
+
+@test "review #184 r3: a lock whose holder is proven gone (dead pid, or another process on that pid) is reaped; one with no start time to compare is not" {
+  usage_fixture
+  _usage184_finisher
+  local cache="$CLIKAE_HOME/state/usage/claude/work.json" dead
+  sleep 0 & dead=$!; wait "$dead"
+  local owner
+  for owner in "$dead|Mon Jan  1 00:00:00 2001|tok" "$$|Mon Jan  1 00:00:00 2001|tok"; do
+    ln -s "$owner" "$cache.lck"
+    ROLE=B run "$TEST_HOME/finisher.sh"
+    echo "$output" | jq -e '.source == "vendor" and .window_pct == 7' >/dev/null || { echo "[$owner] $output"; false; }
+    jq -e '.source == "vendor" and .window_pct == 7' "$cache" >/dev/null || { echo "[$owner] not published: $(cat "$cache")"; false; }
+    [ ! -L "$cache.lck" ] || { echo "[$owner] lock left: $(readlink "$cache.lck")"; false; }
+    printf '%s\n' '{"source":"vendor","window_pct":50,"weekly_pct":60,"cached_at":1,"scanned_at":1}' > "$cache"
+  done
+  # A live pid with no recorded start time: liveness alone decides — alive.
+  ln -s "$$||tok" "$cache.lck"
+  ROLE=B run "$TEST_HOME/finisher.sh"
+  jq -e '.window_pct == 50' "$cache" >/dev/null || { echo "reaped a live holder: $(cat "$cache")"; false; }
+  [ "$(readlink "$cache.lck")" = "$$||tok" ]
+  rm -f "$cache.lck"
 }
 
 @test "review #184 (2): a needs-refresh cached by a reader that may not spend is not the final answer for one that may" {

@@ -419,7 +419,7 @@ _usage_read_finish() {
          and ($prev.source == "vendor" or $prev.source == "transcript"
               or $prev.source == "quota-api" or $prev.source == "unknown")
          and ($s > $stamp or ($s == $stamp and ($prev|has_pct) and (has_pct|not)))' >/dev/null 2>&1; then
-    [ "$locked" = 0 ] || rmdir "$cache.lock" 2>/dev/null
+    [ "$locked" = 0 ] || _usage_cache_unlock "$cache"
     printf '%s\n' "$prev" | _usage_public "$engine" "$tank" "$now"
     return
   fi
@@ -433,12 +433,19 @@ _usage_read_finish() {
        else null end) as $lg |
       if $lg != null then . + {last_good:$lg} else . end
     else . end' 2>/dev/null)" || record=""
-  if [ -n "$record" ] && mkdir -p "${cache%/*}" && tmp="$(mktemp "$cache.XXXXXX")"; then
+  if [ "$locked" = 0 ]; then
+    # Review of #184 r3: no lock, no write. Another reader is still
+    # publishing (or the directory is unwritable), and a comparison made
+    # outside the lock may be false by the rename. This caller still gets its
+    # answer (the comparison above only ever READ the cache); the next read
+    # publishes again.
+    declare -F log_warn >/dev/null && log_warn "$engine/$tank: usage cache not updated — ${_USAGE_LOCK_HOLDER:+another clikae (pid $_USAGE_LOCK_HOLDER) is still writing it}${_USAGE_LOCK_HOLDER:-its lock could not be taken}; this reading is returned, not cached"
+  elif [ -n "$record" ] && mkdir -p "${cache%/*}" && tmp="$(mktemp "$cache.XXXXXX")"; then
     if printf '%s\n' "$record" > "$tmp"; then
       mv -f "$tmp" "$cache"
     else rm -f "$tmp"; fi
   fi
-  [ "$locked" = 0 ] || rmdir "$cache.lock" 2>/dev/null
+  [ "$locked" = 0 ] || _usage_cache_unlock "$cache"
   if [ -n "$record" ]; then
     printf '%s\n' "$record" | _usage_public "$engine" "$tank" "$now"
   else
@@ -446,23 +453,72 @@ _usage_read_finish() {
   fi
 }
 
-# _usage_cache_lock <cache> — take `<cache>.lock` (mkdir: atomic everywhere)
-# for _usage_read_finish's compare-and-write. Bounded: about three seconds of
-# waiting, then the caller writes unlocked rather than losing its reading. A
-# lock older than 10 s is a crashed writer's (the section it guards is a few
-# jq calls) and is reaped.
+# _usage_cache_lock <cache> — take `<cache>.lck` for _usage_read_finish's
+# compare-and-write; 0 = held (release with _usage_cache_unlock), 1 = not.
+# Review of #184 r3: round 2's mkdir lock was reaped by AGE (> 10 s) and a
+# waiter that gave up after ~3 s wrote anyway, so a holder merely slow
+# between its comparison and its rename — alive the whole time — put its
+# older failure back over the waiter's fresh numbers. Same rule as the tmux
+# record lock (#181): the lock is a symlink made by `ln -s`, atomic WITH its
+# content, naming its holder `pid|start time|token`. A live holder keeps it
+# however old it is; after ~3 s a waiter takes it only from a holder proven
+# gone (pid dead, or a different process on that pid), via a rename to a name
+# only it uses that puts back any lock it did not judge. A waiter that still
+# cannot get it returns 1 and the caller SKIPS publication — never an
+# unlocked write.
 _usage_cache_lock() {
-  local d="$1.lock" i=0 m
+  local lock="$1.lck" i=0 again=0 owner held priv
+  _USAGE_LOCK_HOLDER=""
   mkdir -p "${1%/*}" 2>/dev/null || return 1
-  while ! mkdir "$d" 2>/dev/null; do
-    i=$((i + 1)); [ "$i" -le 30 ] || return 1
-    m="$(_usage_mtime "$d")"
-    case "$m" in
-      ''|*[!0-9]*) ;;
-      *) if [ $(( $(date +%s) - m )) -gt 10 ]; then rmdir "$d" 2>/dev/null; continue; fi ;;
-    esac
+  # $BASHPID: in a subshell $$ is the parent. bash 3.2 has none; there a
+  # subshell names its parent, which errs towards "alive", never a steal. The
+  # token (a fresh unique name) tells siblings apart on release.
+  _USAGE_LOCK_ME="${BASHPID:-$$}"
+  priv="$(mktemp -u "$1.XXXXXX" 2>/dev/null)" || priv="$1.$_USAGE_LOCK_ME.$i"
+  _USAGE_LOCK_ME="$_USAGE_LOCK_ME|$(_usage_proc_lstart "$_USAGE_LOCK_ME")|${priv##*/}"
+  while ! ln -s "$_USAGE_LOCK_ME" "$lock" 2>/dev/null; do
+    i=$((i + 1))
+    if [ "$i" -gt 30 ]; then
+      owner="$(readlink "$lock" 2>/dev/null)" || owner=""
+      if [ "$again" = 0 ] && ! _usage_lock_holder_alive "$owner"; then
+        if mv "$lock" "$priv.stale" 2>/dev/null; then
+          held="$(readlink "$priv.stale" 2>/dev/null)" || held=""
+          [ "$held" = "$owner" ] || ln -s "$held" "$lock" 2>/dev/null || true
+          rm -f "$priv.stale" 2>/dev/null
+        fi
+        again=1; i=0
+        continue
+      fi
+      _USAGE_LOCK_HOLDER="${owner%%|*}"
+      return 1
+    fi
     sleep 0.1 2>/dev/null || sleep 1
   done
+}
+
+# _usage_cache_unlock <cache> — remove `<cache>.lck` only while it names us.
+_usage_cache_unlock() {
+  [ "$(readlink "$1.lck" 2>/dev/null)" != "$_USAGE_LOCK_ME" ] || rm -f "$1.lck" 2>/dev/null
+}
+
+# _usage_lock_holder_alive <owner> -> 0 while the lock's holder (pid|start
+# time|token) is still that same process. An empty start time (ps had no
+# answer when the lock was taken) falls back to liveness alone — towards
+# "alive". Empty or malformed -> not alive: there is no holder to protect.
+_usage_lock_holder_alive() {
+  local pid="${1%%|*}" rest want
+  case "$pid" in ''|*[!0-9]*) return 1 ;; esac
+  rest="${1#*|}"; want="${rest%%|*}"
+  kill -0 "$pid" 2>/dev/null || return 1
+  [ -z "$want" ] || [ "$(_usage_proc_lstart "$pid")" = "$want" ]
+}
+
+# _usage_proc_lstart <pid> -> that process's start time as `ps` prints it
+# (compared as a string, never parsed), or nothing.
+_usage_proc_lstart() {
+  local s
+  s="$(ps -o lstart= -p "$1" 2>/dev/null)" || return 0
+  printf '%s' "$s" | tr -s ' ' | sed 's/^ //; s/ $//'
 }
 
 # _usage_mtime <file> -> epoch mtime, or nothing. GNU's `stat -c` first: on a
