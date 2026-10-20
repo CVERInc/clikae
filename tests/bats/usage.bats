@@ -2179,6 +2179,18 @@ STUB
   [ ! -e "$CLIKAE_HOME/state/usage/claude/work.json.lock" ]
 }
 
+@test "review #184 (1): the compare-and-write lock creates the cache directory private, like the write it guards" {
+  usage_fixture
+  rm -rf "$CLIKAE_HOME/state/usage"
+  umask 022
+  run clikae usage claude work --json
+  echo "$output" | jq -e '.source == "vendor"'
+  local d
+  for d in "$CLIKAE_HOME/state/usage" "$CLIKAE_HOME/state/usage/claude"; do
+    [ "$(ls -ld "$d" | cut -c1-10)" = drwx------ ] || { echo "not private: $(ls -ld "$d")"; false; }
+  done
+}
+
 @test "review #184 (1): an obsolete failure never overwrites a newer reading — B's 401, measured before A's refresh, lands after A published" {
   usage_fixture
   _usage107_creds rt-stub-value

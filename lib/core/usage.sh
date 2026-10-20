@@ -401,6 +401,9 @@ _usage_read_finish() {
   # and then only if its stamp is not behind this one's. Stamps are whole
   # seconds: on a tie, a reading with numbers beats one without.
   local stamp="${measured_at:-$now}" prev="{}" record locked=0 appeared=false
+  # Before the lock: taking it may be what creates the cache directory, and
+  # that directory is private like every file written into it.
+  umask 077
   _usage_cache_lock "$cache" && locked=1
   now="$(date +%s)"
   if [ -n "$measured_at" ] && [ -f "$cache" ] && [ "$(cat "$cache" 2>/dev/null)" != "$measured_seen" ]; then
@@ -430,7 +433,6 @@ _usage_read_finish() {
        else null end) as $lg |
       if $lg != null then . + {last_good:$lg} else . end
     else . end' 2>/dev/null)" || record=""
-  umask 077
   if [ -n "$record" ] && mkdir -p "${cache%/*}" && tmp="$(mktemp "$cache.XXXXXX")"; then
     if printf '%s\n' "$record" > "$tmp"; then
       mv -f "$tmp" "$cache"
