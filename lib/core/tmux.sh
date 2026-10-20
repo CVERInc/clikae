@@ -308,36 +308,83 @@ _tmux_is_ancestor() {
 # rescue's snapshot could overwrite a server recorded meanwhile (finding 5).
 # Lines that are not three fields (round-1 format) are dropped: they carry no
 # start time, so nothing could ever be proven about them.
+#
+# The lock (round 3, P2) is a symlink made by `ln -s`, atomic WITH its
+# content: the target names the holder, `pid|start time|token`. Round 2's
+# mkdir lock was broken by any writer that waited 5s, whoever held it: a
+# holder merely slow between its read and its rename then put back its older
+# snapshot over the breaker's, and the breaker's server was off the record.
+# Now a waiter that times out takes the lock only from a holder that is gone
+# (_tmux_lock_holder_alive); a live one keeps it and the update is skipped,
+# said out loud — every spawn records again, so the next one fills it in.
+# Release removes the lock only while it still names us.
 _tmux_rec_update() {
-  local drop="$1" add="${2:-}" rec lock tmp i=0 broke=0
+  local drop="$1" add="${2:-}" rec lock tmp me owner held i=0 again=0
   rec="$(_tmux_rec_file)" || return 0
-  lock="$rec.lock"
-  while ! mkdir "$lock" 2>/dev/null; do
+  lock="$rec.lck"
+  tmp="$(mktemp "$rec.XXXXXX" 2>/dev/null)" || return 0
+  # $BASHPID: in a subshell, $$ is the parent. bash 3.2 has no BASHPID; there
+  # a subshell names its parent, which errs towards "alive", never towards a
+  # steal. The token (our unique temp name) tells siblings apart on release.
+  me="${BASHPID:-$$}"
+  me="$me|$(_tmux_proc_lstart "$me")|${tmp##*/}"
+  while ! ln -s "$me" "$lock" 2>/dev/null; do
     i=$((i + 1))
-    # The section below is one awk and one mv. A lock older than ~5s is a
-    # writer that died holding it; break it once, then give up quietly
-    # rather than wedge a launch on a record.
     if [ "$i" -ge 50 ]; then
-      [ "$broke" -eq 0 ] || return 0
-      rm -rf "$lock" 2>/dev/null; broke=1; i=0
+      owner="$(readlink "$lock" 2>/dev/null)" || owner=""
+      if [ "$again" -eq 0 ] && ! _tmux_lock_holder_alive "$owner"; then
+        # Gone (or the lock vanished meanwhile): move it to a name only we
+        # use, and keep it away only if it is the one judged — a lock taken
+        # in between by a live writer goes straight back.
+        if mv "$lock" "$tmp.stale" 2>/dev/null; then
+          held="$(readlink "$tmp.stale" 2>/dev/null)" || held=""
+          [ "$held" = "$owner" ] || ln -s "$held" "$lock" 2>/dev/null || true
+          rm -rf "$tmp.stale" 2>/dev/null
+        fi
+        again=1; i=0
+        continue
+      fi
+      rm -f "$tmp" 2>/dev/null
+      if declare -F log_warn >/dev/null 2>&1; then
+        log_warn "tmux server record not updated: another clikae (${owner%%|*}) has held $lock for 5s and is still running. The next launch records again."
+      else
+        printf 'clikae: tmux server record not updated: %s is held by live process %s\n' "$lock" "${owner%%|*}" >&2
+      fi
+      return 0
     fi
     sleep 0.1
   done
-  if tmp="$(mktemp "$rec.XXXXXX" 2>/dev/null)"; then
-    # `if`, not `&&`: a group ending in a false `[ -n "$add" ]` returns 1 and
-    # the rename never happens (measured: a drop with nothing to add was a
-    # silent no-op).
-    {
-      if [ -f "$rec" ]; then
-        CLIKAE_TMUX_DROP="$drop" LC_ALL=C awk -F'\t' '
-          BEGIN { n = split(ENVIRON["CLIKAE_TMUX_DROP"], a, "\n"); for (i = 1; i <= n; i++) if (a[i] != "") d[a[i]] = 1 }
-          NF == 3 && !($1 in d) && !(($1 "|" $2) in d)' "$rec"
-      fi
-      if [ -n "$add" ]; then printf '%s\n' "$add"; fi
-    } > "$tmp" 2>/dev/null && mv -f "$tmp" "$rec" 2>/dev/null || rm -f "$tmp" 2>/dev/null
-  fi
-  rm -rf "$lock" 2>/dev/null
+  # `if`, not `&&`: a group ending in a false `[ -n "$add" ]` returns 1 and
+  # the rename never happens (measured: a drop with nothing to add was a
+  # silent no-op).
+  {
+    if [ -f "$rec" ]; then
+      CLIKAE_TMUX_DROP="$drop" LC_ALL=C awk -F'\t' '
+        BEGIN { n = split(ENVIRON["CLIKAE_TMUX_DROP"], a, "\n"); for (i = 1; i <= n; i++) if (a[i] != "") d[a[i]] = 1 }
+        NF == 3 && !($1 in d) && !(($1 "|" $2) in d)' "$rec"
+    fi
+    if [ -n "$add" ]; then printf '%s\n' "$add"; fi
+  } > "$tmp" 2>/dev/null && mv -f "$tmp" "$rec" 2>/dev/null || rm -f "$tmp" 2>/dev/null
+  if [ "$(readlink "$lock" 2>/dev/null)" = "$me" ]; then rm -f "$lock" 2>/dev/null; fi
   return 0
+}
+
+# _tmux_rec_lock_path -> the record's lock (a symlink; see _tmux_rec_update).
+_tmux_rec_lock_path() {
+  local rec; rec="$(_tmux_rec_file)" || return 1
+  printf '%s.lck\n' "$rec"
+}
+
+# _tmux_lock_holder_alive <owner> -> 0 when the lock's holder (pid|start
+# time|token) is still that same process. An empty start time (ps had no
+# answer when the lock was taken) falls back to liveness alone — towards
+# "alive". Empty or malformed -> not alive: there is no holder to protect.
+_tmux_lock_holder_alive() {
+  local pid="${1%%|*}" rest want
+  case "$pid" in ''|*[!0-9]*) return 1 ;; esac
+  rest="${1#*|}"; want="${rest%%|*}"
+  kill -0 "$pid" 2>/dev/null || return 1
+  [ -z "$want" ] || [ "$(_tmux_proc_lstart "$pid")" = "$want" ]
 }
 
 # tmux_server_record — write (pid, start time, socket) of the server a bare
@@ -377,14 +424,20 @@ tmux_rescue_orphans() {
       continue
     fi
     [ -S "$sock" ] && continue
-    # Identity, owner and incarnation — then only the socket's directory (the
-    # server needs it to exist) stands between the check and the kill.
+    # Identity, owner and incarnation: first so nothing is made for a
+    # process that is not ours, then AGAIN after the socket's directory (the
+    # server needs it to exist) is made — the check the kill acts on is the
+    # one right before it, no mkdir or chmod in between (round 3).
     if ! _tmux_is_our_server "$pid" "$lstart"; then
       drop="$drop$pid|$lstart"$'\n'
       continue
     fi
     mkdir -p "$(dirname "$sock")" 2>/dev/null || continue
     chmod 0700 "$(dirname "$sock")" 2>/dev/null || true
+    if ! _tmux_is_our_server "$pid" "$lstart"; then
+      drop="$drop$pid|$lstart"$'\n'
+      continue
+    fi
     kill -USR1 "$pid" 2>/dev/null || continue
     i=0
     while [ "$i" -lt 40 ] && [ ! -S "$sock" ]; do sleep 0.05; i=$((i + 1)); done
