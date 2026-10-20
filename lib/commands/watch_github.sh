@@ -1343,10 +1343,13 @@ _wg_heartbeat_write() {
     fi
     now="$(date +%s 2>/dev/null || echo 0)"
     tmp="$(mktemp "$f.tmp.XXXXXX" 2>/dev/null)" || return 0
-    {
+    if ! {
       printf '{"org":%s,"pid":%s,"last_poll_at":%s,"last_ok_at":%s,"consecutive_failures":%s,"events_this_poll":%s,"last_error":%s,"last_error_kind":%s}\n' \
         "$(json_str "$org")" "$$" "$now" "$__WG_LAST_OK" "$__WG_FAILS" "$events" "$err" "$kind"
-    } > "$tmp" 2>/dev/null && mv -f "$tmp" "$f" 2>/dev/null || { rm -f "$tmp" 2>/dev/null; return 0; }
+    } > "$tmp" 2>/dev/null || ! mv -f "$tmp" "$f" 2>/dev/null; then
+      rm -f "$tmp" 2>/dev/null
+      return 0
+    fi
     _wg_streak_read "$org"
     __WG_FAILS="$(_wg_streak_count "$org" "$__WG_STREAK")"
     [ "$__WG_STREAK $__WG_FAILS $__WG_LAST_OK" = "$shown" ] && break
