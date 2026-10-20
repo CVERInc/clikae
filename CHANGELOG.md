@@ -9,6 +9,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **`clikae usage codex --wake` refreshes a tank outside a git work tree** (#186).
+  Its one-prompt burn uses a temporary directory and now passes codex's
+  `--skip-git-repo-check` through the existing burn option before re-reading usage.
 - **`clikae usage` refreshes a lapsed access token before it measures, and
   the word `expired` is retired** (#177, #179). An idle Claude tank whose
   access token had passed its expiry — with a perfectly good refresh token
