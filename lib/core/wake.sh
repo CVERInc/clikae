@@ -1267,7 +1267,10 @@ wake_usage_refresh() {
   # A watcher whose process never loaded the usage layer simply does not
   # refresh. That is a missing number on a row, never a dead watcher.
   declare -F usage_read >/dev/null 2>&1 || return 0
-  usage_read "$engine" "$tank" >/dev/null 2>&1 || true
+  # #179: this window belongs to a LIVE session on this very tank — the
+  # session is the refresh. Never spend a prompt from here (#177's
+  # refresh-before-measure is for a reader that is asking, not watching).
+  CLIKAE_USAGE_AUTO_WAKE=0 usage_read "$engine" "$tank" >/dev/null 2>&1 || true
   return 0
 }
 

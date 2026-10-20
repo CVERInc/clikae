@@ -901,7 +901,9 @@ tmux_status_fuelv() {
       fresh=0   # cached_at IS present, just not in a shape this reader understands — untrusted, not "current"
     fi
     if [ -n "$w" ] && [ -n "$k" ] && [ "$fresh" = 1 ]; then
-      _TSTAT_FUEL="5h ${w}% · 7d ${k}%"
+      # #179: the labels are lib/core/usage.sh's, defined once; this leaf
+      # may be sourced without it, so the same two words are the fallback.
+      _TSTAT_FUEL="${USAGE_LABEL_WINDOW:-5h} ${w}% · ${USAGE_LABEL_WEEKLY:-7d} ${k}%"
       _TSTAT_FUEL_AGE="$suffix"
       return 0
     fi
@@ -925,12 +927,17 @@ tmux_status_fuelv() {
     # NO AGE SUFFIX. The suffix qualifies a NUMBER ("42% · 3h ago"); this slot
     # carries no number, and rung 2 of the ladder exists to drop the qualifier
     # first, not to explain a glyph.
+    # #179 (#177): the one word `expired` is retired — it made "needs a
+    # session" and "needs a person" look alike. The reason names which:
+    # `refresh` (needs-refresh: a session, or `clikae usage`, refreshes it)
+    # or `relogin` (relogin-required: the refresh ran and was refused).
+    # Both plain ASCII, 7 columns, measured like `expired` was.
     if [ "$fresh" = 1 ]; then
-      burn_status_fieldv "$json" source; src="$_BSF"
-      if [ "$src" = '"expired"' ]; then
-        _TSTAT_FUEL="expired"
-        return 0
-      fi
+      burn_status_fieldv "$json" reason; src="$_BSF"
+      case "$src" in
+        '"needs-refresh"')    _TSTAT_FUEL="refresh"; return 0 ;;
+        '"relogin-required"') _TSTAT_FUEL="relogin"; return 0 ;;
+      esac
     fi
   fi
 

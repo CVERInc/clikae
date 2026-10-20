@@ -189,7 +189,10 @@ _watch_usage_poll_one() {
   fi
   [ "$now" -ge "${_WATCH_USAGE_POLL_NEXT[idx]:-0}" ] || return 0
   local reading source reason retry facts
-  reading="$(usage_read "$cli" "$tank" 2>/dev/null)"
+  # #179: a heartbeat never spends quota to read a meter (#174's rule); it
+  # reads needs-refresh and lets the session — or a person's `clikae usage`
+  # — do the refresh.
+  reading="$(CLIKAE_USAGE_AUTO_WAKE=0 usage_read "$cli" "$tank" 2>/dev/null)"
   # One jq fork per due poll, same as before #136 — three facts out of it, not
   # three calls. @tsv on three strings always yields two tabs, so `read` fills
   # all three names even when the last two are empty.
@@ -215,7 +218,11 @@ _watch_usage_poll_one() {
               [ "$delay" -le "$max" ] || delay="$max"
               cur="$delay" ;;
           esac ;;
-        expired-token|no-credentials)
+        relogin-required|no-credentials|needs-refresh|keychain-denied)
+          # #179: `needs-refresh` is here too — this loop is a reader that
+          # may not spend (CLIKAE_USAGE_AUTO_WAKE=0 below), so waiting does
+          # not change it either; a session on the tank does. Same for a
+          # refused Keychain read.
           state=auth; cur="$max"; delay="$max" ;;
         *)
           state=transient
