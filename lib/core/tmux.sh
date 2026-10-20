@@ -233,6 +233,14 @@ tmux_on() {
   tmux "$@"
 }
 
+# _tmux_at <socket|""> <tmux args…> — tmux on that server; a bare tmux when
+# the socket is empty (no server had the session). Same exit code as tmux.
+_tmux_at() {
+  local sock="$1"; shift
+  if [ -n "$sock" ]; then tmux -S "$sock" "$@"; return $?; fi
+  tmux "$@"
+}
+
 # _tmux_sq <string> -> the string single-quoted. Single quotes, because the
 # command it goes into is run by the user's default-shell (sh, bash, zsh and
 # fish all read them the same way; `$'…'` from printf %q they do not).
@@ -310,35 +318,44 @@ _tmux_is_ancestor() {
 # server and is written only as a whole:
 #   - a writer puts the line in a unique temp file and `mv`s it to the server's
 #     own name — atomic, and no other writer's server shares that name;
-#   - a reader lists the directory; it deletes a file only when the server it
+#   - a writer deletes NOTHING but its own temp file (round 5);
+#   - a reader lists the directory; it deletes a record only when the server it
 #     names is PROVEN dead (pid gone, or that pid now has another start time),
-#     which no writer can contradict: a writer only ever names a live server.
+#     and a temp file only when it is abandoned (old). Both are best-effort:
+#     another reader may have got there first, and that is never an error.
 # A live server's file is never deleted, whatever else is wrong with it.
+#
+# 🔴 Round 4 named the temp file after `${BASHPID:-$$}` expanded INSIDE
+# `$(mktemp …)` — the command substitution's own pid, exited before the write
+# is published — and pruned temp files whose "writer" was not running: a
+# reader deleted any write in progress. And a writer removed every other file
+# of its pid as "an earlier incarnation", which is false when the WRITER is
+# the stale one (it sampled the pid before that server exited and the pid was
+# reused): the live server's record went. A pid says nothing about a temp
+# file; its age does. Only a reader, holding the live pid's start time, can
+# prove an incarnation dead.
+
+# A temp file older than this many minutes is abandoned: a publish is a printf
+# and an mv, never minutes apart.
+_TMUX_REC_TMP_MAX_MIN=10
 
 # _tmux_rec_key <lstart> -> the start time as a file name: Thu-Oct-20-12-34-56-2026.
 _tmux_rec_key() {
   printf '%s' "$1" | tr -cs 'A-Za-z0-9' '-'
 }
 
-# _tmux_rec_write <pid> <lstart> <sock> — publish one server's record. The
-# temp file is named after its writer (.<pid>.XXXXXX) so a reader can tell a
-# write in progress from one whose writer died (_tmux_rec_prune_tmp). $BASHPID:
-# in a subshell $$ is the parent; bash 3.2 has no BASHPID and names the parent,
-# which errs towards "writer alive" — a leftover kept, never a write removed.
+# _tmux_rec_write <pid> <lstart> <sock> — publish one server's record.
+# Returns 1 when it could not (its temp file is then removed): a record that
+# was not published is never reported as one that was.
 _tmux_rec_write() {
-  local pid="$1" lstart="$2" sock="$3" dir name tmp f
-  dir="$(_tmux_rec_dir)" || return 0
+  local pid="$1" lstart="$2" sock="$3" dir name tmp
+  dir="$(_tmux_rec_dir)" || return 1
   name="$dir/$pid.$(_tmux_rec_key "$lstart")"
-  tmp="$(mktemp "$dir/.${BASHPID:-$$}.XXXXXX" 2>/dev/null)" || return 0
+  tmp="$(mktemp "$dir/.tmp.XXXXXX" 2>/dev/null)" || return 1
   if ! { printf '%s\t%s\t%s\n' "$pid" "$lstart" "$sock" > "$tmp" && mv -f "$tmp" "$name"; } 2>/dev/null; then
     rm -f "$tmp" 2>/dev/null
-    return 0
+    return 1
   fi
-  # Any other file of this pid is an earlier incarnation: the pid is this
-  # server now, so that one is proven dead.
-  for f in "$dir/$pid".*; do
-    if [ -f "$f" ] && [ "$f" != "$name" ]; then rm -f "$f" 2>/dev/null; fi
-  done
   return 0
 }
 
@@ -352,38 +369,40 @@ _tmux_rec_dead() {
   ! kill -0 "$1" 2>/dev/null
 }
 
-# _tmux_rec_prune_tmp <dir> — remove temp files whose writer is not running
-# (a writer killed between mktemp and mv). A running writer's is left alone.
+# _tmux_rec_prune_tmp <dir> — remove temp files left by a writer killed
+# between mktemp and mv: by age only, so a write in progress is never touched.
+# Round 4's `.<pid>.XXXXXX` names are caught too. Best-effort, never an error.
 _tmux_rec_prune_tmp() {
-  local t w
-  for t in "$1"/.[0-9]*; do
-    [ -f "$t" ] || continue
-    w="${t##*/.}"; w="${w%%.*}"
-    case "$w" in ''|*[!0-9]*) continue ;; esac
-    kill -0 "$w" 2>/dev/null || rm -f "$t" 2>/dev/null
-  done
+  find "$1" -maxdepth 1 -type f -name '.*' -mmin +"$_TMUX_REC_TMP_MAX_MIN" \
+    -exec rm -f {} + 2>/dev/null || true
 }
 
 # _tmux_rec_migrate <dir> — rounds 1-3 kept every server in one file,
 # state/tmux/servers (never released: only this PR's own builds wrote it). Its
-# three-field lines become per-server files, then it is gone. It is CLAIMED
-# first by a rename to a name only this reader uses, so two readers never both
-# convert it, and a still-running old writer that renames its snapshot back
-# into place merely leaves a file the next reader converts again (re-writing a
-# server's file is idempotent). An existing per-server file is newer; it wins.
+# three-field lines become per-server files, then it is gone. No claim and no
+# temp name of its own (round 4's claim was pruned from under its reader): the
+# file is READ into memory, so another reader removing it changes nothing
+# here; each live entry is published by _tmux_rec_write, and publishing the
+# same server again writes the same file, so two readers converting at once
+# agree. An entry already proven dead is skipped — a stale line for a reused
+# pid never becomes a file. The old file goes only once every live entry is
+# published; a still-running old writer that puts it back merely leaves it
+# for the next reader.
 _tmux_rec_migrate() {
-  local dir="$1" old claim pid lstart sock
+  local dir="$1" old lines pid lstart sock ok=1
   old="${dir%/*}/servers"
   [ -f "$old" ] || return 0
-  claim="$(mktemp "$dir/.${BASHPID:-$$}.XXXXXX" 2>/dev/null)" || return 0
-  if ! mv -f "$old" "$claim" 2>/dev/null; then rm -f "$claim" 2>/dev/null; return 0; fi
+  lines="$(cat "$old" 2>/dev/null)" || return 0
   while IFS=$'\t' read -r pid lstart sock; do
     case "$pid" in ''|*[!0-9]*) continue ;; esac
     [ -n "$lstart" ] && [ -n "$sock" ] || continue
+    _tmux_rec_dead "$pid" "$lstart" && continue
     [ -e "$dir/$pid.$(_tmux_rec_key "$lstart")" ] && continue
-    _tmux_rec_write "$pid" "$lstart" "$sock"
-  done < "$claim"
-  rm -f "$claim" 2>/dev/null
+    _tmux_rec_write "$pid" "$lstart" "$sock" || ok=0
+  done <<EOF
+$lines
+EOF
+  if [ "$ok" -eq 1 ]; then rm -f "$old" 2>/dev/null || true; fi
   return 0
 }
 
@@ -414,11 +433,14 @@ tmux_rescue_orphans() {
     for f in "$dir"/*; do
       [ -f "$f" ] || continue
       pid=""; lstart=""; sock=""
-      IFS=$'\t' read -r pid lstart sock < "$f" 2>/dev/null
+      # Guarded: another reader may remove it between the check above and
+      # this read, and an unguarded redirection failure exits a `set -e`
+      # caller (the launch path is one). A record that is gone is skipped.
+      IFS=$'\t' read -r pid lstart sock 2>/dev/null < "$f" || [ -n "$pid" ] || continue
       case "$pid" in ''|*[!0-9]*) continue ;; esac
       [ -n "$lstart" ] && [ -n "$sock" ] || continue
       if _tmux_rec_dead "$pid" "$lstart"; then
-        rm -f "$f" 2>/dev/null
+        rm -f "$f" 2>/dev/null || true
         continue
       fi
       _tmux_rescue_one "$pid" "$lstart" "$sock"
@@ -1153,7 +1175,8 @@ tmux_spawn_session() {
   if [ "$births_server" -eq 1 ]; then tmux_server_born_note; fi
   # Rule 13: (pid, socket) on record, every spawn, not only at birth — a server
   # born by an older clikae has no record yet, and this is the first chance.
-  tmux_server_record
+  # Best-effort: a record that cannot be written must not stop the spawn.
+  tmux_server_record || true
   return 0
 }
 
@@ -1991,10 +2014,15 @@ tmux_set_session_id() {
 # back what we started, because `new-session -d` has already launched the engine
 # and a session nobody can see still spends the account's quota.
 tmux_attach() {
-  local session="$1" started_here="$2" scrollback_file="$3"
-  # tmux_on: a cockpit still on the pre-#176 /tmp socket is attached where it
-  # is (Rule 13). Inside it $TMUX takes over and every later call is local.
-  if tmux_on "$session" attach -t "=$session"; then
+  local session="$1" started_here="$2" scrollback_file="$3" sock
+  # The server that has it — a cockpit still on the pre-#176 /tmp socket is
+  # attached where it is (Rule 13). Inside it $TMUX takes over and every later
+  # call is local. Resolved ONCE and kept: if that server dies during the
+  # attach, the failure must be read off THAT server, not looked up again
+  # (round 5: the lookup then fell back to a bare tmux, the home server
+  # answered, and a dead legacy server read as "tmux refused" -> 1, not 2).
+  sock="$(tmux_session_socket "$session")" || sock=""
+  if _tmux_at "$sock" attach -t "=$session"; then
     if [ -s "$scrollback_file" ]; then
       awk '/^$/{b=b "\n"; next} {printf "%s%s\n", b, $0; b=""}' "$scrollback_file"
       rm -f "$scrollback_file"
@@ -2018,11 +2046,11 @@ tmux_attach() {
   # A session that simply ENDED is not either of these: measured rc=0, with and
   # without other sessions on the server, so it never reaches this line. That
   # matters — a wrong 2 here would relaunch an engine the human just quit.
-  if ! tmux_on "$session" has-session -t "=$session" 2>/dev/null && ! tmux list-sessions >/dev/null 2>&1; then
+  if ! _tmux_at "$sock" has-session -t "=$session" 2>/dev/null && ! _tmux_at "$sock" list-sessions >/dev/null 2>&1; then
     rm -f "$scrollback_file"
     return 2
   fi
-  [ "$started_here" -eq 1 ] && tmux_on "$session" kill-session -t "=$session" 2>/dev/null
+  [ "$started_here" -eq 1 ] && _tmux_at "$sock" kill-session -t "=$session" 2>/dev/null
   rm -f "$scrollback_file"
   return 1
 }

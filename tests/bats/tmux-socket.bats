@@ -587,6 +587,219 @@ _publish_barrier() {
   [ ! -e "$old" ] && _on_record "$live" || { _records; false; }
 }
 
+# ── round 5: what a writer may delete, and who may prune (PR #181 r4 review) ─
+#
+# r4 named a temp file after `${BASHPID:-$$}` expanded INSIDE `$(mktemp …)` —
+# the command substitution's own pid, gone before the write was published —
+# so any reader's pruning deleted a write in progress. And a writer removed
+# every other file of its pid, which deletes the NEW incarnation's record when
+# the writer itself is the stale one.
+
+# _hold_first_mv <name> [after] — in this shell, the FIRST `mv` (a publish, or
+# r4's migration claim) drops "$GATE/held.<name>" and waits for
+# "$GATE/go.<name>" (bounded at 10s): before that mv runs, or with `after`,
+# right after it.
+_hold_first_mv() {
+  _HF_NAME="$1"; _HF_AFTER="${2:-}"
+  mv() {
+    local _hf_rc=0
+    [ -z "$_HF_AFTER" ] || command mv "$@" || _hf_rc=$?
+    if [ -z "${_HF_DONE:-}" ]; then
+      _HF_DONE=1
+      : > "$GATE/held.$_HF_NAME"
+      local n=0
+      while [ "$n" -lt 200 ] && [ ! -e "$GATE/go.$_HF_NAME" ]; do command sleep 0.05; n=$((n + 1)); done
+    fi
+    [ -n "$_HF_AFTER" ] || command mv "$@" || _hf_rc=$?
+    return "$_hf_rc"
+  }
+}
+
+# _await <file> — wait (bounded at 10s) until <file> exists.
+_await() {
+  local n=0
+  while [ "$n" -lt 200 ] && [ ! -e "$1" ]; do sleep 0.05; n=$((n + 1)); done
+  [ -e "$1" ] || { echo "control: $1 never appeared"; return 1; }
+}
+
+# _reader_script — a reader as the real launch path runs it: `set -e`, then the
+# rescue, then a statement that must be reached. Holds at its first mv when
+# HOLD is set.
+_reader_script() {
+  cat > "$TEST_HOME/reader.sh" <<EOF
+set -e
+. "$CLIKAE_TEST_ROOT/lib/core/log.sh"
+. "$CLIKAE_TEST_ROOT/lib/core/tmux.sh"
+$(declare -f _hold_first_mv)
+[ -z "\${HOLD:-}" ] || _hold_first_mv "\$HOLD" "\${HOLD_AFTER:-}"
+tmux_rescue_orphans
+echo reached
+EOF
+}
+
+@test "record (r5): a reader's pruning never removes a write in progress" {
+  _src_tmux
+  local sock; _sockfile sock
+  local p; _fake_tmux_proc p
+  GATE="$(mktemp -d "$TEST_HOME/gate.XXXXXX")"
+  # Writer A has its temp file written and is about to publish it…
+  ( _hold_first_mv A; rc=0; _tmux_rec_write "$p" "$(_lstart "$p")" "$sock" || rc=$?; echo "$rc" > "$GATE/rc.A" ) &
+  local a=$!
+  _await "$GATE/held.A"
+  local t n=0
+  for t in "$(_rec_d)"/.[!.]*; do [ -f "$t" ] && n=$((n + 1)); done
+  [ "$n" -eq 1 ] || { echo "control: A's temp file is not there"; ls -la "$(_rec_d)"; false; }
+  # …when reader B prunes.
+  PATH="$TEST_HOME/fakebin:$PATH" tmux_rescue_orphans
+  : > "$GATE/go.A"; wait "$a" || true
+  [ "$(cat "$GATE/rc.A")" -eq 0 ] || { echo "A's publish failed (rc $(cat "$GATE/rc.A"))"; false; }
+  _on_record "$p" || { echo "the pruner deleted A's write in progress"; ls -la "$(_rec_d)"; false; }
+}
+
+@test "record (r5): a temp file is pruned only when abandoned (old), and a failed publish says so" {
+  _src_tmux
+  local sock; _sockfile sock
+  local d; d="$(_rec_d)"; mkdir -p "$d"
+  # Abandoned (a writer killed between mktemp and mv, long ago) vs fresh — the
+  # fresh one is named after a pid that is certainly dead, which r4 read as
+  # "abandoned".
+  local dead; _dead_pid dead
+  : > "$d/.tmp.old"; touch -t 200001010000 "$d/.tmp.old"
+  : > "$d/.$dead.fresh"
+  tmux_rescue_orphans
+  [ ! -e "$d/.tmp.old" ] || { echo "an abandoned temp file was kept"; false; }
+  [ -e "$d/.$dead.fresh" ] || { echo "a fresh temp file was pruned"; false; }
+  # A publish whose mv fails is a failure, and leaves nothing behind.
+  rm -f "$d/.$dead.fresh"
+  mv() { return 1; }
+  local rc=0
+  _tmux_rec_write 4242 "Thu Jan  1 00:00:00 1970" "$sock" || rc=$?
+  unset -f mv
+  [ "$rc" -ne 0 ] || { echo "a failed publish returned 0"; false; }
+  local f
+  for f in "$d"/* "$d"/.[!.]*; do
+    [ -e "$f" ] && { echo "left behind: $f"; false; }
+  done
+  return 0
+}
+
+@test "record (r5): a delayed old-incarnation writer never deletes the new incarnation's record" {
+  _src_tmux
+  local sock; _sockfile sock
+  local p; _fake_tmux_proc p
+  local s1="Thu Jan  1 00:00:00 1970" s2; s2="$(_lstart "$p")"
+  local old new
+  old="$(_rec_d)/$p.$(_tmux_rec_key "$s1")"; new="$(_rec_d)/$p.$(_tmux_rec_key "$s2")"
+  GATE="$(mktemp -d "$TEST_HOME/gate.XXXXXX")"
+  # A sampled pid P when it was incarnation S1 and pauses before publishing…
+  ( _hold_first_mv A; _tmux_rec_write "$p" "$s1" "$sock" ) & local a=$!
+  _await "$GATE/held.A"
+  # …that server exits, P is reused (S2), and B records the live server.
+  _tmux_rec_write "$p" "$s2" "$sock"
+  [ -f "$new" ] || { echo "control: B's record is not there"; false; }
+  : > "$GATE/go.A"; wait "$a" || true
+  [ -f "$new" ] || { echo "the delayed old-incarnation writer deleted the live server's record"; ls -la "$(_rec_d)"; false; }
+  # Retiring the stale one is the reader's job, and it can prove it dead.
+  PATH="$TEST_HOME/fakebin:$PATH" tmux_rescue_orphans
+  [ ! -e "$old" ] || { echo "the stale incarnation's record was kept"; false; }
+  [ -f "$new" ] || { echo "the reader removed the live record"; false; }
+}
+
+@test "record (r5): a stale migration entry for a reused pid never deletes the live record" {
+  _src_tmux
+  local sock; _sockfile sock
+  local p; _fake_tmux_proc p
+  local new; new="$(_rec_d)/$p.$(_tmux_rec_key "$(_lstart "$p")")"
+  _tmux_rec_write "$p" "$(_lstart "$p")" "$sock"
+  [ -f "$new" ] || { echo "control: no live record"; false; }
+  local old="$CLIKAE_HOME/state/tmux/servers"
+  printf '%s\t%s\t%s\n' "$p" "Thu Jan  1 00:00:00 1970" "$sock" > "$old"
+  PATH="$TEST_HOME/fakebin:$PATH" tmux_rescue_orphans
+  [ ! -e "$old" ] || { echo "the old single file is still there"; false; }
+  [ -f "$new" ] || { echo "migrating a stale entry deleted the live record"; ls -la "$(_rec_d)"; false; }
+  [ "$(cat "$(_rec_d)/$p".*)" = "$p	$(_lstart "$p")	$sock" ] || { _records; false; }
+}
+
+@test "record (r5): a record that disappears between the check and the read is skipped under set -e" {
+  _src_tmux
+  local sock; _sockfile sock
+  local dead; _dead_pid dead
+  _tmux_rec_write "$dead" "Thu Jan  1 00:00:00 1970" "$sock"
+  local victim; victim="$(echo "$(_rec_d)/$dead".*)"
+  [ -f "$victim" ] || { echo "control: no record to race on"; false; }
+  _reader_script
+  # Reader B removes the record right after reader A has seen it exist.
+  run env VICTIM="$victim" bash -c '
+    [() { builtin [ "$@"; local r=$?
+      if builtin [ "$1" = -f ] && builtin [ "$2" = "$VICTIM" ] && builtin [ "$r" -eq 0 ]; then rm -f "$VICTIM"; fi
+      return "$r"; }
+    . "$1"' _ "$TEST_HOME/reader.sh"
+  [ "$status" -eq 0 ] && [ "${lines[${#lines[@]}-1]}" = reached ] \
+    || { echo "the reader aborted (rc $status): $output"; false; }
+  [ ! -e "$victim" ] || { echo "control: the race never removed the record"; false; }
+}
+
+@test "record (r5): two readers migrating at once — both finish under set -e and nothing live is lost" {
+  _src_tmux
+  local sock; _sockfile sock
+  local live dead
+  _fake_tmux_proc live; _dead_pid dead
+  local old="$CLIKAE_HOME/state/tmux/servers"
+  mkdir -p "${old%/*}"
+  {
+    printf '%s\t%s\t%s\n' "$live" "$(_lstart "$live")" "$sock"
+    printf '%s\t%s\t%s\n' "$dead" "Thu Jan  1 00:00:00 1970" "$sock"
+  } > "$old"
+  GATE="$(mktemp -d "$TEST_HOME/gate.XXXXXX")"; export GATE
+  _reader_script
+  # A stops right after its first mv — r4: its claim of `servers`; now: the
+  # publish of the first converted record — while B runs from start to finish.
+  HOLD=A HOLD_AFTER=1 PATH="$TEST_HOME/fakebin:$PATH" bash "$TEST_HOME/reader.sh" > "$GATE/out.A" 2>&1 & local a=$!
+  _await "$GATE/held.A"
+  run env PATH="$TEST_HOME/fakebin:$PATH" bash "$TEST_HOME/reader.sh"
+  [ "$status" -eq 0 ] && [ "${lines[${#lines[@]}-1]}" = reached ] || { echo "B aborted: $output"; false; }
+  : > "$GATE/go.A"
+  local rc=0; wait "$a" || rc=$?
+  [ "$rc" -eq 0 ] && [ "$(tail -n 1 "$GATE/out.A")" = reached ] || { echo "A aborted (rc $rc):"; cat "$GATE/out.A"; false; }
+  [ ! -e "$old" ] || { echo "the old single file is still there"; false; }
+  _on_record "$live" || { echo "the live server's record was lost"; ls -la "$(_rec_d)"; false; }
+  ! _on_record "$dead" || { echo "the dead server's record was kept"; false; }
+  local f
+  for f in "$(_rec_d)"/* "$(_rec_d)"/.[!.]*; do
+    [ -e "$f" ] || continue
+    case "${f##*/}" in "$live".*) ;; *) echo "left behind: $f"; false ;; esac
+  done
+}
+
+@test "attach (r5): a legacy server that dies during the attach is told by ITS socket, not the home server's" {
+  command -v tmux >/dev/null 2>&1 || skip "tmux not installed"
+  _src_tmux
+  export CLIKAE_SESS_PREFIX="clikae-"
+  # Home server A, alive, with an unrelated session; the cockpit is on B.
+  tmux new-session -d -s unrelated 'sleep 30'
+  _legacy_up clikae-codex-L
+  local lsock="$LEGACY_SOCK"
+  # B dies during the attach.
+  tmux() {
+    if [ "$1" = -S ] && [ "$2" = "$lsock" ] && [ "$3" = attach ]; then
+      command tmux -S "$lsock" kill-server; return 1
+    fi
+    command tmux "$@"
+  }
+  local rc=0; tmux_attach clikae-codex-L 0 "$TEST_HOME/sb" || rc=$?
+  tmux list-sessions >/dev/null 2>&1 || { echo "control: home server A is down"; false; }
+  [ "$rc" -eq 2 ] || { echo "rc $rc: B's death was read off home server A"; false; }
+  # Control: B alive, the attach merely refused (a TERM tmux cannot draw) -> 1.
+  _legacy_up clikae-codex-L
+  tmux() {
+    if [ "$1" = -S ] && [ "$2" = "$lsock" ] && [ "$3" = attach ]; then return 1; fi
+    command tmux "$@"
+  }
+  rc=0; tmux_attach clikae-codex-L 0 "$TEST_HOME/sb" || rc=$?
+  unset -f tmux
+  [ "$rc" -eq 1 ] || { echo "control: a refused attach on a live B returned $rc"; false; }
+}
+
 @test "endpoints: inside an OLD-server cockpit, the board and the launch still find the new server" {
   command -v tmux >/dev/null 2>&1 || skip "tmux not installed"
   _src_tmux
