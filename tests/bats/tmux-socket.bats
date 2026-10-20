@@ -255,6 +255,14 @@ _fake_tmux_proc() {
   printf -v "$1" '%s' "$_ft_pid"
 }
 
+# _fakebin_tmux — a `tmux` on PATH for tests that never start a server.
+# tmux_rescue_orphans returns at once when no tmux is installed (the macOS CI
+# image has none), which would turn the pruning/race tests into no-ops.
+_fakebin_tmux() {
+  mkdir -p "$TEST_HOME/fakebin"
+  [ -x "$TEST_HOME/fakebin/tmux" ] || cp "$(command -v sleep)" "$TEST_HOME/fakebin/tmux"
+}
+
 # _dead_pid <var> — a pid that has certainly exited.
 _dead_pid() {
   sh -c 'exit 0' & local _dp=$!
@@ -669,7 +677,8 @@ EOF
   local dead; _dead_pid dead
   : > "$d/.tmp.old"; touch -t 200001010000 "$d/.tmp.old"
   : > "$d/.$dead.fresh"
-  tmux_rescue_orphans
+  _fakebin_tmux
+  PATH="$TEST_HOME/fakebin:$PATH" tmux_rescue_orphans
   [ ! -e "$d/.tmp.old" ] || { echo "an abandoned temp file was kept"; false; }
   [ -e "$d/.$dead.fresh" ] || { echo "a fresh temp file was pruned"; false; }
   # A publish whose mv fails is a failure, and leaves nothing behind.
@@ -730,9 +739,9 @@ EOF
   _tmux_rec_write "$dead" "Thu Jan  1 00:00:00 1970" "$sock"
   local victim; victim="$(echo "$(_rec_d)/$dead".*)"
   [ -f "$victim" ] || { echo "control: no record to race on"; false; }
-  _reader_script
+  _reader_script; _fakebin_tmux
   # Reader B removes the record right after reader A has seen it exist.
-  run env VICTIM="$victim" bash -c '
+  run env PATH="$TEST_HOME/fakebin:$PATH" VICTIM="$victim" bash -c '
     [() { builtin [ "$@"; local r=$?
       if builtin [ "$1" = -f ] && builtin [ "$2" = "$VICTIM" ] && builtin [ "$r" -eq 0 ]; then rm -f "$VICTIM"; fi
       return "$r"; }
