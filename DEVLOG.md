@@ -1,9 +1,14 @@
+---
+title: "Devlog"
+description: "clikae (CLI-Kae / ｷﾘｶｴ) — An on-ramp for AI coding CLIs: land on your recent sessions across every Claude Code, Codex, Grok & Antigravity account, each with a recap of where you left off."
+canonical: "https://clikae.cver.net/DEVLOG"
+---
 # Devlog
 
 A narrative history of clikae, from the first commit through a deliberate park, the
 v0.6 that earned its way out of it, and the stretch after — where a tank stopped
 being a fuel tank and the front page finally said so.
-For the precise, per-release record see [CHANGELOG.md](https://github.com/CVERInc/clikae/blob/8e9e24168ba559450450959ef2b6227a26b83c2b/CHANGELOG.md) — this is
+For the precise, per-release record see [CHANGELOG.md](https://github.com/CVERInc/clikae/blob/762aacccb44012d1c657884d18a2d748a5e3d65b/CHANGELOG.md) — this is
 the story around it: the itch, the wrong turns, and the lessons that made each
 version what it is. Dates are the real tag dates (JST); claims map to the
 changelog. Nothing here is roadmap or aspiration — only what actually shipped.

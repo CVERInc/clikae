@@ -5,7 +5,7 @@ var __getOwnPropDesc = Object.getOwnPropertyDescriptor;
 var __getOwnPropNames = Object.getOwnPropertyNames;
 var __getProtoOf = Object.getPrototypeOf;
 var __hasOwnProp = Object.prototype.hasOwnProperty;
-var __commonJSMin = (cb, mod) => () => (mod || (cb((mod = { exports: {} }).exports, mod), cb = null), mod.exports);
+var __commonJSMin = (cb, mod) => () => (mod || (cb((mod = { exports: {} }).exports, mod, mod.exports), cb = null), mod.exports);
 var __copyProps = (to, from, except, desc) => {
 	if (from && typeof from === "object" || typeof from === "function") for (var keys = __getOwnPropNames(from), i = 0, n = keys.length, key; i < n; i++) {
 		key = keys[i];
@@ -405,7 +405,7 @@ var require_react_production = /* @__PURE__ */ __commonJSMin(((exports) => {
 	exports.useTransition = function() {
 		return ReactSharedInternals.H.useTransition();
 	};
-	exports.version = "19.3.0";
+	exports.version = "19.3.1";
 }));
 //#endregion
 //#region node_modules/react/index.js
@@ -823,7 +823,7 @@ var require_react_dom_production = /* @__PURE__ */ __commonJSMin(((exports) => {
 	exports.useFormStatus = function() {
 		return ReactSharedInternals.H.useHostTransitionStatus();
 	};
-	exports.version = "19.3.0";
+	exports.version = "19.3.1";
 }));
 //#endregion
 //#region node_modules/react-dom/index.js
@@ -11378,7 +11378,7 @@ var require_react_dom_client_production = /* @__PURE__ */ __commonJSMin(((export
 		}
 	};
 	var isomorphicReactPackageVersion$jscomp$inline_2043 = React.version;
-	if ("19.3.0" !== isomorphicReactPackageVersion$jscomp$inline_2043) throw Error(formatProdErrorMessage(527, isomorphicReactPackageVersion$jscomp$inline_2043, "19.3.0"));
+	if ("19.3.1" !== isomorphicReactPackageVersion$jscomp$inline_2043) throw Error(formatProdErrorMessage(527, isomorphicReactPackageVersion$jscomp$inline_2043, "19.3.1"));
 	ReactDOMSharedInternals.findDOMNode = function(componentOrElement) {
 		var fiber = componentOrElement._reactInternals;
 		if (void 0 === fiber) {
@@ -11393,10 +11393,10 @@ var require_react_dom_client_production = /* @__PURE__ */ __commonJSMin(((export
 	};
 	var internals$jscomp$inline_2586 = {
 		bundleType: 0,
-		version: "19.3.0",
+		version: "19.3.1",
 		rendererPackageName: "react-dom",
 		currentDispatcherRef: ReactSharedInternals,
-		reconcilerVersion: "19.3.0"
+		reconcilerVersion: "19.3.1"
 	};
 	if ("undefined" !== typeof __REACT_DEVTOOLS_GLOBAL_HOOK__) {
 		var hook$jscomp$inline_2587 = __REACT_DEVTOOLS_GLOBAL_HOOK__;
@@ -11472,6 +11472,63 @@ function JuneSlot({ children, html }) {
 		suppressHydrationWarning: true
 	});
 	return (0, import_react.createElement)(ISLAND_SLOT_TAG, null, children);
+}
+//#endregion
+//#region node_modules/@junejs/core/src/execute-scripts.ts
+const EXECUTABLE = /* @__PURE__ */ new Set([
+	"",
+	"module",
+	"application/ecmascript",
+	"application/javascript",
+	"application/x-ecmascript",
+	"application/x-javascript",
+	"text/ecmascript",
+	"text/javascript",
+	"text/javascript1.0",
+	"text/javascript1.1",
+	"text/javascript1.2",
+	"text/javascript1.3",
+	"text/javascript1.4",
+	"text/javascript1.5",
+	"text/jscript",
+	"text/livescript",
+	"text/x-ecmascript",
+	"text/x-javascript"
+]);
+const isExecutable = (type) => EXECUTABLE.has((type.split(";")[0] ?? "").trim().toLowerCase());
+const PENDING_TYPE = "text/x-june-pending";
+const PENDING_ATTR = "data-june-pending";
+const ORIG_TYPE_ATTR = "data-june-type";
+function neutralizeScripts(region) {
+	for (const s of Array.from(region.querySelectorAll("script"))) {
+		if (!isExecutable(s.type)) continue;
+		const orig = s.getAttribute("type");
+		if (orig !== null) s.setAttribute(ORIG_TYPE_ATTR, orig);
+		s.setAttribute("type", PENDING_TYPE);
+		s.setAttribute(PENDING_ATTR, "");
+	}
+}
+function executeScripts(region) {
+	for (const old of Array.from(region.querySelectorAll(`script[type="${PENDING_TYPE}"][${PENDING_ATTR}]`))) {
+		const origType = old.getAttribute(ORIG_TYPE_ATTR);
+		if (old.closest("june-island") || old.hasAttribute("data-june-once")) {
+			if (origType !== null) old.setAttribute("type", origType);
+			else old.removeAttribute("type");
+			old.removeAttribute(ORIG_TYPE_ATTR);
+			old.removeAttribute(PENDING_ATTR);
+			continue;
+		}
+		const fresh = document.createElement("script");
+		for (const a of Array.from(old.attributes)) fresh.setAttribute(a.name, a.value);
+		if (origType !== null) fresh.setAttribute("type", origType);
+		else fresh.removeAttribute("type");
+		fresh.removeAttribute(ORIG_TYPE_ATTR);
+		fresh.removeAttribute(PENDING_ATTR);
+		if (old.nonce) fresh.nonce = old.nonce;
+		fresh.textContent = old.textContent;
+		if (old.src && !old.hasAttribute("async")) fresh.async = false;
+		old.replaceWith(fresh);
+	}
 }
 //#endregion
 //#region node_modules/@junejs/core/src/morph.ts
@@ -11570,12 +11627,43 @@ function updateActiveLinks() {
 function isHardNav(url) {
 	return /\.(md|json|txt|xml)$/.test(url.pathname) || url.pathname === "/mcp";
 }
+const pageKey = () => location.pathname + location.search;
+const isHex = (c) => c >= 48 && c <= 57 || c >= 65 && c <= 70 || c >= 97 && c <= 102;
+function percentDecode(s) {
+	if (!/%[0-9A-Fa-f]{2}/.test(s)) return s;
+	const src = new TextEncoder().encode(s);
+	const out = [];
+	for (let i = 0; i < src.length; i++) {
+		const b = src[i];
+		if (b === 37 && i + 2 < src.length && isHex(src[i + 1]) && isHex(src[i + 2])) {
+			out.push(parseInt(String.fromCharCode(src[i + 1], src[i + 2]), 16));
+			i += 2;
+		} else out.push(b);
+	}
+	return new TextDecoder("utf-8", { ignoreBOM: true }).decode(new Uint8Array(out));
+}
+function indicatedElement(fragment) {
+	const decoded = percentDecode(fragment);
+	const candidates = decoded === fragment ? [fragment] : [fragment, decoded];
+	for (const id of candidates) {
+		const byId = document.getElementById(id);
+		if (byId) return byId;
+		for (const el of Array.from(document.getElementsByName(id))) if (el.localName === "a") return el;
+	}
+	return null;
+}
+function landOn(hash) {
+	const el = hash.length > 1 ? indicatedElement(hash.slice(1)) : null;
+	if (el) el.scrollIntoView?.();
+	else window.scrollTo?.(0, 0);
+}
 function startClientRouter(rehydrate) {
 	const w = window;
 	if (w.__juneRouter) return;
 	w.__juneRouter = true;
 	let token = 0;
 	let inflight = null;
+	let lastPage = pageKey();
 	async function navigate(href, push) {
 		const mine = ++token;
 		inflight?.abort();
@@ -11590,6 +11678,14 @@ function startClientRouter(rehydrate) {
 				signal: ac.signal
 			});
 			if (!res.ok) throw new Error(`status ${res.status}`);
+			if (res.url && new URL(res.url).origin !== location.origin) {
+				if (mine === token) location.href = href;
+				return;
+			}
+			if (res.url) {
+				const final = new URL(res.url);
+				href = final.pathname + final.search + (final.hash || new URL(href, location.origin).hash);
+			}
 			html = await res.text();
 			title = decodeTitle(res.headers.get(TITLE_HEADER));
 			fragmentShell = res.headers.get(SEGMENT_HEADER);
@@ -11606,14 +11702,19 @@ function startClientRouter(rehydrate) {
 		}
 		const next = current.cloneNode(false);
 		next.innerHTML = html;
+		neutralizeScripts(next);
 		if (fragmentShell === null) next.removeAttribute(SHELL_ATTR);
 		if (push) history.pushState({ june: true }, "", href);
+		const hash = new URL(href, location.href).hash;
 		const apply = () => {
+			if (mine !== token) return;
 			morph(current, next);
+			lastPage = pageKey();
 			if (title !== null) document.title = title;
+			executeScripts(current);
 			rehydrate(current);
 			updateActiveLinks();
-			window.scrollTo?.(0, 0);
+			landOn(hash);
 		};
 		const startVT = document.startViewTransition;
 		if (typeof startVT === "function") startVT.call(document, apply);
@@ -11631,6 +11732,12 @@ function startClientRouter(rehydrate) {
 		navigate(url.pathname + url.search + url.hash, true);
 	});
 	window.addEventListener("popstate", () => {
+		if (pageKey() === lastPage) {
+			++token;
+			inflight?.abort();
+			inflight = null;
+			return;
+		}
 		navigate(location.pathname + location.search + location.hash, false);
 	});
 }
@@ -11642,9 +11749,11 @@ function applyLiveUpdate(fragmentHtml, title, rehydrate, segmentShell) {
 	if (!current) return false;
 	const next = current.cloneNode(false);
 	next.innerHTML = fragmentHtml;
+	neutralizeScripts(next);
 	if (fragmentShell === null) next.removeAttribute(SHELL_ATTR);
 	morph(current, next, { preserveIslands: "all" });
 	if (title !== null) document.title = title;
+	executeScripts(current);
 	rehydrate(current);
 	return true;
 }
@@ -11704,7 +11813,7 @@ function startJuneClient(options) {
 	const routerRoot = document.querySelector("[data-june-root]");
 	if (!routerRoot) return;
 	if (routerRoot.getAttribute("data-june-router") === "flight") {
-		import("./client-router-flight-f1305ef2.js").then(({ startFlightRouter }) => startFlightRouter());
+		import("./client-router-flight-684c945d.js").then(({ startFlightRouter }) => startFlightRouter());
 		return;
 	}
 	startClientRouter(rehydrate);
@@ -11712,6 +11821,10 @@ function startJuneClient(options) {
 		try {
 			const res = await fetch(location.href, { headers: { accept: FRAGMENT_ACCEPT } });
 			if (!res.ok) return false;
+			if (res.url) {
+				const final = new URL(res.url);
+				if (final.origin !== location.origin || final.pathname + final.search !== location.pathname + location.search) return false;
+			}
 			return applyLiveUpdate(await res.text(), decodeTitle(res.headers.get(TITLE_HEADER)), rehydrate, res.headers.get(SEGMENT_HEADER));
 		} catch {
 			return false;

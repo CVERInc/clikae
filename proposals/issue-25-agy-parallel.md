@@ -1,3 +1,8 @@
+---
+title: "#25 · agy parallel"
+description: "clikae (CLI-Kae / ｷﾘｶｴ) — An on-ramp for AI coding CLIs: land on your recent sessions across every Claude Code, Codex, Grok & Antigravity account, each with a recap of where you left off."
+canonical: "https://clikae.cver.net/proposals/issue-25-agy-parallel"
+---
 # Issue #25 — agy Parallel Execution on Same Account (Design Note)
 
 > Status: **Design Discussion, Unresolved**. The conclusion leans towards "do not implement multi-account parallel execution (proven unfeasible); same-account multi-worker parallel execution is technically possible but has limited value and low priority."

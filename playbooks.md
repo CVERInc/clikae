@@ -1,8 +1,13 @@
+---
+title: "Playbooks — wielding the fleet"
+description: "clikae (CLI-Kae / ｷﾘｶｴ) — An on-ramp for AI coding CLIs: land on your recent sessions across every Claude Code, Codex, Grok & Antigravity account, each with a recap of where you left off."
+canonical: "https://clikae.cver.net/playbooks"
+---
 # Playbooks — wielding the fleet
 
 Every other page documents a *capability*. This one maps **situations to moves**: which
 play to reach for, and the exact call. If you are an agent driving clikae, this is your
-decision layer — [AGENTS.md](https://github.com/CVERInc/clikae/blob/8e9e24168ba559450450959ef2b6227a26b83c2b/AGENTS.md) and [orchestration.md](/orchestration.md) give
+decision layer — [AGENTS.md](https://github.com/CVERInc/clikae/blob/762aacccb44012d1c657884d18a2d748a5e3d65b/AGENTS.md) and [orchestration.md](/orchestration.md) give
 the mechanics and the non-negotiable rules; this gives the *when*.
 
 The through-line: an account switcher gives you another **login**. clikae gives you a

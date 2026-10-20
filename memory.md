@@ -1,3 +1,8 @@
+---
+title: "Memory (Soul layer)"
+description: "clikae (CLI-Kae / ｷﾘｶｴ) — An on-ramp for AI coding CLIs: land on your recent sessions across every Claude Code, Codex, Grok & Antigravity account, each with a recap of where you left off."
+canonical: "https://clikae.cver.net/memory"
+---
 # clikae memory — the Soul layer (convention)
 
 > **Status: cross-engine shipped (claude + codex + agy).** This file defines the *schema

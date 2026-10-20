@@ -1,3 +1,8 @@
+---
+title: "#24 · simplify burn"
+description: "clikae (CLI-Kae / ｷﾘｶｴ) — An on-ramp for AI coding CLIs: land on your recent sessions across every Claude Code, Codex, Grok & Antigravity account, each with a recap of where you left off."
+canonical: "https://clikae.cver.net/proposals/issue-24-burn-simplify"
+---
 # Proposal — Issue #24: simplify `clikae burn` (drop the per-engine flag wrangling)
 
 > Status: ✅ **SHIPPED in v0.6.0** (the full design — `--prompt` / `--prompt-file` /

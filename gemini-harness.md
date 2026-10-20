@@ -1,3 +1,8 @@
+---
+title: "Gemini (agy) 工作韁繩：形狀 × 產出物 × 閘"
+description: "clikae (CLI-Kae / ｷﾘｶｴ) — An on-ramp for AI coding CLIs: land on your recent sessions across every Claude Code, Codex, Grok & Antigravity account, each with a recap of where you left off."
+canonical: "https://clikae.cver.net/gemini-harness"
+---
 # Gemini (agy) 工作韁繩：形狀 × 產出物 × 閘
 
 > **取代**：前一版的「七條認知棘輪」。那一版失效的原因寫在 §0，讀完再往下。

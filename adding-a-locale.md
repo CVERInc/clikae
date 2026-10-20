@@ -1,3 +1,8 @@
+---
+title: "Adding a language"
+description: "clikae (CLI-Kae / ｷﾘｶｴ) — An on-ramp for AI coding CLIs: land on your recent sessions across every Claude Code, Codex, Grok & Antigravity account, each with a recap of where you left off."
+canonical: "https://clikae.cver.net/adding-a-locale"
+---
 # Adding a language
 
 clikae's board and prompts speak nine languages today — `en-US`, `ja-JP`, `zh-TW`,

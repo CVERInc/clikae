@@ -1,4 +1,4 @@
-<!DOCTYPE html><html lang="en"><head><meta charSet="utf-8"/><meta name="viewport" content="width=device-width, initial-scale=1"/><link rel="icon" href="/favicon.svg" type="image/svg+xml"/><title>Usage - clikae</title><meta name="description" content="clikae (CLI-Kae / ｷﾘｶｴ) — An on-ramp for AI coding CLIs: land on your recent sessions across every Claude Code, Codex, Grok &amp; Antigravity account, each with a recap of where you left off."/><link rel="canonical" href="https://clikae.cver.net/usage"/><meta property="og:title" content="Usage"/><meta property="og:description" content="clikae (CLI-Kae / ｷﾘｶｴ) — An on-ramp for AI coding CLIs: land on your recent sessions across every Claude Code, Codex, Grok &amp; Antigravity account, each with a recap of where you left off."/><meta property="og:type" content="article"/><script type="speculationrules">{"prerender":[{"where":{"and":[{"href_matches":"/*"},{"not":{"href_matches":"/*.md"}},{"not":{"href_matches":"/*.json"}},{"not":{"href_matches":"/*.txt"}},{"not":{"href_matches":"/*.xml"}},{"not":{"href_matches":"/mcp"}}]},"eagerness":"moderate"}],"prefetch":[{"where":{"and":[{"href_matches":"/*"},{"not":{"href_matches":"/*.md"}},{"not":{"href_matches":"/*.json"}},{"not":{"href_matches":"/*.txt"}},{"not":{"href_matches":"/*.xml"}},{"not":{"href_matches":"/mcp"}}]},"eagerness":"moderate"}]}</script><script>(function(){if(HTMLScriptElement.supports&&HTMLScriptElement.supports('speculationrules'))return;var seen=new Set();document.addEventListener('pointerover',function(e){var a=e.target&&e.target.closest&&e.target.closest('a[href]');if(!a)return;var u=new URL(a.href,location.href);if(u.origin!==location.origin||seen.has(u.pathname)||u.pathname===location.pathname)return;if(/.(md|json)$/.test(u.pathname)||u.pathname==='/mcp')return;seen.add(u.pathname);var l=document.createElement('link');l.rel='prefetch';l.href=u.pathname+u.search;document.head.appendChild(l);},{passive:true});})();</script><style>
+<!DOCTYPE html><html lang="en"><head><meta charSet="utf-8"/><meta name="viewport" content="width=device-width, initial-scale=1"/><link rel="icon" href="/favicon.svg" type="image/svg+xml"/><link rel="icon" href="/icon.png" type="image/png" sizes="32x32"/><link rel="apple-touch-icon" href="/apple-touch-icon.png"/><link rel="manifest" href="/manifest.webmanifest"/><title>Usage - clikae</title><meta name="description" content="clikae (CLI-Kae / ｷﾘｶｴ) — An on-ramp for AI coding CLIs: land on your recent sessions across every Claude Code, Codex, Grok &amp; Antigravity account, each with a recap of where you left off."/><link rel="canonical" href="https://clikae.cver.net/usage"/><link rel="alternate" type="text/markdown" href="/usage.md"/><meta property="og:title" content="Usage"/><meta property="og:description" content="clikae (CLI-Kae / ｷﾘｶｴ) — An on-ramp for AI coding CLIs: land on your recent sessions across every Claude Code, Codex, Grok &amp; Antigravity account, each with a recap of where you left off."/><meta property="og:type" content="article"/><meta property="og:url" content="https://clikae.cver.net/usage"/><meta property="og:site_name" content="clikae"/><meta property="og:locale" content="en"/><meta name="twitter:card" content="summary"/><script type="speculationrules">{"prerender":[{"where":{"and":[{"href_matches":"/*"},{"not":{"href_matches":"/*.md"}},{"not":{"href_matches":"/*.json"}},{"not":{"href_matches":"/*.txt"}},{"not":{"href_matches":"/*.xml"}},{"not":{"href_matches":"/mcp"}}]},"eagerness":"moderate"}],"prefetch":[{"where":{"and":[{"href_matches":"/*"},{"not":{"href_matches":"/*.md"}},{"not":{"href_matches":"/*.json"}},{"not":{"href_matches":"/*.txt"}},{"not":{"href_matches":"/*.xml"}},{"not":{"href_matches":"/mcp"}}]},"eagerness":"moderate"}]}</script><script>(function(){if(HTMLScriptElement.supports&&HTMLScriptElement.supports('speculationrules'))return;var seen=new Set();document.addEventListener('pointerover',function(e){var a=e.target&&e.target.closest&&e.target.closest('a[href]');if(!a)return;var u=new URL(a.href,location.href);if(u.origin!==location.origin||seen.has(u.pathname)||u.pathname===location.pathname)return;if(/.(md|json)$/.test(u.pathname)||u.pathname==='/mcp')return;seen.add(u.pathname);var l=document.createElement('link');l.rel='prefetch';l.href=u.pathname+u.search;document.head.appendChild(l);},{passive:true});})();</script><style>
           @view-transition { navigation: auto; }
           ::view-transition-group(root),
           ::view-transition-old(root),
@@ -114,8 +114,12 @@ readings — closing the session ends it. What you see when there is no number:<
 <td>this tank is out of fuel right now</td>
 </tr>
 <tr>
-<td><code>expired</code></td>
-<td>the access token expired — start a session on that tank, or run <code>clikae usage --wake &lt;tank&gt;</code></td>
+<td><code>refresh</code></td>
+<td>the access token lapsed, the login is fine — a session on that tank refreshes it, so does <code>clikae usage &lt;engine&gt; &lt;tank&gt;</code> (#177)</td>
+</tr>
+<tr>
+<td><code>relogin</code></td>
+<td>a refresh ran and the vendor still refused — sign in again on that tank</td>
 </tr>
 </tbody>
 </table>
@@ -134,9 +138,19 @@ numbers and how old it is, plus one word for why there is no new one:</p>
 </thead>
 <tbody>
 <tr>
-<td><code>expired</code></td>
-<td>the access token lapsed (or the token on this machine is a stale copy; clikae cannot tell which)</td>
-<td>start a session on that tank, or <code>clikae usage --wake &lt;tank&gt;</code> on the machine that holds its login</td>
+<td><code>needs-refresh</code></td>
+<td>the access token lapsed, the login is fine, and THIS reader was not allowed to refresh it (the board, a live session's wake window, burn's ranking and <code>clikae watch</code> never spend a prompt to read a meter; or the refresh burn was refused — the recorded cockpit, a running burn)</td>
+<td>start a session on that tank, or run <code>clikae usage &lt;engine&gt; &lt;tank&gt;</code> from a terminal — it refreshes before it measures (#177)</td>
+</tr>
+<tr>
+<td><code>relogin-required</code></td>
+<td>the refresh RAN (one trivial prompt) and the vendor still refused the token</td>
+<td><code>clikae &lt;engine&gt; &lt;tank&gt;</code>, then <code>/login</code></td>
+</tr>
+<tr>
+<td><code>keychain-denied</code></td>
+<td>macOS: this process may not read the tank's Keychain item (a tmux-hosted wake window, no ACL, interaction not allowed) — nothing is known either way, so the last numbers are kept and the cache is not written</td>
+<td><code>clikae usage &lt;engine&gt; &lt;tank&gt;</code> from a terminal reads it</td>
 </tr>
 <tr>
 <td><code>no-probe</code></td>
@@ -150,7 +164,13 @@ numbers and how old it is, plus one word for why there is no new one:</p>
 </tr>
 </tbody>
 </table>
-<p>On the board that reads <code>weekly 85% · 5h ago · expired</code>. An agy tank whose
+<p>Every reading also carries <code>age_sec</code> — how old its evidence is — and, when an
+axis's own <code>resets_at</code> is already behind now, <code>window_reset_passed</code> /
+<code>weekly_reset_passed: true</code>: the percentage beside it is from before a reset and
+says nothing about the current window (#174). The summary line prints the age
+past an hour (<code>claude 92 3h ago</code>) and says <code>reset</code> instead of a percentage
+whose window has since reset.</p>
+<p>On the board that reads <code>7d 85% · 5h ago · needs-refresh</code>. An agy tank whose
 saved access token is still live (Linux file backend; the token lives an hour
 and only agy refreshes it) is read through agy's own
 <code>v1internal:retrieveUserQuotaSummary</code>, <code>source:&quot;quota-api&quot;</code>: each quota bucket
@@ -863,8 +883,8 @@ things (#136):</p>
 <td>waits the vendor's own <code>Retry-After</code>, clamped to the base interval and to <code>CLIKAE_WATCH_USAGE_MAX_BACKOFF</code> (default 1800s). A missing, negative, zero, non-numeric, HTTP-date or out-of-range header is not a hint — it falls back to the row below.</td>
 </tr>
 <tr>
-<td><code>expired-token</code> / <code>no-credentials</code></td>
-<td>straight to <code>CLIKAE_WATCH_USAGE_MAX_BACKOFF</code> and marked. Neither starts working because we waited a little longer, so there is no ramp to climb. The board says so immediately either way — a cached expired reading draws <code>expired</code> on the row the moment it lands. On the interactive board Enter on that row is the fix (a session renews the token); the static board's footer and the <code>?</code> page name the headless one, <code>clikae usage --wake &lt;tank&gt;</code>.</td>
+<td><code>needs-refresh</code> / <code>relogin-required</code> / <code>keychain-denied</code> / <code>no-credentials</code></td>
+<td>straight to <code>CLIKAE_WATCH_USAGE_MAX_BACKOFF</code> and marked. None starts working because we waited a little longer, so there is no ramp to climb (the poll never spends a prompt to read a meter — <code>CLIKAE_USAGE_AUTO_WAKE=0</code> — so a lapsed token stays <code>needs-refresh</code> here until a session, or a person's <code>clikae usage</code>, refreshes it). The board says so immediately either way — the reason word draws on the row the moment it lands. On the interactive board Enter on that row is the fix (a session renews the token); the static board's footer and the <code>?</code> page name the headless one, <code>clikae usage --wake &lt;tank&gt;</code>.</td>
 </tr>
 <tr>
 <td>anything else (no connection, a timeout, a 5xx, an unreadable body)</td>
@@ -1666,4 +1686,4 @@ existing <code>~/.aws/config</code>. So <code>clikae init aws work</code> expect
   sync();
   var outlet=document.querySelector('[data-june-outlet]');
   if(outlet) new MutationObserver(sync).observe(outlet,{childList:true,subtree:true});
-})();</script><script type="module" src="/_june/client.d87e9edc.js"></script><script type="application/json" id="june-webmcp">[{"name":"search_docs","description":"Hybrid keyword + semantic search over the docs. Returns the most relevant passages with their doc slug, title, and relevance score.","inputSchema":{"type":"object","properties":{"query":{"type":"string","description":"A natural-language question or keywords."},"topK":{"type":"integer","description":"Number of results to return (default 5)."},"locale":{"type":"string","description":"Optional locale — scopes results to that locale's view (its translations plus untranslated defaults)."}},"required":["query"]}},{"name":"get_page","description":"Fetch one doc page as the authored Markdown source by its slug (e.g. introduction, search, agents).","inputSchema":{"type":"object","properties":{"slug":{"type":"string","description":"The page slug."},"locale":{"type":"string","description":"Optional locale — returns that variant when it exists."}},"required":["slug"]}},{"name":"list_docs","description":"List every doc page with its slug, title, section, and `sources` (the code paths it documents). The map for finding which pages a code change affects.","inputSchema":{"type":"object","properties":{}}}]</script><script>(function(){var mc=navigator.modelContext;if(!mc||!mc.registerTool)return;var el=document.getElementById('june-webmcp');if(!el)return;var tools;try{tools=JSON.parse(el.textContent)}catch(e){return}var ac=new AbortController();tools.forEach(function(t){mc.registerTool({name:t.name,description:t.description,inputSchema:t.inputSchema,execute:function(args){return fetch('/mcp',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({jsonrpc:'2.0',id:1,method:'tools/call',params:{name:t.name,arguments:args}})}).then(function(r){return r.json()}).then(function(j){return j.result})}},{signal:ac.signal})})})();</script></body></html>
+})();</script><script type="module" src="/_june/client.90278050.js"></script></body></html>

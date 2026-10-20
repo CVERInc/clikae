@@ -1,3 +1,8 @@
+---
+title: "Installation"
+description: "clikae (CLI-Kae / ｷﾘｶｴ) — An on-ramp for AI coding CLIs: land on your recent sessions across every Claude Code, Codex, Grok & Antigravity account, each with a recap of where you left off."
+canonical: "https://clikae.cver.net/installation"
+---
 # Installing clikae
 
 `clikae` is pure bash (3.2+ compatible) with no Python/Node runtime. Pick whichever path fits.

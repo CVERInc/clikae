@@ -1,3 +1,8 @@
+---
+title: "Orchestration"
+description: "clikae (CLI-Kae / ｷﾘｶｴ) — An on-ramp for AI coding CLIs: land on your recent sessions across every Claude Code, Codex, Grok & Antigravity account, each with a recap of where you left off."
+canonical: "https://clikae.cver.net/orchestration"
+---
 # Driving clikae headless — the orchestration playbook
 
 This is the field guide for **fanning work across your accounts** with clikae —

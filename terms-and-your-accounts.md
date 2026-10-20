@@ -1,3 +1,8 @@
+---
+title: "Your accounts and the vendors' terms"
+description: "clikae (CLI-Kae / ｷﾘｶｴ) — An on-ramp for AI coding CLIs: land on your recent sessions across every Claude Code, Codex, Grok & Antigravity account, each with a recap of where you left off."
+canonical: "https://clikae.cver.net/terms-and-your-accounts"
+---
 # Your accounts and the vendors' terms
 
 clikae moves work between accounts. Whether a particular move is fine or risky

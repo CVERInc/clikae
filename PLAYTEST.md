@@ -1,3 +1,8 @@
+---
+title: "Playtest guide"
+description: "clikae (CLI-Kae / ｷﾘｶｴ) — An on-ramp for AI coding CLIs: land on your recent sessions across every Claude Code, Codex, Grok & Antigravity account, each with a recap of where you left off."
+canonical: "https://clikae.cver.net/PLAYTEST"
+---
 # clikae Playtest Guide — 10-Minute Get Started
 
 > Hi 👋 Thank you for helping playtest **clikae**. This guide will take you from scratch to "Aha, I get it" in about 10 minutes.

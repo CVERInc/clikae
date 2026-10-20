@@ -1,3 +1,8 @@
+---
+title: "HANDOFF — 回憶命中率：記憶層的真指標"
+description: "clikae (CLI-Kae / ｷﾘｶｴ) — An on-ramp for AI coding CLIs: land on your recent sessions across every Claude Code, Codex, Grok & Antigravity account, each with a recap of where you left off."
+canonical: "https://clikae.cver.net/HANDOFF-recall-hit-rate"
+---
 # HANDOFF — 回憶命中率：記憶層的真指標
 
 2026-07-18 一場實戰對話蒸出來的洞察，留給 clikae 的記憶層設計。起因：KITT 明明把「部署鑰匙會 403」的答案存進了清冊（別的 session 前一天寫的），隔天自己差點照舊配方原地重撞，被維護者一句「要不要看一下鑰匙清冊」人肉攔截。

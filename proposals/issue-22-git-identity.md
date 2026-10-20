@@ -1,3 +1,8 @@
+---
+title: "#22 · git identity"
+description: "clikae (CLI-Kae / ｷﾘｶｴ) — An on-ramp for AI coding CLIs: land on your recent sessions across every Claude Code, Codex, Grok & Antigravity account, each with a recap of where you left off."
+canonical: "https://clikae.cver.net/proposals/issue-22-git-identity"
+---
 # Proposal — issue #22: per-tank git commit identity
 
 > Status: ✅ **SHIPPED in v0.6.0** (the recommended Option A — per-tank git identity,

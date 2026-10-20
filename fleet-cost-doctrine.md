@@ -1,3 +1,8 @@
+---
+title: "艦隊作業流程：成本量測與派工規範"
+description: "clikae (CLI-Kae / ｷﾘｶｴ) — An on-ramp for AI coding CLIs: land on your recent sessions across every Claude Code, Codex, Grok & Antigravity account, each with a recap of where you left off."
+canonical: "https://clikae.cver.net/fleet-cost-doctrine"
+---
 # 艦隊作業流程：成本量測與派工規範
 
 2026-09-17 · KITT（CVER Inc.）· 量測對象：reefbox 四個 tank（blenny／goby／tuna／wrasse）近 7 天全部對話紀錄，60,234 次模型呼叫，按 API 定價換算。
@@ -96,7 +101,7 @@
 
 - `/usage` 的 `Prompt cache (main)`：命中率、miss 次數、最近一次 miss 的原因。
 - 狀態列 `current_usage.cache_read_input_tokens` vs `cache_creation_input_tokens`：write 連續偏高＝前綴在變。
-- 每週重跑 [`tools/tank-cost.py`](https://github.com/CVERInc/clikae/blob/8e9e24168ba559450450959ef2b6227a26b83c2b/scripts/tank-cost.py)、[`tools/tank-agents.py`](https://github.com/CVERInc/clikae/blob/8e9e24168ba559450450959ef2b6227a26b83c2b/scripts/tank-agents.py)（讀 `~/.clikae/profiles/claude/*/projects/**/*.jsonl`），看三個數：快取讀取佔比、subagent 中位步數、座艙自己幹活的呼叫數。目標：subagent 中位數從 96 往 40 走。
+- 每週重跑 [`tools/tank-cost.py`](https://github.com/CVERInc/clikae/blob/762aacccb44012d1c657884d18a2d748a5e3d65b/scripts/tank-cost.py)、[`tools/tank-agents.py`](https://github.com/CVERInc/clikae/blob/762aacccb44012d1c657884d18a2d748a5e3d65b/scripts/tank-agents.py)（讀 `~/.clikae/profiles/claude/*/projects/**/*.jsonl`），看三個數：快取讀取佔比、subagent 中位步數、座艙自己幹活的呼叫數。目標：subagent 中位數從 96 往 40 走。
 
 ## 未驗證
 

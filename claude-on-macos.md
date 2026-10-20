@@ -1,3 +1,8 @@
+---
+title: "Claude Code on macOS"
+description: "clikae (CLI-Kae / ｷﾘｶｴ) — An on-ramp for AI coding CLIs: land on your recent sessions across every Claude Code, Codex, Grok & Antigravity account, each with a recap of where you left off."
+canonical: "https://clikae.cver.net/claude-on-macos"
+---
 # Notes: Claude Code on macOS
 
 A record of two macOS-specific Claude Code behaviours that affect (or merely

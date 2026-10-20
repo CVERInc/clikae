@@ -1,4 +1,4 @@
-<!DOCTYPE html><html lang="en"><head><meta charSet="utf-8"/><meta name="viewport" content="width=device-width, initial-scale=1"/><link rel="icon" href="/favicon.svg" type="image/svg+xml"/><title>Board: fuel dots - clikae</title><meta name="description" content="clikae (CLI-Kae / ｷﾘｶｴ) — An on-ramp for AI coding CLIs: land on your recent sessions across every Claude Code, Codex, Grok &amp; Antigravity account, each with a recap of where you left off."/><link rel="canonical" href="https://clikae.cver.net/DESIGN-board-fuel-dots"/><meta property="og:title" content="Board: fuel dots"/><meta property="og:description" content="clikae (CLI-Kae / ｷﾘｶｴ) — An on-ramp for AI coding CLIs: land on your recent sessions across every Claude Code, Codex, Grok &amp; Antigravity account, each with a recap of where you left off."/><meta property="og:type" content="article"/><script type="speculationrules">{"prerender":[{"where":{"and":[{"href_matches":"/*"},{"not":{"href_matches":"/*.md"}},{"not":{"href_matches":"/*.json"}},{"not":{"href_matches":"/*.txt"}},{"not":{"href_matches":"/*.xml"}},{"not":{"href_matches":"/mcp"}}]},"eagerness":"moderate"}],"prefetch":[{"where":{"and":[{"href_matches":"/*"},{"not":{"href_matches":"/*.md"}},{"not":{"href_matches":"/*.json"}},{"not":{"href_matches":"/*.txt"}},{"not":{"href_matches":"/*.xml"}},{"not":{"href_matches":"/mcp"}}]},"eagerness":"moderate"}]}</script><script>(function(){if(HTMLScriptElement.supports&&HTMLScriptElement.supports('speculationrules'))return;var seen=new Set();document.addEventListener('pointerover',function(e){var a=e.target&&e.target.closest&&e.target.closest('a[href]');if(!a)return;var u=new URL(a.href,location.href);if(u.origin!==location.origin||seen.has(u.pathname)||u.pathname===location.pathname)return;if(/.(md|json)$/.test(u.pathname)||u.pathname==='/mcp')return;seen.add(u.pathname);var l=document.createElement('link');l.rel='prefetch';l.href=u.pathname+u.search;document.head.appendChild(l);},{passive:true});})();</script><style>
+<!DOCTYPE html><html lang="en"><head><meta charSet="utf-8"/><meta name="viewport" content="width=device-width, initial-scale=1"/><link rel="icon" href="/favicon.svg" type="image/svg+xml"/><link rel="icon" href="/icon.png" type="image/png" sizes="32x32"/><link rel="apple-touch-icon" href="/apple-touch-icon.png"/><link rel="manifest" href="/manifest.webmanifest"/><title>Board: fuel dots - clikae</title><meta name="description" content="clikae (CLI-Kae / ｷﾘｶｴ) — An on-ramp for AI coding CLIs: land on your recent sessions across every Claude Code, Codex, Grok &amp; Antigravity account, each with a recap of where you left off."/><link rel="canonical" href="https://clikae.cver.net/DESIGN-board-fuel-dots"/><link rel="alternate" type="text/markdown" href="/DESIGN-board-fuel-dots.md"/><meta property="og:title" content="Board: fuel dots"/><meta property="og:description" content="clikae (CLI-Kae / ｷﾘｶｴ) — An on-ramp for AI coding CLIs: land on your recent sessions across every Claude Code, Codex, Grok &amp; Antigravity account, each with a recap of where you left off."/><meta property="og:type" content="article"/><meta property="og:url" content="https://clikae.cver.net/DESIGN-board-fuel-dots"/><meta property="og:site_name" content="clikae"/><meta property="og:locale" content="en"/><meta name="twitter:card" content="summary"/><script type="speculationrules">{"prerender":[{"where":{"and":[{"href_matches":"/*"},{"not":{"href_matches":"/*.md"}},{"not":{"href_matches":"/*.json"}},{"not":{"href_matches":"/*.txt"}},{"not":{"href_matches":"/*.xml"}},{"not":{"href_matches":"/mcp"}}]},"eagerness":"moderate"}],"prefetch":[{"where":{"and":[{"href_matches":"/*"},{"not":{"href_matches":"/*.md"}},{"not":{"href_matches":"/*.json"}},{"not":{"href_matches":"/*.txt"}},{"not":{"href_matches":"/*.xml"}},{"not":{"href_matches":"/mcp"}}]},"eagerness":"moderate"}]}</script><script>(function(){if(HTMLScriptElement.supports&&HTMLScriptElement.supports('speculationrules'))return;var seen=new Set();document.addEventListener('pointerover',function(e){var a=e.target&&e.target.closest&&e.target.closest('a[href]');if(!a)return;var u=new URL(a.href,location.href);if(u.origin!==location.origin||seen.has(u.pathname)||u.pathname===location.pathname)return;if(/.(md|json)$/.test(u.pathname)||u.pathname==='/mcp')return;seen.add(u.pathname);var l=document.createElement('link');l.rel='prefetch';l.href=u.pathname+u.search;document.head.appendChild(l);},{passive:true});})();</script><style>
           @view-transition { navigation: auto; }
           ::view-transition-group(root),
           ::view-transition-old(root),
@@ -282,12 +282,17 @@ quota (0–100); unavailable fields are null. <code>source</code> is <code>&quot
 call actually answered), <code>&quot;transcript&quot;</code> (derived from local evidence the
 engine already wrote — currently Codex's <code>rate_limits</code>, scanned from
 rollouts modified in the last 7 days, the same <code>-mmin -10080</code> window
-<code>limit_codex_status</code> uses), <code>&quot;expired&quot;</code> (#107: the vendor refused an access
-token whose credentials hold a refresh token, or that token's own recorded
-expiry had passed — the login is fine, only a session refreshes it; always
-with <code>reason:&quot;expired-token&quot;</code> and no numbers), or <code>&quot;unknown&quot;</code> (no usable
-reading; <code>reason</code> is <code>no-credentials</code>, <code>network</code>, <code>rate-limited</code> or
-<code>unparseable</code> when known). A <code>rate-limited</code> reading (#136: HTTP 429, which
+<code>limit_codex_status</code> uses), or <code>&quot;unknown&quot;</code> (no usable reading; <code>reason</code> is
+<code>needs-refresh</code>, <code>relogin-required</code>, <code>keychain-denied</code>, <code>no-credentials</code>,
+<code>network</code>, <code>rate-limited</code> or <code>unparseable</code> when known). #107's <code>&quot;expired&quot;</code>
+source is retired by #177/#179: an access token past its expiry with a refresh
+token beside it is refreshed before it is measured (<code>clikae usage</code> runs the
+same one-prompt burn <code>--wake</code> does), so it reads as numbers; <code>needs-refresh</code>
+is what a reader that may not spend (the board, a session's wake window, burn,
+<code>clikae watch</code>) writes instead, and <code>relogin-required</code> is a refresh that ran
+and was still refused. Every public reading carries <code>age_sec</code>, and
+<code>window_reset_passed</code> / <code>weekly_reset_passed: true</code> when that axis's reset is
+already behind now (#174). A <code>rate-limited</code> reading (#136: HTTP 429, which
 used to be part of the <code>network</code> lump) may carry <code>retry_after</code>, the vendor's
 own <code>Retry-After</code> header in whole seconds, and only when that header was in
 1..86400 — <code>clikae watch</code>'s usage poll schedules that tank's next poll off it
@@ -302,18 +307,18 @@ the tank's weekly number is the binding limit, so the note names it
 (<code>weekly 87% · Fable 100%</code>, the name being the vendor's), and a row at 100%
 turns a green dot yellow. A row at or below the tank value, or no <code>models[]</code>,
 adds nothing. A reading with no numbers shows the last one that had them,
-aged, with a reason word (<code>expired</code>, <code>no-probe</code>, <code>no-signal</code>); see
-docs/usage.md.
-On the board an expired reading under 24h old draws the no-reading <code>·</code> with
-the note <code>expired</code> (the word lives in the note, not the dot — no emoji on any
-delivery surface, so the note carries a word and costs no special width
-handling). The remedy, <code>clikae usage --wake &lt;tank&gt;</code>, is not on the row since
+aged, with a reason word (<code>needs-refresh</code>, <code>relogin-required</code>,
+<code>keychain-denied</code>, <code>no-probe</code>, <code>no-signal</code>); see docs/usage.md.
+On the board a <code>needs-refresh</code> / <code>relogin-required</code> reading under 24h old
+draws the no-reading <code>·</code> with the reason as the note (the word lives in the
+note, not the dot — no emoji on any delivery surface, so the note carries a
+word and costs no special width handling). The remedy is not on the row since
 2026-10-11 (see &quot;One grammar for the note&quot; below): the static board prints it
-as a footer line per expired tank; the interactive one leaves it to Enter on
-the row and names <code>--wake</code> on the <code>?</code> page;
-<code>clikae usage</code> prints the full sentence, <code>token expired — run a session or 'clikae usage --wake &lt;tank&gt;'</code>. The tmux status row, which has a fuel SLOT rather than a padded
-grid, draws the word <code>expired</code> in that slot instead of the dot, on the same
-24h ceiling, measured like any other ASCII fuel string
+as a footer line per tank — <code>T_REFRESH_HINT</code> with <code>clikae usage &lt;engine&gt; --wake &lt;tank&gt;</code> for needs-refresh, <code>T_EXPIRED_HINT</code> with <code>clikae &lt;engine&gt; &lt;tank&gt;</code> for relogin-required; the interactive one leaves it to Enter on the
+row and names both on the <code>?</code> page; <code>clikae usage</code> prints the full sentence
+on stderr. The tmux status row, which has a fuel SLOT rather than a padded
+grid, draws <code>refresh</code> or <code>relogin</code> in that slot instead of the dot, on the
+same 24h ceiling, measured like any other ASCII fuel string
 (<code>docs/DESIGN-tmux.md</code> Rule 11 §6/§7). The optional
 adapter hook is <code>adapter_usage &lt;config-dir&gt;</code>. Claude calls the vendor OAuth
 usage endpoint; Codex never runs a <code>codex</code> process for this — it reads the
@@ -329,9 +334,20 @@ review, P3 — the two coincide for a vendor reading but not for codex's
 transcript evidence, whose <code>cached_at</code> is the underlying event's own time).
 TTL defaults to 120 seconds against <code>scanned_at</code>; <code>CLIKAE_USAGE_TTL</code>
 overrides it and <code>--fresh</code> bypasses it. Errors are cached too — except that
-an <code>&quot;expired&quot;</code> reading is cached for at most <code>_USAGE_AUTH_FAIL_TTL_SEC</code> (60),
-so the read after a session refreshes the token sees numbers (#107). Writes are
-atomic, and <code>usage_read</code> is the ONLY writer in the repo.</p>
+a <code>needs-refresh</code> / <code>relogin-required</code> reading is cached for at most
+<code>_USAGE_AUTH_FAIL_TTL_SEC</code> (60), so the read after a session refreshes the
+token sees numbers (#107), and a <code>keychain-denied</code> read never overwrites a
+cache that holds a valid reading with numbers at all (#179; anything else on
+disk — a retired <code>expired</code> record, a failure, a malformed file — is replaced
+by <code>unknown</code>/<code>keychain-denied</code> with the last numbers carried forward). A
+cached <code>needs-refresh</code> is served only to a reader that may not spend; one
+that may refreshes instead. Writes are atomic, and <code>usage_read</code> is the ONLY
+writer in the repo. Each reading is stamped with when its measurement
+started, and a record another reader published while it was in flight, with
+a stamp not behind its own, is kept rather than overwritten (review of #184:
+a reader whose refresh was refused must not bury the numbers of the reader
+whose refresh ran). Every refresh, whatever burn's exit code, is followed by
+one more measurement — never a second refresh — and only that decides.</p>
 <p><strong>Who writes this cache, and who reads what (round-2 review, P2-1):</strong></p>
 <ul>
 <li><strong>(a)</strong> <code>burn</code> refreshes the LAUNCHED tank's reading once, at run END —
@@ -588,7 +604,7 @@ temp file, which is what makes a 401 observable rather than inferred (#107).</p>
 <h2 id="one-grammar-for-the-note-the-account-behind-the-cursor-2026-10-11">One grammar for the note; the account behind the cursor (2026-10-11)</h2>
 <p>Pasted from a real board with fourteen tanks, the Tanks section read like this
 (one line per engine family, abridged):</p>
-<pre class="shiki shiki-themes github-light github-dark-default" style="--shiki-light:#24292e;--shiki-dark:#e6edf3;--shiki-light-bg:#fff;--shiki-dark-bg:#0d1117" tabindex="0"><code><span class="line"><span>◐ tuna    claude   hello@cver.net          weekly 99.0% · 17h ago · expired · clikae usage --wake tuna to renew</span></span>
+<pre class="shiki shiki-themes github-light github-dark-default" style="--shiki-light:#24292e;--shiki-dark:#e6edf3;--shiki-light-bg:#fff;--shiki-dark-bg:#0d1117" tabindex="0"><code><span class="line"><span>◐ tuna    claude   hello@cver.net          weekly 99.0% · 17h ago · expired · clikae usage --wake tuna to renew   (the word `expired` has since been retired — #179)</span></span>
 <span class="line"><span>◐ salmon  codex    xiaoyacomic@gmail.com   5h 100% left · weekly 12% left (resets 03:21 on 15 Oct)</span></span>
 <span class="line"><span>● chromis agy      chodaict@gmail.com      weekly 21.7% · 8d ago · no-signal</span></span></code></pre>
 <p>Three defects, found by reading it cold rather than by any test:</p>
@@ -620,12 +636,16 @@ shape when it is the one shape clikae knows (<code>used 85% of your weekly limit
 → <code>weekly 85%</code>); any other phrase stays verbatim. <code>clikae usage</code> and
 <code>burn --json</code> are untouched — the human note and the <code>% left</code> dialect live
 on there, per engine.</li>
-<li><strong>A state word is the last thing on the row</strong> (<code>expired</code>, <code>no-signal</code>,
-<code>no-probe</code>, <code>reset passed · unverified</code>, <code>last used 13d ago</code>); a codex reset
-instant appears only when the light is not green.</li>
+<li><strong>A state word is the last thing on the row</strong> (<code>needs-refresh</code>,
+<code>relogin-required</code>, <code>no-signal</code>, <code>no-probe</code>, <code>reset passed · unverified</code>,
+<code>last used 13d ago</code>); a codex reset instant appears only when the light is
+not green. The two quota labels are <code>5h</code> and <code>7d</code> on every surface
+(<code>USAGE_LABEL_WINDOW</code> / <code>USAGE_LABEL_WEEKLY</code>, lib/core/usage.sh, #179 —
+chodaict's choice over abstract words; defined once).</li>
 <li><strong>The remedy is <code>$_FREMEDY</code>, not part of the note.</strong> The renderer places it:
-the static board (no cursor) prints one footer line per expired tank, in the
-over-quota line's shape. The interactive board does not print it at all:
+the static board (no cursor) prints one footer line per such tank, in the
+over-quota line's shape (<code>T_REFRESH_HINT</code> for needs-refresh, <code>T_EXPIRED_HINT</code>
+for relogin-required). The interactive board does not print it at all:
 there, Enter on the row <em>is</em> the remedy — opening a session renews the token
 (<code>docs/usage.md</code>, &quot;start a session on that tank&quot;) — and <code>--wake</code> is the
 headless / other-machine path, stated once on the <code>?</code> page under the dots
@@ -686,4 +706,4 @@ it as a table.</p>
   sync();
   var outlet=document.querySelector('[data-june-outlet]');
   if(outlet) new MutationObserver(sync).observe(outlet,{childList:true,subtree:true});
-})();</script><script type="module" src="/_june/client.d87e9edc.js"></script><script type="application/json" id="june-webmcp">[{"name":"search_docs","description":"Hybrid keyword + semantic search over the docs. Returns the most relevant passages with their doc slug, title, and relevance score.","inputSchema":{"type":"object","properties":{"query":{"type":"string","description":"A natural-language question or keywords."},"topK":{"type":"integer","description":"Number of results to return (default 5)."},"locale":{"type":"string","description":"Optional locale — scopes results to that locale's view (its translations plus untranslated defaults)."}},"required":["query"]}},{"name":"get_page","description":"Fetch one doc page as the authored Markdown source by its slug (e.g. introduction, search, agents).","inputSchema":{"type":"object","properties":{"slug":{"type":"string","description":"The page slug."},"locale":{"type":"string","description":"Optional locale — returns that variant when it exists."}},"required":["slug"]}},{"name":"list_docs","description":"List every doc page with its slug, title, section, and `sources` (the code paths it documents). The map for finding which pages a code change affects.","inputSchema":{"type":"object","properties":{}}}]</script><script>(function(){var mc=navigator.modelContext;if(!mc||!mc.registerTool)return;var el=document.getElementById('june-webmcp');if(!el)return;var tools;try{tools=JSON.parse(el.textContent)}catch(e){return}var ac=new AbortController();tools.forEach(function(t){mc.registerTool({name:t.name,description:t.description,inputSchema:t.inputSchema,execute:function(args){return fetch('/mcp',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({jsonrpc:'2.0',id:1,method:'tools/call',params:{name:t.name,arguments:args}})}).then(function(r){return r.json()}).then(function(j){return j.result})}},{signal:ac.signal})})})();</script></body></html>
+})();</script><script type="module" src="/_june/client.90278050.js"></script></body></html>
