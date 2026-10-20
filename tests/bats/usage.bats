@@ -2102,3 +2102,153 @@ _usage179_security() {
   run grep -rnE '"source":"expired"|_TSTAT_FUEL="expired"|usage_unknown expired-token|unreadable expired-token' "$CLIKAE_TEST_ROOT/lib"
   [ -z "$output" ] || { echo "still emitted: $output"; false; }
 }
+
+# --- review of #184: the refresh's own races and fallbacks -------------------
+
+# _usage184_reader — a script that runs ONE usage_read claude/work in its own
+# process, with usage_wake_burn replaced by a role-scripted wake ($READER A or
+# B) so two readers can be held at exact points with barrier files under
+# $BAR. Every wake is logged to $BAR/wakes, one line per call, by role.
+_usage184_reader() {
+  export BAR="$TEST_HOME/bar"; mkdir -p "$BAR"
+  cat > "$TEST_HOME/reader.sh" <<'SH'
+#!/usr/bin/env bash
+for f in core/log.sh core/i18n.sh core/profile_store.sh core/adapter_loader.sh core/dry_store.sh core/limit.sh core/usage.sh; do
+  source "$CLIKAE_LIB/$f"
+done
+CLIKAE_BIN="$(type -P true)"   # only has to be executable: the wake is stubbed below
+_bar_wait() { local i=0; while ! "$@"; do i=$((i + 1)); [ "$i" -le 100 ] || return 1; sleep 0.1; done; }
+_vendor_cached() { jq -e '.source == "vendor"' "$CLIKAE_HOME/state/usage/claude/work.json" >/dev/null 2>&1; }
+usage_wake_burn() {
+  printf '%s\n' "$READER" >> "$BAR/wakes"
+  case "$READER:$SCENARIO" in
+    # A holds the tank (its burn is the one that runs) until B is refused.
+    A:busy)     : > "$BAR/a-waking"; _bar_wait test -e "$BAR/b-waking"; : > "$WAKE_REFRESHED"; return 0 ;;
+    # B is refused (a burn already holds the tank) — and resumes only after
+    # A has published the vendor's numbers.
+    B:busy)     : > "$BAR/b-waking"; _bar_wait _vendor_cached; return 1 ;;
+    # A renews only once B's post-wake measurement is in flight.
+    A:obsolete) _bar_wait test -e "$BAR/b-measuring"; : > "$WAKE_REFRESHED"; return 0 ;;
+    B:obsolete) return 1 ;;
+  esac
+}
+usage_read claude work
+SH
+  chmod +x "$TEST_HOME/reader.sh"
+  # 401 until the token is renewed. In the `obsolete` scenario B's SECOND
+  # call decides 401 at once (the token is not renewed yet) but answers only
+  # after A has published: a measurement that started before the refresh
+  # and lands after it.
+  cat > "$TEST_HOME/.testbin/curl" <<'STUB'
+#!/usr/bin/env bash
+printf '%s\n' "${READER:-?}" >> "$USAGE_CALLS"
+cat >/dev/null
+n="$(grep -c "^${READER:-?}\$" "$USAGE_CALLS")"
+if [ ! -e "$WAKE_REFRESHED" ]; then
+  if [ "${SCENARIO:-}:${READER:-}:$n" = obsolete:B:2 ]; then
+    : > "$BAR/b-measuring"
+    i=0; until jq -e '.source == "vendor"' "$CLIKAE_HOME/state/usage/claude/work.json" >/dev/null 2>&1; do
+      i=$((i + 1)); [ "$i" -le 100 ] || break; sleep 0.1; done
+  fi
+  printf '401' >&2; exit 22
+fi
+printf '200' >&2
+echo '{"five_hour":{"utilization":7,"resets_at":"2099-01-01T00:00:00.000000+00:00"},"seven_day":{"utilization":8,"resets_at":"2099-01-07T00:00:00.000000+00:00"}}'
+STUB
+  chmod +x "$TEST_HOME/.testbin/curl"
+  export WAKE_REFRESHED="$TEST_HOME/refreshed"
+}
+
+@test "review #184 (1): a refused wake re-measures before publishing — B, refused while A refreshes, ends on A's numbers, not needs-refresh" {
+  usage_fixture
+  _usage107_creds rt-stub-value
+  _usage184_reader
+  READER=A SCENARIO=busy "$TEST_HOME/reader.sh" > "$BAR/a.out" 2> "$BAR/a.err" &
+  local a=$!
+  READER=B SCENARIO=busy "$TEST_HOME/reader.sh" > "$BAR/b.out" 2> "$BAR/b.err" &
+  local b=$!
+  wait "$a"; wait "$b"
+  jq -e '.source == "vendor" and .window_pct == 7' "$BAR/a.out" >/dev/null \
+    || { echo "A: $(cat "$BAR/a.out")"; cat "$BAR/a.err" "$BAR/wakes"; false; }
+  jq -e '.source == "vendor" and .window_pct == 7 and .weekly_pct == 8' "$BAR/b.out" >/dev/null \
+    || { echo "B published its pre-wake failure: $(cat "$BAR/b.out")"; false; }
+  jq -e '.source == "vendor" and .window_pct == 7' "$CLIKAE_HOME/state/usage/claude/work.json" >/dev/null \
+    || { echo "cache: $(cat "$CLIKAE_HOME/state/usage/claude/work.json")"; false; }
+  # One wake each: the re-measure never wakes again.
+  [ "$(grep -c '^A$' "$BAR/wakes")" = 1 ] && [ "$(grep -c '^B$' "$BAR/wakes")" = 1 ] || { cat "$BAR/wakes"; false; }
+  [ ! -e "$CLIKAE_HOME/state/usage/claude/work.json.lock" ]
+}
+
+@test "review #184 (1): an obsolete failure never overwrites a newer reading — B's 401, measured before A's refresh, lands after A published" {
+  usage_fixture
+  _usage107_creds rt-stub-value
+  _usage184_reader
+  READER=A SCENARIO=obsolete "$TEST_HOME/reader.sh" > "$BAR/a.out" 2> "$BAR/a.err" &
+  local a=$!
+  READER=B SCENARIO=obsolete "$TEST_HOME/reader.sh" > "$BAR/b.out" 2> "$BAR/b.err" &
+  local b=$!
+  wait "$a"; wait "$b"
+  # The barrier really held: B's second measurement started before the refresh.
+  [ -e "$BAR/b-measuring" ] || { echo "B never re-measured"; cat "$BAR/b.err"; false; }
+  jq -e '.source == "vendor" and .window_pct == 7' "$BAR/a.out" >/dev/null || { echo "A: $(cat "$BAR/a.out")"; false; }
+  jq -e '.source == "vendor" and .window_pct == 7' "$CLIKAE_HOME/state/usage/claude/work.json" >/dev/null \
+    || { echo "the obsolete failure overwrote the newer reading: $(cat "$CLIKAE_HOME/state/usage/claude/work.json")"; false; }
+  # B answers with the newer of the two, not its own obsolete one.
+  jq -e '.source == "vendor" and .window_pct == 7' "$BAR/b.out" >/dev/null || { echo "B: $(cat "$BAR/b.out")"; false; }
+  [ ! -e "$CLIKAE_HOME/state/usage/claude/work.json.lock" ]
+}
+
+@test "review #184 (2): a needs-refresh cached by a reader that may not spend is not the final answer for one that may" {
+  usage_fixture
+  _usage107_creds rt-stub-value
+  _usage179_wake_stubs
+  # The board / a wake window: may not spend, caches needs-refresh.
+  CLIKAE_USAGE_AUTO_WAKE=0 run clikae usage claude work --json
+  echo "$output" | jq -e '.reason == "needs-refresh"' || { echo "got: $output"; false; }
+  [ ! -e "$WAKE_ARGV_LOG" ]
+  # Seconds later, a plain `clikae usage`: it refreshes, as its doc promises.
+  run --separate-stderr clikae usage claude work --json
+  [ "$status" -eq 0 ] || { echo "stderr: $stderr"; false; }
+  echo "$output" | jq -e '.source == "vendor" and .window_pct == 3 and .weekly_pct == 99' \
+    || { echo "the cached failure was served without a refresh: $output"; false; }
+  [ "$(wc -l < "$WAKE_ARGV_LOG" | tr -d ' ')" = 1 ] || { echo "argv log: $(cat "$WAKE_ARGV_LOG" 2>/dev/null)"; false; }
+  # Control: a reader that may not spend still gets its cache hit.
+  rm -f "$WAKE_REFRESHED"
+  CLIKAE_USAGE_AUTO_WAKE=0 run clikae usage claude work --fresh --json
+  echo "$output" | jq -e '.reason == "needs-refresh"'
+  : > "$USAGE_CALLS"
+  CLIKAE_USAGE_AUTO_WAKE=0 run clikae usage claude work --json
+  echo "$output" | jq -e '.reason == "needs-refresh"'
+  [ "$(_usage107_calls)" = 0 ] || { echo "a non-spender lost its cache hit: $(_usage107_calls) calls"; false; }
+}
+
+@test "review #184 (3): the Keychain fallback serves only a valid reading — a legacy expired record becomes unknown/keychain-denied, a malformed cache a structured unknown" {
+  usage_fixture
+  local f="$CLIKAE_HOME/state/usage/claude/work.json" now; now="$(date +%s)"
+  mkdir -p "${f%/*}"
+  # What an upgrade leaves behind: the retired word, with the last numbers.
+  jq -cn --argjson at "$(( now - 30 ))" --argjson lg "$(( now - 10800 ))" \
+    '{window_pct:null,weekly_pct:null,window_resets_at:null,weekly_resets_at:null,source:"expired",reason:"expired-token",
+      cached_at:$at,scanned_at:$at,last_good:{window_pct:65,weekly_pct:92,at:$lg}}' > "$f"
+  rm -f "$CLIKAE_HOME/profiles/claude/work/.credentials.json"
+  _usage179_security 36
+  OSTYPE=darwin22 run --separate-stderr clikae usage claude work --json
+  [ "$status" -eq 0 ] || { echo "stderr: $stderr"; false; }
+  [[ "$output" != *expired* ]] || { echo "the retired record was served: $output"; false; }
+  echo "$output" | jq -e '.source == "unknown" and .reason == "keychain-denied" and .gap == "keychain-denied"
+    and .last_weekly_pct == 92 and .last_age_sec >= 10800' || { echo "got: $output"; false; }
+  jq -e '.source == "unknown" and .reason == "keychain-denied" and .last_good.weekly_pct == 92' "$f" >/dev/null \
+    || { echo "cache not normalized: $(cat "$f")"; false; }
+  # A malformed cache: the normal structured unknown, not silence.
+  printf 'not json{\n' > "$f"
+  OSTYPE=darwin22 run --separate-stderr clikae usage claude work --json
+  [ "$status" -eq 0 ] || { echo "stderr: $stderr"; false; }
+  echo "$output" | jq -e '.source == "unknown" and .reason == "keychain-denied" and .window_pct == null' \
+    || { echo "malformed got: [$output]"; false; }
+  # Control: a valid numeric record is still served, with its own age.
+  jq -cn --argjson at "$(( now - 10800 ))" \
+    '{window_pct:65,weekly_pct:92,window_resets_at:"2099-01-01T00:00:00Z",weekly_resets_at:"2099-01-07T00:00:00Z",source:"vendor",cached_at:$at,scanned_at:$at}' > "$f"
+  OSTYPE=darwin22 run clikae usage claude work --fresh --json
+  echo "$output" | jq -e '.source == "vendor" and .reason == "keychain-denied" and .weekly_pct == 92 and .age_sec >= 10800' \
+    || { echo "control got: $output"; false; }
+}

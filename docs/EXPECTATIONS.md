@@ -51,7 +51,8 @@ rerouted six lanes off a tank that needed eleven seconds of refresh (#177). Sinc
 reading. It still does **not** speak the vendor's OAuth refresh protocol itself.
 The two remaining words say who is needed: `needs-refresh` (a reader that may not
 spend quota — the board, a live session's wake window, burn's ranking, `clikae
-watch` — or a refresh burn's own gates refused it: a session clears it) and
+watch` — or a refresh burn's own gates refused it and a second look still found
+the token lapsed: a session clears it) and
 `relogin-required` (the refresh ran and the vendor still refused: a person has to
 sign in again). Both are cached for 60 seconds only. A 401 with no refresh token
 reads `no-credentials`, because that tank really does need a login.

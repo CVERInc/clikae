@@ -306,8 +306,17 @@ overrides it and `--fresh` bypasses it. Errors are cached too — except that
 a `needs-refresh` / `relogin-required` reading is cached for at most
 `_USAGE_AUTH_FAIL_TTL_SEC` (60), so the read after a session refreshes the
 token sees numbers (#107), and a `keychain-denied` read never overwrites a
-cache that holds numbers at all (#179). Writes are atomic, and `usage_read`
-is the ONLY writer in the repo.
+cache that holds a valid reading with numbers at all (#179; anything else on
+disk — a retired `expired` record, a failure, a malformed file — is replaced
+by `unknown`/`keychain-denied` with the last numbers carried forward). A
+cached `needs-refresh` is served only to a reader that may not spend; one
+that may refreshes instead. Writes are atomic, and `usage_read` is the ONLY
+writer in the repo. Each reading is stamped with when its measurement
+started, and a record another reader published while it was in flight, with
+a stamp not behind its own, is kept rather than overwritten (review of #184:
+a reader whose refresh was refused must not bury the numbers of the reader
+whose refresh ran). Every refresh, whatever burn's exit code, is followed by
+one more measurement — never a second refresh — and only that decides.
 
 **Who writes this cache, and who reads what (round-2 review, P2-1):**
 
