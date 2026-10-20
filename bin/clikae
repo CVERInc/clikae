@@ -48,6 +48,10 @@ source "$CLIKAE_LIB/core/profile_store.sh"
 
 # shellcheck source=../lib/core/tmux.sh
 source "$CLIKAE_LIB/core/tmux.sh"
+# The tmux socket lives under $CLIKAE_HOME/state, not /tmp (clikae#176) —
+# decided here, once, so every tmux call below and every process a session
+# forks inherits it. An explicit TMUX_TMPDIR or an inherited $TMUX still wins.
+tmux_socket_init
 # shellcheck source=../lib/core/soul.sh
 source "$CLIKAE_LIB/core/soul.sh"
 # shellcheck source=../lib/core/fleet_mcp.sh

@@ -39,6 +39,21 @@ load '../helpers'
   [ "$before" = "$after" ]
 }
 
+@test "doctor changes nothing on disk with the default socket location (no TMUX_TMPDIR)" {
+  # The suite exports TMUX_TMPDIR, which makes startup skip its default
+  # (\$CLIKAE_HOME/state/tmux). Take it away so the binary decides; the inert
+  # tmux stub keeps any real server out of it, and the legacy socket stays
+  # the throwaway one helpers.bash set.
+  local stub="$BATS_TEST_TMPDIR/inert"; mkdir -p "$stub"
+  printf '#!/bin/sh\nexit 1\n' > "$stub/tmux"; chmod +x "$stub/tmux"
+  unset TMUX_TMPDIR TMUX
+  before="$(find "$CLIKAE_HOME" 2>/dev/null | sort)"
+  PATH="$stub:$PATH" run clikae doctor
+  [ "$status" -eq 0 ]
+  after="$(find "$CLIKAE_HOME" 2>/dev/null | sort)"
+  [ "$before" = "$after" ]
+}
+
 @test "doctor rejects unexpected arguments" {
   run clikae doctor bogus
   [ "$status" -ne 0 ]
