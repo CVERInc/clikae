@@ -29,7 +29,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   (`last_poll_at`, `last_ok_at`, `consecutive_failures`, last error); three
   failed polls in a row (`$CLIKAE_WATCH_GITHUB_STALL_POLLS`; a poll that
   cannot get the org's poll lock counts as failed) write a
-  `state: fail` run that `clikae wait --latest watch-github-<org>` returns
+  `state: fail` run, in a run directory of its own even when an event
+  lands in the same second, that `clikae wait --latest watch-github-<org>` returns
   on and say so loudly; a failed poll re-checks `gh auth status` and a
   login that is gone exits 1 instead of spinning. Comment/review/mention
   events now carry `login` and `body` (first 200 bytes, cut on a UTF-8 boundary) —
