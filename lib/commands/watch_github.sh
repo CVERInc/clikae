@@ -1202,8 +1202,22 @@ _wg_heartbeat_file() { printf '%s/%s.heartbeat.json\n' "$(_wg_state_dir)" "$1"; 
 # consecutive_failures = the number of records under the token `streak`
 # names right now. A success names a fresh token, so every earlier record
 # is in a closed streak — no mtime comparison, so no whole-second ties —
-# then removes the closed streaks, best-effort. No `streak` file yet (no
-# success ever) is token 0.
+# then removes the closed streaks' records, best-effort. No `streak` file
+# yet (no success ever) is token 0.
+#
+# #183 r6 (P2): a success NEVER removes a stall claim. It used to, and a
+# failure of the closed streak paused between its count and its claim then
+# found no claim, made one and raised a second stall after the recovery.
+# Every streak has its own token, so an old claim cannot collide with a new
+# streak; claims are pruned by age (older than a day) instead. And a claim
+# re-reads `streak` after its mkdir: a streak a success has closed raises
+# nothing (_wg_stall_claim).
+#
+# Residual limit, stated rather than hidden: the re-read and the stall
+# write are two steps, so a success landing in the few microseconds
+# between them can still let at most ONE extra stall event out for a
+# streak that just closed. Never a lost count: the count is always the
+# number of record files, read when it is shown.
 
 _wg_fail_dir() { printf '%s/%s.failures.d\n' "$(_wg_state_dir)" "$1"; }
 
@@ -1249,8 +1263,9 @@ _wg_fail_record() {
 }
 
 # _wg_fail_reset <org> -> a successful poll: name a fresh streak, then
-# remove every closed one (records and stall claims), best-effort. Runs only
-# under the org lock, so two resets never race each other.
+# remove every closed streak's records, best-effort, and stall claims older
+# than a day — never a fresh claim (#183 r6; see above). Runs only under the
+# org lock, so two resets never race each other.
 _wg_fail_reset() {
   local org="$1" fdir now tmp token d name
   __WG_FAILS=0
@@ -1265,18 +1280,28 @@ _wg_fail_reset() {
   fi
   for d in "$fdir"/*; do
     name="${d##*/}"
-    case "$name" in streak|"$token"|"$token.stall") continue ;; esac
+    case "$name" in streak|"$token"|*.stall) continue ;; esac
     [ -d "$d" ] && rm -rf "$d" 2>/dev/null
   done
+  find "$fdir" -mindepth 1 -maxdepth 1 -type d -name '*.stall' -mmin +1440 \
+    -exec rm -rf {} + 2>/dev/null || true
   return 0
 }
 
 # _wg_stall_claim <org> <token> <count> -> 0 exactly once per streak: the
-# exclusive mkdir is the record "stall emitted for streak <token>".
+# exclusive mkdir is the record "stall emitted for streak <token>". Then
+# re-read `streak` (#183 r6): if it no longer names <token>, a success
+# closed this streak while we counted — remove our own claim, return 1,
+# emit nothing.
 _wg_stall_claim() {
   local d
   d="$(_wg_fail_dir "$1")/$2.stall"
   mkdir "$d" 2>/dev/null || return 1
+  _wg_streak_read "$1"
+  if [ "$__WG_STREAK" != "$2" ]; then
+    rm -rf "$d" 2>/dev/null
+    return 1
+  fi
   printf 'stall emitted for streak %s at %s after %s failed polls\n' \
     "$2" "$(date +%s 2>/dev/null || echo 0)" "$3" > "$d/note" 2>/dev/null || true
   return 0
@@ -1288,24 +1313,46 @@ _wg_stall_claim() {
 # poll, `last_ok_at` only on a successful one, `consecutive_failures` is the
 # current streak's record count (persisted, so `--once` under cron counts
 # across runs). Sets $__WG_FAILS / $__WG_STREAK. Never fatal.
+#
+# #183 r6 (P2): the streak, its count and `last_ok_at` are read from the
+# record files for each publication, never carried from the record step —
+# and read AGAIN after the rename. A writer delayed between its temp file
+# and its rename (by a later failure, or across a success) used to replace
+# the newer heartbeat with its older snapshot; now, if what it published
+# is no longer what the files say, it publishes again. The last rename of
+# all is followed by its own check, so once the polls finish the file
+# describes the current streak. A count of 0 shows no error: the error
+# belongs to a streak that has closed.
 _wg_heartbeat_write() {
-  local org="$1" ok="$2" ekind="$3" ereason="$4" f now events tmp
+  local org="$1" ok="$2" ekind="$3" ereason="$4" f now events tmp shown tries=0 err kind
   f="$(_wg_heartbeat_file "$org")"
   mkdir -p "$(_wg_state_dir)" 2>/dev/null || true
   if [ "$ok" = 1 ]; then
-    _wg_fail_reset "$org"; _wg_streak_read "$org"
+    _wg_fail_reset "$org"
   else
     _wg_fail_record "$org" "$ekind" "$ereason"
   fi
-  now="$(date +%s 2>/dev/null || echo 0)"
   events="${__WG_EVENTS:-0}"
-  tmp="$(mktemp "$f.tmp.XXXXXX" 2>/dev/null)" || return 0
-  {
-    printf '{"org":%s,"pid":%s,"last_poll_at":%s,"last_ok_at":%s,"consecutive_failures":%s,"events_this_poll":%s,"last_error":%s,"last_error_kind":%s}\n' \
-      "$(json_str "$org")" "$$" "$now" "$__WG_LAST_OK" "${__WG_FAILS:-0}" "$events" \
-      "$([ "$ok" = 1 ] && printf null || json_str "$ereason")" \
-      "$([ "$ok" = 1 ] && printf null || json_str "$ekind")"
-  } > "$tmp" 2>/dev/null && mv -f "$tmp" "$f" 2>/dev/null || rm -f "$tmp" 2>/dev/null
+  while :; do
+    _wg_streak_read "$org"
+    __WG_FAILS="$(_wg_streak_count "$org" "$__WG_STREAK")"
+    shown="$__WG_STREAK $__WG_FAILS $__WG_LAST_OK"
+    err=null; kind=null
+    if [ "$ok" != 1 ] && [ "$__WG_FAILS" -gt 0 ]; then
+      err="$(json_str "$ereason")"; kind="$(json_str "$ekind")"
+    fi
+    now="$(date +%s 2>/dev/null || echo 0)"
+    tmp="$(mktemp "$f.tmp.XXXXXX" 2>/dev/null)" || return 0
+    {
+      printf '{"org":%s,"pid":%s,"last_poll_at":%s,"last_ok_at":%s,"consecutive_failures":%s,"events_this_poll":%s,"last_error":%s,"last_error_kind":%s}\n' \
+        "$(json_str "$org")" "$$" "$now" "$__WG_LAST_OK" "$__WG_FAILS" "$events" "$err" "$kind"
+    } > "$tmp" 2>/dev/null && mv -f "$tmp" "$f" 2>/dev/null || { rm -f "$tmp" 2>/dev/null; return 0; }
+    _wg_streak_read "$org"
+    __WG_FAILS="$(_wg_streak_count "$org" "$__WG_STREAK")"
+    [ "$__WG_STREAK $__WG_FAILS $__WG_LAST_OK" = "$shown" ] && break
+    tries=$((tries + 1))
+    [ "$tries" -lt 5 ] || break
+  done
   return 0
 }
 

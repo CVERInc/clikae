@@ -3177,11 +3177,190 @@ _hb() { printf '%s/state/watch-github/CVERInc.heartbeat.json' "$CLIKAE_HOME"; }
   [ "$(_n_stalls)" = 1 ]
   _wg_heartbeat_write CVERInc 1 "" ""
   [[ "$(cat "$(_hb)")" == *'"consecutive_failures":0'* ]] || false
-  # The closed streak's records and stall claim are gone; only the marker.
-  [ "$(ls -A "$CLIKAE_HOME/state/watch-github/CVERInc.failures.d")" = "streak" ]
+  # The closed streak's records are gone; its stall claim stays (#183 r6:
+  # a success never deletes a claim, so a delayed failure of the closed
+  # streak cannot claim it again). Only the marker and that claim remain.
+  local left
+  left="$(ls -A "$CLIKAE_HOME/state/watch-github/CVERInc.failures.d" | tr '\n' ' ')"
+  echo "left: $left"
+  case "$left" in 'streak '|*.stall' streak ') ;; *) false ;; esac
+  [ "$(ls -d "$CLIKAE_HOME/state/watch-github/CVERInc.failures.d"/*.stall | wc -l | tr -d ' ')" = 1 ]
   for i in 1 2; do _wg_poll CVERInc 2>/dev/null || true; done
   [ "$(_n_stalls)" = 1 ]
   _wg_poll CVERInc 2>/dev/null || true
   [[ "$(cat "$(_hb)")" == *'"consecutive_failures":3'* ]] || false
   [ "$(_n_stalls)" = 2 ]
+}
+
+# --- #183 round 6 -------------------------------------------------------------
+# Shared by the r6 tests: the real libs, every poll a lock failure (outside
+# the org lock, like the review's reproductions), and a foreign holder.
+_r6_setup() {
+  source "$CLIKAE_TEST_ROOT/lib/core/log.sh"
+  source "$CLIKAE_TEST_ROOT/lib/core/json.sh"
+  source "$CLIKAE_TEST_ROOT/lib/core/profile_store.sh"
+  source "$CLIKAE_TEST_ROOT/lib/core/burn_status.sh"
+  source "$CLIKAE_TEST_ROOT/lib/commands/watch_github.sh"
+  R6_GATE="$BATS_TEST_TMPDIR/gate"
+  command mkdir -p "$R6_GATE"
+  _wg_lock_acquire() { return 1; }
+  R6_LOCK="$(_wg_lock_dir CVERInc)"
+  command mkdir -p "$R6_LOCK"
+  printf '424242\n' > "$R6_LOCK/pid"
+}
+# _r6_block -> signal "at", wait for "go" (only in a WG_PAUSE=1 subshell).
+_r6_block() {
+  : > "$R6_GATE/at"
+  while [ ! -e "$R6_GATE/go" ]; do sleep 0.05; done
+}
+_r6_wait_at() {
+  local i=0
+  while [ ! -e "$R6_GATE/at" ] && [ "$i" -lt 200 ]; do sleep 0.05; i=$((i + 1)); done
+  [ -e "$R6_GATE/at" ]
+}
+_r6_n_fail() {
+  local f n=0
+  for f in "$CLIKAE_HOME"/logs/watch-github-CVERInc-*/status.json; do
+    [ -f "$f" ] || continue
+    case "$(command cat "$f")" in *'"state":"fail"'*) n=$((n + 1)) ;; esac
+  done
+  printf '%s\n' "$n"
+}
+# The successful poll, as _wg_poll does it: its event, then the heartbeat.
+_r6_success() {
+  _wg_status_write CVERInc '{"kind":"comment","n":7}' "#7 comment by carol"
+  _wg_heartbeat_write CVERInc 1 "" ""
+}
+# In the paused poll only: block just before its exclusive stall claim.
+_r6_pause_at_claim() {
+  mkdir() {
+    local a
+    if [ "${WG_PAUSE:-0}" = 1 ]; then
+      for a in "$@"; do
+        case "$a" in */CVERInc.failures.d/*.stall) WG_PAUSE=0; _r6_block ;; esac
+      done
+    fi
+    command mkdir "$@"
+  }
+}
+# In the paused poll only: block just before it renames its heartbeat into place.
+_r6_pause_at_heartbeat_mv() {
+  mv() {
+    local a
+    if [ "${WG_PAUSE:-0}" = 1 ]; then
+      for a in "$@"; do
+        case "$a" in */CVERInc.heartbeat.json.tmp.*) WG_PAUSE=0; _r6_block ;; esac
+      done
+    fi
+    command mv "$@"
+  }
+}
+
+# #183 r6 (P2-1): the review's interleaving. Three failures emitted the
+# stall; a fourth reads streak/count and pauses just before its exclusive
+# `mkdir <token>.stall`; a success (with an event) closes the streak; the
+# fourth resumes. A success used to delete the old claim, so the fourth's
+# mkdir succeeded and a second stall landed AFTER the recovery.
+@test "watch github: a failure paused at its stall claim across a success raises no second stall, and wait --latest stays on the success (#183 r6 P2)" {
+  _r6_setup
+  _r6_pause_at_claim
+  local i
+  for i in 1 2 3; do _wg_poll CVERInc 2>>"$BATS_TEST_TMPDIR/poll.err" || true; done
+  [ "$(_r6_n_fail)" = 1 ]
+  ( WG_PAUSE=1; _wg_poll CVERInc 2>>"$BATS_TEST_TMPDIR/poll.err" || true ) &
+  local paused=$!
+  _r6_wait_at
+  _r6_success
+  : > "$R6_GATE/go"
+  wait "$paused"
+  command cat "$(_hb)"
+  echo "stall status files: $(_r6_n_fail)"
+  [ "$(_r6_n_fail)" = 1 ]
+  [[ "$(command cat "$(_hb)")" == *'"consecutive_failures":0'* ]] || false
+  run clikae wait --latest watch-github-CVERInc --timeout 5
+  echo "$output"
+  [ "$status" -eq 0 ]
+  [[ "$output" == *'"state":"done"'* ]] || false
+  [ "$(command cat "$R6_LOCK/pid")" = "424242" ]
+}
+
+# #183 r6: the same pause on the failure that REACHES the threshold — there
+# is no claim yet, so its mkdir succeeds. It re-reads the streak, sees the
+# success closed it, removes its own claim and emits nothing.
+@test "watch github: the threshold failure claiming after a success closed its streak removes its claim and emits no stall (#183 r6)" {
+  _r6_setup
+  _r6_pause_at_claim
+  local i
+  for i in 1 2; do _wg_poll CVERInc 2>>"$BATS_TEST_TMPDIR/poll.err" || true; done
+  ( WG_PAUSE=1; _wg_poll CVERInc 2>>"$BATS_TEST_TMPDIR/poll.err" || true ) &
+  local paused=$!
+  _r6_wait_at
+  _r6_success
+  : > "$R6_GATE/go"
+  wait "$paused"
+  echo "stall status files: $(_r6_n_fail)"
+  ls -A "$CLIKAE_HOME/state/watch-github/CVERInc.failures.d"
+  [ "$(_r6_n_fail)" = 0 ]
+  [ -z "$(ls -d "$CLIKAE_HOME/state/watch-github/CVERInc.failures.d"/*.stall 2>/dev/null)" ]
+  run clikae wait --latest watch-github-CVERInc --timeout 5
+  [ "$status" -eq 0 ]
+  [[ "$output" == *'"state":"done"'* ]] || false
+}
+
+# #183 r6 (P2-2): the review's delayed publication. Failure 1 completes;
+# failure 2 writes its heartbeat temp file with count 2 and pauses before
+# the rename; failure 3 completes (count 3, the stall); failure 2 resumes.
+# Its rename used to replace the newer heartbeat with count 2.
+@test "watch github: a heartbeat rename delayed past a later failure still shows the full count (#183 r6 P2)" {
+  _r6_setup
+  _r6_pause_at_heartbeat_mv
+  _wg_poll CVERInc 2>>"$BATS_TEST_TMPDIR/poll.err" || true
+  ( WG_PAUSE=1; _wg_poll CVERInc 2>>"$BATS_TEST_TMPDIR/poll.err" || true ) &
+  local paused=$!
+  _r6_wait_at
+  _wg_poll CVERInc 2>>"$BATS_TEST_TMPDIR/poll.err" || true
+  : > "$R6_GATE/go"
+  wait "$paused"
+  command cat "$(_hb)"
+  echo "stall status files: $(_r6_n_fail)"
+  [[ "$(command cat "$(_hb)")" == *'"consecutive_failures":3'* ]] || false
+  [ "$(_r6_n_fail)" = 1 ]
+}
+
+# #183 r6 (P2-2), across a success: failure 3 pauses before its heartbeat
+# rename; a success lands; failure 3 resumes. The heartbeat must describe
+# the success's streak — count 0, the success's last_ok_at — and the closed
+# streak raises no stall.
+@test "watch github: a failure's heartbeat rename delayed past a success never restores the stale count or last_ok_at (#183 r6 P2)" {
+  _r6_setup
+  _r6_pause_at_heartbeat_mv
+  local i
+  for i in 1 2; do _wg_poll CVERInc 2>>"$BATS_TEST_TMPDIR/poll.err" || true; done
+  ( WG_PAUSE=1; _wg_poll CVERInc 2>>"$BATS_TEST_TMPDIR/poll.err" || true ) &
+  local paused=$!
+  _r6_wait_at
+  _r6_success
+  local ok_at
+  ok_at="$(command cat "$CLIKAE_HOME/state/watch-github/CVERInc.failures.d/streak")"; ok_at="${ok_at#* }"
+  : > "$R6_GATE/go"
+  wait "$paused"
+  command cat "$(_hb)"
+  echo "last_ok_at from streak: $ok_at; stall status files: $(_r6_n_fail)"
+  [[ "$(command cat "$(_hb)")" == *'"consecutive_failures":0'* ]] || false
+  [[ "$(command cat "$(_hb)")" == *"\"last_ok_at\":$ok_at,"* ]] || false
+  [ "$(_r6_n_fail)" = 0 ]
+}
+
+# #183 r6: stall claims are pruned by age (older than a day), never by a
+# success — a fresh claim of a closed streak survives the success.
+@test "watch github: a success prunes stall claims older than a day and keeps fresh ones (#183 r6)" {
+  _r6_setup
+  local fdir="$CLIKAE_HOME/state/watch-github/CVERInc.failures.d"
+  command mkdir -p "$fdir/1700000000-1-old.stall" "$fdir/1789000000-2-new.stall" "$fdir/1700000000-1-old"
+  touch -t 202001010000 "$fdir/1700000000-1-old.stall"
+  _wg_heartbeat_write CVERInc 1 "" ""
+  ls -A "$fdir"
+  [ ! -e "$fdir/1700000000-1-old.stall" ]
+  [ -d "$fdir/1789000000-2-new.stall" ]
+  [ ! -e "$fdir/1700000000-1-old" ]
 }
