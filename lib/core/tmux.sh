@@ -138,7 +138,8 @@ declare -F runtime_lib >/dev/null 2>&1 ||
 # 🔴 A SERVER WHOSE SOCKET WAS DELETED IS NOT DEAD, and tmux knows how to
 # recover one: SIGUSR1 makes the server re-create its socket at the path it was
 # born with. Which needs the pid — so every server born here is written down
-# (pid, start time, socket) in $CLIKAE_HOME/state/tmux/servers, and $TMUX
+# (pid, start time, socket), one file per server in
+# $CLIKAE_HOME/state/tmux/servers.d, and $TMUX
 # itself carries the pid for a shell inside the orphan. tmux_rescue_orphans
 # does the signal; tmux_sessv calls it before deciding a session is not there
 # (a direct `clikae <engine> <tank>` must not spawn a twin, finding 4) and the
@@ -258,13 +259,14 @@ tmux_switch_to() {
     "env -u TMUX -u TMUX_PANE tmux -S $(_tmux_sq "$sock") attach -t $(_tmux_sq "=$session")"
 }
 
-# _tmux_rec_file -> the server record. Its directory is created 0700 even when
-# an explicit TMUX_TMPDIR means tmux_socket_init never touched it.
-_tmux_rec_file() {
+# _tmux_rec_dir -> the server records: one file per server, servers.d/<pid>.<key>
+# (see _tmux_rec_write). Created 0700 even when an explicit TMUX_TMPDIR means
+# tmux_socket_init never touched the directory above it.
+_tmux_rec_dir() {
   local dir="${CLIKAE_HOME:-$HOME/.clikae}/state/tmux"
-  mkdir -p "$dir" 2>/dev/null || return 1
-  chmod 0700 "$dir" 2>/dev/null || true
-  printf '%s/servers\n' "$dir"
+  mkdir -p "$dir/servers.d" 2>/dev/null || return 1
+  chmod 0700 "$dir" "$dir/servers.d" 2>/dev/null || true
+  printf '%s/servers.d\n' "$dir"
 }
 
 # _tmux_proc_lstart <pid> -> the process's start time (its incarnation).
@@ -299,96 +301,94 @@ _tmux_is_ancestor() {
   return 1
 }
 
-# _tmux_rec_update <drop-keys> [<line>] — the ONE writer of the record.
-# <drop-keys> is newline-separated: a bare `pid` drops every line of that pid,
-# `pid|lstart` only that incarnation's line. <line> (pid TAB lstart TAB socket)
-# is appended. Read-modify-write under a lock, through a unique temp file and
-# a rename, so two writers can neither interleave bytes nor lose each other's
-# line — the round-1 version had a fixed `servers.tmp` and no lock, and a
-# rescue's snapshot could overwrite a server recorded meanwhile (finding 5).
-# Lines that are not three fields (round-1 format) are dropped: they carry no
-# start time, so nothing could ever be proven about them.
-#
-# The lock (round 3, P2) is a symlink made by `ln -s`, atomic WITH its
-# content: the target names the holder, `pid|start time|token`. Round 2's
-# mkdir lock was broken by any writer that waited 5s, whoever held it: a
-# holder merely slow between its read and its rename then put back its older
-# snapshot over the breaker's, and the breaker's server was off the record.
-# Now a waiter that times out takes the lock only from a holder that is gone
-# (_tmux_lock_holder_alive); a live one keeps it and the update is skipped,
-# said out loud — every spawn records again, so the next one fills it in.
-# Release removes the lock only while it still names us.
-_tmux_rec_update() {
-  local drop="$1" add="${2:-}" rec lock tmp me owner held i=0 again=0
-  rec="$(_tmux_rec_file)" || return 0
-  lock="$rec.lck"
-  tmp="$(mktemp "$rec.XXXXXX" 2>/dev/null)" || return 0
-  # $BASHPID: in a subshell, $$ is the parent. bash 3.2 has no BASHPID; there
-  # a subshell names its parent, which errs towards "alive", never towards a
-  # steal. The token (our unique temp name) tells siblings apart on release.
-  me="${BASHPID:-$$}"
-  me="$me|$(_tmux_proc_lstart "$me")|${tmp##*/}"
-  while ! ln -s "$me" "$lock" 2>/dev/null; do
-    i=$((i + 1))
-    if [ "$i" -ge 50 ]; then
-      owner="$(readlink "$lock" 2>/dev/null)" || owner=""
-      if [ "$again" -eq 0 ] && ! _tmux_lock_holder_alive "$owner"; then
-        # Gone (or the lock vanished meanwhile): move it to a name only we
-        # use, and keep it away only if it is the one judged — a lock taken
-        # in between by a live writer goes straight back.
-        if mv "$lock" "$tmp.stale" 2>/dev/null; then
-          held="$(readlink "$tmp.stale" 2>/dev/null)" || held=""
-          [ "$held" = "$owner" ] || ln -s "$held" "$lock" 2>/dev/null || true
-          rm -rf "$tmp.stale" 2>/dev/null
-        fi
-        again=1; i=0
-        continue
-      fi
-      rm -f "$tmp" 2>/dev/null
-      if declare -F log_warn >/dev/null 2>&1; then
-        log_warn "tmux server record not updated: another clikae (${owner%%|*}) has held $lock for 5s and is still running. The next launch records again."
-      else
-        printf 'clikae: tmux server record not updated: %s is held by live process %s\n' "$lock" "${owner%%|*}" >&2
-      fi
-      return 0
-    fi
-    sleep 0.1
+# 🔴 THE RECORDS HAVE NO LOCK BECAUSE NOTHING IS SHARED (round 4). Rounds 1-3
+# kept every server in ONE file, read-modify-write, and each round's lock had a
+# race: a fixed temp name (round 1), a lock broken from a live holder (round 2),
+# a dead holder's lock stolen while a second stealer moved the new holder's
+# lock aside (round 3, reproduced with barriers). Taking a dead holder's lock
+# safely needs flock, and macOS has none. So now a file belongs to exactly one
+# server and is written only as a whole:
+#   - a writer puts the line in a unique temp file and `mv`s it to the server's
+#     own name — atomic, and no other writer's server shares that name;
+#   - a reader lists the directory; it deletes a file only when the server it
+#     names is PROVEN dead (pid gone, or that pid now has another start time),
+#     which no writer can contradict: a writer only ever names a live server.
+# A live server's file is never deleted, whatever else is wrong with it.
+
+# _tmux_rec_key <lstart> -> the start time as a file name: Thu-Oct-20-12-34-56-2026.
+_tmux_rec_key() {
+  printf '%s' "$1" | tr -cs 'A-Za-z0-9' '-'
+}
+
+# _tmux_rec_write <pid> <lstart> <sock> — publish one server's record. The
+# temp file is named after its writer (.<pid>.XXXXXX) so a reader can tell a
+# write in progress from one whose writer died (_tmux_rec_prune_tmp). $BASHPID:
+# in a subshell $$ is the parent; bash 3.2 has no BASHPID and names the parent,
+# which errs towards "writer alive" — a leftover kept, never a write removed.
+_tmux_rec_write() {
+  local pid="$1" lstart="$2" sock="$3" dir name tmp f
+  dir="$(_tmux_rec_dir)" || return 0
+  name="$dir/$pid.$(_tmux_rec_key "$lstart")"
+  tmp="$(mktemp "$dir/.${BASHPID:-$$}.XXXXXX" 2>/dev/null)" || return 0
+  if ! { printf '%s\t%s\t%s\n' "$pid" "$lstart" "$sock" > "$tmp" && mv -f "$tmp" "$name"; } 2>/dev/null; then
+    rm -f "$tmp" 2>/dev/null
+    return 0
+  fi
+  # Any other file of this pid is an earlier incarnation: the pid is this
+  # server now, so that one is proven dead.
+  for f in "$dir/$pid".*; do
+    if [ -f "$f" ] && [ "$f" != "$name" ]; then rm -f "$f" 2>/dev/null; fi
   done
-  # `if`, not `&&`: a group ending in a false `[ -n "$add" ]` returns 1 and
-  # the rename never happens (measured: a drop with nothing to add was a
-  # silent no-op).
-  {
-    if [ -f "$rec" ]; then
-      CLIKAE_TMUX_DROP="$drop" LC_ALL=C awk -F'\t' '
-        BEGIN { n = split(ENVIRON["CLIKAE_TMUX_DROP"], a, "\n"); for (i = 1; i <= n; i++) if (a[i] != "") d[a[i]] = 1 }
-        NF == 3 && !($1 in d) && !(($1 "|" $2) in d)' "$rec"
-    fi
-    if [ -n "$add" ]; then printf '%s\n' "$add"; fi
-  } > "$tmp" 2>/dev/null && mv -f "$tmp" "$rec" 2>/dev/null || rm -f "$tmp" 2>/dev/null
-  if [ "$(readlink "$lock" 2>/dev/null)" = "$me" ]; then rm -f "$lock" 2>/dev/null; fi
   return 0
 }
 
-# _tmux_rec_lock_path -> the record's lock (a symlink; see _tmux_rec_update).
-_tmux_rec_lock_path() {
-  local rec; rec="$(_tmux_rec_file)" || return 1
-  printf '%s.lck\n' "$rec"
+# _tmux_rec_dead <pid> <lstart> -> 0 only when the server recorded as (pid,
+# lstart) is proven gone: the pid is not running, or it is running with a
+# different start time (a reused pid). No answer from ps alone is not proof.
+_tmux_rec_dead() {
+  local now
+  now="$(_tmux_proc_lstart "$1")"
+  if [ -n "$now" ]; then [ "$now" != "$2" ]; return; fi
+  ! kill -0 "$1" 2>/dev/null
 }
 
-# _tmux_lock_holder_alive <owner> -> 0 when the lock's holder (pid|start
-# time|token) is still that same process. An empty start time (ps had no
-# answer when the lock was taken) falls back to liveness alone — towards
-# "alive". Empty or malformed -> not alive: there is no holder to protect.
-_tmux_lock_holder_alive() {
-  local pid="${1%%|*}" rest want
-  case "$pid" in ''|*[!0-9]*) return 1 ;; esac
-  rest="${1#*|}"; want="${rest%%|*}"
-  kill -0 "$pid" 2>/dev/null || return 1
-  [ -z "$want" ] || [ "$(_tmux_proc_lstart "$pid")" = "$want" ]
+# _tmux_rec_prune_tmp <dir> — remove temp files whose writer is not running
+# (a writer killed between mktemp and mv). A running writer's is left alone.
+_tmux_rec_prune_tmp() {
+  local t w
+  for t in "$1"/.[0-9]*; do
+    [ -f "$t" ] || continue
+    w="${t##*/.}"; w="${w%%.*}"
+    case "$w" in ''|*[!0-9]*) continue ;; esac
+    kill -0 "$w" 2>/dev/null || rm -f "$t" 2>/dev/null
+  done
+}
+
+# _tmux_rec_migrate <dir> — rounds 1-3 kept every server in one file,
+# state/tmux/servers (never released: only this PR's own builds wrote it). Its
+# three-field lines become per-server files, then it is gone. It is CLAIMED
+# first by a rename to a name only this reader uses, so two readers never both
+# convert it, and a still-running old writer that renames its snapshot back
+# into place merely leaves a file the next reader converts again (re-writing a
+# server's file is idempotent). An existing per-server file is newer; it wins.
+_tmux_rec_migrate() {
+  local dir="$1" old claim pid lstart sock
+  old="${dir%/*}/servers"
+  [ -f "$old" ] || return 0
+  claim="$(mktemp "$dir/.${BASHPID:-$$}.XXXXXX" 2>/dev/null)" || return 0
+  if ! mv -f "$old" "$claim" 2>/dev/null; then rm -f "$claim" 2>/dev/null; return 0; fi
+  while IFS=$'\t' read -r pid lstart sock; do
+    case "$pid" in ''|*[!0-9]*) continue ;; esac
+    [ -n "$lstart" ] && [ -n "$sock" ] || continue
+    [ -e "$dir/$pid.$(_tmux_rec_key "$lstart")" ] && continue
+    _tmux_rec_write "$pid" "$lstart" "$sock"
+  done < "$claim"
+  rm -f "$claim" 2>/dev/null
+  return 0
 }
 
 # tmux_server_record — write (pid, start time, socket) of the server a bare
-# tmux reaches. One line per pid; re-recording the same server replaces it.
+# tmux reaches. One file per server; re-recording the same server replaces it.
 tmux_server_record() {
   local pid sock lstart
   pid="$(tmux display-message -p '#{pid}' 2>/dev/null)" || return 0
@@ -397,58 +397,64 @@ tmux_server_record() {
   [ -n "$sock" ] || return 0
   lstart="$(_tmux_proc_lstart "$pid")"
   [ -n "$lstart" ] || return 0
-  _tmux_rec_update "$pid" "$pid"$'\t'"$lstart"$'\t'"$sock"
+  _tmux_rec_write "$pid" "$lstart" "$sock"
 }
 
 # tmux_rescue_orphans — for every server on record (and the one this process
 # is running inside, per $TMUX) that is alive but whose socket file is gone,
-# ask it to re-create the socket. A record whose pid is dead, or no longer
-# that same tmux server, is dropped and never signalled.
+# ask it to re-create the socket. A record whose server is proven dead is
+# deleted and never signalled; one that is alive but not provably ours (uid,
+# comm) is not signalled and is left in place.
 tmux_rescue_orphans() {
   command -v tmux >/dev/null 2>&1 || return 0
-  local rec cands="" drop="" pid lstart sock tpid i
-  rec="${CLIKAE_HOME:-$HOME/.clikae}/state/tmux/servers"
-  [ -f "$rec" ] && cands="$(cat "$rec" 2>/dev/null)"
+  local dir f pid lstart sock tpid
+  if dir="$(_tmux_rec_dir)"; then
+    _tmux_rec_migrate "$dir"
+    _tmux_rec_prune_tmp "$dir"
+    for f in "$dir"/*; do
+      [ -f "$f" ] || continue
+      pid=""; lstart=""; sock=""
+      IFS=$'\t' read -r pid lstart sock < "$f" 2>/dev/null
+      case "$pid" in ''|*[!0-9]*) continue ;; esac
+      [ -n "$lstart" ] && [ -n "$sock" ] || continue
+      if _tmux_rec_dead "$pid" "$lstart"; then
+        rm -f "$f" 2>/dev/null
+        continue
+      fi
+      _tmux_rescue_one "$pid" "$lstart" "$sock"
+    done
+  fi
   if [ -n "${TMUX:-}" ]; then
     sock="${TMUX%%,*}"; tpid="${TMUX#*,}"; tpid="${tpid%%,*}"
     case "$tpid" in ''|*[!0-9]*) tpid="" ;; esac
     if [ -n "$tpid" ] && [ ! -S "$sock" ] && _tmux_is_ancestor "$tpid"; then
-      cands="$cands"$'\n'"$tpid"$'\t'"$(_tmux_proc_lstart "$tpid")"$'\t'"$sock"
+      lstart="$(_tmux_proc_lstart "$tpid")"
+      [ -z "$lstart" ] || _tmux_rescue_one "$tpid" "$lstart" "$sock"
     fi
   fi
-  [ -n "$cands" ] || return 0
-  while IFS=$'\t' read -r pid lstart sock; do
-    case "$pid" in ''|*[!0-9]*) continue ;; esac
-    if [ -z "$lstart" ] || [ -z "$sock" ] || ! kill -0 "$pid" 2>/dev/null; then
-      drop="$drop$pid|$lstart"$'\n'
-      continue
-    fi
-    [ -S "$sock" ] && continue
-    # Identity, owner and incarnation: first so nothing is made for a
-    # process that is not ours, then AGAIN after the socket's directory (the
-    # server needs it to exist) is made — the check the kill acts on is the
-    # one right before it, no mkdir or chmod in between (round 3).
-    if ! _tmux_is_our_server "$pid" "$lstart"; then
-      drop="$drop$pid|$lstart"$'\n'
-      continue
-    fi
-    mkdir -p "$(dirname "$sock")" 2>/dev/null || continue
-    chmod 0700 "$(dirname "$sock")" 2>/dev/null || true
-    if ! _tmux_is_our_server "$pid" "$lstart"; then
-      drop="$drop$pid|$lstart"$'\n'
-      continue
-    fi
-    kill -USR1 "$pid" 2>/dev/null || continue
-    i=0
-    while [ "$i" -lt 40 ] && [ ! -S "$sock" ]; do sleep 0.05; i=$((i + 1)); done
-    if [ -S "$sock" ]; then
-      declare -F log_dim >/dev/null 2>&1 \
-        && log_dim "Recovered the tmux socket of server $pid at $sock (it had been deleted; the sessions on it were never gone)."
-    fi
-  done <<EOF
-$cands
-EOF
-  [ -z "$drop" ] || _tmux_rec_update "$drop"
+  return 0
+}
+
+# _tmux_rescue_one <pid> <lstart> <sock> — signal one live server whose socket
+# is gone, if it is still our server, that incarnation.
+_tmux_rescue_one() {
+  local pid="$1" lstart="$2" sock="$3" i
+  [ -S "$sock" ] && return 0
+  # Identity, owner and incarnation: first so nothing is made for a process
+  # that is not ours, then AGAIN after the socket's directory (the server
+  # needs it to exist) is made — the check the kill acts on is the one right
+  # before it, no mkdir or chmod in between (round 3).
+  _tmux_is_our_server "$pid" "$lstart" || return 0
+  mkdir -p "$(dirname "$sock")" 2>/dev/null || return 0
+  chmod 0700 "$(dirname "$sock")" 2>/dev/null || true
+  _tmux_is_our_server "$pid" "$lstart" || return 0
+  kill -USR1 "$pid" 2>/dev/null || return 0
+  i=0
+  while [ "$i" -lt 40 ] && [ ! -S "$sock" ]; do sleep 0.05; i=$((i + 1)); done
+  if [ -S "$sock" ]; then
+    declare -F log_dim >/dev/null 2>&1 \
+      && log_dim "Recovered the tmux socket of server $pid at $sock (it had been deleted; the sessions on it were never gone)."
+  fi
   return 0
 }
 

@@ -191,16 +191,83 @@ teardown() {
 
 # ── 4: a server whose socket was swept ─────────────────────────────────────
 
+# _lstart <pid> -> the process's start time as ps prints it (its incarnation).
+_lstart() { ps -o lstart= -p "$1" 2>/dev/null | sed 's/^ *//; s/ *$//'; }
+
+# Records (round 4): one file per server under servers.d. Rounds 1-3 kept one
+# shared file, state/tmux/servers; these helpers seed and read whichever the
+# code under test has, so a test run against round-3 code goes red on what it
+# asserts, not on a missing directory.
+_rec_d() { printf '%s\n' "$CLIKAE_HOME/state/tmux/servers.d"; }
+
+# _seed <pid> <lstart> <sock> — put a server on record, as the code would.
+_seed() {
+  if declare -F _tmux_rec_write >/dev/null; then
+    _tmux_rec_write "$1" "$2" "$3"
+  else
+    mkdir -p "$CLIKAE_HOME/state/tmux"
+    printf '%s\t%s\t%s\n' "$1" "$2" "$3" >> "$CLIKAE_HOME/state/tmux/servers"
+  fi
+}
+
+# _on_record <pid> -> 0 when <pid> has a record, in either layout.
+_on_record() {
+  local f
+  for f in "$(_rec_d)/$1".*; do [ -f "$f" ] && return 0; done
+  grep -q "^$1	" "$CLIKAE_HOME/state/tmux/servers" 2>/dev/null
+}
+
+# _records -> every record line, either layout (for failure output and greps).
+_records() {
+  local f
+  for f in "$(_rec_d)"/* "$CLIKAE_HOME/state/tmux/servers"; do
+    [ -f "$f" ] && cat "$f"
+  done
+  return 0
+}
+
+# _clear_records — no record of any kind, as on a machine before this release.
+_clear_records() { rm -rf "$(_rec_d)" "$CLIKAE_HOME/state/tmux/servers"; }
+
+# _sockfile <var> — a real socket file nobody listens on: a record pointing at
+# it has its socket, so the rescue never signals that server.
+_sockfile() {
+  local _sf; _sf="$(mktemp -d "$TEST_HOME/sock.XXXXXX")/s"
+  python3 -c 'import socket,sys; socket.socket(socket.AF_UNIX).bind(sys.argv[1])' "$_sf"
+  [ -S "$_sf" ] || { echo "control: no socket file at $_sf"; return 1; }
+  printf -v "$1" '%s' "$_sf"
+}
+
+# _fake_tmux_proc <var> — a live process whose comm is exactly `tmux` (a copy
+# of sleep under that name: SIGUSR1 kills it, so "alive afterwards" is "not
+# signalled"). Waits until ps can see its start time.
+_fake_tmux_proc() {
+  mkdir -p "$TEST_HOME/fakebin"
+  [ -x "$TEST_HOME/fakebin/tmux" ] || cp "$(command -v sleep)" "$TEST_HOME/fakebin/tmux"
+  # _ft_ names: printf -v below must not land on a local of the caller's name.
+  "$TEST_HOME/fakebin/tmux" 30 & local _ft_pid=$!
+  OWN_PIDS="${OWN_PIDS:-} $_ft_pid"
+  local _ft_i=0
+  while [ "$_ft_i" -lt 50 ] && [ -z "$(_lstart "$_ft_pid")" ]; do sleep 0.05; _ft_i=$((_ft_i + 1)); done
+  printf -v "$1" '%s' "$_ft_pid"
+}
+
+# _dead_pid <var> — a pid that has certainly exited.
+_dead_pid() {
+  sh -c 'exit 0' & local _dp=$!
+  wait "$_dp" || true
+  printf -v "$1" '%s' "$_dp"
+}
+
 @test "orphan: a server born through clikae is on record (pid + socket)" {
   command -v tmux >/dev/null 2>&1 || skip "tmux not installed"
   _src_tmux
   export CLIKAE_SESS_PREFIX="clikae-"
   tmux_spawn_session --session clikae-claude-rec -- 'sleep 30'
-  local rec="$CLIKAE_HOME/state/tmux/servers"
-  [ -f "$rec" ] || { echo "no record at $rec"; false; }
   local pid; pid="$(tmux display-message -p '#{pid}')"
+  _on_record "$pid" || { echo "no record of $pid under $(_rec_d)"; _records; false; }
   # pid, its start time (the incarnation — round 2), socket.
-  grep -q "^$pid	$(_lstart "$pid")	$(tmux_socket_path)$" "$rec" || { cat "$rec"; false; }
+  _records | grep -q "^$pid	$(_lstart "$pid")	$(tmux_socket_path)$" || { _records; false; }
 }
 
 @test "orphan: a recorded server whose socket is gone gets it back, and the board sees it again" {
@@ -222,24 +289,22 @@ teardown() {
 @test "orphan: the record of a dead server is dropped, never signalled" {
   command -v tmux >/dev/null 2>&1 || skip "tmux not installed"
   _src_tmux
-  mkdir -p "$CLIKAE_HOME/state/tmux"
-  # A pid that has certainly exited.
-  sh -c 'exit 0' & local dead=$!; wait "$dead" || true
-  printf '%s\t%s\n' "$dead" "$TEST_HOME/never/default" > "$CLIKAE_HOME/state/tmux/servers"
+  local dead; _dead_pid dead
+  _seed "$dead" "Thu Jan  1 00:00:00 1970" "$TEST_HOME/never/default"
   run tmux_rescue_orphans
   [ "$status" -eq 0 ]
   [ ! -e "$TEST_HOME/never" ]
-  [ ! -s "$CLIKAE_HOME/state/tmux/servers" ]
+  ! _on_record "$dead" || { _records; false; }
 }
 
 @test "orphan: a live pid that is not tmux is left alone" {
   _src_tmux
-  mkdir -p "$CLIKAE_HOME/state/tmux"
   sleep 30 & local other=$!
-  printf '%s\t%s\n' "$other" "$TEST_HOME/never/default" > "$CLIKAE_HOME/state/tmux/servers"
+  OWN_PIDS="$other"
+  _seed "$other" "$(_lstart "$other")" "$TEST_HOME/never/default"
   run tmux_rescue_orphans
-  kill "$other" 2>/dev/null || true
   [ "$status" -eq 0 ]
+  kill -0 "$other" 2>/dev/null || { echo "signalled $other"; false; }
   [ ! -e "$TEST_HOME/never" ]
 }
 
@@ -260,8 +325,8 @@ tmux_rescue_orphans
 sleep 30
 EOF
   tmux new-session -d -s clikae-claude-inside "bash '$TEST_HOME/inside.sh'"
-  # No record file at all — the cockpit predates this release.
-  rm -f "$CLIKAE_HOME/state/tmux/servers"
+  # No record at all — the cockpit predates this release.
+  _clear_records
   rm -f "$sock"
   local i=0
   while [ "$i" -lt 100 ] && [ ! -e "$TEST_HOME/rescued" ]; do sleep 0.1; i=$((i + 1)); done
@@ -277,19 +342,15 @@ EOF
 # be sitting on either. Every path — listing, routing, the launch decision,
 # the inside-tmux switch, the rescue — has to work whichever one that is.
 
-# _lstart <pid> -> the process's start time as ps prints it (its incarnation).
-_lstart() { ps -o lstart= -p "$1" 2>/dev/null | sed 's/^ *//; s/ *$//'; }
-
 @test "rescue: a live non-tmux process named tmux-helper is never signalled" {
   _src_tmux
   cd "$TEST_HOME"
-  mkdir -p "$TEST_HOME/fakebin" "$CLIKAE_HOME/state/tmux"
+  mkdir -p "$TEST_HOME/fakebin"
   cp "$(command -v sleep)" "$TEST_HOME/fakebin/tmux-helper"
   "$TEST_HOME/fakebin/tmux-helper" 30 & local other=$!
   OWN_PIDS="$other"
   sleep 0.2
-  printf '%s\t%s\t%s\n' "$other" "$(_lstart "$other")" "$TEST_HOME/never/default" \
-    > "$CLIKAE_HOME/state/tmux/servers"
+  _seed "$other" "$(_lstart "$other")" "$TEST_HOME/never/default"
   run tmux_rescue_orphans
   [ "$status" -eq 0 ]
   # SIGUSR1's default action is to terminate: alive afterwards = not signalled.
@@ -305,17 +366,16 @@ _lstart() { ps -o lstart= -p "$1" 2>/dev/null | sed 's/^ *//; s/ *$//'; }
   tmux -S "$sock" new-session -d -s clikae-claude-reuse 'sleep 30'
   pid="$(tmux -S "$sock" display-message -p '#{pid}')"
   OWN_PIDS="$pid"
-  mkdir -p "$CLIKAE_HOME/state/tmux"
   # The pid on record is right, the incarnation is not: what a reused pid
   # looks like from here. Same uid, same comm — only the start time differs.
-  printf '%s\t%s\t%s\n' "$pid" "Thu Jan  1 00:00:00 1970" "$sock" > "$CLIKAE_HOME/state/tmux/servers"
+  _seed "$pid" "Thu Jan  1 00:00:00 1970" "$sock"
   rm -f "$sock"
   run tmux_rescue_orphans
   [ "$status" -eq 0 ]
   # A signalled tmux server would have re-created its socket.
   [ ! -e "$sock" ] || { echo "the server was signalled: socket is back"; false; }
   kill -0 "$pid"
-  ! grep -q "^$pid	" "$CLIKAE_HOME/state/tmux/servers" || false
+  ! _on_record "$pid" || { _records; false; }
 }
 
 @test "rescue: \$TMUX names a server we are not inside -> not signalled (no record, no proof)" {
@@ -326,27 +386,20 @@ _lstart() { ps -o lstart= -p "$1" 2>/dev/null | sed 's/^ *//; s/ *$//'; }
   pid="$(tmux -S "$sock" display-message -p '#{pid}')"
   OWN_PIDS="$pid"
   rm -f "$sock"
-  rm -f "$CLIKAE_HOME/state/tmux/servers"
+  _clear_records
   # An inherited $TMUX outlives its server; the pid in it can be anyone's now.
   TMUX="$sock,$pid,0" tmux_rescue_orphans
   [ ! -e "$sock" ] || { echo "signalled a server this process is not inside"; false; }
 }
 
-# _fake_server <var> — a live process whose comm is exactly `tmux` (a copy of
-# sleep under that name: SIGUSR1 kills it, so "alive afterwards" is "not
-# signalled"), recorded with its real start time and a socket that is gone.
-# No tmux server involved; fakebin goes first in PATH only for the rescue,
-# which asks `command -v tmux` and never runs it.
+# _fake_server <var> — a fake tmux process (_fake_tmux_proc) recorded with its
+# real start time and a socket that is gone. No tmux server involved; fakebin
+# goes first in PATH only for the rescue, which asks `command -v tmux` and
+# never runs it.
 _fake_server() {
-  mkdir -p "$TEST_HOME/fakebin" "$CLIKAE_HOME/state/tmux"
-  [ -x "$TEST_HOME/fakebin/tmux" ] || cp "$(command -v sleep)" "$TEST_HOME/fakebin/tmux"
-  # _fs_ names: printf -v below must not land on a local of the caller's name.
-  "$TEST_HOME/fakebin/tmux" 30 & local _fs_pid=$!
-  OWN_PIDS="${OWN_PIDS:-} $_fs_pid"
-  local _fs_i=0
-  while [ "$_fs_i" -lt 50 ] && [ -z "$(_lstart "$_fs_pid")" ]; do sleep 0.05; _fs_i=$((_fs_i + 1)); done
-  printf '%s\t%s\t%s\n' "$_fs_pid" "$(_lstart "$_fs_pid")" "$TEST_HOME/swept-$_fs_pid/default" \
-    >> "$CLIKAE_HOME/state/tmux/servers"
+  local _fs_pid
+  _fake_tmux_proc _fs_pid
+  _seed "$_fs_pid" "$(_lstart "$_fs_pid")" "$TEST_HOME/swept-$_fs_pid/default"
   printf -v "$1" '%s' "$_fs_pid"
 }
 
@@ -364,7 +417,7 @@ _signalled() {
   _fake_server mine
   PATH="$TEST_HOME/fakebin:$PATH" tmux_rescue_orphans
   _signalled "$mine" || { echo "control: our own recorded server ($mine) was not signalled"; false; }
-  rm -f "$CLIKAE_HOME/state/tmux/servers"
+  _clear_records
   # The same process shape — comm tmux, start time on record — but the uid
   # differs. A process of another uid is out of a test's reach, so the
   # comparison's other side moves instead: CLIKAE_TMUX_UID is what the check
@@ -393,181 +446,145 @@ _signalled() {
   ! _signalled "$pid" || { echo "signalled on an identity checked before the mkdir ($pid)"; false; }
 }
 
-@test "record: recording the same server twice leaves one line" {
+@test "record: recording the same server twice leaves one record" {
   command -v tmux >/dev/null 2>&1 || skip "tmux not installed"
   _src_tmux
   tmux new-session -d -s clikae-claude-twice 'sleep 30'
   tmux_server_record
   tmux_server_record
   local pid; pid="$(tmux display-message -p '#{pid}')"
-  [ "$(grep -c "^$pid	" "$CLIKAE_HOME/state/tmux/servers")" -eq 1 ] \
-    || { cat "$CLIKAE_HOME/state/tmux/servers"; false; }
+  [ "$(_records | grep -c "^$pid	")" -eq 1 ] || { _records; false; }
 }
 
-# ── round 3: the record's lock (PR #181 r2 review, P2) ─────────────────────
+# ── round 4: one file per server, no lock (PR #181 r3 review, P2) ──────────
 #
-# _tmux_rec_update is read-modify-write. Its awk is the read; the barriers
-# below split that awk in two — the snapshot is taken, then held until the
-# test says go — so "a writer is between its read and its rename" is a state
-# the test puts a writer in, not one it hopes the scheduler produces.
+# Rounds 2 and 3 serialized writers of ONE shared file with a shell lock, and
+# recovering a dead holder's lock raced (r3: a second stealer moved the new
+# holder's lock aside, a third writer got in, and a record was lost). Now
+# nothing is shared: each server's record is its own file, published by a
+# rename, and only a server proven dead loses its file.
 
-# _gate_wait_for <file> — wait (bounded, a deadlock guard only) for a marker.
-_gate_wait_for() {
-  local n=0
-  while [ ! -e "$1" ] && [ "$n" -lt 400 ]; do command sleep 0.05; n=$((n + 1)); done
-  [ -e "$1" ]
-}
-
-# _gated_awk — in this shell and its subshells, the record's awk (and only
-# it) reads its snapshot, drops "$GATE/read.$GATE_ID", runs _gate_hold, then
-# writes the snapshot out. Set GATE, GATE_ID and define _gate_hold first.
-_gated_awk() {
-  awk() {
-    case "$*" in *CLIKAE_TMUX_DROP*) ;; *) command awk "$@"; return ;; esac
-    command awk "$@" > "$GATE/buf.$GATE_ID"
-    : > "$GATE/read.$GATE_ID"
-    _gate_hold
-    cat "$GATE/buf.$GATE_ID"
-  }
-}
-
-# _rec_lock <rec> -> the lock path (the round-2 code had no helper: its
-# `$rec.lock` directory is the fallback, so these tests run red on it).
-_rec_lock() { _tmux_rec_lock_path 2>/dev/null || printf '%s.lock\n' "$1"; }
-
-@test "record lock: a writer that times out never steals a LIVE holder's lock (no tmux)" {
-  _src_tmux
-  local dir="$CLIKAE_HOME/state/tmux"; mkdir -p "$dir"
-  local rec="$dir/servers"
-  printf '1\tL1\t/s1\n' > "$rec"
-  GATE="$(mktemp -d "$TEST_HOME/gate.XXXXXX")"
-  # A takes the lock, reads {1}, and is held there — past B's whole timeout.
-  _gate_hold() { _gate_wait_for "$GATE/go"; }
-  ( GATE_ID=A; _gated_awk; _tmux_rec_update "" $'2\tL2\t/s2' ) & local a=$!
-  OWN_PIDS="$a"
-  _gate_wait_for "$GATE/read.A" || { echo "control: A never reached its read"; false; }
-  local lock; lock="$(_rec_lock "$rec")"
-  # B: its fifty 0.1s waits made instant, so the timeout arrives while A is
-  # alive and mid-update — the review's suspended writer, on purpose.
-  local out
-  out="$( sleep() { :; }; _tmux_rec_update "" $'3\tL3\t/s3' 2>&1 )"
-  local a_lock_kept=0
-  { [ -e "$lock" ] || [ -L "$lock" ]; } && a_lock_kept=1
-  : > "$GATE/go"
-  wait "$a" || true
-  grep -q '^1	' "$rec" && grep -q '^2	' "$rec" || { echo "A's update lost:"; cat "$rec"; false; }
-  if ! grep -q '^3	' "$rec"; then
-    [[ "$out" == *"not updated"* ]] \
-      || { echo "B's record lost and nothing said so (B printed: $out)"; cat "$rec"; false; }
-  fi
-  [ "$a_lock_kept" -eq 1 ] || { echo "B removed A's live lock"; false; }
-  # A released its own lock on the way out.
-  [ ! -e "$lock" ] && [ ! -L "$lock" ] || { ls -la "$dir"; false; }
-}
-
-@test "record lock: a holder's cleanup removes only its own lock, never a successor's" {
-  _src_tmux
-  local dir="$CLIKAE_HOME/state/tmux"; mkdir -p "$dir"
-  local rec="$dir/servers"
-  : > "$rec"
-  GATE="$(mktemp -d "$TEST_HOME/gate.XXXXXX")"
-  local lock; lock="$(_rec_lock "$rec")"
-  # While A is between read and rename, its lock is taken over: A's moved
-  # aside and a successor's planted at the path, the same kind of entry.
-  _gate_hold() {
-    if [ -L "$lock" ]; then
-      mv "$lock" "$GATE/a-lock" && ln -s '1|successor|tok' "$lock"
-    else
-      mv "$lock" "$GATE/a-lock" && mkdir "$lock"
+# _publish_barrier — in this shell and its subshells, the FIRST `mv` each
+# writer makes (its publish) drops "$GATE/at.$GATE_ID" and waits until
+# $GATE_N writers are there, so every writer is between "ready" and
+# "published" at the same instant. Bounded at 10s, past round 3's 5s lock
+# timeout: a writer held behind a lock waits the whole of it.
+_publish_barrier() {
+  mv() {
+    if [ -z "${_PB_DONE:-}" ]; then
+      _PB_DONE=1
+      : > "$GATE/at.$GATE_ID"
+      local n=0 c f
+      while [ "$n" -lt 200 ]; do
+        c=0; for f in "$GATE"/at.*; do [ -e "$f" ] && c=$((c + 1)); done
+        [ "$c" -ge "$GATE_N" ] && break
+        command sleep 0.05; n=$((n + 1))
+      done
     fi
+    command mv "$@"
   }
-  ( GATE_ID=A; _gated_awk; _tmux_rec_update "" $'2\tL2\t/s2' )
-  [ -e "$GATE/a-lock" ] || [ -L "$GATE/a-lock" ] || { echo "control: A held no lock to move"; false; }
-  [ -e "$lock" ] || [ -L "$lock" ] || { echo "A's cleanup removed the successor's lock"; false; }
 }
 
-@test "record lock: a lock whose holder is dead is recovered, and the update lands" {
+@test "record: writers A, B and C publish at the same instant, and every record survives" {
   _src_tmux
-  local dir="$CLIKAE_HOME/state/tmux"; mkdir -p "$dir"
-  local rec="$dir/servers"
-  printf '1\tL1\t/s1\n' > "$rec"
-  sh -c 'exit 0' & local dead=$!; wait "$dead" || true
-  local lock; lock="$(_tmux_rec_lock_path)"
-  ln -s "$dead|Thu Jan  1 00:00:00 1970|tok" "$lock"
-  local out
-  out="$( sleep() { :; }; _tmux_rec_update "" $'2\tL2\t/s2' 2>&1 )"
-  grep -q '^2	' "$rec" || { echo "not recovered (printed: $out)"; cat "$rec"; false; }
-  grep -q '^1	' "$rec"
-  [ ! -e "$lock" ] && [ ! -L "$lock" ] || { echo "lock left behind"; ls -la "$dir"; false; }
-}
-
-@test "record: concurrent recorders and a rescue lose no server (barrier: every writer reads before any writes, unless serialized)" {
-  command -v python3 >/dev/null 2>&1 || skip "python3 needed to make a socket file"
-  _src_tmux
-  local dir="$CLIKAE_HOME/state/tmux"; mkdir -p "$dir"
-  local rec="$dir/servers"
-  # One socket file every record points at, so the rescue leaves them all be.
-  local shared_sock; shared_sock="$(mktemp -d "$TEST_HOME/sock.XXXXXX")/s"
-  python3 -c 'import socket,sys; socket.socket(socket.AF_UNIX).bind(sys.argv[1])' "$shared_sock"
-  [ -S "$shared_sock" ] || { echo "control: no socket file"; false; }
-  # Eight live "servers": copies of sleep under the name tmux, our own pids.
-  mkdir -p "$TEST_HOME/fakebin"
-  cp "$(command -v sleep)" "$TEST_HOME/fakebin/tmux"
-  local -a pids=(); local i p n=8
-  for i in $(seq 1 "$n"); do "$TEST_HOME/fakebin/tmux" 30 & pids+=($!); done
-  OWN_PIDS="${pids[*]}"
-  # And one dead one on record, which the rescue drops — making it a writer too.
-  sh -c 'exit 0' & local dead=$!; wait "$dead" || true
-  printf '%s\t%s\t%s\n' "$dead" "Thu Jan  1 00:00:00 1970" "$shared_sock" > "$rec"
-  GATE="$(mktemp -d "$TEST_HOME/gate.XXXXXX")"
-  local lock; lock="$(_tmux_rec_lock_path)"
-  # The barrier: a writer that has read waits until all n+1 writers have
-  # read — unless the lock is held, i.e. by itself, i.e. the writes are
-  # serialized and the others cannot be reading. Without the lock every
-  # writer reads the same {dead} snapshot before any rename: all but the
-  # last rename are lost, on every run.
-  _gate_hold() {
-    local w=0 f c
-    while [ "$w" -lt 400 ]; do
-      [ -e "$lock" ] || [ -L "$lock" ] && return 0
-      c=0; for f in "$GATE"/read.*; do [ -e "$f" ] && c=$((c + 1)); done
-      [ "$c" -ge $((n + 1)) ] && return 0
-      command sleep 0.02; w=$((w + 1))
-    done
-  }
+  local sock; _sockfile sock
+  local a b c p
+  _fake_tmux_proc a; _fake_tmux_proc b; _fake_tmux_proc c
+  GATE="$(mktemp -d "$TEST_HOME/gate.XXXXXX")"; GATE_N=3
   local -a jobs=()
-  for p in "${pids[@]}"; do
+  for p in "$a" "$b" "$c"; do
     (
-      GATE_ID="$p"; _gated_awk
+      GATE_ID="$p"; _publish_barrier
       # Stand-in for the server answering "who are you": this pid, that socket.
       # (Not named $sock: the stub runs inside tmux_server_record, whose own
       # `local sock` would shadow it — bash scope is dynamic.)
+      _w_sock="$sock"
       tmux() {
         case "$*" in
           *'#{pid}'*) echo "$p" ;;
-          *'#{socket_path}'*) echo "$shared_sock" ;;
+          *'#{socket_path}'*) echo "$_w_sock" ;;
           *) command tmux "$@" ;;
         esac
       }
       tmux_server_record
     ) & jobs+=($!)
   done
-  # fakebin first: the rescue only asks `command -v tmux`, never runs it.
-  ( GATE_ID=rescue; _gated_awk; PATH="$TEST_HOME/fakebin:$PATH" tmux_rescue_orphans ) & jobs+=($!)
   for p in "${jobs[@]}"; do wait "$p" || true; done
-  # Control: every writer really went through the gated read.
-  local c=0 f
-  for f in "$GATE"/read.*; do [ -e "$f" ] && c=$((c + 1)); done
-  [ "$c" -eq $((n + 1)) ] || { echo "control: $c of $((n + 1)) writers read"; false; }
   local missing=""
-  for p in "${pids[@]}"; do grep -q "^$p	" "$rec" || missing="$missing $p"; done
-  [ -z "$missing" ] || { echo "lost:$missing"; cat "$rec"; false; }
-  ! grep -q "^$dead	" "$rec" || { echo "the rescue's drop was lost"; cat "$rec"; false; }
-  [ "$(wc -l < "$rec" | tr -d ' ')" -eq "$n" ] || { cat "$rec"; false; }
-  # No temp file or lock left behind by any writer.
-  for f in "$dir"/*; do
-    case "${f##*/}" in servers|tmux-*) ;; *) echo "left behind: $f"; false ;; esac
+  for p in "$a" "$b" "$c"; do _on_record "$p" || missing="$missing $p"; done
+  [ -z "$missing" ] || { echo "lost:$missing"; _records; false; }
+  # Control: the three really were at their publish together.
+  local n=0 f
+  for f in "$GATE"/at.*; do [ -e "$f" ] && n=$((n + 1)); done
+  [ "$n" -eq 3 ] || { echo "control: $n of 3 writers reached the publish"; false; }
+  # Each record is whole, and no temp file is left behind.
+  for p in "$a" "$b" "$c"; do
+    [ "$(cat "$(_rec_d)/$p".*)" = "$p	$(_lstart "$p")	$sock" ] || { _records; false; }
   done
+  for f in "$(_rec_d)"/* "$(_rec_d)"/.[!.]*; do
+    [ -e "$f" ] || continue
+    case "${f##*/}" in "$a".*|"$b".*|"$c".*) ;; *) echo "left behind: $f"; false ;; esac
+  done
+}
+
+@test "record: pruning removes exactly the dead — pid gone, pid reused — and nothing live" {
+  _src_tmux
+  local sock; _sockfile sock
+  local live reused dead
+  _fake_tmux_proc live; _fake_tmux_proc reused; _dead_pid dead
+  _seed "$live" "$(_lstart "$live")" "$sock"
+  _seed "$reused" "Thu Jan  1 00:00:00 1970" "$sock"
+  _seed "$dead" "Thu Jan  1 00:00:00 1970" "$sock"
+  PATH="$TEST_HOME/fakebin:$PATH" tmux_rescue_orphans
+  ! _on_record "$dead" || { echo "the dead server's record was kept"; _records; false; }
+  ! _on_record "$reused" || { echo "the reused pid's old record was kept"; _records; false; }
+  _on_record "$live" || { echo "a live server's record was removed"; _records; false; }
+  # Its socket is there: nothing to rescue, nothing signalled.
+  kill -0 "$live" 2>/dev/null || { echo "signalled $live"; false; }
+}
+
+@test "record: a live server's record is never removed, even when it cannot be signalled" {
+  _src_tmux
+  # Two live processes, each on record with its real start time and a swept
+  # socket, that the rescue must NOT signal: one whose comm is not tmux, one
+  # whose uid is not ours. Neither is proven dead, so neither loses its record
+  # (rounds 1-3 dropped any record that failed the identity check).
+  local plain theirs
+  sleep 30 & plain=$!
+  OWN_PIDS="$plain"
+  _fake_tmux_proc theirs
+  _seed "$plain" "$(_lstart "$plain")" "$TEST_HOME/swept-$plain/default"
+  _seed "$theirs" "$(_lstart "$theirs")" "$TEST_HOME/swept-$theirs/default"
+  CLIKAE_TMUX_UID=$(( $(id -u) + 1 )) PATH="$TEST_HOME/fakebin:$PATH" tmux_rescue_orphans
+  kill -0 "$plain" 2>/dev/null && kill -0 "$theirs" 2>/dev/null || { echo "control: signalled"; false; }
+  _on_record "$plain" || { echo "the live non-tmux record ($plain) was removed"; _records; false; }
+  _on_record "$theirs" || { echo "the live other-uid record ($theirs) was removed"; _records; false; }
+  # And a second rescue still leaves them: nothing about them changed.
+  CLIKAE_TMUX_UID=$(( $(id -u) + 1 )) PATH="$TEST_HOME/fakebin:$PATH" tmux_rescue_orphans
+  _on_record "$plain" && _on_record "$theirs" || { _records; false; }
+}
+
+@test "record: the rounds 1-3 single file is converted to per-server files once, then removed" {
+  _src_tmux
+  local sock; _sockfile sock
+  local live dead
+  _fake_tmux_proc live; _dead_pid dead
+  local old="$CLIKAE_HOME/state/tmux/servers"
+  mkdir -p "${old%/*}"
+  {
+    printf '%s\t%s\t%s\n' "$live" "$(_lstart "$live")" "$sock"
+    printf '%s\t%s\t%s\n' "$dead" "Thu Jan  1 00:00:00 1970" "$sock"
+    printf '%s\t%s\n' 4242 "$TEST_HOME/round-1-format/default"
+  } > "$old"
+  PATH="$TEST_HOME/fakebin:$PATH" tmux_rescue_orphans
+  [ ! -e "$old" ] || { echo "the old single file is still there:"; cat "$old"; false; }
+  local f n=0
+  for f in "$(_rec_d)"/* "$(_rec_d)"/.[!.]*; do [ -e "$f" ] && n=$((n + 1)); done
+  [ "$n" -eq 1 ] || { echo "expected only the live server's file:"; ls -la "$(_rec_d)"; false; }
+  [ "$(cat "$(_rec_d)/$live".*)" = "$live	$(_lstart "$live")	$sock" ] || { _records; false; }
+  # Once: a second pass changes nothing.
+  PATH="$TEST_HOME/fakebin:$PATH" tmux_rescue_orphans
+  [ ! -e "$old" ] && _on_record "$live" || { _records; false; }
 }
 
 @test "endpoints: inside an OLD-server cockpit, the board and the launch still find the new server" {
