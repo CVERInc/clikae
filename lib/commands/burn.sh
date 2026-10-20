@@ -451,8 +451,22 @@ _burn_redact() {
 # Raw engine output stays in its capture log; burn's progress never repeats
 # the task, on either dispatch form (see _burn_redact).
 _burn_output_tail() {
-  local text="$1" lines="${2:-5}"
+  local text="$1" lines="${2:-5}" _who=""
   [ -n "${saved_prompt:-}" ] && text="$(_burn_redact "$text" "[prompt: $saved_prompt]")"
+  # #174: these lines are the ENGINE's words, and after a reroute they are
+  # the NEXT tank's — "OAuth session expired" under a run that started on A
+  # read as A's login having expired when it was B's. Name the tank whose
+  # output this is, and the trail it was rerouted along, BEFORE the lines.
+  # `cli`/`cur`/`tried` are cmd_burn's (bash dynamic scope, the same way
+  # saved_prompt reaches here); a caller outside a burn gets no header.
+  if [ -n "${cli:-}" ] && [ -n "${cur:-}" ]; then
+    _who="$cli/$cur said"
+    if [ -n "${tried:-}" ]; then
+      local _from; _from="$(printf '%s' "${tried# }" | sed 's/ /, /g')"
+      _who="$_who (rerouted from $_from)"
+    fi
+    printf '    %s:\n' "$_who"
+  fi
   printf '%s\n' "$text" | tail -n "$lines" | sed 's/^/    /'
 }
 
@@ -757,7 +771,9 @@ EOF
     done
     [ "$pick" -ge 0 ] || break
     c_picked[pick]=1
-    declare -F usage_read >/dev/null && usage_read "$cli" "${c_tank[pick]}" 1 >/dev/null 2>&1 || true
+    # #179: ranking never spends a prompt to read a meter — the burn that
+    # follows IS the session that refreshes the winner's token.
+    declare -F usage_read >/dev/null && CLIKAE_USAGE_AUTO_WAKE=0 usage_read "$cli" "${c_tank[pick]}" 1 >/dev/null 2>&1 || true
     calls=$((calls + 1))
     local up="" uw="" peak="" fields
     if declare -F usage_cache_peek >/dev/null && fields="$(usage_cache_peek "$cli" "${c_tank[pick]}")"; then
@@ -1240,7 +1256,7 @@ _agy_burn() {
     # headline (agy's Gemini and Claude/GPT groups are separate quotas).
     # Best-effort; a tank with no live token makes no call at all.
     if declare -F usage_read >/dev/null; then
-      CLIKAE_AGY_USAGE_MODEL="$(_agy_burn_model_of ${extra[@]+"${extra[@]}"})" \
+      CLIKAE_USAGE_AUTO_WAKE=0 CLIKAE_AGY_USAGE_MODEL="$(_agy_burn_model_of ${extra[@]+"${extra[@]}"})" \
         usage_read antigravity "$cur" 1 >/dev/null 2>&1 || true
     fi
     if [ "$dry" -eq 0 ]; then
@@ -4850,7 +4866,8 @@ KV
     # would end the whole burn if it were ever non-zero here; `|| true`
     # makes "best-effort" structural instead of relying on usage_read
     # happening to always end in a printf today.)
-    declare -F usage_read >/dev/null && usage_read "$cli" "$cur" 1 >/dev/null 2>&1 || true
+    # #179: the run that just ended IS the session; never nest a wake here.
+    declare -F usage_read >/dev/null && CLIKAE_USAGE_AUTO_WAKE=0 usage_read "$cli" "$cur" 1 >/dev/null 2>&1 || true
 
     # P1-2 (2026-09-08 review): de-identify the engine's OWN echo of the task
     # BEFORE classifying — not just at display time. _burn_output_tail already

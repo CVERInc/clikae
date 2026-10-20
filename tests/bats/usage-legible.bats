@@ -48,9 +48,9 @@ _agy_tank() {
   run clikae usage claude work --fresh --json
   echo "$output" | jq -e '.weekly_pct == 92 and (has("gap") | not)' || { echo "got: $output"; false; }
   _age_cache claude work 18000
-  USAGE_HTTP=401 run --separate-stderr clikae usage claude work --fresh --json
+  USAGE_HTTP=401 CLIKAE_USAGE_AUTO_WAKE=0 run --separate-stderr clikae usage claude work --fresh --json
   [ "$status" -eq 0 ]
-  echo "$output" | jq -e '.source == "expired" and .gap == "expired" and .weekly_pct == null
+  echo "$output" | jq -e '.source == "unknown" and .gap == "needs-refresh" and .weekly_pct == null
     and .last_weekly_pct == 92 and .last_window_pct == 65 and .last_age_sec >= 18000
     and .last_age_sec < 18100' || { echo "got: $output"; false; }
   # A second failure keeps the SAME last good reading, not the failed one.
@@ -145,16 +145,16 @@ STUB
   _board_env
   local now; now="$(date +%s)"
   mkdir -p "$CLIKAE_HOME/state/usage/claude"
-  printf '{"window_pct":null,"weekly_pct":null,"window_resets_at":null,"weekly_resets_at":null,"source":"expired","reason":"expired-token","cached_at":%s,"scanned_at":%s,"last_good":{"window_pct":10,"weekly_pct":85,"at":%s}}\n' \
+  printf '{"window_pct":null,"weekly_pct":null,"window_resets_at":null,"weekly_resets_at":null,"source":"unknown","reason":"needs-refresh","cached_at":%s,"scanned_at":%s,"last_good":{"window_pct":10,"weekly_pct":85,"at":%s}}\n' \
     "$now" "$now" "$(( now - 18000 ))" > "$CLIKAE_HOME/state/usage/claude/goby.json"
   _home_fuel_dotv_compute "" claude goby "$now"
-  [ "$_FNOTE" = "weekly 85% · 5h ago · expired" ] || { echo "note: $_FNOTE"; false; }
-  [ "$_FREMEDY" = "clikae usage claude --wake goby" ] || { echo "remedy: $_FREMEDY"; false; }
+  [ "$_FNOTE" = "7d 85% · 5h ago · needs-refresh" ] || { echo "note: $_FNOTE"; false; }
+  [ "$_FREMEDY" = "refresh clikae usage claude --wake goby" ] || { echo "remedy: $_FREMEDY"; false; }
   printf '{"window_pct":null,"weekly_pct":null,"window_resets_at":null,"weekly_resets_at":null,"source":"unknown","cached_at":%s,"scanned_at":%s,"last_good":{"window_pct":null,"weekly_pct":40,"at":%s}}\n' \
     "$now" "$now" "$(( now - 3600 ))" > "$CLIKAE_HOME/state/usage/codex/marlin.json" 2>/dev/null ||
     { mkdir -p "$CLIKAE_HOME/state/usage/codex"; printf '{"window_pct":null,"weekly_pct":null,"window_resets_at":null,"weekly_resets_at":null,"source":"unknown","cached_at":%s,"scanned_at":%s,"last_good":{"window_pct":null,"weekly_pct":40,"at":%s}}\n' "$now" "$now" "$(( now - 3600 ))" > "$CLIKAE_HOME/state/usage/codex/marlin.json"; }
   _home_fuel_dotv_compute "" codex marlin "$now"
-  [ "$_FNOTE" = "weekly 40% · 1h ago · no-probe" ] || { echo "codex note: $_FNOTE"; false; }
+  [ "$_FNOTE" = "7d 40% · 1h ago · no-probe" ] || { echo "codex note: $_FNOTE"; false; }
 }
 
 @test "#149 stale date: claude's comma form 'resets Sep 20, 11pm' resolves, so five days later it has passed" {
@@ -201,7 +201,7 @@ STUB
   set="$(printf 'claude\ttuna\t%s\n' "$CLIKAE_HOME/profiles/claude/tuna" | limit_dry_set --include-unverified)"
   [ -z "$set" ] || { echo "still in the dry set: $set"; false; }
   _home_fuel_dotv_compute "$set" claude tuna "$now"
-  [ "$_FNOTE" = "window 12% · weekly 96%" ] || { echo "set=[$set] note: $_FNOTE"; false; }
+  [ "$_FNOTE" = "5h 12% · 7d 96%" ] || { echo "set=[$set] note: $_FNOTE"; false; }
 }
 
 _goby_cache() { # <weekly> <models-json-array-or-empty>
@@ -217,18 +217,18 @@ _goby_cache() { # <weekly> <models-json-array-or-empty>
   _board_env
   _goby_cache 87 '[{"name":"Fable","pct":40,"resets_at":"2099-01-07T00:00:00Z"}]'
   _home_fuel_dotv_compute "" claude goby "$(date +%s)"
-  [ "$_FNOTE" = "window 1% · weekly 87%" ] || { echo "below: $_FNOTE"; false; }
+  [ "$_FNOTE" = "5h 1% · 7d 87%" ] || { echo "below: $_FNOTE"; false; }
   _goby_cache 87 '[]'
   _home_fuel_dotv_compute "" claude goby "$(date +%s)"
-  [ "$_FNOTE" = "window 1% · weekly 87%" ] || { echo "empty: $_FNOTE"; false; }
+  [ "$_FNOTE" = "5h 1% · 7d 87%" ] || { echo "empty: $_FNOTE"; false; }
   _goby_cache 87 ''
   _home_fuel_dotv_compute "" claude goby "$(date +%s)"
-  [ "$_FNOTE" = "window 1% · weekly 87%" ] || { echo "absent: $_FNOTE"; false; }
+  [ "$_FNOTE" = "5h 1% · 7d 87%" ] || { echo "absent: $_FNOTE"; false; }
   # Any vendor name, not a known one; above the tank but under 100 is shown
   # without changing the dot.
   _goby_cache 20 '[{"name":"Other Model","pct":55,"resets_at":"2099-01-07T00:00:00Z"}]'
   _home_fuel_dotv_compute "" claude goby "$(date +%s)"
-  [ "$_FNOTE" = "window 1% · weekly 20% · Other Model 55%" ] || { echo "other: $_FNOTE"; false; }
+  [ "$_FNOTE" = "5h 1% · 7d 20% · Other Model 55%" ] || { echo "other: $_FNOTE"; false; }
   [ "$_FDOT" = "GREEN●" ]
 }
 
@@ -239,7 +239,7 @@ _goby_cache() { # <weekly> <models-json-array-or-empty>
   printf '{"window_pct":1,"weekly_pct":87,"window_resets_at":"2099-01-01T00:00:00Z","weekly_resets_at":"2099-01-07T00:00:00Z","source":"vendor","models":[{"name":"Fable","pct":100,"resets_at":"2099-01-07T00:00:00Z"}],"cached_at":%s,"scanned_at":%s}\n' \
     "$now" "$now" > "$CLIKAE_HOME/state/usage/claude/goby.json"
   _home_fuel_dotv_compute "" claude goby "$now"
-  [ "$_FNOTE" = "window 1% · weekly 87% · Fable 100%" ] || { echo "note: $_FNOTE"; false; }
+  [ "$_FNOTE" = "5h 1% · 7d 87% · Fable 100%" ] || { echo "note: $_FNOTE"; false; }
   [ "$_FDOT" = "YELLOW◐" ]
 }
 
@@ -281,7 +281,7 @@ _goby_cache() { # <weekly> <models-json-array-or-empty>
 _lg_cache() {
   mkdir -p "$CLIKAE_HOME/state/usage/$1"
   printf '{"window_pct":null,"weekly_pct":null,"window_resets_at":null,"weekly_resets_at":null,"source":"%s"%s,"cached_at":%s,"scanned_at":%s%s}\n' \
-    "$3" "$([ "$3" != expired ] || printf ',"reason":"expired-token"')" "$4" "$4" "${5:+,\"last_good\":$5}" > "$CLIKAE_HOME/state/usage/$1/$2.json"
+    "$([ "$3" != expired ] && printf '%s' "$3" || printf unknown)" "$([ "$3" != expired ] || printf ',"reason":"needs-refresh"')" "$4" "$4" "${5:+,\"last_good\":$5}" > "$CLIKAE_HOME/state/usage/$1/$2.json"
 }
 
 @test "board light: an expired cache with a 21h-old last_good draws its band dimmed, not the no-reading dot" {
@@ -290,7 +290,7 @@ _lg_cache() {
   _lg_cache claude goby expired "$now" "{\"window_pct\":10,\"weekly_pct\":19,\"at\":$at}"
   _home_fuel_dotv_compute "" claude goby "$now"
   [ "$_FDOT" = "DIM●" ] || { echo "dot: $_FDOT"; false; }
-  [ "$_FNOTE" = "weekly 19% · 21h ago · expired" ] || { echo "note: $_FNOTE"; false; }
+  [ "$_FNOTE" = "7d 19% · 21h ago · needs-refresh" ] || { echo "note: $_FNOTE"; false; }
   _lg_cache claude goby expired "$now" "{\"window_pct\":10,\"weekly_pct\":88,\"at\":$at}"
   _home_fuel_dotv_compute "" claude goby "$now"
   [ "$_FDOT" = "DIM◐" ] || { echo "dot: $_FDOT"; false; }
@@ -353,30 +353,30 @@ _lg_cache() {
   printf '{"window_pct":8.0,"weekly_pct":85.4,"window_resets_at":"2099-01-01T00:00:00Z","weekly_resets_at":"2099-01-07T00:00:00Z","source":"vendor","models":[{"name":"Fable","pct":97.2,"resets_at":"2099-01-07T00:00:00Z"}],"cached_at":%s,"scanned_at":%s}\n' \
     "$now" "$now" > "$CLIKAE_HOME/state/usage/claude/goby.json"
   _home_fuel_dotv_compute "" claude goby "$now"
-  [ "$_FNOTE" = "window 8% · weekly 85% · Fable 97%" ] || { echo "note: $_FNOTE"; false; }
+  [ "$_FNOTE" = "5h 8% · 7d 85% · Fable 97%" ] || { echo "note: $_FNOTE"; false; }
   [ -z "$_FREMEDY" ] || { echo "remedy on a healthy tank: $_FREMEDY"; false; }
   # Older than the TTL: the age comes AFTER the model segment, as the grammar says.
   printf '{"window_pct":8,"weekly_pct":85,"window_resets_at":"2099-01-01T00:00:00Z","weekly_resets_at":"2099-01-07T00:00:00Z","source":"vendor","models":[{"name":"Fable","pct":97,"resets_at":"2099-01-07T00:00:00Z"}],"cached_at":%s,"scanned_at":%s}\n' \
     "$(( now - 10800 ))" "$(( now - 10800 ))" > "$CLIKAE_HOME/state/usage/claude/goby.json"
   _home_fuel_dotv_compute "" claude goby "$now"
-  [ "$_FNOTE" = "window 8% · weekly 85% · Fable 97% · 3h ago" ] || { echo "note: $_FNOTE"; false; }
+  [ "$_FNOTE" = "5h 8% · 7d 85% · Fable 97% · 3h ago" ] || { echo "note: $_FNOTE"; false; }
   # expired with no last number: the word, and the remedy beside it (not in it).
   _lg_cache claude tuna expired "$now" ""
   _home_fuel_dotv_compute "" claude tuna "$now"
-  [ "$_FNOTE" = "expired" ] || { echo "note: $_FNOTE"; false; }
-  [ "$_FREMEDY" = "clikae usage claude --wake tuna" ] || { echo "remedy: $_FREMEDY"; false; }
+  [ "$_FNOTE" = "needs-refresh" ] || { echo "note: $_FNOTE"; false; }
+  [ "$_FREMEDY" = "refresh clikae usage claude --wake tuna" ] || { echo "remedy: $_FREMEDY"; false; }
   # the weekly-BETA cache: vendor sentence in, board grammar out; unknown shape stays verbatim.
   _home_weekly_normv "85% of your weekly limit"     # what limit_weekly_marker writes
-  [ "$_WNORM" = "weekly 85%" ] || { echo "norm: $_WNORM"; false; }
+  [ "$_WNORM" = "7d 85%" ] || { echo "norm: $_WNORM"; false; }
   _home_weekly_normv "used 85% of your weekly limit"
-  [ "$_WNORM" = "weekly 85%" ] || { echo "norm: $_WNORM"; false; }
+  [ "$_WNORM" = "7d 85%" ] || { echo "norm: $_WNORM"; false; }
   _home_weekly_normv "7% of your week limit"
-  [ "$_WNORM" = "weekly 7%" ] || { echo "norm: $_WNORM"; false; }
+  [ "$_WNORM" = "7d 7%" ] || { echo "norm: $_WNORM"; false; }
   _home_weekly_normv "something the parser never saw"
   [ "$_WNORM" = "something the parser never saw" ] || { echo "norm: $_WNORM"; false; }
   # codex segments: spent %, rounded UP on a fraction like the light itself; 5h is "window".
-  _home_codex_segv 11.5 300;   [ "$_CSEG" = "window 12%" ] || { echo "seg: $_CSEG"; false; }
-  _home_codex_segv 88 10080;   [ "$_CSEG" = "weekly 88%" ] || { echo "seg: $_CSEG"; false; }
+  _home_codex_segv 11.5 300;   [ "$_CSEG" = "5h 12%" ] || { echo "seg: $_CSEG"; false; }
+  _home_codex_segv 88 10080;   [ "$_CSEG" = "7d 88%" ] || { echo "seg: $_CSEG"; false; }
   _home_codex_segv 40 43200;   [ "$_CSEG" = "30d 40%" ]    || { echo "seg: $_CSEG"; false; }
   ! _home_codex_segv "" 300 || false
 }
@@ -403,11 +403,17 @@ _lg_cache() {
   clikae init claude tuna >/dev/null
   local now; now="$(date +%s)"
   mkdir -p "$CLIKAE_HOME/state/usage/claude"
-  printf '{"window_pct":null,"weekly_pct":null,"window_resets_at":null,"weekly_resets_at":null,"source":"expired","reason":"expired-token","cached_at":%s,"scanned_at":%s,"last_good":{"window_pct":10,"weekly_pct":85,"at":%s}}\n' \
+  printf '{"window_pct":null,"weekly_pct":null,"window_resets_at":null,"weekly_resets_at":null,"source":"unknown","reason":"needs-refresh","cached_at":%s,"scanned_at":%s,"last_good":{"window_pct":10,"weekly_pct":85,"at":%s}}\n' \
     "$now" "$now" "$(( now - 18000 ))" > "$CLIKAE_HOME/state/usage/claude/tuna.json"
   CLIKAE_NO_INTERACTIVE=1 CLIKAE_LANG=en-US run clikae
   [ "$status" -eq 0 ]
-  [[ "$output" == *"tuna"*"weekly 85% · 5h ago · expired"* ]] || { echo "$output"; false; }
+  [[ "$output" == *"tuna"*"7d 85% · 5h ago · needs-refresh"* ]] || { echo "$output"; false; }
   [[ "$output" != *"to renew"* ]] || { echo "$output"; false; }
-  [[ "$output" == *"! sign-in expired — renew it: clikae usage claude --wake tuna"* ]] || { echo "$output"; false; }
+  [[ "$output" == *"! token lapsed, sign-in fine — refresh it: clikae usage claude --wake tuna"* ]] || { echo "$output"; false; }
+  # relogin-required gets the sign-in hint and the session command instead.
+  printf '{"window_pct":null,"weekly_pct":null,"window_resets_at":null,"weekly_resets_at":null,"source":"unknown","reason":"relogin-required","cached_at":%s,"scanned_at":%s}\n' \
+    "$now" "$now" > "$CLIKAE_HOME/state/usage/claude/tuna.json"
+  CLIKAE_NO_INTERACTIVE=1 CLIKAE_LANG=en-US run clikae
+  [[ "$output" == *"tuna"*"relogin-required"* ]] || { echo "$output"; false; }
+  [[ "$output" == *"! sign-in expired — renew it: clikae claude tuna"* ]] || { echo "$output"; false; }
 }

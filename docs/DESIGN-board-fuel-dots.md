@@ -248,12 +248,17 @@ quota (0–100); unavailable fields are null. `source` is `"vendor"` (a live
 call actually answered), `"transcript"` (derived from local evidence the
 engine already wrote — currently Codex's `rate_limits`, scanned from
 rollouts modified in the last 7 days, the same `-mmin -10080` window
-`limit_codex_status` uses), `"expired"` (#107: the vendor refused an access
-token whose credentials hold a refresh token, or that token's own recorded
-expiry had passed — the login is fine, only a session refreshes it; always
-with `reason:"expired-token"` and no numbers), or `"unknown"` (no usable
-reading; `reason` is `no-credentials`, `network`, `rate-limited` or
-`unparseable` when known). A `rate-limited` reading (#136: HTTP 429, which
+`limit_codex_status` uses), or `"unknown"` (no usable reading; `reason` is
+`needs-refresh`, `relogin-required`, `keychain-denied`, `no-credentials`,
+`network`, `rate-limited` or `unparseable` when known). #107's `"expired"`
+source is retired by #177/#179: an access token past its expiry with a refresh
+token beside it is refreshed before it is measured (`clikae usage` runs the
+same one-prompt burn `--wake` does), so it reads as numbers; `needs-refresh`
+is what a reader that may not spend (the board, a session's wake window, burn,
+`clikae watch`) writes instead, and `relogin-required` is a refresh that ran
+and was still refused. Every public reading carries `age_sec`, and
+`window_reset_passed` / `weekly_reset_passed: true` when that axis's reset is
+already behind now (#174). A `rate-limited` reading (#136: HTTP 429, which
 used to be part of the `network` lump) may carry `retry_after`, the vendor's
 own `Retry-After` header in whole seconds, and only when that header was in
 1..86400 — `clikae watch`'s usage poll schedules that tank's next poll off it
@@ -268,19 +273,20 @@ the tank's weekly number is the binding limit, so the note names it
 (`weekly 87% · Fable 100%`, the name being the vendor's), and a row at 100%
 turns a green dot yellow. A row at or below the tank value, or no `models[]`,
 adds nothing. A reading with no numbers shows the last one that had them,
-aged, with a reason word (`expired`, `no-probe`, `no-signal`); see
-docs/usage.md.
-On the board an expired reading under 24h old draws the no-reading `·` with
-the note `expired` (the word lives in the note, not the dot — no emoji on any
-delivery surface, so the note carries a word and costs no special width
-handling). The remedy, `clikae usage --wake <tank>`, is not on the row since
+aged, with a reason word (`needs-refresh`, `relogin-required`,
+`keychain-denied`, `no-probe`, `no-signal`); see docs/usage.md.
+On the board a `needs-refresh` / `relogin-required` reading under 24h old
+draws the no-reading `·` with the reason as the note (the word lives in the
+note, not the dot — no emoji on any delivery surface, so the note carries a
+word and costs no special width handling). The remedy is not on the row since
 2026-10-11 (see "One grammar for the note" below): the static board prints it
-as a footer line per expired tank; the interactive one leaves it to Enter on
-the row and names `--wake` on the `?` page;
-`clikae usage` prints the full sentence, `token expired — run a session or
-'clikae usage --wake <tank>'`. The tmux status row, which has a fuel SLOT rather than a padded
-grid, draws the word `expired` in that slot instead of the dot, on the same
-24h ceiling, measured like any other ASCII fuel string
+as a footer line per tank — `T_REFRESH_HINT` with `clikae usage <engine>
+--wake <tank>` for needs-refresh, `T_EXPIRED_HINT` with `clikae <engine>
+<tank>` for relogin-required; the interactive one leaves it to Enter on the
+row and names both on the `?` page; `clikae usage` prints the full sentence
+on stderr. The tmux status row, which has a fuel SLOT rather than a padded
+grid, draws `refresh` or `relogin` in that slot instead of the dot, on the
+same 24h ceiling, measured like any other ASCII fuel string
 (`docs/DESIGN-tmux.md` Rule 11 §6/§7). The optional
 adapter hook is `adapter_usage <config-dir>`. Claude calls the vendor OAuth
 usage endpoint; Codex never runs a `codex` process for this — it reads the
@@ -297,9 +303,20 @@ review, P3 — the two coincide for a vendor reading but not for codex's
 transcript evidence, whose `cached_at` is the underlying event's own time).
 TTL defaults to 120 seconds against `scanned_at`; `CLIKAE_USAGE_TTL`
 overrides it and `--fresh` bypasses it. Errors are cached too — except that
-an `"expired"` reading is cached for at most `_USAGE_AUTH_FAIL_TTL_SEC` (60),
-so the read after a session refreshes the token sees numbers (#107). Writes are
-atomic, and `usage_read` is the ONLY writer in the repo.
+a `needs-refresh` / `relogin-required` reading is cached for at most
+`_USAGE_AUTH_FAIL_TTL_SEC` (60), so the read after a session refreshes the
+token sees numbers (#107), and a `keychain-denied` read never overwrites a
+cache that holds a valid reading with numbers at all (#179; anything else on
+disk — a retired `expired` record, a failure, a malformed file — is replaced
+by `unknown`/`keychain-denied` with the last numbers carried forward). A
+cached `needs-refresh` is served only to a reader that may not spend; one
+that may refreshes instead. Writes are atomic, and `usage_read` is the ONLY
+writer in the repo. Each reading is stamped with when its measurement
+started, and a record another reader published while it was in flight, with
+a stamp not behind its own, is kept rather than overwritten (review of #184:
+a reader whose refresh was refused must not bury the numbers of the reader
+whose refresh ran). Every refresh, whatever burn's exit code, is followed by
+one more measurement — never a second refresh — and only that decides.
 
 **Who writes this cache, and who reads what (round-2 review, P2-1):**
 
@@ -552,7 +569,7 @@ Pasted from a real board with fourteen tanks, the Tanks section read like this
 (one line per engine family, abridged):
 
 ```
-◐ tuna    claude   hello@cver.net          weekly 99.0% · 17h ago · expired · clikae usage --wake tuna to renew
+◐ tuna    claude   hello@cver.net          weekly 99.0% · 17h ago · expired · clikae usage --wake tuna to renew   (the word `expired` has since been retired — #179)
 ◐ salmon  codex    xiaoyacomic@gmail.com   5h 100% left · weekly 12% left (resets 03:21 on 15 Oct)
 ● chromis agy      chodaict@gmail.com      weekly 21.7% · 8d ago · no-signal
 ```
@@ -591,12 +608,16 @@ The fix is a grammar, not a layout — stated once above
   → `weekly 85%`); any other phrase stays verbatim. `clikae usage` and
   `burn --json` are untouched — the human note and the `% left` dialect live
   on there, per engine.
-- **A state word is the last thing on the row** (`expired`, `no-signal`,
-  `no-probe`, `reset passed · unverified`, `last used 13d ago`); a codex reset
-  instant appears only when the light is not green.
+- **A state word is the last thing on the row** (`needs-refresh`,
+  `relogin-required`, `no-signal`, `no-probe`, `reset passed · unverified`,
+  `last used 13d ago`); a codex reset instant appears only when the light is
+  not green. The two quota labels are `5h` and `7d` on every surface
+  (`USAGE_LABEL_WINDOW` / `USAGE_LABEL_WEEKLY`, lib/core/usage.sh, #179 —
+  chodaict's choice over abstract words; defined once).
 - **The remedy is `$_FREMEDY`, not part of the note.** The renderer places it:
-  the static board (no cursor) prints one footer line per expired tank, in the
-  over-quota line's shape. The interactive board does not print it at all:
+  the static board (no cursor) prints one footer line per such tank, in the
+  over-quota line's shape (`T_REFRESH_HINT` for needs-refresh, `T_EXPIRED_HINT`
+  for relogin-required). The interactive board does not print it at all:
   there, Enter on the row *is* the remedy — opening a session renews the token
   (`docs/usage.md`, "start a session on that tank") — and `--wake` is the
   headless / other-machine path, stated once on the `?` page under the dots

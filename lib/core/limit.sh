@@ -538,7 +538,16 @@ limit_profile_dry() {
   local files
   files=""
   if [ "${_CLIKAE_BOARD:-0}" != 1 ]; then
-    files="$(find "$proj_root" -name '*.jsonl' -mmin -300 2>/dev/null)"
+    # #162: a caller asking about ONE parked session (wake, via _wake_scopev)
+    # names that session's own transcript, already window-filtered, so a
+    # subagent's or a sibling session's turn cannot answer for it. Keyed on the
+    # tank dir, so account contagion asking about a SIBLING tank still reads
+    # that sibling whole.
+    if [ -n "${_LIMIT_PARKED_FILES:-}" ] && [ "$dir" = "${_LIMIT_PARKED_DIR:-}" ]; then
+      files="$_LIMIT_PARKED_FILES"
+    else
+      files="$(find "$proj_root" -name '*.jsonl' -mmin -300 2>/dev/null)"
+    fi
     [ -n "$files" ] || return 1
   fi
 
@@ -743,7 +752,7 @@ _limit_tank_dry_self() {
      && case "$stamp" in *T*) true ;; *) false ;; esac \
      && ! limit_reset_epoch "$reset" "$anchor" >/dev/null 2>&1 \
      && [ "$((now - anchor))" -gt "$LIMIT_CODEX_UNPHRASED_SEC" ]; then
-    _limit_read_after "$1" "$2" "$((anchor + LIMIT_CODEX_UNPHRASED_SEC))" && return 1
+    ! _limit_parked_is "$1" "$2" && _limit_read_after "$1" "$2" "$((anchor + LIMIT_CODEX_UNPHRASED_SEC))" && return 1
     printf '%s' "$LIMIT_RESET_UNVERIFIED"
     return 0
   fi
@@ -753,7 +762,13 @@ _limit_tank_dry_self() {
     # as a successful turn, so the tank is not dry and not unverified: the
     # board draws that reading (the tuna row: a fresh 96% under a stale
     # limit). A reading from before the reset proves nothing and is ignored.
-    _limit_read_after "$1" "$2" "$at" && return 1
+    #
+    # 🔴 Except when the question is about a PARKED SESSION (#163, wake's
+    # watcher). A reading says the ACCOUNT has fuel; it says nothing about
+    # whether this conversation moved — and the watcher writes that reading
+    # itself every WAKE_USAGE_INTERVAL, so it was answering its own question
+    # with "not dry" and never seeing the hand-over below.
+    ! _limit_parked_is "$1" "$2" && _limit_read_after "$1" "$2" "$at" && return 1
     printf '%s' "$LIMIT_RESET_UNVERIFIED"
   else
     # Preserve the store's existing TTL for evidence whose reset did not expire.
@@ -763,6 +778,16 @@ _limit_tank_dry_self() {
     esac
     printf '%s' "$reset"
   fi
+}
+
+# _limit_parked_is <engine> <tank> -> 0 when the caller scoped this question to
+# a parked session on exactly this tank (`_LIMIT_PARKED_TANK`, set as a local
+# by wake's _wake_scopev). Then only that session's transcript is evidence:
+# _limit_read_after's account-level reading is not, and limit_profile_dry
+# reads `_LIMIT_PARKED_FILES` when it has them. A sibling tank asked about by
+# account contagion is never this tank, so it keeps the ordinary answer.
+_limit_parked_is() {
+  [ -n "${_LIMIT_PARKED_TANK:-}" ] && [ "$_LIMIT_PARKED_TANK" = "$1/$2" ]
 }
 
 # _limit_read_after <engine> <tank> <epoch> -> 0 when the tank's usage cache
@@ -1550,8 +1575,10 @@ limit_codex_status_light() {
 _limit_codex_window_label() {
   local win="$1"
   case "$win" in ''|*[!0-9]*) printf 'usage'; return ;; esac
-  if   [ "$win" -le 360 ];   then printf '5h'
-  elif [ "$win" -le 10080 ]; then printf 'weekly'
+  # #179: the labels are lib/core/usage.sh's (5h / 7d), defined once; this
+  # leaf may be sourced without it, so the same two words are the fallback.
+  if   [ "$win" -le 360 ];   then printf '%s' "${USAGE_LABEL_WINDOW:-5h}"
+  elif [ "$win" -le 10080 ]; then printf '%s' "${USAGE_LABEL_WEEKLY:-7d}"
   else printf '%dd' "$((win / 1440))"; fi
 }
 
