@@ -451,7 +451,7 @@ _assert_first_terminal_is() {
   [ "$status" -eq 0 ]
   [ "$(cat "$BATS_TEST_TMPDIR/codex_calls")" = "2" ]
   grep -q '^waiting-reset ' "$TRACE"
-  _assert_first_terminal_is done
+  _assert_first_terminal_is "done"
 }
 
 # agy: dry on its first call, writes the artifact on the second. agy only ever
@@ -515,6 +515,7 @@ STUB
 
 @test "_burn_status_write (#183 r3 P1): the terminal flag follows the LAST row — an in-progress row after a terminal one re-arms the exit guard" {
   _src_burn
+  # shellcheck disable=SC2034  # read by _burn_status_write through dynamic scope
   local run_dir="$BATS_TEST_TMPDIR/run" burn_id="burn-1" started_at=1
   _BURN_TERMINAL_WRITTEN=0
   _burn_status_write dry false codex T1 "" "tank ran dry" ""
