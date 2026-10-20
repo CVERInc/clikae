@@ -1,47 +1,39 @@
 # shellcheck shell=bash
 
-# #107: the ceiling on --wake's one-prompt burn, whole seconds. Passed to
-# burn's own --timeout, so it bounds the engine run the way every other burn
-# is bounded (timeout/gtimeout/perl, or an honest warning with none of them).
-_USAGE_WAKE_TIMEOUT_SEC=60
-
 # _usage_wake <engine> <tank> <force_cockpit> <json>
-# Refresh a tank's token the only way clikae knows how without touching the
-# vendor's OAuth flow itself: run the engine headless for one trivial prompt,
-# through `clikae burn` — the same process, the same cockpit gate, the same
-# running-burn lock and tmux session — then re-read usage with no cache.
-# A child process, not cmd_burn in this shell: burn owns fd 1/2 redirection,
-# EXIT traps and `exit`, none of which may leak into this command.
+# `--wake`: refresh the token unconditionally (one trivial prompt through
+# `clikae burn` — usage_wake_burn, lib/core/usage.sh), then re-read usage with
+# no cache. Since #177 a plain `clikae usage` does the same refresh on its own
+# when the token is past its expiry; --wake stays for "I want it refreshed
+# now, whatever the reading says" and for --force-cockpit.
 _usage_wake() {
-  local e="$1" t="$2" force="$3" json="$4" work rc=0 reading fc=""
-  [ "$force" != 1 ] || fc=--force-cockpit
-  work="$(mktemp -d "${TMPDIR:-/tmp}/clikae-wake.XXXXXX")" || { log_err "wake: could not create a temp directory"; return 1; }
-  # The artifact is the proof the engine actually answered. The prompt names
-  # it verbatim; nothing else is asked for.
-  # Burn's own words (progress, refusals) go to stderr: stdout stays the
-  # reading, the same shape `clikae usage` always prints.
-  "$CLIKAE_BIN" burn "$e" "$t" --no-reroute --infra-retries 0 \
-    --timeout "$_USAGE_WAKE_TIMEOUT_SEC" \
-    --artifact "$work/wake-ok" --add-dir "$work" \
-    --prompt "Write the single word ok into the file $work/wake-ok and do nothing else." \
-    ${fc:+"$fc"} 1>&2 || rc=$?
-  rm -rf "$work"
+  local e="$1" t="$2" force="$3" json="$4" rc=0 reading
+  usage_wake_burn "$e" "$t" "$force" || rc=$?
   if [ "$rc" -ne 0 ]; then
     log_err "wake: the burn on $e/$t did not complete (exit $rc) — --wake did not re-read usage."
     return "$rc"
   fi
-  reading="$(CLIKAE_USAGE_TTL=0 usage_read "$e" "$t" 1)"
+  # The burn ran: a token the vendor still refuses now is relogin-required,
+  # not another refresh (_CLIKAE_USAGE_AFTER_WAKE, read by usage_read).
+  reading="$(CLIKAE_USAGE_TTL=0 CLIKAE_USAGE_AUTO_WAKE=0 _CLIKAE_USAGE_AFTER_WAKE=1 usage_read "$e" "$t" 1)"
   _usage_print "$e" "$t" "$reading" "$json"
 }
 
 _usage_print() {
-  local e="$1" t="$2" reading="$3" json="$4"
+  local e="$1" t="$2" reading="$3" json="$4" _reason
   if [ "$json" = 1 ]; then
     printf '{"engine":%s,"tank":%s,%s\n' "$(json_str "$e")" "$(json_str "$t")" "${reading#\{}"
   else
     printf '%s/%s %s\n' "$e" "$t" "$reading"
+    # #179: the remedy line for an auth reason, on stderr (stdout stays the
+    # "<engine>/<tank> <reading>" line for anything parsing it).
     case "$reading" in
-      *'"source":"expired"'*) usage_expired_hintv "$t"; printf '  %s\n' "$_UEH" >&2 ;;
+      *'"reason":"'*)
+        _reason="${reading#*\"reason\":\"}"; _reason="${_reason%%\"*}"
+        usage_auth_hintv "$e" "$t" "$_reason"
+        [ -z "$_UEH" ] || printf '  %s\n' "$_UEH" >&2 ;;
+    esac
+    case "$reading" in
       *'"groups":['*) _usage_groups_line "$reading" ;;
     esac
   fi
@@ -77,19 +69,28 @@ _USAGE_SUM_ENGINES=""
 _usage_summary_add() {
   local e="$1" tok var
   [ "$e" != antigravity ] || e=agy
+  # #174: a number is never printed as "now" when it is not. Past an hour the
+  # token carries its age ("92 3h ago"); a last-known number carries the age
+  # of THAT reading; and an axis whose reset has passed since the reading
+  # says `reset` instead of the percentage it had before the reset.
   tok="$(printf '%s' "$2" | jq -r --argjson now "$(date +%s)" '
     def r: if type == "number" then (. + 0.5 | floor | tostring) else null end;
+    def age: if . == null or . < 3600 then "" elif . < 86400 then " \(./3600|floor)h ago" else " \(./86400|floor)d ago" end;
     (.weekly_pct | numbers // -1) as $wk |
     ([(.models // [])[] | select(.pct > $wk) | "\(.name) \(.pct|r)"] | join(",")) as $bind |
     (if $bind == "" then "" else "(" + $bind + ")" end) as $sp |
-    if (.weekly_pct|r) != null then (.weekly_pct|r) + $sp
-    elif (.window_pct|r) != null then (.window_pct|r) + $sp
+    (.age_sec | age) as $a |
+    (.last_age_sec | age) as $la |
+    if (.weekly_pct|r) != null then
+      (if .weekly_reset_passed == true then "reset" else (.weekly_pct|r) + $sp end) + $a
+    elif (.window_pct|r) != null then
+      (if .window_reset_passed == true then "reset" else (.window_pct|r) + $sp end) + $a
     elif (.last_used_at|type) == "number" then
       ($now - .last_used_at) as $d |
       "@" + (if $d < 3600 then "\($d/60|floor)m" elif $d < 86400 then "\($d/3600|floor)h" else "\($d/86400|floor)d" end)
     elif .gap == "no-signal" and has("last_used_at") then "no-signal"
-    elif (.last_weekly_pct|r) != null then (.last_weekly_pct|r) + "?"
-    elif (.last_window_pct|r) != null then (.last_window_pct|r) + "?"
+    elif (.last_weekly_pct|r) != null then (.last_weekly_pct|r) + "?" + $la
+    elif (.last_window_pct|r) != null then (.last_window_pct|r) + "?" + $la
     else "??" end' 2>/dev/null)" || tok="??"
   [ -n "$tok" ] || tok="??"
   var="_USAGE_SUM_$(printf '%s' "$e" | tr -c 'A-Za-z0-9' '_')"
@@ -142,17 +143,30 @@ live call answered), "quota-api" (agy: its own retrieveUserQuotaSummary
 answered; the top-level numbers are one quota group's, headline_group,
 and every group is under groups),
 "transcript" (read from evidence the engine already
-wrote locally — no live process invoked; currently Codex), "expired" (the
-login is fine but its access token has lapsed — see --wake), or "unknown"
-(no usable reading).
+wrote locally — no live process invoked; currently Codex), or "unknown"
+(no usable reading). Every reading carries "age_sec" (how old its evidence
+is) and, when an axis's own resets_at is already behind now,
+"window_reset_passed" / "weekly_reset_passed": true — the percentage beside
+it is from before a reset.
+
+An access token past its expiry with a refresh token beside it is REFRESHED
+BEFORE IT IS MEASURED: one trivial headless prompt through `clikae burn`
+(the same thing --wake does), then the real reading. CLIKAE_USAGE_AUTO_WAKE=0
+turns that off for a reader that must not spend (the board, a session's wake
+window, burn and `clikae watch` set it).
 
 A reading with no numbers may carry one more field, "reason" — present only
 when it is actually known, never on a vendor/transcript reading:
-  expired-token   (always with source "expired") the vendor refused the
-                  token, or its own recorded expiry had passed, and the
-                  credentials hold a refresh token. Only a session refreshes
-                  it — an idle tank reads this, not "no login". Cached for at
-                  most 60s, so the read after a session sees fresh numbers.
+  needs-refresh   the token lapsed, the login is fine, and this reader was
+                  not allowed to refresh it (or burn's own gates refused the
+                  refresh: the recorded cockpit, a running burn). A session
+                  clears it; so does `clikae usage` from a terminal. Cached
+                  for at most 60s.
+  relogin-required the refresh ran and the vendor still refused the token:
+                  `clikae <engine> <tank>`, then /login. Cached 60s.
+  keychain-denied macOS: this process may not read the tank's Keychain item.
+                  The last reading is served with its age (the reason rides
+                  beside the numbers) and the cache is not written.
   no-credentials  no usable token was found, or the vendor refused one
                   with no refresh token to renew it: this one needs a login.
   network         no connection, a timeout or a server error.
@@ -171,8 +185,8 @@ using the all-models number, because picking the relevant per-model row
 would mean knowing which model a tank runs, and a tank has no such property
 (--model is an argument to burn/relay, not a setting on a tank).
 
---wake <tank> refreshes an expired token: it runs the engine headless for
-one trivial prompt through `clikae burn` (so burn's rules apply unchanged —
+--wake <tank> refreshes the token unconditionally: it runs the engine headless
+for one trivial prompt through `clikae burn` (so burn's rules apply unchanged —
 the recorded cockpit is refused without --force-cockpit, a tank with a
 running burn is refused, the run is bounded to 60s), then re-reads usage
 with no cache and prints that reading. Name the engine when the same tank

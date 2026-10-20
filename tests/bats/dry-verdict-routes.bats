@@ -7,8 +7,8 @@
 #   · claude/wrasse — a PER-MODEL limit ("You've reached your Fable limit",
 #     apiError model_requires_usage_credits, no reset phrase) was counted as
 #     the whole tank running dry, because the reading awk took ANY synthetic
-#     api-error line as a limit. The vendor's own usage API said window 0%,
-#     weekly 79%, models:[Fable 100%] at the same moment: every other model
+#     api-error line as a limit. The vendor's own usage API said 5h 0%,
+#     7d 79%, models:[Fable 100%] at the same moment: every other model
 #     on that account still worked.
 #   · codex/salmon — a usage limit whose reset had long passed, followed by a
 #     "workspace is out of credits" event with no reset phrase at all, read
@@ -151,7 +151,7 @@ _wrasse_usage() {
   [ "$status" -eq 0 ]
 }
 
-@test "route B: the board row reads 'Fable dry · weekly 79%' on a non-red dot" {
+@test "route B: the board row reads 'Fable dry · 7d 79%' on a non-red dot" {
   _boot
   _claude_tank wrasse _wrasse_line
   _wrasse_usage wrasse
@@ -159,7 +159,7 @@ _wrasse_usage() {
   _home_fuel_memo_reset
   _home_fuel_dotv "$dry" claude wrasse
   [[ "$_FNOTE" == "Fable dry · "* ]] || { echo "note: $_FNOTE"; false; }
-  [[ "$_FNOTE" == *"weekly 79%"* ]] || { echo "note: $_FNOTE"; false; }
+  [[ "$_FNOTE" == *"7d 79%"* ]] || { echo "note: $_FNOTE"; false; }
   [[ "$_FDOT" != RED* ]] || { echo "dot: $_FDOT"; false; }
   ! _home_is_dryv "$dry" claude wrasse || false
 }

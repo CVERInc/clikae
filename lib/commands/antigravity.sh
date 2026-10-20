@@ -575,7 +575,7 @@ cmd_antigravity() {
     local -a _agy_env=(--env "CLIKAE_TANK_NAME=$tank" --env "HOME=$HOME")
     [ -n "${CLIKAE_HOME:-}" ] && _agy_env+=(--env "CLIKAE_HOME=$CLIKAE_HOME")
 
-    local CLIKAE_TMUX_SESS CLIKAE_TMUX_SESS_EXISTS
+    local CLIKAE_TMUX_SESS CLIKAE_TMUX_SESS_EXISTS CLIKAE_TMUX_SESS_SOCK
     tmux_sessv "$_agy_sess"
     if [ "$CLIKAE_TMUX_SESS_EXISTS" -eq 0 ]; then
       tmux_spawn_session "${_agy_env[@]}" \
@@ -588,11 +588,15 @@ cmd_antigravity() {
       _agy_here="$(tmux display-message -p -t "${TMUX_PANE:-}" '#S' 2>/dev/null || true)"
       [ -z "$_agy_here" ] && _agy_here="$(tmux display-message -p '#S' 2>/dev/null || true)"
       if [ -n "$(tmux list-clients -t "=$_agy_here" 2>/dev/null || true)" ]; then
-        exec tmux switch-client -t "=$CLIKAE_TMUX_SESS"
+        # Possibly across servers (DESIGN-tmux Rule 13) — tmux_switch_to.
+        tmux_switch_to "$CLIKAE_TMUX_SESS" "$CLIKAE_TMUX_SESS_SOCK"
       fi
       log_info "Started agy/$tank in tmux session $CLIKAE_TMUX_SESS (no client here to switch)."
       log_dim  "Reach it with:  tmux switch-client -t $CLIKAE_TMUX_SESS"
       return 0
+    fi
+    if [ -n "$CLIKAE_TMUX_SESS_SOCK" ]; then
+      exec tmux -S "$CLIKAE_TMUX_SESS_SOCK" attach -t "=$CLIKAE_TMUX_SESS"
     fi
     exec tmux attach -t "=$CLIKAE_TMUX_SESS"
   fi

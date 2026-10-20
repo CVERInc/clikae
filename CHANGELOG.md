@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- `clikae tanks --available`: list tanks that can take work, ordered by remaining
+  quota per hour until reset. Supports an engine filter, cockpit inclusion, and
+  JSON with scores and skip reasons; reads the current inventory and usage.
 ### Fixed
 
 - **A `--no-reroute` burn that runs dry is paused, not silently stopped**
@@ -50,6 +55,91 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   running watcher, which says why); creating the watcher window ends by
   selecting the engine window; the status line says `ctrl-b 0 returns to
   claude`.
+
+- **The cockpit's tmux socket no longer lives in `/tmp`** (#176). A `/tmp`
+  sweep that removed `/tmp/tmux-<uid>` left a two-day-old cockpit running but
+  invisible: the board listed nothing, attach found nothing, a resume of the
+  same transcript started a second engine, and `burn` died with "error
+  creating /tmp/tmux-<uid>/default". The socket now defaults to
+  `~/.clikae/state/tmux` (an explicit `TMUX_TMPDIR` or an inherited `$TMUX`
+  still wins). A cockpit started by an older clikae stays on the `/tmp`
+  socket until it is restarted — a tmux session cannot move between servers —
+  and until then the board lists it, `clikae <tank>` attaches to it instead
+  of spawning a twin, and per-session reads reach it — whichever of the two
+  servers you type the command on: inside an old cockpit the board still
+  lists the new server's sessions, and when the cockpit you asked for is on
+  the other server your terminal is handed over to it (tmux cannot
+  `switch-client` across servers). A server whose socket file was deleted is
+  recovered before the board lists and before a launch decides, so a direct
+  `clikae <engine> <tank>` lands in it instead of starting a second engine:
+  clikae records each server's pid and start time at spawn and asks it
+  (SIGUSR1) to re-create its socket — only after checking that the pid is
+  still that same tmux server of yours. **To migrate a running cockpit:** quit the engine and start it
+  again with the same `clikae <engine> <tank>`; the new session is born on
+  the new socket. (DESIGN-tmux Rule 13.)
+- **`clikae usage` refreshes a lapsed access token before it measures, and
+  the word `expired` is retired** (#177, #179). An idle Claude tank whose
+  access token had passed its expiry — with a perfectly good refresh token
+  beside it — read `source:"expired"`, a terminal-sounding word that made a
+  fleet dispatcher reroute six lanes off a tank that needed eleven seconds of
+  refresh. `usage_read` now runs the same one-prompt burn `--wake` does and
+  prints the vendor's numbers. Two words replace the one: `needs-refresh` (a
+  reader that may not spend — the board, a live session's wake window, burn's
+  ranking, `clikae watch` — or the refresh burn was refused by its own gates;
+  a session clears it) and `relogin-required` (the refresh ran and the vendor
+  still refused; a person signs in again). `CLIKAE_USAGE_AUTO_WAKE=0` is the
+  opt-out. The board note, the tmux status row (`refresh` / `relogin`), the
+  `?` page and the static board's footer say which; a cache written by an
+  older version with `source:"expired"` is re-read, never served.
+- **A stale reading looks stale** (#174). Every reading carries `age_sec`;
+  the summary line prints the age past an hour (`claude 92 3h ago`), a
+  last-known number prints its own age, and an axis whose `resets_at` is
+  already behind now carries `window_reset_passed` / `weekly_reset_passed:
+  true` and prints `reset` instead of the percentage it had before the reset.
+- **A reroute's failure names the tank that failed** (#174). The engine's own
+  lines under a `[ FAIL ]` line are headed `codex/B said (rerouted from
+  codex/A):` — "OAuth session expired" no longer reads as A's login.
+- **A refused Keychain read is `keychain-denied`, not `no-credentials`**
+  (#179). A tmux-hosted wake window on a Mac cannot read the tank's Keychain
+  item (no ACL, interaction not allowed); the claude adapter used to report
+  that as "no login" and overwrite the last good numbers every five minutes,
+  which is why the Mac board went grey. The read's own exit status now tells
+  "refused" from "not found" (44), and a refused read serves the last reading
+  with its age and leaves the cache untouched.
+- **`5h` / `7d` are the quota labels everywhere a person reads them** —
+  the board, the tmux row, codex's status note, `clikae usage`'s summary —
+  defined once (`USAGE_LABEL_WINDOW` / `USAGE_LABEL_WEEKLY`). The JSON keys
+  `window_pct` / `weekly_pct` are unchanged.
+- **Waking a limited session reads that session, not the whole tank (#162).**
+  The watcher's "is it parked?", the waiter's "did the vendor already
+  continue it?" and the post-nudge "did it land?" now read the parked
+  session's own transcript (the id clikae stamps at launch). A background
+  subagent's reply, or another session on the same tank, no longer makes the
+  watcher miss the limit or the waiter skip the nudge. With no stamped id the
+  read is the whole tank, as before. The pane counts as moved to a newer
+  conversation (`/clear`, `/resume`) only when a process in that pane holds
+  its transcript open, and a conversation it moved on to that is not parked
+  is never nudged. A newer conversation that nothing ties to the pane, such
+  as a bare `claude` in another terminal, never makes the waiter skip: the
+  read is the whole tank, only the launch-stamped conversation can count as
+  "continued by itself", and the trace says the pane was treated as possibly
+  parked.
+- **The watcher's own usage refresh no longer hides a parked session (#163).**
+  A post-reset usage reading still clears the tank on the board, but on the
+  watcher's path it no longer answers "this conversation moved", so the
+  hand-over at `reset passed · unverified` is seen.
+- **The wake trace records what kind of screen it typed into, and a menu is
+  closed first (#163).** Before the nudge the trace gets the screen's class
+  (`prompt`, `menu(3 options, cursor on 1)`, `limit-text`, `unknown`) and a
+  short hash, never the text on it, and the trace is private (0600 in a
+  0700 directory). The screen counts as a menu only when the options are the
+  last thing on it, with nothing below but blank rows, its box and the
+  `Enter to confirm · Esc to cancel` footer. A numbered list above the prompt
+  is not a menu. A menu gets Escape before typing; if it stays open, nothing
+  is typed (Enter would pick an option) and the waiter gives up visibly.
+  Options with anything else below them, such as a limit banner and its
+  countdown, and a picker with only its selected row visible, get neither
+  Escape nor the nudge: Escape can cancel the automatic limit wait.
 
 ## [0.42.0] — 2026-10-15
 

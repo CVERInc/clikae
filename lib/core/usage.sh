@@ -1,15 +1,30 @@
 # shellcheck shell=bash
 # Shared, atomic usage cache. Only normalized public readings reach disk.
-# P3-5 (round-6 review) and #107: a reading with no numbers may carry a
-# `reason`. FIVE values (#136 added the last), and nothing else is ever
-# emitted or cached:
-#   expired-token   the vendor refused the token (HTTP 401/403), or its own
-#                   recorded expiry had passed, AND the credentials hold a
-#                   refresh token. The login is fine; the access token only
-#                   needs the refresh a session does. This reason always
-#                   comes with source:"expired", never "unknown" — that is
-#                   the whole of #107: an idle tank at 99% weekly used to read
-#                   exactly like a tank with no login at all.
+# P3-5 (round-6 review), #107 and #179: a reading with no numbers may carry a
+# `reason`. SEVEN values, and nothing else is ever emitted or cached:
+#   needs-refresh   the access token is past its expiry (by the vendor's 401/
+#                   403, or by the credentials' own recorded expiry) AND a
+#                   refresh token is beside it. The login is fine; the token
+#                   needs the refresh a session does. A reader that is ALLOWED
+#                   to spend does that refresh itself before it ever prints
+#                   this word (see `usage_read` below, and #177): this reason
+#                   only reaches disk from a reader that may not spend (the
+#                   board's refresh-on-open, a live session's wake window,
+#                   burn's ranking) or whose refresh was refused by burn's own
+#                   gates (the recorded cockpit, a running burn). It is never
+#                   "this tank cannot be used".
+#   relogin-required the refresh was ATTEMPTED — the engine ran one trivial
+#                   prompt — and the vendor still refused the token. Only
+#                   this needs a person (`clikae claude <tank>`, then /login).
+#                   #177: the two words exist so that "needs a session" and
+#                   "needs a person" can never look alike again; the old
+#                   single word `expired` is retired.
+#   keychain-denied the Keychain read itself was REFUSED (macOS: no ACL for
+#                   this process, interaction not allowed, a locked keychain
+#                   — exactly what a tmux-hosted wake window gets). Nothing is
+#                   known about the login either way, so this reason NEVER
+#                   overwrites a cache that holds numbers: `usage_read` serves
+#                   the last reading, with its age, and writes nothing.
 #   no-credentials  no usable token was found at all (no credentials file, no
 #                   Keychain entry, one that does not parse), or the vendor
 #                   refused one that has no refresh token to renew it with.
@@ -26,13 +41,72 @@
 #   unparseable     the call answered 200 and the body was not one usable
 #                   reading (malformed, several documents, over the byte cap).
 # The key is ABSENT (not null) when the reason is unknown, and absent on
-# every vendor/transcript reading, so no existing output shape moves.
+# every vendor/transcript reading, so no existing output shape moves — with
+# one public exception: a keychain-denied read that is serving the LAST
+# reading carries `reason:"keychain-denied"` beside those numbers, so the
+# caller knows the numbers are old and why (that shape is public only; the
+# cache file is untouched).
 #
 # THE AUTH CLASS IS TWO WORDS, NOT ONE. #136 asked for a single `reauth`;
-# `expired-token` and `no-credentials` already are that class, split by the
-# one fact that changes the remedy (is there a refresh token?). A caller that
+# `relogin-required` and `no-credentials` are that class, split by the one
+# fact that changes the remedy (is there a refresh token?). A caller that
 # wants "this will never succeed on its own" asks for either word — see
-# lib/commands/watch.sh's `_watch_usage_poll_one`.
+# lib/commands/watch.sh's `_watch_usage_poll_one`. `needs-refresh` is NOT in
+# that class: a session (or the next `clikae usage`) clears it.
+#
+# #179: the two human labels for the two quotas, defined ONCE. The board, the
+# tmux status row and `clikae usage`'s summary all print these; the JSON
+# keys stay `window_pct` / `weekly_pct` (a contract, not a label). chodaict
+# 2026-10-18 chose the vendor's own durations over abstract words — change
+# them here, together, if the vendor's windows ever change.
+# shellcheck disable=SC2034  # read by home.sh, tmux.sh, limit.sh, usage.sh
+USAGE_LABEL_WINDOW="5h"
+# shellcheck disable=SC2034
+USAGE_LABEL_WEEKLY="7d"
+
+# #177: may THIS reader refresh an expired token by running the engine for
+# one trivial prompt (through `clikae burn`, the same way `--wake` does)? On
+# by default — `clikae usage` and `clikae watch` are a person or a cockpit
+# asking, and an eleven-second refresh is cheaper than a wrong reroute. A
+# reader that must never spend quota sets CLIKAE_USAGE_AUTO_WAKE=0: the
+# board's refresh-on-open (home.sh), a live session's own wake window
+# (wake.sh — the session IS the refresh), burn's run-end and reroute-ranking
+# reads (burn.sh — the burn is the session). The wake child inherits 0 so a
+# refresh can never recurse into another refresh.
+_usage_auto_wake_allowed() {
+  case "${CLIKAE_USAGE_AUTO_WAKE:-1}" in 0|off|no|false) return 1 ;; esac
+  [ -n "${CLIKAE_BIN:-}" ] && [ -x "${CLIKAE_BIN:-}" ] || return 1
+  return 0
+}
+
+# #107: the ceiling on a wake's one-prompt burn, whole seconds. Passed to
+# burn's own --timeout, so it bounds the engine run the way every other burn
+# is bounded (timeout/gtimeout/perl, or an honest warning with none of them).
+_USAGE_WAKE_TIMEOUT_SEC=60
+
+# usage_wake_burn <engine> <tank> [force_cockpit] -> rc of the burn.
+# Refresh a tank's token the only way clikae knows how without touching the
+# vendor's OAuth flow itself: run the engine headless for one trivial prompt,
+# through `clikae burn` — the same process, the same cockpit gate, the same
+# running-burn lock and tmux session. A child process, not cmd_burn in this
+# shell: burn owns fd 1/2 redirection, EXIT traps and `exit`, none of which
+# may leak into the caller. Burn's own words (progress, refusals) go to
+# stderr; stdout is left alone for the reading. Used by `clikae usage --wake`
+# and by usage_read's own refresh-before-measure (#177).
+usage_wake_burn() {
+  local e="$1" t="$2" force="${3:-0}" work rc=0 fc=""
+  [ "$force" != 1 ] || fc=--force-cockpit
+  work="$(mktemp -d "${TMPDIR:-/tmp}/clikae-wake.XXXXXX")" || { log_err "wake: could not create a temp directory"; return 1; }
+  # The artifact is the proof the engine actually answered. The prompt names
+  # it verbatim; nothing else is asked for.
+  CLIKAE_USAGE_AUTO_WAKE=0 "$CLIKAE_BIN" burn "$e" "$t" --no-reroute --infra-retries 0 \
+    --timeout "$_USAGE_WAKE_TIMEOUT_SEC" \
+    --artifact "$work/wake-ok" --add-dir "$work" \
+    --prompt "Write the single word ok into the file $work/wake-ok and do nothing else." \
+    ${fc:+"$fc"} 1>&2 || rc=$?
+  rm -rf "$work"
+  return "$rc"
+}
 #
 # #137: a VENDOR reading may carry one extra key, `models` — an array of
 # `{name, pct, resets_at}`, the vendor's own per-model weekly rows. Read by
@@ -45,13 +119,17 @@
 # token must see the fresh number, not a minute-old "expired".
 _USAGE_AUTH_FAIL_TTL_SEC=60
 
-# usage_expired_hintv <tank> -> $_UEH, the one line a person reads next to an
-# "expired" reading (`clikae usage` text, the board's note). The words are
-# the remedy, not a diagnosis: the login is fine, only a session (or `clikae
-# usage --wake`) refreshes the access token. A `…v` setter so the board's
-# redraw pays no subshell for it.
-usage_expired_hintv() {
-  _UEH="token expired — run a session or 'clikae usage --wake $1'"
+# usage_auth_hintv <engine> <tank> <reason> -> $_UEH, the one line a person
+# reads next to a reading with no numbers for an auth reason (`clikae usage`
+# text, the board's note). The words are the remedy, not a diagnosis. Empty
+# for any other reason. A `…v` setter so the board's redraw pays no subshell.
+usage_auth_hintv() {
+  case "${3:-}" in
+    needs-refresh)    _UEH="token lapsed, not the login — a session refreshes it, or 'clikae usage $1 --wake $2'" ;;
+    relogin-required) _UEH="refresh failed — relogin: 'clikae $1 $2', then /login" ;;
+    keychain-denied)  _UEH="this process may not read the Keychain — showing the last reading; 'clikae usage $1 $2' from a terminal reads it" ;;
+    *) _UEH="" ;;
+  esac
 }
 # usage_unknown [reason] [retry_after]
 # $2 is honoured for `rate-limited` only, and only as an integer in 1..86400
@@ -65,20 +143,30 @@ usage_unknown() {
     *) if [ "$2" -ge 1 ] && [ "$2" -le 86400 ]; then _u_retry=",\"retry_after\":$2"; fi ;;
   esac
   case "${1:-}" in
-    expired-token)
-      printf '{"window_pct":null,"weekly_pct":null,"window_resets_at":null,"weekly_resets_at":null,"source":"expired","reason":"%s"}\n' "$1" ;;
     rate-limited)
       printf '{"window_pct":null,"weekly_pct":null,"window_resets_at":null,"weekly_resets_at":null,"source":"unknown","reason":"rate-limited"%s}\n' "$_u_retry" ;;
-    no-credentials|network|unparseable)
+    needs-refresh|relogin-required|keychain-denied|no-credentials|network|unparseable)
       printf '{"window_pct":null,"weekly_pct":null,"window_resets_at":null,"weekly_resets_at":null,"source":"unknown","reason":"%s"}\n' "$1" ;;
     *)
       printf '%s\n' '{"window_pct":null,"weekly_pct":null,"window_resets_at":null,"weekly_resets_at":null,"source":"unknown"}' ;;
   esac
 }
 
+# _USAGE_NUMERIC_RECORD_JQ — a cache record that is a usable last reading: an
+# object from a live source, stamped, with at least one percentage and none
+# out of range. The Keychain fallback below serves ONLY this; anything else on
+# disk (a retired `source:"expired"` record, a failure record, a malformed
+# file) is not a reading to stand on.
+_USAGE_NUMERIC_RECORD_JQ='type == "object"
+  and (.source == "vendor" or .source == "transcript" or .source == "quota-api")
+  and (.cached_at|type) == "number"
+  and ([.window_pct, .weekly_pct] | any(type == "number"))
+  and ([.window_pct, .weekly_pct] | all(. == null or (type == "number" and . >= 0 and . <= 100)))'
+
 usage_read() (
   local engine="$1" tank="$2" fresh="${3:-0}" cache now ttl reading tmp
-  local adapter_out="" adapter_reason="" adapter_retry=""
+  local adapter_out="" adapter_reason="" adapter_retry="" measured_at="" measured_seen="" can_wake=0 wake_rc
+  _usage_auto_wake_allowed && can_wake=1
   cache="$CLIKAE_HOME/state/usage/$engine/$tank.json"
   now="$(date +%s)"; ttl="${CLIKAE_USAGE_TTL:-120}"
   case "$ttl" in ''|*[!0-9]*) ttl=120 ;; esac
@@ -97,18 +185,95 @@ usage_read() (
   # check should mean, the same thing it already means for a vendor read
   # (where the two coincide). `// .cached_at` falls back for any cache file
   # written before this field existed.
-  # #107: an "expired" reading gets the shorter of the two TTLs.
+  # #107: an auth-failure reading gets the shorter of the two TTLs.
+  # #179: a cache written by a previous version with source:"expired" is the
+  # retired word — it is read as "unknown, refresh first" and never served.
+  # #177 (review of #184, finding 2): a cached `needs-refresh` is never the
+  # FINAL answer for a reader that may refresh it. It was most likely written
+  # by one that may not (the board, a wake window, burn's ranking) — serving
+  # it here would print the failure without attempting the refresh this
+  # reader exists to do. Readers that may not spend still hit it as before.
   if [ "$fresh" != 1 ] && [ -f "$cache" ] &&
-     jq -e --argjson now "$now" --argjson ttl "$ttl" --argjson authttl "$_USAGE_AUTH_FAIL_TTL_SEC" \
+     jq -e --argjson now "$now" --argjson ttl "$ttl" --argjson authttl "$_USAGE_AUTH_FAIL_TTL_SEC" --argjson canwake "$can_wake" \
        '(.scanned_at // .cached_at) as $s
-        | (if .source == "expired" and $authttl < $ttl then $authttl else $ttl end) as $t
-        | $s <= $now and ($now - $s < $t)' "$cache" >/dev/null 2>&1; then
+        | (if (.reason == "needs-refresh" or .reason == "relogin-required") and $authttl < $ttl then $authttl else $ttl end) as $t
+        | .source != "expired" and $s <= $now and ($now - $s < $t)
+          and (.reason != "needs-refresh" or $canwake == 0)' "$cache" >/dev/null 2>&1; then
     _usage_public "$engine" "$tank" "$now" < "$cache"; return
   fi
   reading=""
   if [ -f "$CLIKAE_LIB/adapters/$engine.sh" ]; then
     load_adapter "$engine"
     if declare -F adapter_usage >/dev/null; then
+      _usage_adapter_call "$engine" "$tank"
+      # #177: REFRESH BEFORE MEASURE. The access token is past its expiry and
+      # a refresh token sits beside it — the one state that used to be printed
+      # as the terminal word `expired`. Run the engine for one trivial prompt
+      # (the same burn `--wake` runs; its cockpit gate and running-burn lock
+      # apply unchanged), then ask again. Only a refresh that RAN and still
+      # left the vendor refusing is `relogin-required`; a refresh that could
+      # not run (gated, no engine, timed out) leaves `needs-refresh`, which
+      # says what it is: stale, not broken.
+      # Review of #184, finding 1: the burn's exit code says whether the
+      # BURN worked (engine answered, artifact written), not whether the
+      # CREDENTIALS were renewed — a run that renewed them can still end in a
+      # limit (rc 2) or a missing artifact, and a refusal because another
+      # burn holds the tank (rc 1/2) is usually that other burn renewing
+      # them. So every wake, whatever its rc, is followed by one more
+      # measurement — never by a second wake — and only that measurement
+      # decides. The pre-wake `needs-refresh` is never published as is.
+      if [ "$adapter_reason" = needs-refresh ] && [ "$can_wake" = 1 ]; then
+        # stderr: this function's stdout IS the reading, captured by callers.
+        declare -F log_info >/dev/null && log_info "$engine/$tank: access token lapsed — refreshing it (one trivial prompt, ≤${_USAGE_WAKE_TIMEOUT_SEC}s)" >&2
+        wake_rc=0
+        usage_wake_burn "$engine" "$tank" || wake_rc=$?
+        _usage_adapter_call "$engine" "$tank"
+        if [ "$adapter_reason" = needs-refresh ]; then
+          if [ "$wake_rc" = 0 ]; then
+            adapter_reason=relogin-required
+          else
+            declare -F log_warn >/dev/null && log_warn "$engine/$tank: the refresh did not complete (burn rc $wake_rc) and the token still reads lapsed — reading stays needs-refresh (a session on the tank refreshes it)"
+          fi
+        fi
+      elif [ "$adapter_reason" = needs-refresh ] && [ "${_CLIKAE_USAGE_AFTER_WAKE:-0}" = 1 ]; then
+        # `clikae usage --wake` re-reading after ITS burn completed: the
+        # engine ran and the vendor still refuses — this is the failed case.
+        adapter_reason=relogin-required
+      fi
+      # The Keychain read was refused, not empty: nothing is known about the
+      # login either way, so the last reading stands, with its age, and the
+      # cache is NOT touched (a tmux-hosted wake window on a Mac gets this
+      # every five minutes; it must not launder the numbers into
+      # no-credentials — the finding on #179).
+      # Review of #184, finding 3: "the cache file exists" is not "the cache
+      # holds a reading". Only a record that passes _USAGE_NUMERIC_RECORD_JQ
+      # is served (with its own cached_at, so its own age). Anything else —
+      # a retired `source:"expired"` record, a failure record, a malformed
+      # file — falls through to the ordinary finish, which writes
+      # unknown/keychain-denied and carries any last_good forward.
+      if [ "$adapter_reason" = keychain-denied ] && [ -f "$cache" ] &&
+         jq -e "$_USAGE_NUMERIC_RECORD_JQ" "$cache" >/dev/null 2>&1; then
+        jq -c '. + {reason:"keychain-denied"}' "$cache" 2>/dev/null | _usage_public "$engine" "$tank" "$now"
+        return
+      fi
+    fi
+  fi
+  _usage_read_finish "$engine" "$tank" "$cache" "$now"
+)
+
+# _usage_adapter_call <engine> <tank> — one adapter_usage call, into the
+# caller's `reading` / `adapter_reason` / `adapter_retry` (bash dynamic scope;
+# only usage_read calls this). Split out so #177's refresh-then-ask-again is
+# the same code path as the first ask.
+_usage_adapter_call() {
+  local engine="$1" tank="$2" adapter_out=""
+  reading=""; adapter_reason=""; adapter_retry=""
+  # When this measurement started (the reading's evidentiary time), and the
+  # record on disk at that moment: _usage_read_finish uses both to tell a
+  # record another reader published while this one was in flight from one
+  # that was already there.
+  measured_seen="$(cat "$cache" 2>/dev/null)" || measured_seen=""
+  measured_at="$(date +%s)"
       # P3-3 (codex security review, round-5): this used to be `2>/dev/null`,
       # which hid EVERY adapter's own diagnostics from the public `clikae
       # usage` path — including claude.sh's honest "running WITHOUT a time
@@ -129,7 +294,8 @@ usage_read() (
       else
         reading=""
         adapter_reason="$(printf '%s' "$adapter_out" | jq -r '
-          if .reason == "expired-token" or .reason == "no-credentials"
+          if .reason == "needs-refresh" or .reason == "keychain-denied"
+             or .reason == "no-credentials"
              or .reason == "network" or .reason == "unparseable"
              or .reason == "rate-limited"
           then .reason else empty end' 2>/dev/null)"
@@ -144,8 +310,15 @@ usage_read() (
             then (.retry_after|tostring) else empty end' 2>/dev/null)"
         fi
       fi
-    fi
-  fi
+}
+
+# _usage_read_finish <engine> <tank> <cache> <now> — whitelist the reading in
+# the caller's `reading` (plus `adapter_reason` / `adapter_retry`), carry the
+# last good numbers forward, write the cache atomically, print the public
+# form. The tail of usage_read, in its own function only so the refresh
+# branch above can `return` early without duplicating it.
+_usage_read_finish() {
+  local engine="$1" tank="$2" cache="$3" now="$4" tmp
   [ -n "$reading" ] || reading="$(usage_unknown "$adapter_reason" "$adapter_retry")"
   # P2-4 (round-1 review): a reading can be honest evidence without a LIVE
   # vendor call behind it (codex's is derived from a rollout transcript it
@@ -161,8 +334,9 @@ usage_read() (
   reading="$(printf '%s' "$reading" | jq -ce '
     def pct: if type == "number" and . >= 0 and . <= 100 then . else null end;
     def stamp: if type == "string" and test("^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9:.]+(Z|[+-][0-9]{2}:[0-9]{2})$") then . else null end;
-    (if .reason == "no-credentials" or .reason == "network"
-        or .reason == "unparseable" or .reason == "rate-limited"
+    (if .reason == "needs-refresh" or .reason == "relogin-required"
+        or .reason == "keychain-denied" or .reason == "no-credentials"
+        or .reason == "network" or .reason == "unparseable" or .reason == "rate-limited"
      then .reason else null end) as $reason |
     # #136: `retry_after` exists only beside `rate-limited`, only as a whole
     # number of seconds in 1..86400. Anything else is dropped here, so a
@@ -191,11 +365,11 @@ usage_read() (
           disabled: (.disabled == true)} | select(.name != null) ] | .[0:8]
      else [] end) as $groups |
     (.headline_group | gname) as $head |
-    # #107: "expired" exists only with its one reason, and never carries a
-    # number — whatever else an adapter put beside it is dropped here.
-    if .source == "expired" and .reason == "expired-token" then
+    # #179: an auth reason never carries a number — whatever else an adapter
+    # put beside it is dropped here (the same rule #107 gave `expired`).
+    if $reason == "needs-refresh" or $reason == "relogin-required" or $reason == "keychain-denied" then
       {window_pct:null,weekly_pct:null,window_resets_at:null,weekly_resets_at:null,
-       source:"expired",reason:"expired-token"}
+       source:"unknown",reason:$reason}
     else
     {window_pct:(.window_pct|pct),weekly_pct:(.weekly_pct|pct),
      window_resets_at:(.window_resets_at|stamp),weekly_resets_at:(.weekly_resets_at|stamp),
@@ -213,10 +387,43 @@ usage_read() (
   # forward) ride along as `last_good: {window_pct, weekly_pct, at}`, `at`
   # being that reading's own `cached_at` — so `clikae usage` and the board
   # can print "weekly 85%, 5h ago" beside the reason instead of a blank.
-  local prev="{}" record
+  # Review of #184, finding 1: the reading is stamped with when its
+  # measurement STARTED, not when this read began (a read that waited out a
+  # wake is minutes older than its measurement), and it is published only if
+  # nothing NEWER reached the cache while it was in flight. Two readers that
+  # both found a lapsed token: A refreshes and publishes the vendor's numbers;
+  # B, whose measurement predates A's refresh, must not then bury them under
+  # its obsolete `needs-refresh`. Compare-and-write runs under a short lock so
+  # the comparison is still true at the rename. Only a record that APPEARED
+  # during this measurement can outrank it (one already on disk when the
+  # measurement started is older by construction, whatever its stamp says —
+  # so a future stamp from clock skew or a copied cache never pins the file),
+  # and then only if its stamp is not behind this one's. Stamps are whole
+  # seconds: on a tie, a reading with numbers beats one without.
+  local stamp="${measured_at:-$now}" prev="{}" record locked=0 appeared=false
+  # Before the lock: taking it may be what creates the cache directory, and
+  # that directory is private like every file written into it.
+  umask 077
+  _usage_cache_lock "$cache" && locked=1
+  now="$(date +%s)"
+  if [ -n "$measured_at" ] && [ -f "$cache" ] && [ "$(cat "$cache" 2>/dev/null)" != "$measured_seen" ]; then
+    appeared=true
+  fi
   [ -f "$cache" ] && prev="$(jq -c 'if type == "object" then . else {} end' "$cache" 2>/dev/null)"
   [ -n "$prev" ] || prev="{}"
-  record="$(printf '%s' "$reading" | jq -c --argjson now "$now" --arg ev "$event_epoch" --argjson prev "$prev" '
+  if [ "$appeared" = true ] &&
+     printf '%s' "$reading" | jq -e --argjson prev "$prev" --argjson stamp "$stamp" --argjson now "$now" '
+       def has_pct: (.window_pct|type) == "number" or (.weekly_pct|type) == "number";
+       ($prev.scanned_at // $prev.cached_at) as $s
+       | ($s|type) == "number" and $s <= $now
+         and ($prev.source == "vendor" or $prev.source == "transcript"
+              or $prev.source == "quota-api" or $prev.source == "unknown")
+         and ($s > $stamp or ($s == $stamp and ($prev|has_pct) and (has_pct|not)))' >/dev/null 2>&1; then
+    [ "$locked" = 0 ] || _usage_cache_unlock "$cache"
+    printf '%s\n' "$prev" | _usage_public "$engine" "$tank" "$now"
+    return
+  fi
+  record="$(printf '%s' "$reading" | jq -c --argjson now "$stamp" --arg ev "$event_epoch" --argjson prev "$prev" '
     def num: type == "number";
     . + {cached_at:(if $ev == "" then $now else ($ev|tonumber) end), scanned_at:$now} |
     if (.window_pct == null and .weekly_pct == null) then
@@ -226,18 +433,118 @@ usage_read() (
        else null end) as $lg |
       if $lg != null then . + {last_good:$lg} else . end
     else . end' 2>/dev/null)" || record=""
-  umask 077
-  if [ -n "$record" ] && mkdir -p "${cache%/*}" && tmp="$(mktemp "$cache.XXXXXX")"; then
+  if [ "$locked" = 0 ]; then
+    # Review of #184 r3: no lock, no write. Another reader is still
+    # publishing (or the directory is unwritable), and a comparison made
+    # outside the lock may be false by the rename. This caller still gets its
+    # answer (the comparison above only ever READ the cache); the next read
+    # publishes again.
+    declare -F log_warn >/dev/null && log_warn "$engine/$tank: usage cache not updated — ${_USAGE_LOCK_HOLDER:+another clikae (pid $_USAGE_LOCK_HOLDER) is still writing it}${_USAGE_LOCK_HOLDER:-its lock could not be taken}; this reading is returned, not cached"
+  elif [ -n "$record" ] && mkdir -p "${cache%/*}" && tmp="$(mktemp "$cache.XXXXXX")"; then
     if printf '%s\n' "$record" > "$tmp"; then
       mv -f "$tmp" "$cache"
     else rm -f "$tmp"; fi
   fi
+  [ "$locked" = 0 ] || _usage_cache_unlock "$cache"
   if [ -n "$record" ]; then
     printf '%s\n' "$record" | _usage_public "$engine" "$tank" "$now"
   else
     printf '%s\n' "$reading"
   fi
-)
+}
+
+# _usage_cache_lock <cache> — take `<cache>.lck` for _usage_read_finish's
+# compare-and-write; 0 = held (release with _usage_cache_unlock), 1 = not.
+# Review of #184 r3: round 2's mkdir lock was reaped by AGE (> 10 s) and a
+# waiter that gave up after ~3 s wrote anyway, so a holder merely slow
+# between its comparison and its rename — alive the whole time — put its
+# older failure back over the waiter's fresh numbers. Same rule as the tmux
+# record lock (#181): the lock is a symlink made by `ln -s`, atomic WITH its
+# content, naming its holder `pid|start time|token`. A live holder keeps it
+# however old it is; after ~3 s a waiter takes it only from a holder proven
+# gone (pid dead, or a different process on that pid). A waiter that still
+# cannot get it returns 1 and the caller SKIPS publication — never an
+# unlocked write.
+# Review of #184 r4: a lock is never PUT BACK. Round 3 renamed the judged lock
+# aside and restored whatever it had moved if that was not the one it judged —
+# but the holder it moved may have finished meanwhile, found no lock to
+# release, and lived on (a watcher): the restored lock named a live process
+# that held nothing, and every later writer timed out for that process's
+# lifetime. Now the waiter re-reads the lock and takes it away only while it
+# still names the exact owner judged dead; anything else is left alone and this
+# write is skipped. If another stealer replaced it inside that narrow window,
+# the displaced lock is dropped, not restored — the accepted cost is a rare
+# lost cache update (two writers overlap once), which the next measurement
+# repairs; a lock nobody holds would never be repaired.
+_usage_cache_lock() {
+  local lock="$1.lck" i=0 again=0 owner held priv
+  _USAGE_LOCK_HOLDER=""
+  mkdir -p "${1%/*}" 2>/dev/null || return 1
+  # The pid is the process that HOLDS the lock: in a subshell $$ is the parent
+  # (often a long-lived watcher), so a dead subshell's lock would look alive
+  # for as long as the watcher runs. $BASHPID is bash 4+; on 3.2 a fresh sh's
+  # $PPID is this (sub)shell — `exec` makes the sh the `$(…)` child itself
+  # (measured: without it, a redirection on the line costs the implicit exec
+  # and $PPID names that child instead). The token (a fresh unique name) tells
+  # siblings apart on release.
+  _USAGE_LOCK_ME="${BASHPID:-}"
+  [ -n "$_USAGE_LOCK_ME" ] || _USAGE_LOCK_ME="$(exec sh -c 'echo $PPID')"
+  case "$_USAGE_LOCK_ME" in ''|*[!0-9]*) _USAGE_LOCK_ME=$$ ;; esac
+  priv="$(mktemp -u "$1.XXXXXX" 2>/dev/null)" || priv="$1.$_USAGE_LOCK_ME.$i"
+  _USAGE_LOCK_ME="$_USAGE_LOCK_ME|$(_usage_proc_lstart "$_USAGE_LOCK_ME")|${priv##*/}"
+  while ! ln -s "$_USAGE_LOCK_ME" "$lock" 2>/dev/null; do
+    i=$((i + 1))
+    if [ "$i" -gt 30 ]; then
+      owner="$(readlink "$lock" 2>/dev/null)" || owner=""
+      if [ "$again" = 0 ] && ! _usage_lock_holder_alive "$owner"; then
+        # Judged dead — take it away only while it still names that owner.
+        held="$(readlink "$lock" 2>/dev/null)" || held=""
+        if [ "$held" != "$owner" ]; then
+          _USAGE_LOCK_HOLDER="${held%%|*}"
+          return 1
+        fi
+        if mv "$lock" "$priv.stale" 2>/dev/null; then
+          held="$(readlink "$priv.stale" 2>/dev/null)" || held=""
+          rm -f "$priv.stale" 2>/dev/null
+          if [ "$held" != "$owner" ]; then
+            _USAGE_LOCK_HOLDER="${held%%|*}"
+            return 1
+          fi
+        fi
+        again=1; i=0
+        continue
+      fi
+      _USAGE_LOCK_HOLDER="${owner%%|*}"
+      return 1
+    fi
+    sleep 0.1 2>/dev/null || sleep 1
+  done
+}
+
+# _usage_cache_unlock <cache> — remove `<cache>.lck` only while it names us.
+_usage_cache_unlock() {
+  [ "$(readlink "$1.lck" 2>/dev/null)" != "$_USAGE_LOCK_ME" ] || rm -f "$1.lck" 2>/dev/null
+}
+
+# _usage_lock_holder_alive <owner> -> 0 while the lock's holder (pid|start
+# time|token) is still that same process. An empty start time (ps had no
+# answer when the lock was taken) falls back to liveness alone — towards
+# "alive". Empty or malformed -> not alive: there is no holder to protect.
+_usage_lock_holder_alive() {
+  local pid="${1%%|*}" rest want
+  case "$pid" in ''|*[!0-9]*) return 1 ;; esac
+  rest="${1#*|}"; want="${rest%%|*}"
+  kill -0 "$pid" 2>/dev/null || return 1
+  [ -z "$want" ] || [ "$(_usage_proc_lstart "$pid")" = "$want" ]
+}
+
+# _usage_proc_lstart <pid> -> that process's start time as `ps` prints it
+# (compared as a string, never parsed), or nothing.
+_usage_proc_lstart() {
+  local s
+  s="$(ps -o lstart= -p "$1" 2>/dev/null)" || return 0
+  printf '%s' "$s" | tr -s ' ' | sed 's/^ //; s/ $//'
+}
 
 # _usage_mtime <file> -> epoch mtime, or nothing. GNU's `stat -c` first: on a
 # GNU box `stat -f` means --file-system, so the BSD form may only ever be the
@@ -260,21 +567,31 @@ usage_agy_last_used() {
 }
 
 # _usage_public <engine> <tank> <now>  (record on stdin) -> the public reading.
-# Strips the cache's own bookkeeping (cached_at, scanned_at, last_good) and,
-# on a reading with no numbers ONLY (#149), adds:
-#   gap              one word: why there is no number. "expired" (the token
-#                    lapsed — a session or --wake refreshes it), "no-probe"
-#                    (clikae has nothing it can ask for this tank: codex with
-#                    no rollout reading and its live probe off or absent),
-#                    "no-signal" (asked and got nothing usable, or — agy — the
-#                    engine exposes no usage signal at all).
+# Strips the cache's own bookkeeping (cached_at, scanned_at, last_good), adds
+# to EVERY reading (#174):
+#   age_sec          how old the reading's evidence is: now minus `cached_at`
+#                    (a vendor reading's fetch time; a codex transcript's own
+#                    event time), never negative. A cache hit served 100
+#                    minutes after the fetch says 6000 here, not 0.
+#   window_reset_passed, weekly_reset_passed
+#                    present (true) only when that axis's own `resets_at` is
+#                    already behind `now`: the percentage beside it is from
+#                    BEFORE a reset and says nothing about the current window.
+#                    Absent otherwise, so no existing shape moves.
+# and, on a reading with no numbers ONLY (#149):
+#   gap              one word: why there is no number. The auth reasons name
+#                    themselves ("needs-refresh", "relogin-required",
+#                    "keychain-denied" — see the enum at the top of this file),
+#                    else "no-probe" (clikae has nothing it can ask for this
+#                    tank: codex with no rollout reading and its live probe off
+#                    or absent) or "no-signal" (asked and got nothing usable,
+#                    or — agy — the engine exposes no usage signal at all).
 #   last_window_pct, last_weekly_pct, last_at, last_age_sec
 #                    the last reading that HAD numbers, its epoch and age in
 #                    seconds; all null when there never was one.
 #   dry_marked_at    epoch of this tank's dry_store marker (the last burn that
 #                    hit a limit), or null.
 #   last_used_at     antigravity only: usage_agy_last_used, or null.
-# A reading with numbers is returned unchanged (minus the bookkeeping).
 _usage_public() {
   local engine="$1" tank="$2" now="$3" dry_at="" used_at="" _t
   if [ -f "$CLIKAE_HOME/dry/$engine/$tank" ]; then
@@ -282,10 +599,13 @@ _usage_public() {
     case "$dry_at" in ''|*[!0-9]*) dry_at="" ;; esac
   fi
   [ "$engine" != antigravity ] || used_at="$(usage_agy_last_used "$tank")" || used_at=""
-  jq -c --arg engine "$engine" --argjson now "$now" --arg dry "$dry_at" --arg used "$used_at" '
+  jq -c --arg engine "$engine" --argjson now "$now" --arg dry "$dry_at" --arg used "$used_at" "$_USAGE_NORM_STAMP_JQ"'
     . as $r | del(.cached_at, .scanned_at, .last_good) |
+    . + {age_sec:(if ($r.cached_at|type) == "number" then ([$now - $r.cached_at, 0]|max) else null end)} |
+    (if (.window_pct != null) and (.window_resets_at|expired) then . + {window_reset_passed:true} else . end) |
+    (if (.weekly_pct != null) and (.weekly_resets_at|expired) then . + {weekly_reset_passed:true} else . end) |
     if (.window_pct == null and .weekly_pct == null) then
-      . + {gap:(if .source == "expired" then "expired"
+      . + {gap:(if .reason == "needs-refresh" or .reason == "relogin-required" or .reason == "keychain-denied" then .reason
                 elif $engine == "antigravity" then "no-signal"
                 elif $engine == "codex" and (.reason == null) then "no-probe"
                 else "no-signal" end),

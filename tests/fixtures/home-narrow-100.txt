@@ -2,7 +2,7 @@
   clikae  · ↑↓/Tab move · ⏎ open · [ ] reorder · / filter · ? help · q quit
 
     ▸ Tanks
-    ❯ ◐ busy    claude    window 44% · weekly 20% · Fable 100%
+    ❯ ◐ busy    claude    5h 44% · 7d 20% · Fable 100%
         busy.person@example-company.com
       ○ dry     claude    resets @PHRASE@ (Asia/Tokyo)
       ● work    claude

@@ -1177,9 +1177,33 @@ _claude_usage_call_failed() {
   _claude_usage_unreadable network
 }
 _claude_usage_auth_failed() {
+  # #179 (#177): the word is `needs-refresh`, not `expired` — the reader
+  # (lib/core/usage.sh) refreshes before it measures, and only a refresh
+  # that ran and still failed becomes `relogin-required`. This adapter only
+  # ever reports the fact: the token is past its expiry, a refresh exists.
   if [ "${_claude_has_refresh:-0}" = 1 ]
-  then _claude_usage_unreadable expired-token
+  then _claude_usage_unreadable needs-refresh
   else _claude_usage_unreadable no-credentials
+  fi
+}
+
+# _claude_keychain_secret <service> -> the item's secret on stdout; rc 0 when
+# read, 44 when the item does not exist (`security`'s own errSecItemNotFound
+# exit), any other non-zero when the READ WAS REFUSED — no ACL for this
+# process, "user interaction is not allowed" (36, a tmux-hosted wake window
+# on a Mac gets this), a locked keychain, or the 5s bound firing. The finding
+# on #179: these two outcomes were one `|| no-credentials`, so a background
+# reader that merely could not ask wrote "no login" over the last numbers.
+# Bounded exactly as before (P2-2 round-2: _burn_timeout_bin's three arms).
+_claude_keychain_secret() {
+  local service="$1" _tbin=""
+  declare -F _burn_timeout_bin >/dev/null && _tbin="$(_burn_timeout_bin)"
+  if [ "$_tbin" = timeout ] || [ "$_tbin" = gtimeout ]; then
+    "$_tbin" 5 security find-generic-password -s "$service" -w 2>/dev/null
+  elif [ "$_tbin" = perl ]; then
+    perl -e 'alarm shift; exec @ARGV or exit 127' 5 security find-generic-password -s "$service" -w 2>/dev/null
+  else
+    security find-generic-password -s "$service" -w 2>/dev/null
   fi
 }
 # #136: reason `rate-limited`, plus `retry_after` ONLY when the vendor's own
@@ -1223,29 +1247,33 @@ adapter_usage() (
     "\($t)\t\(if (.refreshToken|type) == "string" and .refreshToken != "" then 1 else 0 end)\t\(if (.expiresAt|type) == "number" and (.expiresAt / 1000) < $now then 1 else 0 end)"'
   local _claude_now
   _claude_now="$(date +%s)"
+  # #179: the Keychain READ and the PARSE are two steps with two verdicts.
+  # A read that was refused (any `security` exit but 0 and 44) is
+  # `keychain-denied` — the reader keeps its last numbers. Only "no item"
+  # (44), no `security` at all, or a secret that does not parse is
+  # `no-credentials`. The secret stays inside this subshell: it goes from the
+  # variable into jq's stdin and nowhere else, exactly as the pipe did.
+  # P3-3 (round-3 review): _burn_timeout_bin's own honest warning (lib/core/
+  # timeout_bin.sh) when all three arms are missing is still NOT suppressed —
+  # a stock-macOS box with none of timeout/gtimeout/perl says so rather than
+  # reading UNBOUNDED silently; burn.sh's call sites keep stderr the same way.
+  local _claude_kc_rc=0
+  if [ ! -f "$dir/.credentials.json" ] && [[ "${OSTYPE:-}" == darwin* ]]; then
+    if command -v security >/dev/null 2>&1 && service="$(_claude_keychain_service "$dir")"; then
+      creds="$(_claude_keychain_secret "$service")" || _claude_kc_rc=$?
+      case "$_claude_kc_rc" in
+        0|44) ;;
+        *) creds=""; _claude_usage_unreadable keychain-denied; return 1 ;;
+      esac
+    fi
+  fi
   creds="$(
     if [ -f "$dir/.credentials.json" ]; then
       jq -er --argjson now "$_claude_now" "$_claude_creds_jq" "$dir/.credentials.json" 2>/dev/null
-    elif [[ "${OSTYPE:-}" == darwin* ]]; then
-      command -v security >/dev/null 2>&1 || exit 1
-      service="$(_claude_keychain_service "$dir")" || exit 1
-      local _tbin=""
-      # P3-3 (round-3 review): `2>/dev/null` here swallowed _burn_timeout_bin's
-      # own honest warning (lib/core/timeout_bin.sh:25) when all three arms
-      # are missing, so a stock-macOS box with none of timeout/gtimeout/perl
-      # ran the Keychain read UNBOUNDED, silently. burn.sh's own call sites
-      # (:741, :2476) already leave stderr unsuppressed for this reason.
-      declare -F _burn_timeout_bin >/dev/null && _tbin="$(_burn_timeout_bin)"
-      if [ "$_tbin" = timeout ] || [ "$_tbin" = gtimeout ]; then
-        "$_tbin" 5 security find-generic-password -s "$service" -w 2>/dev/null |
-          jq -er --argjson now "$_claude_now" "$_claude_creds_jq" 2>/dev/null
-      elif [ "$_tbin" = perl ]; then
-        perl -e 'alarm shift; exec @ARGV or exit 127' 5 security find-generic-password -s "$service" -w 2>/dev/null |
-          jq -er --argjson now "$_claude_now" "$_claude_creds_jq" 2>/dev/null
-      else
-        security find-generic-password -s "$service" -w 2>/dev/null |
-          jq -er --argjson now "$_claude_now" "$_claude_creds_jq" 2>/dev/null
-      fi
+    elif [ -n "$creds" ]; then
+      printf '%s' "$creds" | jq -er --argjson now "$_claude_now" "$_claude_creds_jq" 2>/dev/null
+    else
+      exit 1
     fi
   )" || { creds=""; _claude_usage_unreadable no-credentials; return 1; }
   local _claude_has_refresh _claude_token_expired _claude_rest
