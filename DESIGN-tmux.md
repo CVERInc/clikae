@@ -863,3 +863,114 @@ ok 2 called from inside tmux, switch moves the client instead of nesting
   ⚠️ 那兩條要用 `"$CLIKAE_BIN"` 不能用 `env LC_ALL=C clikae`——`clikae` 在測試裡是
   **shell function**，`env` 只能 exec 真的檔案，於是會安靜地跑到 PATH 上那一份裝好的
   clikae 去。
+
+### Rule 13: socket 住在 `~/.clikae/state/tmux`，不住 `/tmp`（The Socket Lives Where clikae Owns the Directory, clikae#176）
+
+- **症狀**（reefbox，2026-10-17）：一支 `/tmp` 清理把 `/tmp/tmux-1002` 刪了（目錄 mtime 老，看起來
+  像殘留）。跑了兩天的座艙（tmux session 內的 `claude --resume`）**還活著**——server 不需要 socket
+  也能養著 pane——但從外面看它已經不存在：`clikae` 列不到、attach 不到；使用者再
+  `clikae claude goby -- --resume <同一 id>`，clikae 開了**第二個** tmux server＋第二個 claude 在同一個
+  transcript 上（harness 把舊的當「上一個 session 結束」、背景任務全標 stopped）；`clikae burn` 則
+  rc=255 `error creating /tmp/tmux-1002/default`，因為它要放 socket 的目錄沒了。
+- **診斷**：tmux 的 socket 預設在 `$TMUX_TMPDIR/tmux-<uid>/default`，變數沒設就是 `/tmp`。`/tmp` 是
+  機器上**唯一一個別人有權清掃**的目錄，而 clikae 最重要的那個行程把它唯一的把手放在那裡。這不是
+  「清理腳本太兇」，是「把手放錯地方」。
+- **規範**：
+  1. `bin/clikae` 載入 `lib/core/tmux.sh` 之後**立刻**呼叫 `tmux_socket_init`：`TMUX_TMPDIR` 沒設就
+     設成 `$CLIKAE_HOME/state/tmux`（0700）。走 `TMUX_TMPDIR` 不走 `-S`：整個 codebase 的裸 `tmux`、
+     guard shim、session 裡的 wake waiter、使用者在 clikae shell 裡自己打的 `tmux ls`，全部免費跟著走；
+     `-S` 得穿過六十個呼叫點，而且下一個人會忘。
+  2. **優先序照 tmux 自己的**：`-S` > `-L` > `$TMUX` > `TMUX_TMPDIR`。明確設了 `TMUX_TMPDIR` 的（測試
+     套件就是靠這個隔離）照舊；繼承到 `$TMUX` 的（座艙裡面打 `clikae`）繼續跟那顆 server 講話——包含
+     還在 `/tmp` socket 上、由舊版 clikae 開的座艙。
+  3. 🔴 **tmux session 搬不了 server。** 舊 socket 上的座艙會一直留在那裡，直到人重開它；**重開就是
+     遷移**，clikae 沒有替人做這件事，因為做不到。
+  4. 🔴 **有兩顆實體 server，而呼叫者可能站在任何一顆上。** 「現在這顆」取決於呼叫者在哪：舊座艙裡的
+     shell 繼承舊的 `$TMUX`，從那裡看「現在這顆」**就是** `/tmp` 那顆。所以沒有任何地方問「現在 vs 舊」
+     ——`tmux_endpoints` 列出每一顆活的 server（`$TMUX` 的／`$TMUX_TMPDIR` 的／`/tmp` 的，現在這顆排
+     第一、同一個檔案用 `-ef` 去重），每個查詢都走這張表（PR #181 審查 finding 2：第一輪只問「現在＋
+     legacy」，舊座艙裡跑 board 就看不到新 server 上的座艙、launch 還會在舊 server 上開雙胞胎）：
+     - `live_session_names_for` 逐顆讀、同名以排前面的為準、只列一次（`_live_rows_on` 是單一 server 的
+       那一半）；
+     - `tmux_session_socket <session>` 回「第一顆有它的 server」；`tmux_on <session> <args…>` 把逐
+       session 的指令送過去。`live_session_id`／`live_wake_note`／`live_engine_alive`／
+       `tmux_sess_has_engine`、switch.sh 兩處「只剩 waiter 就 kill-session」都走它；`tmux_attach` 只查
+       **一次**、把那顆的 socket 留著，attach 失敗後問「還在不在」也問**那一顆**（第五輪：重查會找不到、退回裸
+       tmux、home server 回答「我在」，於是 legacy server 死了被讀成 TERM 被拒，回 1 不回 2，switch.sh 就把
+       engine 開在 tmux 外面）；
+     - `tmux_sessv` 先問現在這顆（含 `ck-` → `clikae-` rename），兩個名字都沒有再逐顆問其他 server，找到
+       就 `EXISTS=1` 並把**在哪顆找到**放進 `CLIKAE_TMUX_SESS_SOCK`。別顆 server 上**不做** rename。
+  5. 🔴 **找到別顆上的 session 只做了一半。** client 屬於一顆 server，`switch-client` 跨不過去（finding 3：
+     第一輪 `tmux_sessv` 找到了、spawn 被擋下，然後裸 `switch-client` 在這顆找不到它，使用者哪裡都沒去）。
+     `tmux_switch_to <session> [<socket>]`：同一顆就 `switch-client`；另一顆就 `detach-client -E
+     "env -u TMUX -u TMUX_PANE tmux -S '<sock>' attach -t '=<session>'"`——client 行程被換成一個 attach
+     到另一顆的 client，同一個終端機。單引號不用 `%q`：`-E` 的指令由使用者的 default-shell 跑（fish 也算）。
+     switch.sh／antigravity.sh／home.sh 的 live 列都走它；session 在別顆時 switch.sh 不貼標籤、不掛
+     watcher（裸 tmux 碰不到它，`set -e` 下 watcher 的 `return 1` 還會把 launch 收掉）。
+  6. 🔴 **socket 被刪的 server 沒死，而且 tmux 知道怎麼救**：`SIGUSR1` 會讓 server 在出生時的路徑
+     重建 socket。每次 `tmux_spawn_session` 都把 `(pid, 啟動時間, socket_path)` 寫進
+     `$CLIKAE_HOME/state/tmux/servers.d/<pid>.<啟動時間>`（`tmux_server_record`，一顆 server 一個檔；**每次 spawn 都寫**，舊版
+     clikae 生的 server 沒有紀錄，這是第一個機會）。`tmux_rescue_orphans` 由 `tmux_sessv`（finding 4：
+     直接 `clikae <engine> <tank>` 不經 board 也要先救，否則被掃掉的 socket 會在原路徑生出第二顆 server）
+     和 `live_session_names` 在做決定**之前**呼叫。
+  7. 🔴 **SIGUSR1 的預設動作是終止。** 紀錄上的 pid 是關於過去的主張；送訊號前它必須**現在**還是**同一顆**
+     我們的 server：同 uid、comm **完全等於** tmux 的（Linux `tmux: server`、macOS `tmux` 或 `…/tmux`，
+     不是前綴——第一輪的 `tmux*` 讓一個 `tmux-helper` 吃了 USR1，finding 1）、`ps -o lstart=` 跟記錄時
+     一樣（incarnation：被重用的 pid 啟動時間不同）。`$TMUX` 來的 pid 沒有紀錄，證明換成「這個行程就跑在
+     它裡面」（server 是祖先）。檢查做兩次：`mkdir`／`chmod` socket 目錄之前一次（不是我們的就什麼都
+     不建），之後再一次，緊接著 `kill`，中間沒有別的指令（第三輪）。uid、comm、lstart 都不是絕對的行程
+     身分：comm 是名字不是執行檔，lstart 只到秒；剩下的窗口是 pid 在兩個相鄰指令之間整圈繞回，bash 沒有
+     pidfd 能再收窄。不符的**絕不送訊號**；紀錄本身只有證明已死才刪（第 8 點）。
+  8. 🔴 **紀錄沒有鎖，因為沒有共用的檔**（第四輪）：第一到三輪把每顆 server 寫在**同一個**檔裡讀-改-寫，
+     每一輪的鎖都有競態——第一輪固定 `servers.tmp` 無鎖（finding 5）、第二輪 `mkdir` 鎖等 5 秒就從
+     活著的持有者手上拆、第三輪 `ln -s` 鎖從死掉的持有者手上搶時，第二個搶的人把新持有者的鎖挪開、
+     第三個寫手趁空進來，一筆紀錄被蓋掉（r3 審查用屏障穩定重現，`$BASHPID` 有無皆然）。安全地搶死人的鎖
+     要 `flock`，macOS 沒有。所以拿掉共用的檔：一顆 server 一個檔 `servers.d/<pid>.<啟動時間>`，內容
+     `pid TAB 啟動時間 TAB socket`；寫手先寫自己的 `mktemp` 暫存檔（`.tmp.XXXXXX`）再 `mv` 到那顆
+     server 自己的名字，原子、而且沒有別的寫手的 server 叫這個名字；`mv` 失敗就回 1（暫存檔刪掉），不假裝
+     寫成了。🔴 **寫手除了自己的暫存檔什麼都不刪**（第五輪）。讀者列目錄；**只刪證明已死的**——pid 不在了，
+     或同 pid 現在的啟動時間不同（被重用）——同 pid 的舊 incarnation 也是這樣由讀者退役。活著但證明不了是
+     我們的（uid、comm 不符）＝不送訊號、**檔留著**（第三輪會丟掉這種紀錄）。暫存檔只看**年紀**：超過 10 分鐘
+     才算被丟下（發佈是一個 printf 加一個 mv，不會隔幾分鐘），進行中的寫入碰不到。刪除一律盡力而為：
+     `rm -f`、讀之前檔已被另一個讀者刪掉就跳過——`set -e` 的呼叫者（直接 launch 就是）不會因此被收掉。
+     第四輪的兩個錯（r4 審查用屏障重現）：暫存檔名用 `$(mktemp ….${BASHPID:-$$}…)`，`$BASHPID` 在
+     命令替換**裡面**展開，是那個早已結束的子行程，讀者據此刪掉進行中的寫入、寫手的 `mv` 失敗卻回 0；
+     寫手發佈後刪同 pid 的其他檔「因為那是更早的 incarnation」——但寫手自己取樣的可能才是舊的（取樣後
+     server 結束、pid 被重用），延遲的舊寫手就把新 incarnation 的紀錄刪了。pid 說不出暫存檔的任何事，
+     年紀才說得出；能證明某個 incarnation 已死的只有手上拿著活 pid 啟動時間的讀者。
+     紀錄目錄一律 0700，明確設了 `TMUX_TMPDIR` 時也是。
+  9. **舊的單一檔只轉一次**：`state/tmux/servers`（第一到三輪的格式；只有這個 PR 自己的 build 寫過，main
+     和任何 release 都沒有）存在時，讀者把它**讀進記憶體**（第五輪：不再 `mv` 認領——第四輪的認領檔被另一個
+     讀者當成死人的暫存檔刪掉，兩邊都沒轉到），三欄的行裡已證明死的跳過（被重用 pid 的舊行根本不生檔），活的
+     各發佈成一個檔（已有的不覆蓋），**每一筆都發佈成功**才刪舊檔（`rm -f`）。兩個讀者同時轉：各自讀到同一份，
+     寫出同樣的檔，都刪得掉或都已不在——冪等。還在跑的舊版寫手若把它的快照 rename 回原位，下一個讀者再轉
+     一次。不是三欄的行（第一輪格式）丟掉：沒有啟動時間，什麼都證明不了。
+- **收據（第五輪）**：七條新測試在第四輪的碼上全紅——`the pruner deleted A's write in progress`（A 停在
+  發佈前、B 跑完整個 rescue）、`an abandoned temp file was kept`（年紀才是判準；同一條也斷言 `mv` 失敗
+  回非零）、`the delayed old-incarnation writer deleted the live server's record`、`migrating a stale entry
+  deleted the live record`、`the reader aborted (rc 1): …tmux.sh: line 417: …: No such file or directory`
+  （A 的 `[ -f ]` 剛成立就被 B 刪掉，`set -e` 下 A 被收掉）、`A aborted (rc 1): …tmux.sh: line 374:
+  …/.<pid>.XXXXXX: No such file or directory`（A 認領後停住，B 把 A 的認領檔當暫存檔刪了）、`rc 1: B's
+  death was read off home server A`（對照：B 活著、attach 被拒 ⇒ 1）。
+- **收據（第四輪）**：新測試在第三輪的碼上全紅——`lost: <B> <C>`（A、B、C 三個寫手被屏障放在發佈前
+  同一刻：持鎖的 A 等在 rename，B、C 等滿 5 秒逾時就 `record not updated` 跳過）、`the reused pid's old
+  record was kept`（socket 還在就不看身分，被重用的 pid 的舊紀錄留著）、`the live non-tmux record (…) was
+  removed`、`the old single file is still there`。突變：改回共用檔讀-改-寫無鎖 ⇒ 三筆剩一筆；判死永遠
+  不成立 ⇒ `the dead server's record was kept`；身分不符就刪 ⇒ `the live non-tmux record (…) was
+  removed`；拿掉轉換 ⇒ `the old single file is still there`。
+- **收據（第一到三輪；第三輪的三條鎖測試已隨鎖移除，換成上面第四輪的四條）**：`tests/bats/tmux-socket.bats`（35 條，第五輪起）。第三輪紅（舊碼上跑新測試，都不需要 tmux server）：
+  `B's record lost and nothing said so`（持鎖者被延遲超過等待者的逾時，紀錄剩 {1,2}）、`A's cleanup
+  removed the successor's lock`、`signalled on an identity checked before the mkdir`；突變：拿掉 uid 檢查
+  ⇒ `a server of another uid (…) was signalled`，拿掉鎖 ⇒ 並行測試 5/5 紅（屏障讓每個寫手都先讀完才有人
+  寫，`lost: …` 8 筆掉 7～8 筆；有鎖時屏障看到鎖在就放行）。第一輪紅：`tmux_socket_init: command not found`、
+  `no server appeared on …/.clikae/state/tmux/tmux-1002/default`、`missing legacy row`、
+  `no record at …/state/tmux/servers`。第二輪紅（舊碼上跑新測試）：`tmux-helper (…) was signalled`、
+  `the server was signalled: socket is back`（啟動時間不符仍送）、`signalled a server this process is not
+  inside`、`lost: …`（20 個並行寫手掉 18 筆）、`new server hidden`、`would spawn a twin`、
+  `a second engine was started`（直接 launch）、`never landed in the existing cockpit`（真 pty client，
+  跨 server）。
+- 🔴 **測試套件的隔離要跟著補**：`TMUX_TMPDIR` 擋得住現在這顆、擋不住 `/tmp/tmux-<uid>/default`——
+  那在任何 dogfood 的機器上都是真的，2026-10-19 reefbox 第一輪 gate，`doctor.bats`／`home-narrow.bats`／
+  `live.bats` 的輸出裡出現了維護者五個活的 `clikae-claude-*-burn-*`。讀到已經不對，`tmux_on … kill-session`
+  碰得到才可怕。`tests/helpers.bash` 現在把 `CLIKAE_TMUX_LEGACY_SOCKET` 指到一個不存在的路徑；這個變數
+  只為測試存在，正式環境永遠是 `/tmp/tmux-<uid>/default`。

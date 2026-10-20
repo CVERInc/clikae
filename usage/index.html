@@ -86,6 +86,14 @@ the terminal you are now sitting at happens to be. That is the roaming case:
 start on the desktop, pick it up from a tablet over ssh.</p>
 <p>Two clients can stay attached at once; clikae does not kick anyone off. If you
 want the other one gone, <code>tmux attach -d</code> does that.</p>
+<p>The tmux socket lives under <code>~/.clikae/state/tmux</code>, not <code>/tmp</code>, so a <code>/tmp</code>
+cleanup cannot make a running session vanish from the board (it did once —
+the session kept running, nothing could reach it). A session started by an
+older clikae stays on the <code>/tmp</code> socket until you restart it: the board still
+lists it and <code>clikae &lt;engine&gt; &lt;tank&gt;</code> still lands in it, but the migration is
+the restart — quit the engine, run the same command again. If a cleanup does
+delete the socket file of a running server, the next <code>clikae</code> asks that
+server to re-create it and the session is back on the board.</p>
 <p><strong>The bottom row is the command back, the fuel, and what is red</strong> — e.g.
 <code>clikae resume a52bdc12 │ 5h 42% · 7d 65% │ !2</code>. The fuel is this tank's
 vendor usage (how much of the 5-hour and 7-day window is spent), and the
