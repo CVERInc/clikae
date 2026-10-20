@@ -159,14 +159,23 @@ declare -F runtime_lib >/dev/null 2>&1 ||
 
 CLIKAE_TMUX_UID="${CLIKAE_TMUX_UID:-$(id -u 2>/dev/null)}"
 
-# tmux_socket_init — decide the socket directory for this process and
+# tmux_socket_init — decide (never create) the socket directory for this process and
 # everything it forks. Called once from bin/clikae, right after CLIKAE_HOME.
 tmux_socket_init() {
   [ -z "${TMUX_TMPDIR:-}" ] || return 0
   TMUX_TMPDIR="${CLIKAE_HOME:-$HOME/.clikae}/state/tmux"
   export TMUX_TMPDIR
-  mkdir -p "$TMUX_TMPDIR" 2>/dev/null || true
-  chmod 0700 "$TMUX_TMPDIR" 2>/dev/null || true
+}
+
+# _tmux_ensure_socket_dir — create the default socket directory (0700) before
+# a writer needs it. Only the default one: an explicit TMUX_TMPDIR is the
+# caller's. tmux_socket_init only names the place, so a read-only command
+# (doctor) never creates or re-modes it.
+_tmux_ensure_socket_dir() {
+  local d="${CLIKAE_HOME:-$HOME/.clikae}/state/tmux"
+  [ "${TMUX_TMPDIR:-}" = "$d" ] || return 0
+  mkdir -p "$d" 2>/dev/null || true
+  chmod 0700 "$d" 2>/dev/null || true
 }
 
 # _tmux_home_socket -> where a bare tmux with no $TMUX puts its server.
@@ -706,6 +715,7 @@ _tmux_ssh_agent_link() {
 #
 # Returns 2 on a rejected name, 1 if tmux refused, 0 on success.
 tmux_spawn_session() {
+  _tmux_ensure_socket_dir
   local session="" window="" cmd=""
   local -a env_args=()
   while [ $# -gt 0 ]; do

@@ -66,6 +66,9 @@ teardown() {
   unset TMUX_TMPDIR
   tmux_socket_init
   [ "$TMUX_TMPDIR" = "$CLIKAE_HOME/state/tmux" ]
+  # Naming the place creates nothing; the writer makes it, 0700.
+  [ ! -e "$TMUX_TMPDIR" ]
+  _tmux_ensure_socket_dir
   [ -d "$TMUX_TMPDIR" ]
   local mode; mode="$(stat -c %a "$TMUX_TMPDIR" 2>/dev/null || stat -f %Lp "$TMUX_TMPDIR")"
   [ "$mode" = "700" ]
