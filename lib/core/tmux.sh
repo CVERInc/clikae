@@ -277,6 +277,17 @@ _tmux_rec_dir() {
   printf '%s/servers.d\n' "$dir"
 }
 
+# _tmux_rec_dir_existing -> the same path, but only when it already exists.
+# For readers: looking must never create state (doctor is read-only). A
+# not-yet-migrated rounds 1-3 file counts as "there is something to read": the
+# migration (a writer) then creates the directory itself.
+_tmux_rec_dir_existing() {
+  local base="${CLIKAE_HOME:-$HOME/.clikae}/state/tmux"
+  local dir="$base/servers.d"
+  [ -d "$dir" ] || [ -f "$base/servers" ] || return 1
+  printf '%s\n' "$dir"
+}
+
 # _tmux_proc_lstart <pid> -> the process's start time (its incarnation).
 _tmux_proc_lstart() {
   ps -o lstart= -p "$1" 2>/dev/null | sed 's/^ *//; s/ *$//'
@@ -427,7 +438,7 @@ tmux_server_record() {
 tmux_rescue_orphans() {
   command -v tmux >/dev/null 2>&1 || return 0
   local dir f pid lstart sock tpid
-  if dir="$(_tmux_rec_dir)"; then
+  if dir="$(_tmux_rec_dir_existing)"; then
     _tmux_rec_migrate "$dir"
     _tmux_rec_prune_tmp "$dir"
     for f in "$dir"/*; do
