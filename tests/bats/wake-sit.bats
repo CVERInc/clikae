@@ -22,6 +22,8 @@ _src_wake() {
   # shellcheck source=/dev/null
   . "$CLIKAE_TEST_ROOT/lib/core/limit.sh"
   # shellcheck source=/dev/null
+  . "$CLIKAE_TEST_ROOT/lib/core/live.sh"
+  # shellcheck source=/dev/null
   . "$CLIKAE_TEST_ROOT/lib/core/wake.sh"
   # Compress the production timings. The VALUES are asserted in wake.bats; here
   # we are testing the loop's shape, and an honest 60s buffer would just make
@@ -85,6 +87,7 @@ _tankname() { printf 'ckt%s%s' "$$" "${BATS_TEST_NUMBER:-0}"; }
 
 teardown() {
   tmux kill-session -t "$(_sess)" 2>/dev/null || true
+  tmux kill-session -t "=$(_sess)-o" 2>/dev/null || true
   [ -n "${TEST_HOME:-}" ] && rm -rf "$TEST_HOME"
   return 0
 }
@@ -846,4 +849,666 @@ _phrase_minutes_ago() {
   [ "$status" -eq 0 ] || { echo "$output"; false; }
   [[ "$output" == *"resumed on its own"* ]] || { echo "$output"; false; }
   [ ! -f "$out" ] || { echo "typed anyway: $(cat "$out")"; false; }
+}
+
+# --- #162: the evidence is the PARKED SESSION's, not the tank's ---------------
+#
+# A usage limit hits the account, but the question the waiter asks is narrower:
+# "is THIS conversation still sitting on its limit". Every transcript on the
+# tank used to answer it — a background subagent's reply, or another session
+# working on the same tank, read as "the vendor resumed", and the session that
+# was actually parked was never nudged. The id clikae stamped at launch
+# (tmux_set_session_id) is what names the parked session's own jsonl.
+
+_LIMIT_LINE='{"type":"assistant","isApiErrorMessage":true,"message":{"model":"<synthetic>","content":[{"type":"text","text":"You have hit your session limit · %s"}]},"timestamp":"%s"}\n'
+_TURN_LINE='{"type":"assistant","message":{"model":"claude-opus","content":[{"type":"text","text":"Done."}]},"timestamp":"%s"}\n'
+
+# _parked_sid <tank> <sid> <phrase> <limit-stamp> -> the parked session's own
+# transcript, named by its id the way Claude Code names it; prints its path.
+_parked_sid() {
+  local proj="$CLIKAE_HOME/profiles/claude/$1/projects/p"
+  mkdir -p "$proj"
+  # shellcheck disable=SC2059  # the format IS the fixture
+  printf "$_LIMIT_LINE" "$3" "$4" > "$proj/$2.jsonl"
+  printf '%s' "$proj/$2.jsonl"
+}
+
+# _subagent_turn <tank> <sid> <stamp> -> a background subagent of that session
+# answering at <stamp>, where Claude Code keeps it (<sid>/subagents/*.jsonl).
+_subagent_turn() {
+  local d="$CLIKAE_HOME/profiles/claude/$1/projects/p/$2/subagents"
+  mkdir -p "$d"
+  # shellcheck disable=SC2059
+  printf "$_TURN_LINE" "$3" > "$d/agent-a1.jsonl"
+}
+
+@test "#162 sit: a subagent's reply after the parked session's limit is NOT 'the vendor resumed'" {
+  command -v tmux >/dev/null 2>&1 || skip "tmux not installed"
+  [ -z "${TMUX:-}" ] && [ -n "${TMUX_TMPDIR:-}" ] || { echo "not on the suite's own tmux server"; false; }
+  _src_wake
+  local tank sid; tank="$(_tankname)"; sid="11111111-1111-4111-8111-111111111111"
+  _parked_sid "$tank" "$sid" "resets 8:20pm (Asia/Tokyo)" "2026-09-16T13:37:00.000Z" >/dev/null
+  _subagent_turn "$tank" "$sid" "2026-09-16T13:40:00.000Z"
+  local out="$BATS_TEST_TMPDIR/typed"
+  tmux new-session -d -s "$(_sess)" "read -r line; printf '%s' \"\$line\" > '$out'; sleep 10"
+  tmux set-option -t "=$(_sess):" @clikae_session_id "$sid"
+  sleep 1
+  run wake_sit "$(_sess)" "$(date +%s)" claude "$tank"
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  [[ "$output" != *"resumed on its own"* ]] || { echo "$output"; false; }
+  sleep 1
+  [ "$(cat "$out" 2>/dev/null)" = "go" ] || { echo "not nudged: $output"; false; }
+}
+
+@test "#162 sit: another session's turn on the same tank does not skip the parked one either" {
+  command -v tmux >/dev/null 2>&1 || skip "tmux not installed"
+  _src_wake
+  local tank sid; tank="$(_tankname)"; sid="22222222-2222-4222-8222-222222222222"
+  _parked_sid "$tank" "$sid" "resets 8:20pm (Asia/Tokyo)" "2026-09-16T13:37:00.000Z" >/dev/null
+  # shellcheck disable=SC2059
+  printf "$_TURN_LINE" "2026-09-16T15:00:00.000Z" \
+    > "$CLIKAE_HOME/profiles/claude/$tank/projects/p/33333333-3333-4333-8333-333333333333.jsonl"
+  local out="$BATS_TEST_TMPDIR/typed"
+  tmux new-session -d -s "$(_sess)" "read -r line; printf '%s' \"\$line\" > '$out'; sleep 10"
+  tmux set-option -t "=$(_sess):" @clikae_session_id "$sid"
+  # The other session is a live clikae launch, stamped with its own id — which
+  # is what tells it apart from this pane after a /clear (#182 round 2: an
+  # unstamped newer transcript is ambiguous and reads the whole tank).
+  tmux new-session -d -s "$(_sess)-o" "sleep 10"
+  tmux set-option -t "=$(_sess)-o:" @clikae_session_id "33333333-3333-4333-8333-333333333333"
+  sleep 1
+  run wake_sit "$(_sess)" "$(date +%s)" claude "$tank"
+  [[ "$output" != *"resumed on its own"* ]] || { echo "$output"; false; }
+  sleep 1
+  [ "$(cat "$out" 2>/dev/null)" = "go" ] || { echo "not nudged: $output"; false; }
+}
+
+@test "#162 sit: the parked session's OWN continuation is still a skip (the scope's control)" {
+  # Without this, a scope that read nothing at all would pass the two above.
+  command -v tmux >/dev/null 2>&1 || skip "tmux not installed"
+  _src_wake
+  local tank sid; tank="$(_tankname)"; sid="44444444-4444-4444-8444-444444444444"
+  local tx; tx="$(_parked_sid "$tank" "$sid" "resets 8:20pm (Asia/Tokyo)" "2026-09-16T13:37:00.000Z")"
+  # shellcheck disable=SC2059
+  printf "$_TURN_LINE" "2026-09-16T15:00:40.000Z" >> "$tx"
+  local out="$BATS_TEST_TMPDIR/typed"
+  tmux new-session -d -s "$(_sess)" "read -r line; printf '%s' \"\$line\" > '$out'; sleep 10"
+  tmux set-option -t "=$(_sess):" @clikae_session_id "$sid"
+  sleep 1
+  run wake_sit "$(_sess)" "$(date +%s)" claude "$tank"
+  [[ "$output" == *"resumed on its own"* ]] || { echo "$output"; false; }
+  [ ! -f "$out" ] || { echo "typed anyway: $(cat "$out")"; false; }
+}
+
+@test "#162 watch: a subagent's later success still leaves the main session parked, so the watcher hands over" {
+  command -v tmux >/dev/null 2>&1 || skip "tmux not installed"
+  _src_wake
+  # shellcheck disable=SC2034  # read by the wake loop sourced above
+  WAKE_WATCH_INTERVAL=1
+  local phrase; phrase="$(_phrase_minutes_ago 10)" || skip "no named zone on this host"
+  local tank sid; tank="$(_tankname)"; sid="55555555-5555-4555-8555-555555555555"
+  local now; now="$(date -u '+%Y-%m-%dT%H:%M:%S')"
+  _parked_sid "$tank" "$sid" "$phrase" "$now.000Z" >/dev/null
+  _subagent_turn "$tank" "$sid" "$now.900Z"
+  local out="$BATS_TEST_TMPDIR/typed"
+  tmux new-session -d -s "$(_sess)" "read -r line; printf '%s' \"\$line\" > '$out'; sleep 60"
+  tmux set-option -t "=$(_sess):" @clikae_session_id "$sid"
+  sleep 1
+  wake_watch claude "$tank" "$(_sess)" >/dev/null &
+  local w=$! i
+  for ((i = 0; i < 20; i++)); do [ -s "$out" ] && break; sleep 1; done
+  { kill "$w"; wait "$w"; } 2>/dev/null || true
+  [ -s "$out" ] || { echo "nothing was typed within 20s: the watcher kept watching"; false; }
+  [ "$(cat "$out")" = "go" ]
+}
+
+@test "#163 watch: the watcher's own post-reset usage reading does not swallow 'parked'" {
+  # The watcher refreshes the usage cache every 300s (wake_usage_refresh). A
+  # reading taken after the reset instant is fine evidence that the ACCOUNT has
+  # fuel — and no evidence at all that this conversation moved. Read on the
+  # watcher's path it made _limit_tank_dry_self answer "not dry" before the
+  # hand-over (`reset passed · unverified`) could be seen.
+  command -v tmux >/dev/null 2>&1 || skip "tmux not installed"
+  _src_wake
+  # shellcheck disable=SC2034  # read by the wake loop sourced above
+  WAKE_WATCH_INTERVAL=1
+  local phrase; phrase="$(_phrase_minutes_ago 10)" || skip "no named zone on this host"
+  local tank sid; tank="$(_tankname)"; sid="66666666-6666-4666-8666-666666666666"
+  _parked_sid "$tank" "$sid" "$phrase" "$(date -u '+%Y-%m-%dT%H:%M:%S.000Z')" >/dev/null
+  mkdir -p "$CLIKAE_HOME/state/usage/claude"
+  printf '{"source":"vendor","window_pct":4,"weekly_pct":31,"cached_at":%s}\n' "$(date +%s)" \
+    > "$CLIKAE_HOME/state/usage/claude/$tank.json"
+  # The reading still counts where it was meant to: the board's question.
+  ! _limit_tank_dry_self claude "$tank" >/dev/null || { echo "precondition: the reading should clear the tank"; false; }
+  local out="$BATS_TEST_TMPDIR/typed"
+  tmux new-session -d -s "$(_sess)" "read -r line; printf '%s' \"\$line\" > '$out'; sleep 60"
+  tmux set-option -t "=$(_sess):" @clikae_session_id "$sid"
+  sleep 1
+  wake_watch claude "$tank" "$(_sess)" >/dev/null &
+  local w=$! i
+  for ((i = 0; i < 20; i++)); do [ -s "$out" ] && break; sleep 1; done
+  { kill "$w"; wait "$w"; } 2>/dev/null || true
+  [ -s "$out" ] || { echo "nothing was typed within 20s: the reading swallowed 'parked'"; false; }
+  [ "$(cat "$out")" = "go" ]
+}
+
+@test "#162 verify: a subagent's turn after the nudge is not the nudge landing" {
+  _src_wake
+  local tank sid s; tank="$(_tankname)"; sid="77777777-7777-4777-8777-777777777777"
+  s="$(_sess)"
+  mkdir -p "$HOME/.clikae/state"
+  printf '%s\n' "$sid" > "$HOME/.clikae/state/$s.session_id"
+  _parked_sid "$tank" "$sid" "resets 8:20pm (Asia/Tokyo)" "2026-09-16T13:37:00.000Z" >/dev/null
+  local sent; sent="$(( $(date +%s) - 5 ))"
+  _subagent_turn "$tank" "$sid" "$(date -u '+%Y-%m-%dT%H:%M:%S.000Z')"
+  run wake_turn_since claude "$tank" "$sent" "$s"
+  [ "$status" -eq 1 ] || { echo "rc=$status out=$output"; false; }
+}
+
+# --- #163: what was on the screen, and a menu that would eat the nudge --------
+
+@test "#163 trace: the screen at send time is written down before typing" {
+  command -v tmux >/dev/null 2>&1 || skip "tmux not installed"
+  _src_wake
+  wake_tank_recovered() { return 1; }
+  local tank; tank="$(_tankname)"
+  local out="$BATS_TEST_TMPDIR/typed"
+  tmux new-session -d -s "$(_sess)" "printf 'banner-one\nbanner-two\n'; read -r line; printf '%s' \"\$line\" > '$out'; sleep 10"
+  sleep 1
+  run wake_sit "$(_sess)" "$(date +%s)" claude "$tank"
+  local log="$CLIKAE_HOME/state/wake/claude-$tank.log"
+  # What the screen WAS, as a class and a hash — never its text (#182 round 2).
+  grep $'\tscreen\t' "$log" | grep -q 'unknown · h:' || { cat "$log"; false; }
+  ! grep -q 'banner' "$log" || { cat "$log"; false; }
+  # Written BEFORE the keystroke: the screen line precedes `typed`.
+  [ "$(grep -n $'\tscreen\t' "$log" | head -1 | cut -d: -f1)" -lt \
+    "$(grep -n $'\ttyped\t' "$log" | head -1 | cut -d: -f1)" ] || { cat "$log"; false; }
+  # A plain screen is not a menu: nothing but the nudge was typed.
+  sleep 1
+  [ "$(cat "$out")" = "go" ]
+}
+
+# _menu_pane <out> <closes:1|0> -> a pane that shows a numbered menu with a
+# cursor, the shape Claude Code draws at a limit. With closes=1 an Escape
+# dismisses it back to a prompt that takes a line; otherwise every key is
+# recorded and the menu stays.
+_menu_pane() {
+  local f="$BATS_TEST_TMPDIR/menu.sh"
+  {
+    printf '#!/bin/bash\nout=%q; closes=%q\n' "$1" "$2"
+    cat <<'SH'
+printf ' What do you want to do?\n\n ❯ 1. Stop and wait for limit to reset\n   2. Switch to extra usage\n   3. Upgrade your plan\n'
+while IFS= read -rsn1 k; do
+  if [ "$closes" = 1 ] && [ "$k" = $'\e' ]; then
+    clear; printf '> '
+    IFS= read -r line; printf 'ESC+%s' "$line" > "$out"; sleep 30; exit 0
+  fi
+  printf 'KEY:%q\n' "$k" >> "$out"
+done
+SH
+  } > "$f"
+  chmod +x "$f"
+  printf '%s' "$f"
+}
+
+@test "#163 modal: a menu on screen is dismissed with Escape BEFORE the nudge is typed" {
+  command -v tmux >/dev/null 2>&1 || skip "tmux not installed"
+  _src_wake
+  wake_tank_recovered() { return 1; }
+  local tank; tank="$(_tankname)"
+  local out="$BATS_TEST_TMPDIR/typed"
+  tmux new-session -d -s "$(_sess)" "$(_menu_pane "$out" 1)"
+  sleep 1
+  run wake_sit "$(_sess)" "$(date +%s)" claude "$tank"
+  sleep 1
+  [ "$(cat "$out" 2>/dev/null)" = "ESC+go" ] || { echo "pane got: $(cat "$out" 2>/dev/null) / $output"; false; }
+  grep -q $'\tmodal\t' "$CLIKAE_HOME/state/wake/claude-$tank.log" \
+    || { cat "$CLIKAE_HOME/state/wake/claude-$tank.log"; false; }
+}
+
+@test "#163 modal: a menu that will not close is never typed into" {
+  # Enter on a menu picks its highlighted option, and at a limit one of the
+  # options can be "switch to extra usage". If Escape did not close it, the
+  # only safe nudge is none.
+  command -v tmux >/dev/null 2>&1 || skip "tmux not installed"
+  _src_wake
+  wake_tank_recovered() { return 1; }
+  local tank; tank="$(_tankname)"
+  local out="$BATS_TEST_TMPDIR/typed"
+  tmux new-session -d -s "$(_sess)" "$(_menu_pane "$out" 0)"
+  sleep 1
+  run wake_sit "$(_sess)" "$(date +%s)" claude "$tank"
+  [ "$status" -ne 0 ] || { echo "$output"; false; }
+  [[ "$output" == *"gave up"* ]] || { echo "$output"; false; }
+  sleep 1
+  # Escape reached the menu, and nothing else did — not "go", not Enter.
+  [ -f "$out" ] || { echo "not even Escape reached the pane"; false; }
+  [ -z "$(grep -v -F "KEY:\$'\\E'" "$out")" ] || { echo "typed into the menu: $(cat "$out")"; false; }
+  grep -q 'menu' "$CLIKAE_HOME/state/wake/claude-$tank.log"
+}
+
+@test "#163 modal: the menu shape is a cursor on a numbered option plus another option" {
+  _src_wake
+  wake_screen_menu $' What now?\n ❯ 1. Stop and wait\n   2. Switch to extra usage' || false
+  wake_screen_menu $'  > 1. Yes\n    2. No' || false
+  wake_screen_menu $'│ ❯ 1. Yes │\n│   2. No  │' || false
+  # A numbered list in the conversation, with no cursor on it, is not a menu.
+  ! wake_screen_menu $' 1. first step\n 2. second step\n\n❯ ' || false
+  # The bare prompt is not a menu.
+  ! wake_screen_menu $'────\n❯ \n────' || false
+  # One option is not a choice.
+  ! wake_screen_menu $' ❯ 1. Continue' || false
+}
+
+# --- round 2 of #182: the trace keeps no screen text; the scope follows the
+# pane past /clear; a menu counts only when the screen ENDS in it -------------
+
+_mode() { if stat -c %a "$1" >/dev/null 2>&1; then stat -c %a "$1"; else stat -f %Lp "$1"; fi; }
+
+# _mins_ago <file> <minutes> -> backdate a file's mtime (GNU or BSD date).
+_mins_ago() {
+  local t
+  t="$(date -d "-$2 min" '+%Y%m%d%H%M.%S' 2>/dev/null || date -v-"$2"M '+%Y%m%d%H%M.%S')"
+  touch -t "$t" "$1"
+}
+
+_SECRET='sk-ant-api03-Zq9SECRETtokenXyZ'
+_CUSTOMER='Customer Alice Wong owes 4200'
+
+@test "#182r2 privacy: no pane text reaches any file under CLIKAE_HOME, and the trace is private" {
+  command -v tmux >/dev/null 2>&1 || skip "tmux not installed"
+  _src_wake
+  umask 022
+  wake_tank_recovered() { return 1; }
+  local tank; tank="$(_tankname)"
+  local out="$BATS_TEST_TMPDIR/typed" f="$BATS_TEST_TMPDIR/pane.sh"
+  # An older trace from a binary that wrote it world-readable is tightened too.
+  mkdir -p "$CLIKAE_HOME/state/wake"; chmod 755 "$CLIKAE_HOME/state/wake"
+  : > "$CLIKAE_HOME/state/wake/claude-$tank.log"; chmod 644 "$CLIKAE_HOME/state/wake/claude-$tank.log"
+  {
+    printf '#!/bin/bash\nout=%q; secret=%q; cust=%q\n' "$out" "$_SECRET" "$_CUSTOMER"
+    cat <<'SH'
+printf 'export ANTHROPIC_API_KEY=%s\n%s\n\n ❯ 1. %s\n   2. %s\n' "$secret" "$cust" "$cust" "$secret"
+while IFS= read -rsn1 k; do
+  if [ "$k" = $'\e' ]; then
+    clear; printf '%s\n%s\n> ' "$secret" "$cust"
+    IFS= read -r line; printf 'ESC+%s' "$line" > "$out"; sleep 30; exit 0
+  fi
+done
+SH
+  } > "$f"; chmod +x "$f"
+  tmux new-session -d -s "$(_sess)" "$f"
+  sleep 1
+  run wake_sit "$(_sess)" "$(date +%s)" claude "$tank"
+  sleep 1
+  [ "$(cat "$out" 2>/dev/null)" = "ESC+go" ] || { echo "pane got: $(cat "$out" 2>/dev/null) / $output"; false; }
+  local log="$CLIKAE_HOME/state/wake/claude-$tank.log"
+  grep -q $'\tmodal\t' "$log" && grep -q $'\tscreen\t' "$log" || { cat "$log"; false; }
+  ! grep -rqF "$_SECRET" "$CLIKAE_HOME" || { grep -rF "$_SECRET" "$CLIKAE_HOME"; false; }
+  ! grep -rqF "Alice Wong" "$CLIKAE_HOME" || { grep -rF "Alice Wong" "$CLIKAE_HOME"; false; }
+  ! grep -rqF "sk-ant" "$CLIKAE_HOME" || { grep -rF "sk-ant" "$CLIKAE_HOME"; false; }
+  [ "$(_mode "$CLIKAE_HOME/state/wake")" = 700 ] || { echo "dir mode $(_mode "$CLIKAE_HOME/state/wake")"; false; }
+  [ "$(_mode "$log")" = 600 ] || { echo "log mode $(_mode "$log")"; false; }
+}
+
+@test "#182r2 privacy: a brand-new trace is created 0600 in a 0700 dir under umask 022" {
+  _src_wake
+  umask 022
+  wake_trace claude t s1 "screen" "prompt · h:1"
+  [ "$(_mode "$CLIKAE_HOME/state/wake")" = 700 ] || { echo "dir mode $(_mode "$CLIKAE_HOME/state/wake")"; false; }
+  [ "$(_mode "$CLIKAE_HOME/state/wake/claude-t.log")" = 600 ] || { echo "log mode $(_mode "$CLIKAE_HOME/state/wake/claude-t.log")"; false; }
+}
+
+@test "#182r2 screen: the class names what the decision needs, never the text" {
+  _src_wake
+  local c
+  c="$(wake_screen_class $' What now?\n ❯ 1. Stop and wait\n   2. Switch to extra usage\n   3. Upgrade')"
+  [ "$c" = "menu(3 options, cursor on 1)" ] || { echo "got: $c"; false; }
+  c="$(wake_screen_class $'❯ 1. First customer item\n  2. Second customer item\n\n> ')"
+  [ "$c" = "prompt" ] || { echo "got: $c"; false; }
+  c="$(wake_screen_class $' What now?\n\n ❯ 1. Stop and wait for limit to reset')"
+  [ "$c" = "menu?(1 option visible, cursor on 1)" ] || { echo "got: $c"; false; }
+  c="$(wake_screen_class $'You have hit your session limit · resets 8pm')"
+  [ "$c" = "limit-text" ] || { echo "got: $c"; false; }
+  c="$(wake_screen_class $'banner-one\nbanner-two')"
+  [ "$c" = "unknown" ] || { echo "got: $c"; false; }
+  # The hash is short and is not the text.
+  c="$(wake_screen_hash "$_SECRET")"
+  case "$c" in *sk-ant*|'') echo "got: $c"; false ;; esac
+  [[ "$c" =~ ^[0-9a-f]{8}$ ]] || { echo "not eight hex digits: $c"; false; }
+  [ "$c" = "$(wake_screen_hash "$_SECRET")" ]
+  [ "$c" != "$(wake_screen_hash "$_CUSTOMER")" ]
+}
+
+@test "#182r2 menu: numbered history ABOVE an ordinary prompt is not a menu (pure shape)" {
+  _src_wake
+  ! wake_screen_menu $'❯ 1. First customer item\n  2. Second customer item\n\n> ' || false
+  ! wake_screen_menu $'│ ❯ 1. First │\n│   2. Second │\n╭────╮\n│ >  │\n╰────╯\n  ? for shortcuts' || false
+  # A real menu still is, with a footer under it.
+  wake_screen_menu $' ❯ 1. Stop\n   2. Switch\n\n Enter to confirm · Esc to cancel' || false
+}
+
+@test "#182r2 menu: numbered history above a prompt gets NO Escape, and the nudge is typed" {
+  command -v tmux >/dev/null 2>&1 || skip "tmux not installed"
+  _src_wake
+  wake_tank_recovered() { return 1; }
+  local tank; tank="$(_tankname)"
+  local out="$BATS_TEST_TMPDIR/typed"
+  tmux new-session -d -s "$(_sess)" "printf '❯ 1. First customer item\n  2. Second customer item\n\n> '; IFS= read -r line; printf '%q' \"\$line\" > '$out'; sleep 10"
+  sleep 1
+  run wake_sit "$(_sess)" "$(date +%s)" claude "$tank"
+  sleep 1
+  [ "$(cat "$out" 2>/dev/null)" = "go" ] || { echo "pane got: $(cat "$out" 2>/dev/null) / $output"; false; }
+  ! grep -q $'\tmodal\t' "$CLIKAE_HOME/state/wake/claude-$tank.log" || { cat "$CLIKAE_HOME/state/wake/claude-$tank.log"; false; }
+  grep $'\tscreen\t' "$CLIKAE_HOME/state/wake/claude-$tank.log" | grep -q 'prompt' \
+    || { cat "$CLIKAE_HOME/state/wake/claude-$tank.log"; false; }
+}
+
+@test "#182r2 menu: a clipped picker (only the cursor row visible) gets neither Escape nor the nudge" {
+  command -v tmux >/dev/null 2>&1 || skip "tmux not installed"
+  _src_wake
+  wake_tank_recovered() { return 1; }
+  local tank; tank="$(_tankname)"
+  local out="$BATS_TEST_TMPDIR/typed" f="$BATS_TEST_TMPDIR/clipped.sh"
+  {
+    printf '#!/bin/bash\nout=%q\n' "$out"
+    cat <<'SH'
+printf ' What do you want to do?\n\n ❯ 1. Stop and wait for limit to reset'
+while IFS= read -rsn1 k; do printf 'KEY:%q\n' "$k" >> "$out"; done
+SH
+  } > "$f"; chmod +x "$f"
+  tmux new-session -d -s "$(_sess)" "$f"
+  sleep 1
+  run wake_sit "$(_sess)" "$(date +%s)" claude "$tank"
+  [ "$status" -ne 0 ] || { echo "$output"; false; }
+  sleep 1
+  [ ! -f "$out" ] || { echo "keys reached the picker: $(cat "$out")"; false; }
+  grep $'\tmodal\t' "$CLIKAE_HOME/state/wake/claude-$tank.log" | grep -q 'no Escape' \
+    || { cat "$CLIKAE_HOME/state/wake/claude-$tank.log"; false; }
+}
+
+# _two_convs <tank> <A> <B> <B-first-stamp> -> A: the launch-stamped transcript,
+# last written 10 minutes ago with its limit at 13:37; B: written now, its first
+# record at <B-first-stamp>. Both in the same project dir, as /clear leaves them.
+_two_convs() {
+  local proj="$CLIKAE_HOME/profiles/claude/$1/projects/p"
+  mkdir -p "$proj"
+  # shellcheck disable=SC2059
+  printf "$_LIMIT_LINE" "resets 8:20pm (Asia/Tokyo)" "2026-09-16T13:37:00.000Z" > "$proj/$2.jsonl"
+  _mins_ago "$proj/$2.jsonl" 10
+  # shellcheck disable=SC2059
+  printf "$_TURN_LINE" "$4" > "$proj/$3.jsonl"
+}
+
+# _holding <file> -> a pane-command prefix that starts a child of the pane's
+# shell holding <file> open, the way an engine process holds a transcript.
+_holding() { printf '( exec 3<%q; exec sleep 30 ) & ' "$1"; }
+
+@test "#182r2 scope: after /clear the pane's conversation is the NEW transcript, never the launch stamp" {
+  # #182 round 3: "after /clear" is proven by the pane's OWN process tree
+  # holding B open. The same files with B held by a process OUTSIDE the pane
+  # are the negative ownership control: ambiguous, whole tank.
+  command -v tmux >/dev/null 2>&1 || skip "tmux not installed"
+  _src_wake
+  local tank a b proj; tank="$(_tankname)"
+  a="aaaaaaaa-1111-4111-8111-111111111111"; b="bbbbbbbb-2222-4222-8222-222222222222"
+  _two_convs "$tank" "$a" "$b" "2026-09-16T15:00:00.000Z"
+  proj="$CLIKAE_HOME/profiles/claude/$tank/projects/p"
+  local _LIMIT_PARKED_TANK _LIMIT_PARKED_DIR _LIMIT_PARKED_FILES _WAKE_SCOPE_WHY _WAKE_SCOPE_AMBIG_STAMP
+  # Control: B is open, but in another (unstamped) terminal, not in this pane.
+  tmux new-session -d -s "$(_sess)" "sleep 30"
+  tmux set-option -t "=$(_sess):" @clikae_session_id "$a"
+  tmux new-session -d -s "$(_sess)-o" "$(_holding "$proj/$b.jsonl")sleep 30"
+  sleep 1
+  _wake_scopev claude "$tank" "$(_sess)"
+  [ -z "$_LIMIT_PARKED_FILES" ] || { echo "another terminal's open file moved this pane: $_LIMIT_PARKED_FILES"; false; }
+  tmux kill-session -t "=$(_sess)-o"; tmux kill-session -t "=$(_sess)"
+  # The pane's own engine has B open: that is the pane's conversation now.
+  tmux new-session -d -s "$(_sess)" "$(_holding "$proj/$b.jsonl")sleep 30"
+  tmux set-option -t "=$(_sess):" @clikae_session_id "$a"
+  sleep 1
+  _wake_scopev claude "$tank" "$(_sess)"
+  [[ "$_LIMIT_PARKED_FILES" != *"$a"* ]] || { echo "scoped to the stale stamp: $_LIMIT_PARKED_FILES"; false; }
+  [[ "$_LIMIT_PARKED_FILES" == *"/$b.jsonl" ]] || { echo "files: $_LIMIT_PARKED_FILES"; false; }
+  local l; l="$(wake_evidence_label claude "$tank" "$(_sess)")"
+  [[ "$l" == "session bbbbbbbb"*"open"*"aaaaaaaa"* ]] || { echo "label: $l"; false; }
+}
+
+@test "#182r2 scope: a newer transcript that cannot be this pane's successor makes it AMBIGUOUS, whole tank, said so" {
+  command -v tmux >/dev/null 2>&1 || skip "tmux not installed"
+  _src_wake
+  local tank a b; tank="$(_tankname)"
+  a="aaaaaaaa-3333-4333-8333-333333333333"; b="bbbbbbbb-4444-4444-8444-444444444444"
+  # B's first record predates A's last: a /resume of an older conversation, or
+  # another terminal on the same tank. Nothing in the files says which.
+  _two_convs "$tank" "$a" "$b" "2026-09-16T12:00:00.000Z"
+  tmux new-session -d -s "$(_sess)" "sleep 30"
+  tmux set-option -t "=$(_sess):" @clikae_session_id "$a"
+  local _LIMIT_PARKED_TANK _LIMIT_PARKED_DIR _LIMIT_PARKED_FILES _WAKE_SCOPE_WHY
+  _wake_scopev claude "$tank" "$(_sess)"
+  [ -z "$_LIMIT_PARKED_FILES" ] || { echo "files: $_LIMIT_PARKED_FILES"; false; }
+  local l; l="$(wake_evidence_label claude "$tank" "$(_sess)")"
+  [[ "$l" == "whole tank (ambiguous"* ]] || { echo "label: $l"; false; }
+}
+
+@test "#182r2 scope: a newer transcript another live session was launched on does not move this pane" {
+  command -v tmux >/dev/null 2>&1 || skip "tmux not installed"
+  _src_wake
+  local tank a b; tank="$(_tankname)"
+  a="aaaaaaaa-5555-4555-8555-555555555555"; b="bbbbbbbb-6666-4666-8666-666666666666"
+  _two_convs "$tank" "$a" "$b" "2026-09-16T15:00:00.000Z"
+  tmux new-session -d -s "$(_sess)" "sleep 30"
+  tmux set-option -t "=$(_sess):" @clikae_session_id "$a"
+  tmux new-session -d -s "$(_sess)-o" "sleep 30"
+  tmux set-option -t "=$(_sess)-o:" @clikae_session_id "$b"
+  local _LIMIT_PARKED_TANK _LIMIT_PARKED_DIR _LIMIT_PARKED_FILES _WAKE_SCOPE_WHY
+  _wake_scopev claude "$tank" "$(_sess)"
+  [[ "$_LIMIT_PARKED_FILES" == *"/$a.jsonl" ]] || { echo "files: $_LIMIT_PARKED_FILES"; false; }
+}
+
+@test "#182r2 sit: a stale launch stamp's limit does not get 'go' typed into the conversation /clear started" {
+  command -v tmux >/dev/null 2>&1 || skip "tmux not installed"
+  _src_wake
+  local tank a b; tank="$(_tankname)"
+  a="aaaaaaaa-7777-4777-8777-777777777777"; b="bbbbbbbb-8888-4888-8888-888888888888"
+  _two_convs "$tank" "$a" "$b" "2026-09-16T15:00:00.000Z"
+  local out="$BATS_TEST_TMPDIR/typed" proj="$CLIKAE_HOME/profiles/claude/$tank/projects/p"
+  # The pane's engine holds B open: the /clear is proven, not inferred (r3).
+  tmux new-session -d -s "$(_sess)" "$(_holding "$proj/$b.jsonl")read -r line; printf '%s' \"\$line\" > '$out'; sleep 10"
+  tmux set-option -t "=$(_sess):" @clikae_session_id "$a"
+  sleep 1
+  run wake_sit "$(_sess)" "$(date +%s)" claude "$tank"
+  [[ "$output" == *"nothing sent"* ]] || { echo "$output"; false; }
+  [ ! -f "$out" ] || { echo "typed into B: $(cat "$out")"; false; }
+  grep $'\tattached\t' "$CLIKAE_HOME/state/wake/claude-$tank.log" | grep -q 'session bbbbbbbb' \
+    || { cat "$CLIKAE_HOME/state/wake/claude-$tank.log"; false; }
+}
+
+@test "#182r2 watch: a limit left in the launch-stamped conversation does not hand over after /clear" {
+  command -v tmux >/dev/null 2>&1 || skip "tmux not installed"
+  _src_wake
+  # shellcheck disable=SC2034  # read by the wake loop sourced above
+  WAKE_WATCH_INTERVAL=1
+  local phrase; phrase="$(_phrase_minutes_ago 10)" || skip "no named zone on this host"
+  local tank a b proj; tank="$(_tankname)"
+  a="aaaaaaaa-9999-4999-8999-999999999999"; b="bbbbbbbb-0000-4000-8000-000000000000"
+  proj="$CLIKAE_HOME/profiles/claude/$tank/projects/p"; mkdir -p "$proj"
+  # shellcheck disable=SC2059
+  local now; now="$(date -u '+%Y-%m-%dT%H:%M:%S')"
+  printf "$_LIMIT_LINE" "$phrase" "$now.000Z" > "$proj/$a.jsonl"
+  _mins_ago "$proj/$a.jsonl" 1
+  # shellcheck disable=SC2059
+  printf "$_TURN_LINE" "$now.500Z" > "$proj/$b.jsonl"
+  # #182 round 3: a distinguishing fixture. A's subagent refuses AFTER B's
+  # turn, so the WHOLE TANK reads parked (newest line a limit), while B alone
+  # does not. A watcher that fell back to the whole tank would hand over and
+  # type; only one that read B leaves it alone. Not a candidate for the
+  # pane's conversation either: subagents live a level down.
+  mkdir -p "$proj/$a/subagents"
+  # shellcheck disable=SC2059
+  printf "$_LIMIT_LINE" "$phrase" "$now.900Z" > "$proj/$a/subagents/agent-a1.jsonl"
+  local out="$BATS_TEST_TMPDIR/typed"
+  tmux new-session -d -s "$(_sess)" "$(_holding "$proj/$b.jsonl")read -r line; printf '%s' \"\$line\" > '$out'; sleep 60"
+  tmux set-option -t "=$(_sess):" @clikae_session_id "$a"
+  sleep 1
+  # Control: on the stamped transcript alone this limit IS parked, and so is
+  # the whole tank.
+  local _LIMIT_PARKED_TANK _LIMIT_PARKED_DIR _LIMIT_PARKED_FILES _WAKE_SCOPE_WHY _WAKE_SCOPE_AMBIG_STAMP
+  _LIMIT_PARKED_TANK="claude/$tank"; _LIMIT_PARKED_DIR="$CLIKAE_HOME/profiles/claude/$tank"
+  _LIMIT_PARKED_FILES="$proj/$a.jsonl"
+  _limit_tank_dry_self claude "$tank" >/dev/null || { echo "precondition: A should read parked"; false; }
+  _LIMIT_PARKED_FILES=""
+  _limit_tank_dry_self claude "$tank" >/dev/null || { echo "precondition: the whole tank should read parked"; false; }
+  # The evidence the watcher will read: B, because the pane's engine has it open.
+  _wake_scopev claude "$tank" "$(_sess)"
+  [[ "$_LIMIT_PARKED_FILES" == *"/$b.jsonl" ]] || { echo "evidence: $_WAKE_SCOPE_WHY / files: $_LIMIT_PARKED_FILES"; false; }
+  [[ "$_WAKE_SCOPE_WHY" == "session bbbbbbbb"* ]] || { echo "why: $_WAKE_SCOPE_WHY"; false; }
+  unset _LIMIT_PARKED_TANK _LIMIT_PARKED_DIR _LIMIT_PARKED_FILES _WAKE_SCOPE_WHY _WAKE_SCOPE_AMBIG_STAMP
+  wake_watch claude "$tank" "$(_sess)" >/dev/null &
+  local w=$! i
+  for ((i = 0; i < 10; i++)); do [ -s "$out" ] && break; sleep 1; done
+  { kill "$w"; wait "$w"; } 2>/dev/null || true
+  [ ! -s "$out" ] || { echo "handed over and typed into B: $(cat "$out")"; false; }
+}
+
+# --- round 3 of #182: "moved on" needs evidence tied to the pane; a menu is
+# the LAST thing on screen -----------------------------------------------------
+
+_USER_LINE='{"type":"user","message":{"role":"user","content":"hello"},"timestamp":"%s"}\n'
+
+# _parked_and_later <tank> <A> <B> <B-line-format> -> A: the launch-stamped
+# transcript, parked on a limit and quiet for 10 minutes; B: a conversation
+# that BEGAN after A went quiet (the shape /clear leaves, and also the shape a
+# bare `claude` in another terminal on the same tank leaves), written now.
+_parked_and_later() {
+  local proj="$CLIKAE_HOME/profiles/claude/$1/projects/p"
+  mkdir -p "$proj"
+  # shellcheck disable=SC2059
+  printf "$_LIMIT_LINE" "resets 8:20pm (Asia/Tokyo)" "2026-09-16T13:37:00.000Z" > "$proj/$2.jsonl"
+  _mins_ago "$proj/$2.jsonl" 10
+  # shellcheck disable=SC2059
+  printf "$4" "2026-09-16T15:00:00.000Z" > "$proj/$3.jsonl"
+}
+
+@test "#182r3 scope: a later unstamped conversation the pane does not hold is AMBIGUOUS, never its successor" {
+  # The review's case, as scope: chronology (B began after A went quiet) is
+  # not ownership. Nothing ties B to this pane, so the read is the whole tank
+  # and the label says the pane is treated as possibly parked.
+  command -v tmux >/dev/null 2>&1 || skip "tmux not installed"
+  _src_wake
+  local tank a b; tank="$(_tankname)"
+  a="aaaaaaaa-a3a3-4a3a-8a3a-a3a3a3a3a3a3"; b="bbbbbbbb-b3b3-4b3b-8b3b-b3b3b3b3b3b3"
+  _parked_and_later "$tank" "$a" "$b" "$_USER_LINE"
+  tmux new-session -d -s "$(_sess)" "sleep 30"
+  tmux set-option -t "=$(_sess):" @clikae_session_id "$a"
+  sleep 1
+  local _LIMIT_PARKED_TANK _LIMIT_PARKED_DIR _LIMIT_PARKED_FILES _WAKE_SCOPE_WHY _WAKE_SCOPE_AMBIG_STAMP
+  _wake_scopev claude "$tank" "$(_sess)"
+  [ -z "$_LIMIT_PARKED_FILES" ] || { echo "picked a conversation nothing ties to the pane: $_LIMIT_PARKED_FILES"; false; }
+  [[ "$_WAKE_SCOPE_WHY" == "whole tank (ambiguous"*"possibly parked"* ]] || { echo "why: $_WAKE_SCOPE_WHY"; false; }
+}
+
+@test "#182r3 sit: A parked + a later unrelated B (a user line, no stamp): the waiter does NOT skip" {
+  command -v tmux >/dev/null 2>&1 || skip "tmux not installed"
+  _src_wake
+  local tank a b; tank="$(_tankname)"
+  a="aaaaaaaa-a4a4-4a4a-8a4a-a4a4a4a4a4a4"; b="bbbbbbbb-b4b4-4b4b-8b4b-b4b4b4b4b4b4"
+  _parked_and_later "$tank" "$a" "$b" "$_USER_LINE"
+  local out="$BATS_TEST_TMPDIR/typed"
+  tmux new-session -d -s "$(_sess)" "read -r line; printf '%s' \"\$line\" > '$out'; sleep 10"
+  tmux set-option -t "=$(_sess):" @clikae_session_id "$a"
+  sleep 1
+  run wake_sit "$(_sess)" "$(date +%s)" claude "$tank"
+  [[ "$output" != *"nothing sent"* ]] || { echo "skipped: $output"; false; }
+  sleep 1
+  [ "$(cat "$out" 2>/dev/null)" = "go" ] || { echo "not nudged: $output"; false; }
+  grep $'\tpossibly-parked\t' "$CLIKAE_HOME/state/wake/claude-$tank.log" | grep -q 'ambiguous' \
+    || { cat "$CLIKAE_HOME/state/wake/claude-$tank.log"; false; }
+}
+
+@test "#182r3 sit: A parked + a later unrelated B with a SUCCESSFUL turn: not taken for 'resumed on its own'" {
+  command -v tmux >/dev/null 2>&1 || skip "tmux not installed"
+  _src_wake
+  local tank a b; tank="$(_tankname)"
+  a="aaaaaaaa-a5a5-4a5a-8a5a-a5a5a5a5a5a5"; b="bbbbbbbb-b5b5-4b5b-8b5b-b5b5b5b5b5b5"
+  _parked_and_later "$tank" "$a" "$b" "$_TURN_LINE"
+  local out="$BATS_TEST_TMPDIR/typed"
+  tmux new-session -d -s "$(_sess)" "read -r line; printf '%s' \"\$line\" > '$out'; sleep 10"
+  tmux set-option -t "=$(_sess):" @clikae_session_id "$a"
+  sleep 1
+  run wake_sit "$(_sess)" "$(date +%s)" claude "$tank"
+  [[ "$output" != *"resumed on its own"* ]] || { echo "skipped as recovered: $output"; false; }
+  [[ "$output" != *"nothing sent"* ]] || { echo "skipped: $output"; false; }
+  sleep 1
+  [ "$(cat "$out" 2>/dev/null)" = "go" ] || { echo "not nudged: $output"; false; }
+}
+
+@test "#182r3 sit: a proven move to a conversation that is ITSELF parked is still nudged" {
+  # The pane's engine holds B open (a proven /clear), and B hit the limit too:
+  # moving on is not a skip when where it moved to is parked.
+  command -v tmux >/dev/null 2>&1 || skip "tmux not installed"
+  _src_wake
+  local tank a b proj fmt; tank="$(_tankname)"
+  a="aaaaaaaa-a6a6-4a6a-8a6a-a6a6a6a6a6a6"; b="bbbbbbbb-b6b6-4b6b-8b6b-b6b6b6b6b6b6"
+  # shellcheck disable=SC2059
+  fmt="$(printf "$_LIMIT_LINE" "resets 8:20pm (Asia/Tokyo)" "%s")"
+  _parked_and_later "$tank" "$a" "$b" "$fmt\n"
+  proj="$CLIKAE_HOME/profiles/claude/$tank/projects/p"
+  local out="$BATS_TEST_TMPDIR/typed"
+  tmux new-session -d -s "$(_sess)" "$(_holding "$proj/$b.jsonl")read -r line; printf '%s' \"\$line\" > '$out'; sleep 10"
+  tmux set-option -t "=$(_sess):" @clikae_session_id "$a"
+  sleep 1
+  run wake_sit "$(_sess)" "$(date +%s)" claude "$tank"
+  [[ "$output" != *"nothing sent"* ]] || { echo "skipped: $output"; false; }
+  sleep 1
+  [ "$(cat "$out" 2>/dev/null)" = "go" ] || { echo "not nudged: $output"; false; }
+  grep $'\tattached\t' "$CLIKAE_HOME/state/wake/claude-$tank.log" | grep -q 'session bbbbbbbb' \
+    || { cat "$CLIKAE_HOME/state/wake/claude-$tank.log"; false; }
+}
+
+# The review's screen: numbered options with a cursor on them, and under them
+# a limit banner and the automatic wait's countdown.
+_OPTS_THEN_WAIT=$'❯ 1. First customer item\n  2. Second customer item\n\n You have hit your session limit · resets 3pm\n   Waiting for the limit to reset… 2h 13m'
+
+@test "#182r3 menu: options followed by anything but the menu footer are NOT a menu (pure shape)" {
+  _src_wake
+  ! wake_screen_menu "$_OPTS_THEN_WAIT" || false
+  local c; c="$(wake_screen_class "$_OPTS_THEN_WAIT")"
+  [ "$c" = "menu?(2 options, cursor on 1, text below)" ] || { echo "got: $c"; false; }
+  # The running-status hint is not a menu footer either.
+  ! wake_screen_menu $' ❯ 1. Stop\n   2. Switch\n\n esc to interrupt' || false
+  # Still a menu: only the vendor footer, blank rows, or the box under it.
+  wake_screen_menu $' ❯ 1. Stop\n   2. Switch\n\n Enter to confirm · Esc to cancel' || false
+  wake_screen_menu $'╭──────────╮\n│ ❯ 1. Yes │\n│   2. No  │\n╰──────────╯' || false
+}
+
+@test "#182r3 menu: a real menu is still seen under LC_ALL=C (byte-wise awk)" {
+  # The box-border strip was a bracket of multibyte glyphs: in a byte-wise
+  # awk it also ate the first byte of ❯, so no cursor was ever seen.
+  _src_wake
+  LC_ALL=C wake_screen_menu $' What now?\n ❯ 1. Stop and wait\n   2. Switch to extra usage' || false
+  LC_ALL=C wake_screen_menu $'│ ❯ 1. Yes │\n│   2. No  │' || false
+}
+
+@test "#182r3 menu: options above a limit banner and countdown get NO Escape and nothing typed" {
+  command -v tmux >/dev/null 2>&1 || skip "tmux not installed"
+  _src_wake
+  wake_tank_recovered() { return 1; }
+  local tank; tank="$(_tankname)"
+  local out="$BATS_TEST_TMPDIR/typed" f="$BATS_TEST_TMPDIR/wait.sh"
+  {
+    printf '#!/bin/bash\nout=%q; scr=%q\n' "$out" "$_OPTS_THEN_WAIT"
+    cat <<'SH'
+printf '%s' "$scr"
+while IFS= read -rsn1 k; do printf 'KEY:%q\n' "$k" >> "$out"; done
+SH
+  } > "$f"; chmod +x "$f"
+  tmux new-session -d -s "$(_sess)" "$f"
+  sleep 1
+  run wake_sit "$(_sess)" "$(date +%s)" claude "$tank"
+  [ "$status" -ne 0 ] || { echo "$output"; false; }
+  sleep 1
+  [ ! -f "$out" ] || { echo "keys reached the waiting screen: $(cat "$out")"; false; }
+  grep $'\tmodal\t' "$CLIKAE_HOME/state/wake/claude-$tank.log" | grep -q 'no Escape' \
+    || { cat "$CLIKAE_HOME/state/wake/claude-$tank.log"; false; }
 }

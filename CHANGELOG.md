@@ -7,6 +7,39 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **Waking a limited session reads that session, not the whole tank (#162).**
+  The watcher's "is it parked?", the waiter's "did the vendor already
+  continue it?" and the post-nudge "did it land?" now read the parked
+  session's own transcript (the id clikae stamps at launch). A background
+  subagent's reply, or another session on the same tank, no longer makes the
+  watcher miss the limit or the waiter skip the nudge. With no stamped id the
+  read is the whole tank, as before. The pane counts as moved to a newer
+  conversation (`/clear`, `/resume`) only when a process in that pane holds
+  its transcript open, and a conversation it moved on to that is not parked
+  is never nudged. A newer conversation that nothing ties to the pane, such
+  as a bare `claude` in another terminal, never makes the waiter skip: the
+  read is the whole tank, only the launch-stamped conversation can count as
+  "continued by itself", and the trace says the pane was treated as possibly
+  parked.
+- **The watcher's own usage refresh no longer hides a parked session (#163).**
+  A post-reset usage reading still clears the tank on the board, but on the
+  watcher's path it no longer answers "this conversation moved", so the
+  hand-over at `reset passed · unverified` is seen.
+- **The wake trace records what kind of screen it typed into, and a menu is
+  closed first (#163).** Before the nudge the trace gets the screen's class
+  (`prompt`, `menu(3 options, cursor on 1)`, `limit-text`, `unknown`) and a
+  short hash, never the text on it, and the trace is private (0600 in a
+  0700 directory). The screen counts as a menu only when the options are the
+  last thing on it, with nothing below but blank rows, its box and the
+  `Enter to confirm · Esc to cancel` footer. A numbered list above the prompt
+  is not a menu. A menu gets Escape before typing; if it stays open, nothing
+  is typed (Enter would pick an option) and the waiter gives up visibly.
+  Options with anything else below them, such as a limit banner and its
+  countdown, and a picker with only its selected row visible, get neither
+  Escape nor the nudge: Escape can cancel the automatic limit wait.
+
 ## [0.42.0] — 2026-10-15
 
 ### Fixed
