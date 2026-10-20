@@ -20,6 +20,13 @@ source "$CLIKAE_LIB/core/duration.sh"
 # watch-github run's PREFIX — `watch-github-<org>` — but not the epoch
 # suffix a not-yet-run poll will pick; this is the "no epoch needed" entry
 # point burn_status_resolve's own literal/`burn-*`/pid forms don't cover).
+#
+# #183 r5 (P2): file_mtime is whole seconds, and a tie used to go to
+# whichever directory the glob listed first — so a stall written in the same
+# second as an earlier event (its directory `…-<epoch>-2`, listed after the
+# event's `…-<epoch>`) was hidden behind it. A whole-second tie is broken by
+# the full-precision mtime (_wait_status_newer), and only an exact tie by
+# the run name.
 _wait_resolve_latest() {
   local prefix="$1" base="$HOME/.clikae/logs" d f m best="" best_m=-1
   [ -n "$prefix" ] && [ -d "$base" ] || return 1
@@ -29,10 +36,43 @@ _wait_resolve_latest() {
     [ -f "$f" ] || continue
     m="$(file_mtime "$f")"
     case "$m" in ''|*[!0-9]*) continue ;; esac
-    if [ "$m" -gt "$best_m" ]; then best="$f"; best_m="$m"; fi
+    if [ "$m" -gt "$best_m" ]; then
+      best="$f"; best_m="$m"
+    elif [ "$m" -eq "$best_m" ] && _wait_status_newer "$f" "$best"; then
+      best="$f"
+    fi
   done
   [ -n "$best" ] || return 1
   printf '%s' "$best"
+}
+
+# _wait_status_newer <a> <b> -> 0 when status file <a> was written after
+# <b>: by full-precision mtime (`find -newer`, not `-nt`, which bash 3.2
+# compares in whole seconds), and on an exact tie by the run directory's
+# name — epoch, then the numeric `-N` collision suffix (`-10` after `-9`,
+# a bare `…-<epoch>` being suffix 1).
+_wait_status_newer() {
+  local a="$1" b="$2" ka kb
+  [ -n "$(find "$a" -newer "$b" 2>/dev/null)" ] && return 0
+  [ -n "$(find "$b" -newer "$a" 2>/dev/null)" ] && return 1
+  ka="$(_wait_run_key "$a")" || return 1
+  kb="$(_wait_run_key "$b")" || return 1
+  [ "${ka% *}" -gt "${kb% *}" ] && return 0
+  [ "${ka% *}" -eq "${kb% *}" ] && [ "${ka#* }" -gt "${kb#* }" ]
+}
+
+# _wait_run_key <status-file> -> "<epoch> <suffix>" from its run directory's
+# name (`…-<epoch>` or `…-<epoch>-<N>`), or 1 when it ends in neither.
+_wait_run_key() {
+  local name last rest prev
+  name="${1%/status.json}"; name="${name##*/}"
+  last="${name##*-}"; rest="${name%-*}"; prev="${rest##*-}"
+  case "$last" in ''|*[!0-9]*) return 1 ;; esac
+  [ "$rest" != "$name" ] || return 1
+  case "$prev" in
+    ''|*[!0-9]*) printf '%s 1\n' "$last" ;;
+    *) printf '%s %s\n' "$prev" "$last" ;;
+  esac
 }
 
 _wait_help() {

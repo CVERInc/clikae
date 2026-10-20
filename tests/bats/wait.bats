@@ -260,6 +260,61 @@ STUB
   [[ "$output" == *'"run_id":"watch-github-T-200"'* ]] || false
 }
 
+# #183 r5 (P2): a stall published after a success must be what --latest
+# returns, whatever the two directories are named. _touch_at <run_id> <time>
+# sets that run's status.json mtime to an ISO time with a fraction (GNU and
+# BSD touch -d both take it).
+_touch_at() { touch -d "$2" "$CLIKAE_HOME/logs/$1/status.json"; }
+
+@test "wait --latest: a stall written a second AFTER a success, under an EARLIER epoch name, is the one returned (#183 r5 P2)" {
+  _mkstatus watch-github-T-1789000005 "done" true github T
+  _touch_at watch-github-T-1789000005 2026-01-01T00:00:00
+  _mkstatus watch-github-T-1789000000 fail false github T
+  _touch_at watch-github-T-1789000000 2026-01-01T00:00:01
+  run clikae wait --latest watch-github-T --timeout 1
+  [ "$status" -eq 1 ]
+  [[ "$output" == *'"run_id":"watch-github-T-1789000000"'* ]] || false
+}
+
+@test "wait --latest: same whole second, the stall's -2 directory written later — the stall wins, not the first-listed success (#183 r5 P2)" {
+  _mkstatus watch-github-T-1789000000 "done" true github T
+  _touch_at watch-github-T-1789000000 2026-01-01T00:00:00.1
+  _mkstatus watch-github-T-1789000000-2 fail false github T
+  _touch_at watch-github-T-1789000000-2 2026-01-01T00:00:00.9
+  run clikae wait --latest watch-github-T --timeout 1
+  [ "$status" -eq 1 ]
+  [[ "$output" == *'"state":"fail"'* ]] || false
+}
+
+@test "wait --latest: same whole second, the success's -2 directory written later — the success wins (#183 r5 P2)" {
+  _mkstatus watch-github-T-1789000000 fail false github T
+  _touch_at watch-github-T-1789000000 2026-01-01T00:00:00.1
+  _mkstatus watch-github-T-1789000000-2 "done" true github T
+  _touch_at watch-github-T-1789000000-2 2026-01-01T00:00:00.9
+  run clikae wait --latest watch-github-T --timeout 1
+  [ "$status" -eq 0 ]
+  [[ "$output" == *'"run_id":"watch-github-T-1789000000-2"'* ]] || false
+}
+
+@test "wait --latest: an exact mtime tie goes to the higher collision suffix, numerically (-2 over the bare epoch, -10 over -9) (#183 r5 P2)" {
+  _mkstatus watch-github-T-1789000000 "done" true github T
+  _mkstatus watch-github-T-1789000000-2 fail false github T
+  _touch_at watch-github-T-1789000000 2026-01-01T00:00:00.5
+  _touch_at watch-github-T-1789000000-2 2026-01-01T00:00:00.5
+  run clikae wait --latest watch-github-T --timeout 1
+  [ "$status" -eq 1 ]
+  [[ "$output" == *'"run_id":"watch-github-T-1789000000-2"'* ]] || false
+  _mkstatus watch-github-T-1789000000-9 fail false github T
+  _mkstatus watch-github-T-1789000000-10 "done" true github T
+  local r
+  for r in watch-github-T-1789000000 watch-github-T-1789000000-2 watch-github-T-1789000000-9 watch-github-T-1789000000-10; do
+    _touch_at "$r" 2026-01-01T00:00:00.5
+  done
+  run clikae wait --latest watch-github-T --timeout 1
+  [ "$status" -eq 0 ]
+  [[ "$output" == *'"run_id":"watch-github-T-1789000000-10"'* ]] || false
+}
+
 @test "wait --latest: no match refuses with a clear message" {
   run clikae wait --latest watch-github-nonexistent
   [ "$status" -eq 1 ]

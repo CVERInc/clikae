@@ -3135,6 +3135,31 @@ _hb() { printf '%s/state/watch-github/CVERInc.heartbeat.json' "$CLIKAE_HOME"; }
   [ "$(command cat "$lock/pid")" = "424242" ]
 }
 
+# #183 round 5 (P2): the real writers, the real consumer. An event and a
+# stall in the same (frozen) second land in `…-<epoch>` and `…-<epoch>-2`;
+# `clikae wait --latest` must return whichever was written LAST, in both
+# orders — it used to return the first-listed directory on a tied second.
+@test "watch github: wait --latest returns the later of an event and a stall written in the same second, in either order (#183 r5 P2)" {
+  source "$CLIKAE_TEST_ROOT/lib/core/log.sh"
+  source "$CLIKAE_TEST_ROOT/lib/core/json.sh"
+  source "$CLIKAE_TEST_ROOT/lib/core/profile_store.sh"
+  source "$CLIKAE_TEST_ROOT/lib/core/burn_status.sh"
+  source "$CLIKAE_TEST_ROOT/lib/commands/watch_github.sh"
+  date() { if [ "$*" = "+%s" ]; then printf '1789000000\n'; else command date "$@"; fi; }
+  _wg_status_write acme '{"kind":"comment","n":1}' "#1 comment by carol"
+  _wg_stall_write acme "github:acme — stalled: 3 consecutive failed polls"
+  _wg_stall_write zeta "github:zeta — stalled: 3 consecutive failed polls"
+  _wg_status_write zeta '{"kind":"comment","n":2}' "#2 comment by carol"
+  [ -f "$CLIKAE_HOME/logs/watch-github-acme-1789000000-2/status.json" ]
+  [ -f "$CLIKAE_HOME/logs/watch-github-zeta-1789000000-2/status.json" ]
+  run clikae wait --latest watch-github-acme --timeout 1
+  [ "$status" -eq 1 ]
+  [[ "$output" == *'"state":"fail"'* ]] || false
+  run clikae wait --latest watch-github-zeta --timeout 1
+  [ "$status" -eq 0 ]
+  [[ "$output" == *'"state":"done"'* ]] || false
+}
+
 # #183 round 5: a stall fires exactly ONCE per streak of failures — not again
 # at 6, 9, … — and a success starts a new streak that can stall again.
 @test "watch github: six failed polls raise one stall; after a success, three more raise the second (#183 r5)" {

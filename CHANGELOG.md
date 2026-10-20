@@ -32,7 +32,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   are each recorded in a file of their own, so none is lost) write ONE
   `state: fail` run per streak, in a run directory of its own even when an event
   lands in the same second, that `clikae wait --latest watch-github-<org>` returns
-  on and say so loudly; a failed poll re-checks `gh auth status` and a
+  on (a same-second tie now goes to the run written last, never the one
+  listed first) and say so loudly; a failed poll re-checks `gh auth status` and a
   login that is gone exits 1 instead of spinning. Comment/review/mention
   events now carry `login` and `body` (first 200 bytes, cut on a UTF-8 boundary) —
   from the timeline event itself, or from the issue's own comments since
