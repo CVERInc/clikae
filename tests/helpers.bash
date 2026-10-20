@@ -201,6 +201,16 @@ setup() {
   unset TMUX TMUX_PANE
   export TMUX_TMPDIR="$TEST_HOME/tmux"
   mkdir -p "$TMUX_TMPDIR"
+  # 🔴 AND THE LEGACY SOCKET. Since #176 the board reads a second server too —
+  # the pre-#176 /tmp/tmux-<uid>/default, so a cockpit started by an older
+  # clikae stays listed until it is restarted. That path is REAL on any machine
+  # that dogfoods clikae, and TMUX_TMPDIR does not cover it: measured 2026-10-19
+  # on reefbox, doctor.bats / home-narrow.bats / live.bats went red with the
+  # maintainer's five live `clikae-claude-*-burn-*` sessions in their output.
+  # Reading them was bad enough; `tmux_on … kill-session` would have REACHED
+  # them. Point it at a path that does not exist; tmux-socket.bats sets its own
+  # throwaway one per test.
+  export CLIKAE_TMUX_LEGACY_SOCKET="$TEST_HOME/no-legacy-socket/default"
   # Keep the suite hermetic: don't let a local-model CLI that happens to be on
   # the dev machine's PATH (apfel/ollama/llm) make `handoff` auto-summarize. Tests
   # that exercise auto-detection re-enable this and stub a summarizer on PATH.
