@@ -1182,12 +1182,13 @@ _wg_heartbeat_write() {
   return 0
 }
 
-# _wg_stall_write <org> <reason> -> ONE burn-status-shaped run directory
-# saying `state: fail` — the same file `clikae wait --latest
+# _wg_stall_write <org> <reason> [rotate:1|0] -> ONE burn-status-shaped run
+# directory saying `state: fail` — the same file `clikae wait --latest
 # watch-github-<org>` already reads for events, so the stall is an event
-# a cockpit returns on (rc 1), not a line in a log nobody tails.
+# a cockpit returns on (rc 1), not a line in a log nobody tails. <rotate> 0
+# (a poll that does not hold the org lock) skips _wg_runs_rotate.
 _wg_stall_write() {
-  local org="$1" reason="$2" now run_id run_dir n=1
+  local org="$1" reason="$2" rotate="${3:-1}" now run_id run_dir n=1
   now="$(date +%s 2>/dev/null || echo 0)"
   run_id="watch-github-$org-$now"
   while [ -d "$(burn_status_dir "$run_id")" ]; do
@@ -1202,7 +1203,7 @@ _wg_stall_write() {
       "$(json_str "$run_id")" "$(json_str "fail")" "$now" "$now" "$$" \
       "$(json_str "$(_wg_heartbeat_file "$org")")" "$(json_str "$reason")"
   } > "$run_dir/status.json.tmp" 2>/dev/null && mv -f "$run_dir/status.json.tmp" "$run_dir/status.json" 2>/dev/null || true
-  _wg_runs_rotate "$org"
+  [ "$rotate" = 0 ] || _wg_runs_rotate "$org"
 }
 
 # _wg_body_excerpt <raw-json-string-content> -> the first 200 characters as
@@ -1789,8 +1790,12 @@ _wg_poll() {
   # failed poll (ok=0) rather than proceeding unguarded.
   if ! _wg_lock_acquire "$org"; then
     __WG_OK=0
+    __WG_LAST_KIND="lock"
+    __WG_LAST_REASON="could not acquire the poll lock"
     log_warn "github:$org — could not acquire the poll lock (another watch github --once running concurrently?); skipping this poll."
-    _wg_heartbeat_write "$org" 0 "lock" "could not acquire the poll lock"   # #166: counted, never silent
+    # #166: counted, never silent — and (#183 round 3, P2) through the same
+    # stall logic as any failed poll. Not ours: no release, no traps.
+    _wg_poll_failed "$org" 0
     return 0
   fi
   # P3-4 (2026-09-14 fix-round-7 review): a poll killed mid-read (Ctrl-C,
@@ -1950,19 +1955,33 @@ _wg_poll() {
       __WG_LAST_KIND="permanent"
       __WG_LAST_REASON="$__WG_PERMANENT_REASON"
     fi
-    _wg_heartbeat_write "$org" 0 "${__WG_LAST_KIND:-}" "${__WG_LAST_REASON:-}"
-    local stall_n="${CLIKAE_WATCH_GITHUB_STALL_POLLS:-3}"
-    case "$stall_n" in ''|*[!0-9]*|0) stall_n=3 ;; esac
-    if [ "$__WG_PERMANENT" -eq 1 ]; then
-      _wg_stall_write "$org" "github:$org — giving up: ${__WG_PERMANENT_REASON}"
-    elif [ "${__WG_FAILS:-0}" -ge "$stall_n" ] && [ $(( __WG_FAILS % stall_n )) -eq 0 ]; then
-      log_err "github:$org — stalled: ${__WG_FAILS} consecutive failed polls (last: ${__WG_LAST_KIND:-?}: ${__WG_LAST_REASON:-?}); heartbeat at $(_wg_heartbeat_file "$org")"
-      _wg_stall_write "$org" "github:$org — stalled: ${__WG_FAILS} consecutive failed polls (last: ${__WG_LAST_KIND:-?}: ${__WG_LAST_REASON:-?})"
-    fi
+    _wg_poll_failed "$org" 1
   fi
 
   _wg_lock_release "$org"
   trap - INT TERM HUP EXIT
+}
+
+# _wg_poll_failed <org> <holds_lock:1|0> -> the ONE place a failed poll is
+# recorded: heartbeat (failure count up, $__WG_LAST_KIND/_REASON as the last
+# error), then the STALL event every CLIKAE_WATCH_GITHUB_STALL_POLLS (3)
+# consecutive failures, or at once on a permanent one. #183 round 3 (P2):
+# the poll-lock failure used to write its own heartbeat and return early,
+# so a run of them was counted and never announced. <holds_lock> 0 (that
+# path) still writes the stall's own fresh run directory, but leaves
+# rotating this org's run directories to the poll that does hold the lock.
+_wg_poll_failed() {
+  local org="$1" holds_lock="${2:-1}"
+  _wg_heartbeat_write "$org" 0 "${__WG_LAST_KIND:-}" "${__WG_LAST_REASON:-}"
+  local stall_n="${CLIKAE_WATCH_GITHUB_STALL_POLLS:-3}"
+  case "$stall_n" in ''|*[!0-9]*|0) stall_n=3 ;; esac
+  if [ "${__WG_PERMANENT:-0}" -eq 1 ]; then
+    _wg_stall_write "$org" "github:$org — giving up: ${__WG_PERMANENT_REASON}" "$holds_lock"
+  elif [ "${__WG_FAILS:-0}" -ge "$stall_n" ] && [ $(( __WG_FAILS % stall_n )) -eq 0 ]; then
+    log_err "github:$org — stalled: ${__WG_FAILS} consecutive failed polls (last: ${__WG_LAST_KIND:-?}: ${__WG_LAST_REASON:-?}); heartbeat at $(_wg_heartbeat_file "$org")"
+    _wg_stall_write "$org" "github:$org — stalled: ${__WG_FAILS} consecutive failed polls (last: ${__WG_LAST_KIND:-?}: ${__WG_LAST_REASON:-?})" "$holds_lock"
+  fi
+  return 0
 }
 
 # --- the command --------------------------------------------------------------

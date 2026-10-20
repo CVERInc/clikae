@@ -2962,3 +2962,43 @@ _hb() { printf '%s/state/watch-github/CVERInc.heartbeat.json' "$CLIKAE_HOME"; }
   local events="$CLIKAE_HOME/logs/watch-github-CVERInc/events.jsonl"
   [[ "$(tail -n1 "$events")" == *'"body":"the newest word, from a collaborator"'* ]] || false
 }
+
+# #183 round 3 (P2): a poll that cannot get the org lock is a failed poll
+# like any other, so three in a row must raise the same STALL event — the
+# early lock-failure return used to count it in the heartbeat and skip the
+# threshold check. Only lock acquisition is stubbed; the lock itself is held
+# by a "foreign" poll whose ownership the failing polls must never touch.
+@test "watch github: three polls that cannot get the lock raise the STALL event clikae wait --latest returns on, and never release the holder's lock (#183 r3 P2)" {
+  source "$CLIKAE_TEST_ROOT/lib/core/log.sh"
+  source "$CLIKAE_TEST_ROOT/lib/core/json.sh"
+  source "$CLIKAE_TEST_ROOT/lib/core/profile_store.sh"
+  source "$CLIKAE_TEST_ROOT/lib/core/burn_status.sh"
+  source "$CLIKAE_TEST_ROOT/lib/commands/watch_github.sh"
+  _wg_lock_acquire() { return 1; }
+  local lock; lock="$(_wg_lock_dir CVERInc)"
+  mkdir -p "$lock"
+  printf '424242\n' > "$lock/pid"
+  local i n_status
+  for i in 1 2 3; do
+    _wg_poll CVERInc 2>>"$BATS_TEST_TMPDIR/poll.err" || true
+    n_status="$(find "$CLIKAE_HOME/logs" -maxdepth 2 -path '*/watch-github-CVERInc-*/status.json' 2>/dev/null | wc -l | tr -d ' ')"
+    echo "poll $i: status files=$n_status ok=$__WG_OK"
+    [ "$__WG_OK" -eq 0 ]
+    if [ "$i" -lt 3 ]; then [ "$n_status" = "0" ]; fi
+  done
+  cat "$(_hb)"
+  [[ "$(cat "$(_hb)")" == *'"consecutive_failures":3'* ]] || false
+  [[ "$(cat "$(_hb)")" == *'"last_error_kind":"lock"'* ]] || false
+  [ "$n_status" = "1" ]
+  local status_file
+  status_file="$(find "$CLIKAE_HOME/logs" -maxdepth 2 -path '*/watch-github-CVERInc-*/status.json' | head -n1)"
+  [[ "$(cat "$status_file")" == *'"state":"fail"'* ]] || false
+  [[ "$(cat "$status_file")" == *'stalled: 3 consecutive failed polls (last: lock:'* ]] || false
+  grep -q stalled "$BATS_TEST_TMPDIR/poll.err"
+  # The holder's lock is untouched: still there, still its pid.
+  [ -d "$lock" ]
+  [ "$(cat "$lock/pid")" = "424242" ]
+  run clikae wait --latest watch-github-CVERInc --timeout 5
+  [ "$status" -eq 1 ]
+  [[ "$output" == *'"state":"fail"'* ]] || false
+}
