@@ -1085,6 +1085,7 @@ wake_attach() {
   # an older binary still works — it just spells its own identity out loud here.
   tmux new-window -d -t "=$session:" -n wake \
     "'$bin' wake --sit '$session' '$reset' '$engine' '$tank'" 2>/dev/null || return 1
+  wake_select_engine_window "$session"   # #168: plumbing is never the landing window
   return 0
 }
 
@@ -1293,6 +1294,143 @@ wake_usage_prime() {
   return 0
 }
 
+# --- #168: a watcher reloads itself after an upgrade, and is never where a
+# human lands -------------------------------------------------------------
+#
+# `clikae wake --watch` sources lib/ once at launch, so every cockpit open
+# when 0.38.0 landed kept running 0.37.0's compact logic for hours — the
+# window's own start command named a Cellar path `brew upgrade` had already
+# removed. The tick already exists; it now asks one cheap question a minute.
+
+# wake_installed_version <path> -> the CLIKAE_VERSION the clikae at <path>
+# carries, read off the file (no exec). brew's bin/clikae is a one-line
+# wrapper that execs libexec/bin/clikae — followed one hop.
+wake_installed_version() {
+  local p="$1" v real
+  [ -f "$p" ] || return 1
+  v="$(grep -m1 '^CLIKAE_VERSION=' "$p" 2>/dev/null | sed -E 's/^CLIKAE_VERSION="?([^"]*)"?[[:space:]]*$/\1/')"
+  if [ -z "$v" ]; then
+    real="$(sed -nE 's/^exec "([^"]+)".*/\1/p' "$p" 2>/dev/null | head -n1)"
+    [ -n "$real" ] && [ -f "$real" ] \
+      && v="$(grep -m1 '^CLIKAE_VERSION=' "$real" 2>/dev/null | sed -E 's/^CLIKAE_VERSION="?([^"]*)"?[[:space:]]*$/\1/')"
+  fi
+  [ -n "$v" ] || return 1
+  printf '%s' "$v"
+}
+
+# wake_reexec_check <path> -> 0 when <path> is a replacement fit to exec; 1
+# with the reason in $_WAKE_REEXEC_WHY otherwise. #183 review round 2: `exec`
+# is irreversible — a wrapper whose target is not installed (yet, or any
+# more: a failed upgrade) exits at once and takes the working watcher with
+# it. So: an executable file; if it is brew's one-line wrapper, its exec
+# target resolves to an executable file too; the code that will actually
+# run carries a CLIKAE_VERSION that reads as a version; and both parse
+# (`bash -n` — a file caught mid-write is cut mid-statement).
+_WAKE_REEXEC_WHY=""
+wake_reexec_check() {
+  local p="$1" real t v
+  _WAKE_REEXEC_WHY=""
+  if [ ! -f "$p" ] || [ ! -x "$p" ]; then
+    _WAKE_REEXEC_WHY="$p is not an executable file"; return 1
+  fi
+  real="$p"
+  t="$(sed -nE 's/^exec "([^"]+)".*/\1/p' "$p" 2>/dev/null | head -n1)"
+  if [ -n "$t" ]; then
+    if [ ! -f "$t" ] || [ ! -x "$t" ]; then
+      _WAKE_REEXEC_WHY="$p execs $t, which is not installed"; return 1
+    fi
+    real="$t"
+  fi
+  v="$(grep -m1 '^CLIKAE_VERSION=' "$real" 2>/dev/null | sed -E 's/^CLIKAE_VERSION="?([^"]*)"?[[:space:]]*$/\1/')"
+  case "$v" in
+    [0-9]*.[0-9]*) case "$v" in *[!0-9A-Za-z.+-]*) v="" ;; esac ;;
+    *) v="" ;;
+  esac
+  if [ -z "$v" ]; then
+    _WAKE_REEXEC_WHY="$real carries no readable CLIKAE_VERSION"; return 1
+  fi
+  if ! bash -n "$p" 2>/dev/null || ! bash -n "$real" 2>/dev/null; then
+    _WAKE_REEXEC_WHY="$real does not parse (still being written?)"; return 1
+  fi
+  return 0
+}
+
+# wake_watch_stale_bin -> 0 and the path to re-exec (also in
+# $_WAKE_REEXEC_PATH) when this watcher's code is no longer what is installed
+# AND the replacement passes wake_reexec_check; 2 when it is stale but the
+# replacement is not fit to exec ($_WAKE_REEXEC_WHY says why); 1 when there
+# is nothing to do. Two shapes, both measured on 2026-10-01:
+#   · our own binary ($CLIKAE_BIN) is GONE — brew removed the old Cellar —
+#     so the installed `clikae` on PATH is the one to become (a FILE: the
+#     test suite defines a shell function by that name, and `type -P`
+#     ignores it);
+#   · our own binary is still there but now carries a different version
+#     (updated in place, e.g. a git checkout) — re-exec that same path.
+# A different clikae elsewhere on PATH while our own binary is intact at our
+# version is NOT a reason: a dev tree would otherwise exec the brew install.
+_WAKE_REEXEC_PATH=""
+wake_watch_stale_bin() {
+  local own="${CLIKAE_BIN:-}" inst v cand
+  _WAKE_REEXEC_PATH=""
+  _WAKE_REEXEC_WHY=""
+  if [ -n "$own" ] && [ -e "$own" ]; then
+    v="$(wake_installed_version "$own")" || return 1
+    [ "$v" != "${CLIKAE_VERSION:-}" ] || return 1
+    cand="$own"
+  else
+    inst="$(type -P clikae 2>/dev/null)" || inst=""
+    [ -n "$inst" ] || return 1
+    cand="$inst"
+  fi
+  wake_reexec_check "$cand" || return 2
+  _WAKE_REEXEC_PATH="$cand"
+  printf '%s' "$cand"
+  return 0
+}
+
+# wake_watch_reload_target -> 0 with the path to exec on stdout (and in
+# $_WAKE_REEXEC_PATH) when the watcher should reload now; 1 otherwise. When
+# an upgrade is visible but its replacement is not fit to exec, the running
+# watcher stays and says why on stderr — once per distinct reason, not once
+# a tick — and the next tick looks again (brew may simply not be done yet).
+_WAKE_REEXEC_SAID=""
+wake_watch_reload_target() {
+  local rc=0
+  wake_watch_stale_bin >/dev/null || rc=$?
+  if [ "$rc" -eq 0 ]; then
+    _WAKE_REEXEC_SAID=""
+    printf '%s' "$_WAKE_REEXEC_PATH"
+    return 0
+  fi
+  if [ "$rc" -eq 2 ] && [ "$_WAKE_REEXEC_SAID" != "$_WAKE_REEXEC_WHY" ]; then
+    _WAKE_REEXEC_SAID="$_WAKE_REEXEC_WHY"
+    printf '\r\033[K' >&2
+    log_warn "clikae looks upgraded, but the replacement is not fit to run: $_WAKE_REEXEC_WHY — keeping this watcher (${CLIKAE_VERSION:-?}); will look again next tick."
+  fi
+  return 1
+}
+
+# wake_select_engine_window <session> -> make the engine window current. The
+# watcher window is plumbing; anything that (re)creates it ends here, so a
+# human attaching afterwards never lands on "watching for a limit".
+wake_select_engine_window() {
+  local session="$1" t
+  command -v tmux >/dev/null 2>&1 || return 0
+  t="$(wake_engine_target "$session")"
+  [ "$t" != "$session" ] || return 0
+  tmux select-window -t "=$t" 2>/dev/null || true
+  return 0
+}
+
+# wake_watch_leave_hint <session> <engine> -> "ctrl-b N returns to <engine>",
+# N being the engine window's index — the status line's way out.
+wake_watch_leave_hint() {
+  local session="$1" engine="$2" t idx=0
+  t="$(wake_engine_target "$session")"
+  [ "$t" = "$session" ] || idx="${t##*:}"
+  printf 'ctrl-b %s returns to %s' "$idx" "$engine"
+}
+
 # wake_watch <engine> <tank> <session> -> watch until this tank runs dry, then
 # hand over to the countdown. Returns non-zero only if it cannot start.
 wake_watch() {
@@ -1335,6 +1473,18 @@ wake_watch() {
     # added to stop. Verified against real tmux; pinned by wake-sit.bats.
     tmux list-windows -t "=$session:" -F '#{window_name}' 2>/dev/null \
       | grep -qvE '^wake( |$)' || return 0
+
+    # #168: after an upgrade, become the installed clikae instead of running
+    # the code this window was born with. After both guards: a session that
+    # is leaving has nothing to reload for. Called in THIS shell (not
+    # `$(…)`): it remembers which refusal it already reported.
+    local _fresh
+    if wake_watch_reload_target >/dev/null; then
+      _fresh="$_WAKE_REEXEC_PATH"
+      printf '\r\033[K'
+      log_info "clikae was upgraded ($(wake_installed_version "$_fresh" 2>/dev/null || printf '?') installed, this watcher is ${CLIKAE_VERSION:-?}) — reloading the watcher."
+      exec "$_fresh" wake --watch "$engine" "$tank" "$session"
+    fi
 
     # AFTER both guards, never before: a session that is leaving must not spend
     # a vendor call on its way out.
@@ -1401,10 +1551,12 @@ wake_watch() {
       fi
     fi
 
+    # #168: the status line says how to leave — a person only ever sees this
+    # window by accident, and `ctrl-b 0` is not something to have to know.
     if [ "${CLIKAE_WATCH_COMPACT_ONLY:-}" != 1 ] || wake_enabled; then
-      printf '\r\033[K%s/%s — watching for a limit' "$engine" "$tank"
+      printf '\r\033[K%s/%s — watching for a limit · %s' "$engine" "$tank" "$(wake_watch_leave_hint "$session" "$engine")"
     else
-      printf '\r\033[K%s/%s — watching for a warm /compact' "$engine" "$tank"
+      printf '\r\033[K%s/%s — watching for a warm /compact · %s' "$engine" "$tank" "$(wake_watch_leave_hint "$session" "$engine")"
     fi
     # Sleep in slices, asking the cheap question between them: if the engine's
     # window closes while we wait, leave NOW rather than at the end of the minute.
@@ -1436,6 +1588,7 @@ wake_attach_watcher() {
   fi
   tmux new-window -d -t "=$session:" -n wake \
     "$pre'$bin' wake --watch '$engine' '$tank' '$session'" 2>/dev/null || return 1
+  wake_select_engine_window "$session"   # #168: plumbing is never the landing window
   return 0
 }
 

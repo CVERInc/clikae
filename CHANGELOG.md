@@ -14,6 +14,48 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   JSON with scores and skip reasons; reads the current inventory and usage.
 ### Fixed
 
+- **A `--no-reroute` burn that runs dry is paused, not silently stopped**
+  (#178). The quota window closing is a normal outcome of a pinned burn. By
+  default the burn waits the reset out in place and re-fires the same tank
+  (`--wait-for-reset <dur>` sets the window, `0` never retries,
+  `$CLIKAE_BURN_DRY_PAUSE_WAIT` sets the 6h default). Whether it will retry
+  is decided before anything terminal is written; while it sleeps the
+  status file says the non-terminal `waiting-reset`, so the tank stays busy
+  to other burns and `--queue`, and `clikae wait` keeps waiting for the real
+  outcome. A burn that will not retry writes the terminal `state:
+  dry-paused` (with `reset` / `reset_at`), on which `clikae wait` returns at
+  once with rc 2. A reset already in the past gets one re-fire, never a
+  spin. Either way a one-line pause note is left at the artifact path when
+  nothing is there (so a waiter that only polls for the report wakes up and
+  reads why) — created exclusively, and removed before a re-fire only if it
+  is still exactly as written.
+- **`clikae watch github` can no longer be alive but not working** (#166).
+  Every poll rewrites `state/watch-github/<org>.heartbeat.json`
+  (`last_poll_at`, `last_ok_at`, `consecutive_failures`, last error) as a
+  display cache; `clikae watch github --status` prints the same fields
+  counted from the per-failure records at read time, so a cache left stale
+  by overlapping polls never changes what is reported or decided; three
+  failed polls in a row (`$CLIKAE_WATCH_GITHUB_STALL_POLLS`; a poll that
+  cannot get the org's poll lock counts as failed, and overlapping failures
+  are each recorded in a file of their own, so none is lost) write ONE
+  `state: fail` run per streak, in a run directory of its own even when an event
+  lands in the same second, that `clikae wait --latest watch-github-<org>` returns
+  on (a same-second tie now goes to the run written last, never the one
+  listed first) and say so loudly; a failed poll re-checks `gh auth status` and a
+  login that is gone exits 1 instead of spinning. Comment/review/mention
+  events now carry `login` and `body` (first 200 bytes, cut on a UTF-8 boundary) —
+  from the timeline event itself, or from the issue's own comments since
+  the cursor when the timeline page has no actor at all (the shape that
+  produced an hour of `by unknown` on 2026-09-29).
+- **The wake watcher reloads itself after an upgrade and is never the window
+  a human lands on** (#168). Once a tick it checks whether its own binary
+  carries a different version or is gone (brew removed the Cellar) and
+  re-execs the installed `clikae` — only once that replacement resolves and
+  reads coherently (a wrapper whose target is not installed yet keeps the
+  running watcher, which says why); creating the watcher window ends by
+  selecting the engine window; the status line says `ctrl-b 0 returns to
+  claude`.
+
 - **The cockpit's tmux socket no longer lives in `/tmp`** (#176). A `/tmp`
   sweep that removed `/tmp/tmux-<uid>` left a two-day-old cockpit running but
   invisible: the board listed nothing, attach found nothing, a resume of the

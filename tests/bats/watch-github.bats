@@ -27,6 +27,14 @@ dir="${GH_STUB_DIR:?}"
 if [ "${1:-}" = "auth" ] && [ "${2:-}" = "status" ]; then
   rc=0
   [ -f "$dir/auth_rc" ] && rc="$(cat "$dir/auth_rc")"
+  # #166: an optional per-call sequence (one rc per line, popped in order;
+  # the last line sticks) so a test can pass at startup and fail later.
+  if [ -s "$dir/auth_rc_seq" ]; then
+    rc="$(head -n1 "$dir/auth_rc_seq")"
+    if [ "$(wc -l < "$dir/auth_rc_seq")" -gt 1 ]; then
+      tail -n +2 "$dir/auth_rc_seq" > "$dir/auth_rc_seq.tmp" && mv -f "$dir/auth_rc_seq.tmp" "$dir/auth_rc_seq"
+    fi
+  fi
   exit "$rc"
 fi
 
@@ -146,6 +154,54 @@ case "${1:-}/${2:-}" in
     fi
     exit 0
     ;;
+  api/repos/*/issues/*/comments)
+    # #166: the issue-comments fallback _wg_latest_actor takes when the
+    # timeline page carries no actor at all. $dir/comments.<repo>.<number>.json
+    # is the raw array; absent -> `[]`. Records the `since=` it was sent.
+    # Multi-page (#183 round 2): comments.<repo>.<number>.page<N>.json is
+    # page N's body and comments.<repo>.<number>.last the rel="last" page
+    # number advertised on page 1, exactly like the timeline stub.
+    path="$2"
+    repo="$(printf '%s' "$path" | cut -d/ -f3)"
+    number="$(printf '%s' "$path" | cut -d/ -f5)"
+    shift 2
+    since=""
+    page=1
+    while [ $# -gt 0 ]; do
+      case "$1" in
+        -f) shift
+            case "${1:-}" in
+              since=*) since="${1#since=}" ;;
+              page=*)  page="${1#page=}" ;;
+            esac ;;
+      esac
+      shift
+    done
+    cf="$dir/comments.calls"
+    n=0
+    [ -f "$cf" ] && n="$(cat "$cf")"
+    n=$((n + 1))
+    printf '%s' "$n" > "$cf"
+    printf '%s\n' "$since" > "$dir/comments.$repo.$number.$n.sent_since"
+    printf '%s\n' "$page" > "$dir/comments.$repo.$number.$n.sent_page"
+    last=1
+    [ -f "$dir/comments.$repo.$number.last" ] && last="$(cat "$dir/comments.$repo.$number.last")"
+    printf 'HTTP/2.0 200 OK\r\n'
+    printf 'x-ratelimit-remaining: 5000\r\n'
+    if [ "$page" = "1" ] && [ "$last" != "1" ]; then
+      printf 'link: <https://api.github.com/repositories/1/issues/%s/comments?per_page=100&page=2>; rel="next", <https://api.github.com/repositories/1/issues/%s/comments?per_page=100&page=%s>; rel="last"\r\n' \
+        "$number" "$number" "$last"
+    fi
+    printf '\r\n'
+    if [ -f "$dir/comments.$repo.$number.page$page.json" ]; then
+      cat "$dir/comments.$repo.$number.page$page.json"
+    elif [ "$page" = "1" ] && [ -f "$dir/comments.$repo.$number.json" ]; then
+      cat "$dir/comments.$repo.$number.json"
+    else
+      printf '[]\n'
+    fi
+    exit 0
+    ;;
 esac
 
 exit 1
@@ -235,6 +291,14 @@ dir="${GH_STUB_DIR:?}"
 if [ "${1:-}" = "auth" ] && [ "${2:-}" = "status" ]; then
   rc=0
   [ -f "$dir/auth_rc" ] && rc="$(cat "$dir/auth_rc")"
+  # #166: an optional per-call sequence (one rc per line, popped in order;
+  # the last line sticks) so a test can pass at startup and fail later.
+  if [ -s "$dir/auth_rc_seq" ]; then
+    rc="$(head -n1 "$dir/auth_rc_seq")"
+    if [ "$(wc -l < "$dir/auth_rc_seq")" -gt 1 ]; then
+      tail -n +2 "$dir/auth_rc_seq" > "$dir/auth_rc_seq.tmp" && mv -f "$dir/auth_rc_seq.tmp" "$dir/auth_rc_seq"
+    fi
+  fi
   exit "$rc"
 fi
 
@@ -289,6 +353,54 @@ case "${1:-}/${2:-}" in
     printf 'x-ratelimit-remaining: 5000\r\n'
     printf '\r\n'
     printf '[]\n'
+    exit 0
+    ;;
+  api/repos/*/issues/*/comments)
+    # #166: the issue-comments fallback _wg_latest_actor takes when the
+    # timeline page carries no actor at all. $dir/comments.<repo>.<number>.json
+    # is the raw array; absent -> `[]`. Records the `since=` it was sent.
+    # Multi-page (#183 round 2): comments.<repo>.<number>.page<N>.json is
+    # page N's body and comments.<repo>.<number>.last the rel="last" page
+    # number advertised on page 1, exactly like the timeline stub.
+    path="$2"
+    repo="$(printf '%s' "$path" | cut -d/ -f3)"
+    number="$(printf '%s' "$path" | cut -d/ -f5)"
+    shift 2
+    since=""
+    page=1
+    while [ $# -gt 0 ]; do
+      case "$1" in
+        -f) shift
+            case "${1:-}" in
+              since=*) since="${1#since=}" ;;
+              page=*)  page="${1#page=}" ;;
+            esac ;;
+      esac
+      shift
+    done
+    cf="$dir/comments.calls"
+    n=0
+    [ -f "$cf" ] && n="$(cat "$cf")"
+    n=$((n + 1))
+    printf '%s' "$n" > "$cf"
+    printf '%s\n' "$since" > "$dir/comments.$repo.$number.$n.sent_since"
+    printf '%s\n' "$page" > "$dir/comments.$repo.$number.$n.sent_page"
+    last=1
+    [ -f "$dir/comments.$repo.$number.last" ] && last="$(cat "$dir/comments.$repo.$number.last")"
+    printf 'HTTP/2.0 200 OK\r\n'
+    printf 'x-ratelimit-remaining: 5000\r\n'
+    if [ "$page" = "1" ] && [ "$last" != "1" ]; then
+      printf 'link: <https://api.github.com/repositories/1/issues/%s/comments?per_page=100&page=2>; rel="next", <https://api.github.com/repositories/1/issues/%s/comments?per_page=100&page=%s>; rel="last"\r\n' \
+        "$number" "$number" "$last"
+    fi
+    printf '\r\n'
+    if [ -f "$dir/comments.$repo.$number.page$page.json" ]; then
+      cat "$dir/comments.$repo.$number.page$page.json"
+    elif [ "$page" = "1" ] && [ -f "$dir/comments.$repo.$number.json" ]; then
+      cat "$dir/comments.$repo.$number.json"
+    else
+      printf '[]\n'
+    fi
     exit 0
     ;;
 esac
@@ -2679,4 +2791,705 @@ _not_run_dir() {
   _not_run_dir foo /logs/watch-github-foo-abc
   _not_run_dir foo /logs/watch-github-foo-12-34-56
   _not_run_dir CVERInc /logs/watch-github-CVERInc-labs-1789538639
+}
+
+# --- #166: a live process is not a working one -----------------------------
+#
+# 2026-09-29: the launchd watcher stayed alive (pid up, state running) while
+# events.jsonl stopped for an hour of real activity, and comment events
+# carried `login: unknown` with no body. Three fixes, each with its own red:
+# a per-poll heartbeat file (last_ok_at), a loud STALL event after N failed
+# polls that `clikae wait --latest` returns on, and comment events that
+# carry who said what (timeline body; issue-comments fallback when the
+# timeline page has no actor at all).
+
+_hb() { printf '%s/state/watch-github/CVERInc.heartbeat.json' "$CLIKAE_HOME"; }
+
+@test "watch github --once: every poll writes a heartbeat with last_ok_at (#166)" {
+  _gh_stub_install
+  run clikae watch github --org CVERInc --once
+  [ "$status" -eq 0 ]
+  [ -f "$(_hb)" ]
+  [[ "$(cat "$(_hb)")" == *'"last_ok_at":'[0-9]* ]] || false
+  [[ "$(cat "$(_hb)")" == *'"consecutive_failures":0'* ]] || false
+  [[ "$(cat "$(_hb)")" == *'"last_poll_at":'[0-9]* ]] || false
+}
+
+@test "watch github --once: a failed poll counts in the heartbeat and never moves last_ok_at (#166)" {
+  _gh_stub_install
+  run clikae watch github --org CVERInc --once
+  [ "$status" -eq 0 ]
+  local ok1; ok1="$(sed -E 's/.*"last_ok_at":([0-9]+).*/\1/' "$(_hb)")"
+  [ -n "$ok1" ]
+  _gh_stub_fail org 2 1 "HTTP 500: boom"
+  run clikae watch github --org CVERInc --once
+  [ "$status" -eq 1 ]
+  [[ "$(cat "$(_hb)")" == *'"consecutive_failures":1'* ]] || false
+  [[ "$(cat "$(_hb)")" == *"\"last_ok_at\":$ok1"* ]] || false
+  [[ "$(cat "$(_hb)")" == *'"last_error":"'* ]] || false
+}
+
+@test "watch github --once: three failed polls in a row raise a STALL event clikae wait returns on (#166)" {
+  _gh_stub_install
+  _gh_stub_fail org 1 1 "HTTP 500: boom"
+  _gh_stub_fail org 2 1 "HTTP 500: boom"
+  _gh_stub_fail org 3 1 "HTTP 500: boom"
+  run clikae watch github --org CVERInc --once
+  [ "$status" -eq 1 ]
+  [[ "$output" != *"stalled"* ]] || false
+  run clikae watch github --org CVERInc --once
+  [ "$status" -eq 1 ]
+  [[ "$output" != *"stalled"* ]] || false
+  run clikae watch github --org CVERInc --once
+  [ "$status" -eq 1 ]
+  [[ "$output" == *"stalled"* ]] || false
+  local status_file
+  status_file="$(find "$CLIKAE_HOME/logs" -maxdepth 2 -path '*/watch-github-CVERInc-*/status.json' | head -n1)"
+  [ -n "$status_file" ]
+  [[ "$(cat "$status_file")" == *'"state":"fail"'* ]] || false
+  [[ "$(cat "$status_file")" == *'stalled'* ]] || false
+  run clikae wait --latest watch-github-CVERInc --timeout 5
+  [ "$status" -eq 1 ]
+  [[ "$output" == *'"state":"fail"'* ]] || false
+}
+
+@test "watch github --once: a successful poll resets the failure count (#166)" {
+  _gh_stub_install
+  _gh_stub_fail org 1 1 "HTTP 500: boom"
+  run clikae watch github --org CVERInc --once
+  [ "$status" -eq 1 ]
+  run clikae watch github --org CVERInc --once
+  [ "$status" -eq 0 ]
+  [[ "$(cat "$(_hb)")" == *'"consecutive_failures":0'* ]] || false
+}
+
+@test "watch github --once: losing gh auth after a failed poll says so and exits 1 (#166)" {
+  _gh_stub_install
+  _gh_stub_fail org 1 1 "HTTP 401: Bad credentials"
+  # The stub pops one rc per `gh auth status` call: startup passes, the
+  # re-check after the failed poll finds the login gone.
+  printf '0\n1\n' > "$GH_STUB_DIR/auth_rc_seq"
+  run clikae watch github --org CVERInc --once
+  [ "$status" -eq 1 ]
+  [[ "$output" == *"no longer logged in"* ]] || false
+}
+
+@test "watch github --once: a comment event carries the commenter's login AND the body (#166)" {
+  _gh_stub_install
+  _gh_stub_page org 1 \
+    "$(_row 100 2026-09-07T04:00:00Z alice reef https://x/100 0 "First issue")"
+  run clikae watch github --org CVERInc --once
+  [ "$status" -eq 0 ]
+  _gh_stub_timeline_page reef 100 1 \
+    '[{"event":"commented","actor":{"login":"carol"},"user":{"login":"carol"},"body":"Looks good, merge when CI is green"}]'
+  _gh_stub_page org 2 \
+    "$(_row 100 2026-09-07T09:00:00Z alice reef https://x/100 0 "First issue")"
+  run clikae watch github --org CVERInc --once
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"#100 comment by carol: First issue"* ]] || false
+  [[ "$output" == *"Looks good, merge when CI is green"* ]] || false
+  local events="$CLIKAE_HOME/logs/watch-github-CVERInc/events.jsonl"
+  local last; last="$(tail -n1 "$events")"
+  [[ "$last" == *'"login":"carol"'* ]] || false
+  [[ "$last" == *'"body":"Looks good, merge when CI is green"'* ]] || false
+}
+
+@test "watch github --once: a comment body is cut to 200 characters in the event (#166)" {
+  _gh_stub_install
+  _gh_stub_page org 1 \
+    "$(_row 100 2026-09-07T04:00:00Z alice reef https://x/100 0 "First issue")"
+  run clikae watch github --org CVERInc --once
+  local long; long="$(printf 'x%.0s' $(seq 1 300))"
+  _gh_stub_timeline_page reef 100 1 \
+    "[{\"event\":\"commented\",\"actor\":{\"login\":\"carol\"},\"body\":\"$long\"}]"
+  _gh_stub_page org 2 \
+    "$(_row 100 2026-09-07T09:00:00Z alice reef https://x/100 0 "First issue")"
+  run clikae watch github --org CVERInc --once
+  [ "$status" -eq 0 ]
+  local events="$CLIKAE_HOME/logs/watch-github-CVERInc/events.jsonl"
+  local body; body="$(tail -n1 "$events" | sed -E 's/.*"body":"([^"]*)".*/\1/')"
+  [[ "$body" == x* ]] || false
+  [[ "$body" == *"…" ]] || false
+  [ "$(printf '%s' "$body" | tr -d '…' | wc -c | tr -d ' ')" -eq 200 ]
+}
+
+@test "watch github --once: a timeline with no actor falls back to issue comments for login and body (#166)" {
+  _gh_stub_install
+  _gh_stub_page org 1 \
+    "$(_row 100 2026-09-07T04:00:00Z alice reef https://x/100 0 "First issue")"
+  run clikae watch github --org CVERInc --once
+  # The real 2026-09-29 shape: a timeline tail of commits only, nothing
+  # carrying actor/user, so the lookup used to give up as "unknown".
+  _gh_stub_timeline_page reef 100 1 \
+    '[{"event":"committed","sha":"abc","author":{"name":"n","email":"e"}}]'
+  printf '%s\n' '[{"user":{"login":"dave"},"body":"from the comments endpoint"}]' \
+    > "$GH_STUB_DIR/comments.reef.100.json"
+  _gh_stub_page org 2 \
+    "$(_row 100 2026-09-07T09:00:00Z alice reef https://x/100 0 "First issue")"
+  run clikae watch github --org CVERInc --once
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"#100 comment by dave: First issue"* ]] || false
+  [[ "$output" != *"by unknown"* ]] || false
+  # The fallback asked only for comments since the cursor: one bounded call.
+  [ "$(cat "$GH_STUB_DIR/comments.calls")" = "1" ]
+  [ "$(cat "$GH_STUB_DIR/comments.reef.100.1.sent_since")" = "2026-09-07T04:00:00Z" ]
+  local events="$CLIKAE_HOME/logs/watch-github-CVERInc/events.jsonl"
+  [[ "$(tail -n1 "$events")" == *'"body":"from the comments endpoint"'* ]] || false
+}
+
+@test "watch github --once: the comments fallback follows pagination to the NEWEST comment — >100 since the cursor, the 100th mine, the newest a collaborator's (#183 round 2)" {
+  _gh_stub_install
+  _gh_stub_page org 1 \
+    "$(_row 100 2026-09-07T04:00:00Z alice reef https://x/100 0 "First issue")"
+  run clikae watch github --org CVERInc --once
+  _gh_stub_timeline_page reef 100 1 \
+    '[{"event":"committed","sha":"abc","author":{"name":"n","email":"e"}}]'
+  # Page 1: 100 comments, ascending, the last of them by me (self).
+  local p1="[" i
+  for i in $(seq 1 99); do p1="$p1{\"user\":{\"login\":\"bob\"},\"body\":\"old $i\"},"; done
+  p1="$p1{\"user\":{\"login\":\"me\"},\"body\":\"my own reply\"}]"
+  printf '%s\n' "$p1" > "$GH_STUB_DIR/comments.reef.100.page1.json"
+  printf '%s\n' '[{"user":{"login":"carol"},"body":"the newest word, from a collaborator"}]' \
+    > "$GH_STUB_DIR/comments.reef.100.page2.json"
+  printf '2\n' > "$GH_STUB_DIR/comments.reef.100.last"
+  _gh_stub_page org 2 \
+    "$(_row 100 2026-09-07T09:00:00Z alice reef https://x/100 0 "First issue")"
+  run clikae watch github --org CVERInc --once
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"#100 comment by carol: First issue"* ]] || false
+  [ "$(cat "$GH_STUB_DIR/comments.reef.100.2.sent_page")" = "2" ]
+  [ "$(cat "$GH_STUB_DIR/comments.reef.100.2.sent_since")" = "2026-09-07T04:00:00Z" ]
+  local events="$CLIKAE_HOME/logs/watch-github-CVERInc/events.jsonl"
+  [[ "$(tail -n1 "$events")" == *'"body":"the newest word, from a collaborator"'* ]] || false
+}
+
+# #183 round 3 (P2): a poll that cannot get the org lock is a failed poll
+# like any other, so three in a row must raise the same STALL event — the
+# early lock-failure return used to count it in the heartbeat and skip the
+# threshold check. Only lock acquisition is stubbed; the lock itself is held
+# by a "foreign" poll whose ownership the failing polls must never touch.
+@test "watch github: three polls that cannot get the lock raise the STALL event clikae wait --latest returns on, and never release the holder's lock (#183 r3 P2)" {
+  source "$CLIKAE_TEST_ROOT/lib/core/log.sh"
+  source "$CLIKAE_TEST_ROOT/lib/core/json.sh"
+  source "$CLIKAE_TEST_ROOT/lib/core/profile_store.sh"
+  source "$CLIKAE_TEST_ROOT/lib/core/burn_status.sh"
+  source "$CLIKAE_TEST_ROOT/lib/commands/watch_github.sh"
+  _wg_lock_acquire() { return 1; }
+  local lock; lock="$(_wg_lock_dir CVERInc)"
+  mkdir -p "$lock"
+  printf '424242\n' > "$lock/pid"
+  local i n_status
+  for i in 1 2 3; do
+    _wg_poll CVERInc 2>>"$BATS_TEST_TMPDIR/poll.err" || true
+    n_status="$(find "$CLIKAE_HOME/logs" -maxdepth 2 -path '*/watch-github-CVERInc-*/status.json' 2>/dev/null | wc -l | tr -d ' ')"
+    echo "poll $i: status files=$n_status ok=$__WG_OK"
+    [ "$__WG_OK" -eq 0 ]
+    if [ "$i" -lt 3 ]; then [ "$n_status" = "0" ]; fi
+  done
+  cat "$(_hb)"
+  [[ "$(cat "$(_hb)")" == *'"consecutive_failures":3'* ]] || false
+  [[ "$(cat "$(_hb)")" == *'"last_error_kind":"lock"'* ]] || false
+  [ "$n_status" = "1" ]
+  local status_file
+  status_file="$(find "$CLIKAE_HOME/logs" -maxdepth 2 -path '*/watch-github-CVERInc-*/status.json' | head -n1)"
+  [[ "$(cat "$status_file")" == *'"state":"fail"'* ]] || false
+  [[ "$(cat "$status_file")" == *'stalled: 3 consecutive failed polls (last: lock:'* ]] || false
+  grep -q stalled "$BATS_TEST_TMPDIR/poll.err"
+  # The holder's lock is untouched: still there, still its pid.
+  [ -d "$lock" ]
+  [ "$(cat "$lock/pid")" = "424242" ]
+  run clikae wait --latest watch-github-CVERInc --timeout 5
+  [ "$status" -eq 1 ]
+  [[ "$output" == *'"state":"fail"'* ]] || false
+}
+
+# #183 round 4 (P2): the stall writer runs OUTSIDE the org lock, so it can
+# race the lock holder's event writer for the same
+# `watch-github-<org>-<epoch>` directory. A check-then-`mkdir -p` let both
+# pass the check and then share one directory, the later status.json
+# overwriting the earlier. The review's interleaving, made deterministic:
+# the epoch is frozen, the event writer is paused just before it creates
+# its run directory, the third lock failure writes the stall, then the
+# writer is released. Both events must survive, each in its own directory.
+@test "watch github: a stall written outside the lock and the holder's event in the same second land in two run directories, neither overwriting the other (#183 r4 P2)" {
+  source "$CLIKAE_TEST_ROOT/lib/core/log.sh"
+  source "$CLIKAE_TEST_ROOT/lib/core/json.sh"
+  source "$CLIKAE_TEST_ROOT/lib/core/profile_store.sh"
+  source "$CLIKAE_TEST_ROOT/lib/core/burn_status.sh"
+  source "$CLIKAE_TEST_ROOT/lib/commands/watch_github.sh"
+  date() { if [ "$*" = "+%s" ]; then printf '1789000000\n'; else command date "$@"; fi; }
+  local gate="$BATS_TEST_TMPDIR/gate"
+  mkdir -p "$gate" "$CLIKAE_HOME/logs"
+  # In the paused writer only: block on its first run-directory mkdir.
+  mkdir() {
+    local a
+    if [ "${WG_PAUSE:-0}" = 1 ]; then
+      for a in "$@"; do
+        case "$a" in
+          */watch-github-CVERInc-1789000000*)
+            : > "$gate/at-mkdir"
+            while [ ! -e "$gate/go" ]; do sleep 0.05; done
+            WG_PAUSE=0
+            ;;
+        esac
+      done
+    fi
+    command mkdir "$@"
+  }
+  _wg_lock_acquire() { return 1; }
+  local lock; lock="$(_wg_lock_dir CVERInc)"
+  command mkdir -p "$lock"
+  printf '424242\n' > "$lock/pid"
+  # Two failures already on the heartbeat: the next poll is the third.
+  _wg_poll CVERInc 2>>"$BATS_TEST_TMPDIR/poll.err" || true
+  _wg_poll CVERInc 2>>"$BATS_TEST_TMPDIR/poll.err" || true
+  ( WG_PAUSE=1; _wg_status_write CVERInc '{"kind":"comment","n":100}' "#100 comment by carol" ) &
+  local writer=$! i=0
+  while [ ! -e "$gate/at-mkdir" ] && [ "$i" -lt 200 ]; do sleep 0.05; i=$((i + 1)); done
+  [ -e "$gate/at-mkdir" ]
+  _wg_poll CVERInc 2>>"$BATS_TEST_TMPDIR/poll.err" || true
+  : > "$gate/go"
+  wait "$writer"
+  local f fails=0 dones=0 n=0
+  for f in "$CLIKAE_HOME"/logs/watch-github-CVERInc-1789000000*/status.json; do
+    [ -f "$f" ] || continue
+    n=$((n + 1))
+    echo "$f: $(cat "$f")"
+    case "$(cat "$f")" in
+      *'stalled: 3 consecutive failed polls'*'"state":"fail"'*) fails=$((fails + 1)) ;;
+      *'"reason":"github-events"'*'"state":"done"'*) dones=$((dones + 1)) ;;
+    esac
+  done
+  echo "run dirs with status=$n fail=$fails done=$dones"
+  [ "$n" = 2 ]
+  [ "$fails" = 1 ]
+  [ "$dones" = 1 ]
+  # The event's own events.jsonl sits beside the done status, not the stall's.
+  for f in "$CLIKAE_HOME"/logs/watch-github-CVERInc-1789000000*/status.json; do
+    case "$(cat "$f")" in
+      *'"state":"done"'*) grep -q '"n":100' "${f%/status.json}/events.jsonl" ;;
+      *) [ ! -e "${f%/status.json}/events.jsonl" ] ;;
+    esac
+  done
+  [ "$(cat "$lock/pid")" = "424242" ]
+}
+
+# #183 round 5 (P2): the failure count lived in one heartbeat.json that every
+# failed poll read, incremented and rewrote. A poll that fails to get the org
+# lock runs that transaction OUTSIDE the lock, so two of them overlapping
+# both read 1, both wrote 2, and the stall at 3 never fired. The review's
+# interleaving, made deterministic: one failure persisted; the second poll
+# is paused at its first read of the watch-github state dir; the third runs
+# to completion; then the second resumes. Three failures, no success: the
+# count is 3 and exactly one stall exists.
+@test "watch github: three overlapping failed polls count 3 and raise exactly one stall — no increment lost to a read-modify-write (#183 r5 P2)" {
+  source "$CLIKAE_TEST_ROOT/lib/core/log.sh"
+  source "$CLIKAE_TEST_ROOT/lib/core/json.sh"
+  source "$CLIKAE_TEST_ROOT/lib/core/profile_store.sh"
+  source "$CLIKAE_TEST_ROOT/lib/core/burn_status.sh"
+  source "$CLIKAE_TEST_ROOT/lib/commands/watch_github.sh"
+  local gate="$BATS_TEST_TMPDIR/gate"
+  mkdir -p "$gate"
+  # In the paused poll only: its first read of the state dir completes, and
+  # THEN it blocks — holding a snapshot while the third poll runs.
+  cat() {
+    local a snap rc
+    if [ "${WG_PAUSE:-0}" = 1 ]; then
+      for a in "$@"; do
+        case "$a" in
+          "$CLIKAE_HOME"/state/watch-github/*)
+            WG_PAUSE=0
+            snap="$(command cat "$@")"; rc=$?
+            : > "$gate/at-read"
+            while [ ! -e "$gate/go" ]; do sleep 0.05; done
+            [ -n "$snap" ] && printf '%s\n' "$snap"
+            return "$rc"
+            ;;
+        esac
+      done
+    fi
+    command cat "$@"
+  }
+  _wg_lock_acquire() { return 1; }
+  local lock; lock="$(_wg_lock_dir CVERInc)"
+  mkdir -p "$lock"
+  printf '424242\n' > "$lock/pid"
+  _wg_poll CVERInc 2>>"$BATS_TEST_TMPDIR/poll.err" || true
+  ( WG_PAUSE=1; _wg_poll CVERInc 2>>"$BATS_TEST_TMPDIR/poll.err" || true ) &
+  local paused=$! i=0
+  while [ ! -e "$gate/at-read" ] && [ "$i" -lt 200 ]; do sleep 0.05; i=$((i + 1)); done
+  [ -e "$gate/at-read" ]
+  _wg_poll CVERInc 2>>"$BATS_TEST_TMPDIR/poll.err" || true
+  : > "$gate/go"
+  wait "$paused"
+  local f n_fail=0
+  for f in "$CLIKAE_HOME"/logs/watch-github-CVERInc-*/status.json; do
+    [ -f "$f" ] || continue
+    command cat "$f"
+    case "$(command cat "$f")" in *'"state":"fail"'*) n_fail=$((n_fail + 1)) ;; esac
+  done
+  command cat "$(_hb)"
+  echo "stall status files: $n_fail"
+  [[ "$(command cat "$(_hb)")" == *'"consecutive_failures":3'* ]] || false
+  [ "$n_fail" = 1 ]
+  [ "$(command cat "$lock/pid")" = "424242" ]
+}
+
+# #183 round 5 (P2): the real writers, the real consumer. An event and a
+# stall in the same (frozen) second land in `…-<epoch>` and `…-<epoch>-2`;
+# `clikae wait --latest` must return whichever was written LAST, in both
+# orders — it used to return the first-listed directory on a tied second.
+@test "watch github: wait --latest returns the later of an event and a stall written in the same second, in either order (#183 r5 P2)" {
+  source "$CLIKAE_TEST_ROOT/lib/core/log.sh"
+  source "$CLIKAE_TEST_ROOT/lib/core/json.sh"
+  source "$CLIKAE_TEST_ROOT/lib/core/profile_store.sh"
+  source "$CLIKAE_TEST_ROOT/lib/core/burn_status.sh"
+  source "$CLIKAE_TEST_ROOT/lib/commands/watch_github.sh"
+  date() { if [ "$*" = "+%s" ]; then printf '1789000000\n'; else command date "$@"; fi; }
+  _wg_status_write acme '{"kind":"comment","n":1}' "#1 comment by carol"
+  _wg_stall_write acme "github:acme — stalled: 3 consecutive failed polls"
+  _wg_stall_write zeta "github:zeta — stalled: 3 consecutive failed polls"
+  _wg_status_write zeta '{"kind":"comment","n":2}' "#2 comment by carol"
+  [ -f "$CLIKAE_HOME/logs/watch-github-acme-1789000000-2/status.json" ]
+  [ -f "$CLIKAE_HOME/logs/watch-github-zeta-1789000000-2/status.json" ]
+  run clikae wait --latest watch-github-acme --timeout 1
+  [ "$status" -eq 1 ]
+  [[ "$output" == *'"state":"fail"'* ]] || false
+  run clikae wait --latest watch-github-zeta --timeout 1
+  [ "$status" -eq 0 ]
+  [[ "$output" == *'"state":"done"'* ]] || false
+}
+
+# #183 round 5: a stall fires exactly ONCE per streak of failures — not again
+# at 6, 9, … — and a success starts a new streak that can stall again.
+@test "watch github: six failed polls raise one stall; after a success, three more raise the second (#183 r5)" {
+  source "$CLIKAE_TEST_ROOT/lib/core/log.sh"
+  source "$CLIKAE_TEST_ROOT/lib/core/json.sh"
+  source "$CLIKAE_TEST_ROOT/lib/core/profile_store.sh"
+  source "$CLIKAE_TEST_ROOT/lib/core/burn_status.sh"
+  source "$CLIKAE_TEST_ROOT/lib/commands/watch_github.sh"
+  _wg_lock_acquire() { return 1; }
+  _n_stalls() { find "$CLIKAE_HOME/logs" -maxdepth 2 -path '*/watch-github-CVERInc-*/status.json' 2>/dev/null | wc -l | tr -d ' '; }
+  local i
+  for i in 1 2 3 4 5 6; do _wg_poll CVERInc 2>/dev/null || true; done
+  cat "$(_hb)"
+  [[ "$(cat "$(_hb)")" == *'"consecutive_failures":6'* ]] || false
+  [ "$(_n_stalls)" = 1 ]
+  _wg_heartbeat_write CVERInc 1 "" ""
+  [[ "$(cat "$(_hb)")" == *'"consecutive_failures":0'* ]] || false
+  # The closed streak's records are gone; its stall claim stays (#183 r6:
+  # a success never deletes a claim, so a delayed failure of the closed
+  # streak cannot claim it again). Only the marker and that claim remain.
+  local left
+  left="$(ls -A "$CLIKAE_HOME/state/watch-github/CVERInc.failures.d" | tr '\n' ' ')"
+  echo "left: $left"
+  case "$left" in 'streak '|*.stall' streak ') ;; *) false ;; esac
+  [ "$(ls -d "$CLIKAE_HOME/state/watch-github/CVERInc.failures.d"/*.stall | wc -l | tr -d ' ')" = 1 ]
+  for i in 1 2; do _wg_poll CVERInc 2>/dev/null || true; done
+  [ "$(_n_stalls)" = 1 ]
+  _wg_poll CVERInc 2>/dev/null || true
+  [[ "$(cat "$(_hb)")" == *'"consecutive_failures":3'* ]] || false
+  [ "$(_n_stalls)" = 2 ]
+}
+
+# --- #183 round 6 -------------------------------------------------------------
+# Shared by the r6 tests: the real libs, every poll a lock failure (outside
+# the org lock, like the review's reproductions), and a foreign holder.
+_r6_setup() {
+  source "$CLIKAE_TEST_ROOT/lib/core/log.sh"
+  source "$CLIKAE_TEST_ROOT/lib/core/json.sh"
+  source "$CLIKAE_TEST_ROOT/lib/core/profile_store.sh"
+  source "$CLIKAE_TEST_ROOT/lib/core/burn_status.sh"
+  source "$CLIKAE_TEST_ROOT/lib/commands/watch_github.sh"
+  R6_GATE="$BATS_TEST_TMPDIR/gate"
+  command mkdir -p "$R6_GATE"
+  _wg_lock_acquire() { return 1; }
+  R6_LOCK="$(_wg_lock_dir CVERInc)"
+  command mkdir -p "$R6_LOCK"
+  printf '424242\n' > "$R6_LOCK/pid"
+}
+# _r6_block -> signal "at", wait for "go" (only in a WG_PAUSE=1 subshell).
+_r6_block() {
+  : > "$R6_GATE/at"
+  while [ ! -e "$R6_GATE/go" ]; do sleep 0.05; done
+}
+_r6_wait_at() {
+  local i=0
+  while [ ! -e "$R6_GATE/at" ] && [ "$i" -lt 200 ]; do sleep 0.05; i=$((i + 1)); done
+  [ -e "$R6_GATE/at" ]
+}
+_r6_n_fail() {
+  local f n=0
+  for f in "$CLIKAE_HOME"/logs/watch-github-CVERInc-*/status.json; do
+    [ -f "$f" ] || continue
+    case "$(command cat "$f")" in *'"state":"fail"'*) n=$((n + 1)) ;; esac
+  done
+  printf '%s\n' "$n"
+}
+# The successful poll, as _wg_poll does it: its event, then the heartbeat.
+_r6_success() {
+  _wg_status_write CVERInc '{"kind":"comment","n":7}' "#7 comment by carol"
+  _wg_heartbeat_write CVERInc 1 "" ""
+}
+# In the paused poll only: block just before its exclusive stall claim.
+_r6_pause_at_claim() {
+  mkdir() {
+    local a
+    if [ "${WG_PAUSE:-0}" = 1 ]; then
+      for a in "$@"; do
+        case "$a" in */CVERInc.failures.d/*.stall) WG_PAUSE=0; _r6_block ;; esac
+      done
+    fi
+    command mkdir "$@"
+  }
+}
+# In the paused poll only: block just before it renames its heartbeat into place.
+_r6_pause_at_heartbeat_mv() {
+  mv() {
+    local a
+    if [ "${WG_PAUSE:-0}" = 1 ]; then
+      for a in "$@"; do
+        case "$a" in */CVERInc.heartbeat.json.tmp.*) WG_PAUSE=0; _r6_block ;; esac
+      done
+    fi
+    command mv "$@"
+  }
+}
+
+# #183 r6 (P2-1): the review's interleaving. Three failures emitted the
+# stall; a fourth reads streak/count and pauses just before its exclusive
+# `mkdir <token>.stall`; a success (with an event) closes the streak; the
+# fourth resumes. A success used to delete the old claim, so the fourth's
+# mkdir succeeded and a second stall landed AFTER the recovery.
+@test "watch github: a failure paused at its stall claim across a success raises no second stall, and wait --latest stays on the success (#183 r6 P2)" {
+  _r6_setup
+  _r6_pause_at_claim
+  local i
+  for i in 1 2 3; do _wg_poll CVERInc 2>>"$BATS_TEST_TMPDIR/poll.err" || true; done
+  [ "$(_r6_n_fail)" = 1 ]
+  ( WG_PAUSE=1; _wg_poll CVERInc 2>>"$BATS_TEST_TMPDIR/poll.err" || true ) &
+  local paused=$!
+  _r6_wait_at
+  _r6_success
+  : > "$R6_GATE/go"
+  wait "$paused"
+  command cat "$(_hb)"
+  echo "stall status files: $(_r6_n_fail)"
+  [ "$(_r6_n_fail)" = 1 ]
+  [[ "$(command cat "$(_hb)")" == *'"consecutive_failures":0'* ]] || false
+  run clikae wait --latest watch-github-CVERInc --timeout 5
+  echo "$output"
+  [ "$status" -eq 0 ]
+  [[ "$output" == *'"state":"done"'* ]] || false
+  [ "$(command cat "$R6_LOCK/pid")" = "424242" ]
+}
+
+# #183 r6: the same pause on the failure that REACHES the threshold — there
+# is no claim yet, so its mkdir succeeds. It re-reads the streak, sees the
+# success closed it, removes its own claim and emits nothing.
+@test "watch github: the threshold failure claiming after a success closed its streak removes its claim and emits no stall (#183 r6)" {
+  _r6_setup
+  _r6_pause_at_claim
+  local i
+  for i in 1 2; do _wg_poll CVERInc 2>>"$BATS_TEST_TMPDIR/poll.err" || true; done
+  ( WG_PAUSE=1; _wg_poll CVERInc 2>>"$BATS_TEST_TMPDIR/poll.err" || true ) &
+  local paused=$!
+  _r6_wait_at
+  _r6_success
+  : > "$R6_GATE/go"
+  wait "$paused"
+  echo "stall status files: $(_r6_n_fail)"
+  ls -A "$CLIKAE_HOME/state/watch-github/CVERInc.failures.d"
+  [ "$(_r6_n_fail)" = 0 ]
+  [ -z "$(ls -d "$CLIKAE_HOME/state/watch-github/CVERInc.failures.d"/*.stall 2>/dev/null)" ]
+  run clikae wait --latest watch-github-CVERInc --timeout 5
+  [ "$status" -eq 0 ]
+  [[ "$output" == *'"state":"done"'* ]] || false
+}
+
+# #183 r6 (P2-2): the review's delayed publication. Failure 1 completes;
+# failure 2 writes its heartbeat temp file with count 2 and pauses before
+# the rename; failure 3 completes (count 3, the stall); failure 2 resumes.
+# Its rename used to replace the newer heartbeat with count 2.
+@test "watch github: a heartbeat rename delayed past a later failure still shows the full count (#183 r6 P2)" {
+  _r6_setup
+  _r6_pause_at_heartbeat_mv
+  _wg_poll CVERInc 2>>"$BATS_TEST_TMPDIR/poll.err" || true
+  ( WG_PAUSE=1; _wg_poll CVERInc 2>>"$BATS_TEST_TMPDIR/poll.err" || true ) &
+  local paused=$!
+  _r6_wait_at
+  _wg_poll CVERInc 2>>"$BATS_TEST_TMPDIR/poll.err" || true
+  : > "$R6_GATE/go"
+  wait "$paused"
+  command cat "$(_hb)"
+  echo "stall status files: $(_r6_n_fail)"
+  [[ "$(command cat "$(_hb)")" == *'"consecutive_failures":3'* ]] || false
+  [ "$(_r6_n_fail)" = 1 ]
+}
+
+# #183 r6 (P2-2), across a success: failure 3 pauses before its heartbeat
+# rename; a success lands; failure 3 resumes. The heartbeat must describe
+# the success's streak — count 0, the success's last_ok_at — and the closed
+# streak raises no stall.
+@test "watch github: a failure's heartbeat rename delayed past a success never restores the stale count or last_ok_at (#183 r6 P2)" {
+  _r6_setup
+  _r6_pause_at_heartbeat_mv
+  local i
+  for i in 1 2; do _wg_poll CVERInc 2>>"$BATS_TEST_TMPDIR/poll.err" || true; done
+  ( WG_PAUSE=1; _wg_poll CVERInc 2>>"$BATS_TEST_TMPDIR/poll.err" || true ) &
+  local paused=$!
+  _r6_wait_at
+  _r6_success
+  local ok_at
+  ok_at="$(command cat "$CLIKAE_HOME/state/watch-github/CVERInc.failures.d/streak")"; ok_at="${ok_at#* }"
+  : > "$R6_GATE/go"
+  wait "$paused"
+  command cat "$(_hb)"
+  echo "last_ok_at from streak: $ok_at; stall status files: $(_r6_n_fail)"
+  [[ "$(command cat "$(_hb)")" == *'"consecutive_failures":0'* ]] || false
+  [[ "$(command cat "$(_hb)")" == *"\"last_ok_at\":$ok_at,"* ]] || false
+  [ "$(_r6_n_fail)" = 0 ]
+}
+
+# #183 r6: stall claims are pruned by age (older than a day), never by a
+# success — a fresh claim of a closed streak survives the success.
+@test "watch github: a success prunes stall claims older than a day and keeps fresh ones (#183 r6)" {
+  _r6_setup
+  local fdir="$CLIKAE_HOME/state/watch-github/CVERInc.failures.d"
+  command mkdir -p "$fdir/1700000000-1-old.stall" "$fdir/1789000000-2-new.stall" "$fdir/1700000000-1-old"
+  touch -t 202001010000 "$fdir/1700000000-1-old.stall"
+  _wg_heartbeat_write CVERInc 1 "" ""
+  ls -A "$fdir"
+  [ ! -e "$fdir/1700000000-1-old.stall" ]
+  [ -d "$fdir/1789000000-2-new.stall" ]
+  [ ! -e "$fdir/1700000000-1-old" ]
+}
+
+# --- #183 round 7 -------------------------------------------------------------
+# The heartbeat JSON is a display cache; the records under
+# <org>.failures.d/ are the only truth, and every reader computes
+# consecutive_failures / last_ok_at from them at read time
+# (`clikae watch github --status`, the stall decision).
+#
+# The review's r6 retry-exhaustion: failure A pauses before EACH of its five
+# heartbeat renames, and before each rename another poll completes. A's
+# fifth rename publishes its older snapshot and the repair budget is spent,
+# so the file stays stale with no poll left to fix it.
+_r7_pause_each_heartbeat_mv() {
+  mv() {
+    local a
+    if [ "${WG_PAUSE:-0}" = 1 ] && [ "${R7_ROUND:-0}" -lt 5 ]; then
+      for a in "$@"; do
+        case "$a" in */CVERInc.heartbeat.json.tmp.*)
+          R7_ROUND=$((${R7_ROUND:-0} + 1))
+          : > "$R6_GATE/at.$R7_ROUND"
+          while [ ! -e "$R6_GATE/go.$R7_ROUND" ]; do sleep 0.05; done ;;
+        esac
+      done
+    fi
+    command mv "$@"
+  }
+}
+_r7_wait_round() {
+  local i=0
+  while [ ! -e "$R6_GATE/at.$1" ] && [ "$i" -lt 200 ]; do sleep 0.05; i=$((i + 1)); done
+  [ -e "$R6_GATE/at.$1" ]
+}
+# _r7_exhaust <last:fail|success> -> A plus four intervening failures, the
+# fifth intervening poll a failure or a success. Leaves $R7_OK_AT set to
+# the success's last_ok_at (success only).
+_r7_exhaust() {
+  _r6_setup
+  _r7_pause_each_heartbeat_mv
+  ( WG_PAUSE=1; R7_ROUND=0; _wg_poll CVERInc 2>>"$BATS_TEST_TMPDIR/poll.err" || true ) &
+  local paused=$! r
+  for r in 1 2 3 4 5; do
+    _r7_wait_round "$r"
+    if [ "$r" = 5 ] && [ "$1" = success ]; then
+      _r6_success
+      R7_OK_AT="$(command cat "$CLIKAE_HOME/state/watch-github/CVERInc.failures.d/streak")"; R7_OK_AT="${R7_OK_AT#* }"
+    else
+      _wg_poll CVERInc 2>>"$BATS_TEST_TMPDIR/poll.err" || true
+    fi
+    : > "$R6_GATE/go.$r"
+  done
+  wait "$paused"
+}
+_r7_field() { # <json> <key> -> the raw value
+  printf '%s\n' "$1" | sed -E "s/.*\"$2\":(\"([^\"\\\\]|\\\\.)*\"|[^,}]*).*/\\1/"
+}
+
+@test "watch github --status: five interleaved renames leave the heartbeat at 5 — the reader still reports the six records (#183 r7)" {
+  _r7_exhaust fail
+  local hb n
+  hb="$(command cat "$(_hb)")"
+  n="$(ls "$CLIKAE_HOME/state/watch-github/CVERInc.failures.d/0" | wc -l | tr -d ' ')"
+  echo "heartbeat cache: $hb"; echo "records: $n"
+  # The scenario reproduced: six records, a stale cache.
+  [ "$n" = 6 ]
+  [[ "$hb" == *'"consecutive_failures":5'* ]] || false
+  run clikae watch github --status --org CVERInc
+  echo "--status: $output"
+  [ "$status" -eq 0 ]
+  [ "$(_r7_field "$output" consecutive_failures)" = 6 ]
+  [ "$(_r7_field "$output" last_ok_at)" = null ]
+  [ "$(_r7_field "$output" last_error_kind)" != null ]
+  [ "$(_r6_n_fail)" = 1 ]
+}
+
+@test "watch github --status: the fifth intervening poll a success — the cache says 5 and null, the reader says 0 and the success time (#183 r7)" {
+  _r7_exhaust success
+  local hb
+  hb="$(command cat "$(_hb)")"
+  echo "heartbeat cache: $hb"; echo "last_ok_at from streak: $R7_OK_AT"
+  [[ "$hb" == *'"consecutive_failures":5'* ]] || false
+  [[ "$hb" == *'"last_ok_at":null'* ]] || false
+  run clikae watch github --status --org CVERInc
+  echo "--status: $output"
+  [ "$status" -eq 0 ]
+  [ "$(_r7_field "$output" consecutive_failures)" = 0 ]
+  [ "$(_r7_field "$output" last_ok_at)" = "$R7_OK_AT" ]
+  [ "$(_r7_field "$output" last_error)" = null ]
+  [ "$(_r7_field "$output" last_error_kind)" = null ]
+  [ "$(_r7_field "$output" last_poll_at)" -ge "$R7_OK_AT" ]
+}
+
+@test "watch github --status: a hand-written stale heartbeat (5, null) over a recorded success reads 0 and the success time (#183 r7)" {
+  _r6_setup
+  _wg_heartbeat_write CVERInc 1 "" ""
+  local ok_at
+  ok_at="$(command cat "$CLIKAE_HOME/state/watch-github/CVERInc.failures.d/streak")"; ok_at="${ok_at#* }"
+  printf '{"org":"CVERInc","pid":1,"last_poll_at":1,"last_ok_at":null,"consecutive_failures":5,"events_this_poll":0,"last_error":"x","last_error_kind":"transient"}\n' > "$(_hb)"
+  run clikae watch github --status --org CVERInc
+  echo "--status: $output"
+  [ "$status" -eq 0 ]
+  [ "$(_r7_field "$output" consecutive_failures)" = 0 ]
+  [ "$(_r7_field "$output" last_ok_at)" = "$ok_at" ]
+  [ "$(_r7_field "$output" last_error)" = null ]
+  [ "$(_r7_field "$output" last_poll_at)" -ge "$ok_at" ]
+}
+
+@test "watch github --status: no state at all reads 0 failures, last_ok_at null, and needs no gh (#183 r7)" {
+  local stub="$BATS_TEST_TMPDIR/nogh"
+  command mkdir -p "$stub"
+  printf '#!/bin/sh\n: > "%s/gh-called"\nexit 1\n' "$stub" > "$stub/gh"
+  chmod +x "$stub/gh"
+  PATH="$stub:$PATH" run clikae watch github --status --org CVERInc
+  echo "--status: $output"
+  [ "$status" -eq 0 ]
+  [ ! -e "$stub/gh-called" ]
+  [ "$(_r7_field "$output" consecutive_failures)" = 0 ]
+  [ "$(_r7_field "$output" last_ok_at)" = null ]
+}
+
+# Control (passes before and after r7 — the decision never read the file):
+# a stale heartbeat claiming 99 failures does not raise a stall on the
+# first real failure.
+@test "watch github: a stale heartbeat claiming 99 failures never raises a stall on one real failure (#183 r7 control)" {
+  _r6_setup
+  command mkdir -p "$CLIKAE_HOME/state/watch-github"
+  printf '{"org":"CVERInc","pid":1,"last_poll_at":1,"last_ok_at":null,"consecutive_failures":99,"events_this_poll":0,"last_error":"x","last_error_kind":"transient"}\n' > "$(_hb)"
+  _wg_poll CVERInc 2>>"$BATS_TEST_TMPDIR/poll.err" || true
+  [ "$(_r6_n_fail)" = 0 ]
+  [[ "$(command cat "$(_hb)")" == *'"consecutive_failures":1'* ]] || false
 }
