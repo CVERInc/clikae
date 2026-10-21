@@ -20,6 +20,13 @@ source "$CLIKAE_LIB/core/duration.sh"
 # watch-github run's PREFIX — `watch-github-<org>` — but not the epoch
 # suffix a not-yet-run poll will pick; this is the "no epoch needed" entry
 # point burn_status_resolve's own literal/`burn-*`/pid forms don't cover).
+#
+# #183 r5 (P2): file_mtime is whole seconds, and a tie used to go to
+# whichever directory the glob listed first — so a stall written in the same
+# second as an earlier event (its directory `…-<epoch>-2`, listed after the
+# event's `…-<epoch>`) was hidden behind it. A whole-second tie is broken by
+# the full-precision mtime (_wait_status_newer), and only an exact tie by
+# the run name.
 _wait_resolve_latest() {
   local prefix="$1" base="$HOME/.clikae/logs" d f m best="" best_m=-1
   [ -n "$prefix" ] && [ -d "$base" ] || return 1
@@ -29,10 +36,43 @@ _wait_resolve_latest() {
     [ -f "$f" ] || continue
     m="$(file_mtime "$f")"
     case "$m" in ''|*[!0-9]*) continue ;; esac
-    if [ "$m" -gt "$best_m" ]; then best="$f"; best_m="$m"; fi
+    if [ "$m" -gt "$best_m" ]; then
+      best="$f"; best_m="$m"
+    elif [ "$m" -eq "$best_m" ] && _wait_status_newer "$f" "$best"; then
+      best="$f"
+    fi
   done
   [ -n "$best" ] || return 1
   printf '%s' "$best"
+}
+
+# _wait_status_newer <a> <b> -> 0 when status file <a> was written after
+# <b>: by full-precision mtime (`find -newer`, not `-nt`, which bash 3.2
+# compares in whole seconds), and on an exact tie by the run directory's
+# name — epoch, then the numeric `-N` collision suffix (`-10` after `-9`,
+# a bare `…-<epoch>` being suffix 1).
+_wait_status_newer() {
+  local a="$1" b="$2" ka kb
+  [ -n "$(find "$a" -newer "$b" 2>/dev/null)" ] && return 0
+  [ -n "$(find "$b" -newer "$a" 2>/dev/null)" ] && return 1
+  ka="$(_wait_run_key "$a")" || return 1
+  kb="$(_wait_run_key "$b")" || return 1
+  [ "${ka% *}" -gt "${kb% *}" ] && return 0
+  [ "${ka% *}" -eq "${kb% *}" ] && [ "${ka#* }" -gt "${kb#* }" ]
+}
+
+# _wait_run_key <status-file> -> "<epoch> <suffix>" from its run directory's
+# name (`…-<epoch>` or `…-<epoch>-<N>`), or 1 when it ends in neither.
+_wait_run_key() {
+  local name last rest prev
+  name="${1%/status.json}"; name="${name##*/}"
+  last="${name##*-}"; rest="${name%-*}"; prev="${rest##*-}"
+  case "$last" in ''|*[!0-9]*) return 1 ;; esac
+  [ "$rest" != "$name" ] || return 1
+  case "$prev" in
+    ''|*[!0-9]*) printf '%s 1\n' "$last" ;;
+    *) printf '%s %s\n' "$prev" "$last" ;;
+  esac
 }
 
 _wait_help() {
@@ -41,7 +81,10 @@ Usage: clikae wait <run_id|status-file>... [--any|--all] [--timeout <dur>]
        clikae wait --latest <prefix> [--any|--all] [--timeout <dur>]
 
 Block until one (or every) named burn reaches a TERMINAL state — done, dry,
-fail, infra, or stale (a `running`/`waiting-reset` row whose recorded pid is
+dry-paused (#178: a --no-reroute burn whose tank ran dry and that will NOT
+retry; `reset_at` says when it is back — one that will re-fire says
+`waiting-reset` meanwhile, which is not terminal), fail, infra,
+or stale (a `running`/`waiting-reset` row whose recorded pid is
 no longer alive, synthesized here at read time, never written to disk — see
 #41's status.json contract, documented in docs/orchestration.md) — and print
 each one's status object as one JSON line on stdout, in the order it
@@ -75,7 +118,7 @@ refusing.
 
 Exit code — 0 only when the REQUESTED condition is met:
   --any (default): 0 if at least one target is done; 2 if none are done and
-                   every one that finished is dry; 1 otherwise (a
+                   every one that finished is dry or dry-paused; 1 otherwise (a
                    fail/infra/stale among them, an unresolved target, or a
                    timeout).
   --all:           0 only if EVERY target is done; 2 only if EVERY target is
@@ -201,15 +244,21 @@ cmd_wait() {
           ;;
       esac
 
+      # #178: `dry-paused` — a --no-reroute burn whose tank ran dry and that
+      # will NOT retry (#183 round 2: one that will re-fire publishes the
+      # non-terminal `waiting-reset` instead, so this loop keeps waiting and
+      # a killed sleeper still reads as stale above). Terminal (ok:false;
+      # `reset_at` says when the tank is back), and the dry class for the rc:
+      # "is anything left to do" has the same answer as a plain `dry`.
       case "$st" in
-        done|dry|fail|infra|stale)
+        done|dry|dry-paused|fail|infra|stale)
           printf '%s\n' "$json"
           reported[i]=1
           terminal_count=$((terminal_count + 1))
           case "$st" in
-            done) any_done=1 ;;
-            dry)  any_dry=1 ;;
-            *)    any_other=1 ;;   # fail, infra, stale
+            done)           any_done=1 ;;
+            dry|dry-paused) any_dry=1 ;;
+            *)              any_other=1 ;;   # fail, infra, stale
           esac
           ;;
       esac

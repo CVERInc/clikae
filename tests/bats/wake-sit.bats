@@ -40,6 +40,16 @@ _src_wake() {
   WAKE_VERIFY_SECONDS=2
   # shellcheck disable=SC2034  # read by the wake loop sourced above
   WAKE_VERIFY_INTERVAL=1
+  # bin/clikae sets its own version before it ever sources lib/; helpers.bash
+  # unsets the inherited one, so a fixture that stops there is a watcher that
+  # cannot say what it is. #168's reload check then reads bin/clikae's
+  # "0.42.0" against "" as an upgrade and EXECS the real binary — every stub
+  # below is gone, and the real watcher watches a pane nobody types into. That
+  # was the 6-hour ubuntu hang on #183. Read straight off the file, not via
+  # wake_installed_version: the fixture must not agree with the code under
+  # test by construction.
+  CLIKAE_VERSION="$(sed -nE 's/^CLIKAE_VERSION="([^"]*)"$/\1/p' "$CLIKAE_TEST_ROOT/bin/clikae")"
+  [ -n "$CLIKAE_VERSION" ] || { echo "_src_wake: no CLIKAE_VERSION in bin/clikae" >&2; return 1; }
 }
 
 # _responder <transcript> <out> <answer>... -> path of a script that stands in
@@ -82,6 +92,13 @@ _parked() {
   printf '%s' "$proj/s.jsonl"
 }
 
+# Every pane below reads with `read -r -t 20 line || exit 0`, never a bare
+# `read`: the waiter and the watcher only leave when their session dies, and a
+# pane that nobody types into is what keeps it alive. Unbounded, one wrong
+# turn in the code under test is not a red test but a CI job that sits until
+# GitHub's 6-hour timeout cancels it — which is what #183 did twice on ubuntu
+# (macOS has no tmux there and skips this file). Twenty seconds is far past
+# any wait in this file and short enough to fail inside `timeout 60`.
 _sess() { printf 'cksit-%s-%s' "$$" "${BATS_TEST_NUMBER:-0}"; }
 _tankname() { printf 'ckt%s%s' "$$" "${BATS_TEST_NUMBER:-0}"; }
 
@@ -96,7 +113,7 @@ teardown() {
   command -v tmux >/dev/null 2>&1 || skip "tmux not installed"
   _src_wake
   local out="$BATS_TEST_TMPDIR/typed"
-  tmux new-session -d -s "$(_sess)" "read -r line; printf '%s' \"\$line\" > '$out'; sleep 10"
+  tmux new-session -d -s "$(_sess)" "read -r -t 20 line || exit 0; printf '%s' \"\$line\" > '$out'; sleep 10"
   sleep 1
   run wake_sit "$(_sess)" "$(date +%s)"
   [ "$status" -eq 0 ]
@@ -111,7 +128,7 @@ teardown() {
   command -v tmux >/dev/null 2>&1 || skip "tmux not installed"
   _src_wake
   local out="$BATS_TEST_TMPDIR/typed"
-  tmux new-session -d -s "$(_sess)" "read -r line; printf '%s' \"\$line\" > '$out'; sleep 10"
+  tmux new-session -d -s "$(_sess)" "read -r -t 20 line || exit 0; printf '%s' \"\$line\" > '$out'; sleep 10"
   sleep 1
   wake_sit "$(_sess)" "$(( $(date +%s) + 4 ))" >/dev/null &
   local sitter=$!
@@ -131,7 +148,7 @@ teardown() {
   _src_wake
   local out="$BATS_TEST_TMPDIR/typed"
   # Window 0 is the engine (blocked on read); rename it off the `wake` namespace.
-  tmux new-session -d -s "$(_sess)" "read -r line; printf '%s' \"\$line\" > '$out'; sleep 10"
+  tmux new-session -d -s "$(_sess)" "read -r -t 20 line || exit 0; printf '%s' \"\$line\" > '$out'; sleep 10"
   tmux rename-window -t "$(_sess):0" claude
   # A second window IS the waiter, and we make it the ACTIVE one — the failing case.
   tmux new-window -d -t "$(_sess)" -n wake 'sleep 30'
@@ -170,7 +187,7 @@ teardown() {
   # of this test used a painter that ate stdin, which made "did it type?"
   # unanswerable and left the verdict as the only thing to assert.
   tmux new-session -d -s "$(_sess)" \
-    "while :; do date +%s.%N; sleep 0.1; done & read -r line; printf '%s' \"\$line\" > '$out'; sleep 10"
+    "while :; do date +%s.%N; sleep 0.1; done & read -r -t 20 line || exit 0; printf '%s' \"\$line\" > '$out'; sleep 10"
   sleep 1
   run wake_sit "$(_sess)" "$(date +%s)" claude "$(_tankname)"
   [ "$status" -eq 0 ] || { echo "$output"; false; }
@@ -214,7 +231,7 @@ teardown() {
     printf '%s\n' '{"parentUuid":"a1","isMeta":true,"type":"user","message":{"role":"user","content":"Your claude.ai usage limit has reset. Continue the task you were working on."},"origin":{"kind":"auto-continuation"},"promptSource":"system","timestamp":"2026-09-16T15:00:30.000Z"}'
   } > "$proj/s.jsonl"
   local out="$BATS_TEST_TMPDIR/typed"
-  tmux new-session -d -s "$(_sess)" "read -r line; printf '%s' \"\$line\" > '$out'; sleep 10"
+  tmux new-session -d -s "$(_sess)" "read -r -t 20 line || exit 0; printf '%s' \"\$line\" > '$out'; sleep 10"
   sleep 1
   run wake_sit "$(_sess)" "$(date +%s)" claude "$tank"
   [ "$status" -eq 0 ] || { echo "$output"; false; }
@@ -234,7 +251,7 @@ teardown() {
   mkdir -p "$proj"
   printf '%s\n' '{"type":"assistant","isApiErrorMessage":true,"message":{"model":"<synthetic>","content":[{"type":"text","text":"You have hit your session limit · resets 8:20pm (Asia/Tokyo)"}]},"timestamp":"2026-09-16T13:37:00.000Z"}' > "$proj/s.jsonl"
   local out="$BATS_TEST_TMPDIR/typed"
-  tmux new-session -d -s "$(_sess)" "read -r line; printf '%s' \"\$line\" > '$out'; sleep 10"
+  tmux new-session -d -s "$(_sess)" "read -r -t 20 line || exit 0; printf '%s' \"\$line\" > '$out'; sleep 10"
   sleep 1
   run wake_sit "$(_sess)" "$(date +%s)" claude "$tank"
   [ "$status" -eq 0 ] || { echo "$output"; false; }
@@ -494,7 +511,7 @@ teardown() {
   # 3:50am — which it did, once, before the stub was added.
   limit_tank_dry() { printf 'resets 3:50am (Asia/Tokyo)'; return 0; }
   limit_reset_epoch() { date +%s; }
-  tmux new-session -d -s "$(_sess)" "read -r line; printf '%s' \"\$line\" > '$BATS_TEST_TMPDIR/typed'; sleep 10"
+  tmux new-session -d -s "$(_sess)" "read -r -t 20 line || exit 0; printf '%s' \"\$line\" > '$BATS_TEST_TMPDIR/typed'; sleep 10"
   sleep 1
   run wake_watch claude "$(_tankname)" "$(_sess)"
   [ "$status" -eq 0 ]
@@ -514,7 +531,7 @@ teardown() {
   # a window. It could not have failed: forcing the watcher to ignore dryness
   # entirely left it green.
   local out="$BATS_TEST_TMPDIR/typed"
-  tmux new-session -d -s "$(_sess)" "read -r line; printf '%s' \"\$line\" > '$out'; sleep 30"
+  tmux new-session -d -s "$(_sess)" "read -r -t 20 line || exit 0; printf '%s' \"\$line\" > '$out'; sleep 30"
   sleep 1
   wake_watch claude "$(_tankname)" "$(_sess)" >/dev/null &
   local w=$!
@@ -529,7 +546,7 @@ teardown() {
   WAKE_WATCH_INTERVAL=1
   limit_tank_dry() { printf 'resets sometime soon'; return 0; }
   local out="$BATS_TEST_TMPDIR/typed"
-  tmux new-session -d -s "$(_sess)" "read -r line; printf '%s' \"\$line\" > '$out'; sleep 30"
+  tmux new-session -d -s "$(_sess)" "read -r -t 20 line || exit 0; printf '%s' \"\$line\" > '$out'; sleep 30"
   sleep 1
   wake_watch claude "$(_tankname)" "$(_sess)" >/dev/null &
   local w=$!
@@ -806,7 +823,7 @@ _phrase_minutes_ago() {
   printf '{"type":"assistant","isApiErrorMessage":true,"message":{"model":"<synthetic>","content":[{"type":"text","text":"You have hit your session limit · %s"}]},"timestamp":"%s"}\n' \
     "$phrase" "$(date -u '+%Y-%m-%dT%H:%M:%S.000Z')" > "$proj/s.jsonl"
   local out="$BATS_TEST_TMPDIR/typed"
-  tmux new-session -d -s "$(_sess)" "read -r line; printf '%s' \"\$line\" > '$out'; sleep 60"
+  tmux new-session -d -s "$(_sess)" "read -r -t 20 line || exit 0; printf '%s' \"\$line\" > '$out'; sleep 60"
   sleep 1
   wake_watch claude "$tank" "$(_sess)" >/dev/null &
   local w=$!
@@ -843,7 +860,7 @@ _phrase_minutes_ago() {
     printf '%s\n' '{"parentUuid":"a1","isMeta":true,"type":"user","message":{"role":"user","content":"Your claude.ai usage limit has reset. Continue the task you were working on."},"origin":{"kind":"auto-continuation"},"promptSource":"system","timestamp":"2026-09-16T15:00:30.000Z"}'
   } > "$proj/s.jsonl"
   local out="$BATS_TEST_TMPDIR/typed"
-  tmux new-session -d -s "$(_sess)" "read -r line; printf '%s' \"\$line\" > '$out'; sleep 30"
+  tmux new-session -d -s "$(_sess)" "read -r -t 20 line || exit 0; printf '%s' \"\$line\" > '$out'; sleep 30"
   sleep 1
   run wake_sit "$(_sess)" "$(( $(date +%s) - 600 ))" claude "$tank"
   [ "$status" -eq 0 ] || { echo "$output"; false; }
@@ -890,7 +907,7 @@ _subagent_turn() {
   _parked_sid "$tank" "$sid" "resets 8:20pm (Asia/Tokyo)" "2026-09-16T13:37:00.000Z" >/dev/null
   _subagent_turn "$tank" "$sid" "2026-09-16T13:40:00.000Z"
   local out="$BATS_TEST_TMPDIR/typed"
-  tmux new-session -d -s "$(_sess)" "read -r line; printf '%s' \"\$line\" > '$out'; sleep 10"
+  tmux new-session -d -s "$(_sess)" "read -r -t 20 line || exit 0; printf '%s' \"\$line\" > '$out'; sleep 10"
   tmux set-option -t "=$(_sess):" @clikae_session_id "$sid"
   sleep 1
   run wake_sit "$(_sess)" "$(date +%s)" claude "$tank"
@@ -909,7 +926,7 @@ _subagent_turn() {
   printf "$_TURN_LINE" "2026-09-16T15:00:00.000Z" \
     > "$CLIKAE_HOME/profiles/claude/$tank/projects/p/33333333-3333-4333-8333-333333333333.jsonl"
   local out="$BATS_TEST_TMPDIR/typed"
-  tmux new-session -d -s "$(_sess)" "read -r line; printf '%s' \"\$line\" > '$out'; sleep 10"
+  tmux new-session -d -s "$(_sess)" "read -r -t 20 line || exit 0; printf '%s' \"\$line\" > '$out'; sleep 10"
   tmux set-option -t "=$(_sess):" @clikae_session_id "$sid"
   # The other session is a live clikae launch, stamped with its own id — which
   # is what tells it apart from this pane after a /clear (#182 round 2: an
@@ -932,7 +949,7 @@ _subagent_turn() {
   # shellcheck disable=SC2059
   printf "$_TURN_LINE" "2026-09-16T15:00:40.000Z" >> "$tx"
   local out="$BATS_TEST_TMPDIR/typed"
-  tmux new-session -d -s "$(_sess)" "read -r line; printf '%s' \"\$line\" > '$out'; sleep 10"
+  tmux new-session -d -s "$(_sess)" "read -r -t 20 line || exit 0; printf '%s' \"\$line\" > '$out'; sleep 10"
   tmux set-option -t "=$(_sess):" @clikae_session_id "$sid"
   sleep 1
   run wake_sit "$(_sess)" "$(date +%s)" claude "$tank"
@@ -951,7 +968,7 @@ _subagent_turn() {
   _parked_sid "$tank" "$sid" "$phrase" "$now.000Z" >/dev/null
   _subagent_turn "$tank" "$sid" "$now.900Z"
   local out="$BATS_TEST_TMPDIR/typed"
-  tmux new-session -d -s "$(_sess)" "read -r line; printf '%s' \"\$line\" > '$out'; sleep 60"
+  tmux new-session -d -s "$(_sess)" "read -r -t 20 line || exit 0; printf '%s' \"\$line\" > '$out'; sleep 60"
   tmux set-option -t "=$(_sess):" @clikae_session_id "$sid"
   sleep 1
   wake_watch claude "$tank" "$(_sess)" >/dev/null &
@@ -981,7 +998,7 @@ _subagent_turn() {
   # The reading still counts where it was meant to: the board's question.
   ! _limit_tank_dry_self claude "$tank" >/dev/null || { echo "precondition: the reading should clear the tank"; false; }
   local out="$BATS_TEST_TMPDIR/typed"
-  tmux new-session -d -s "$(_sess)" "read -r line; printf '%s' \"\$line\" > '$out'; sleep 60"
+  tmux new-session -d -s "$(_sess)" "read -r -t 20 line || exit 0; printf '%s' \"\$line\" > '$out'; sleep 60"
   tmux set-option -t "=$(_sess):" @clikae_session_id "$sid"
   sleep 1
   wake_watch claude "$tank" "$(_sess)" >/dev/null &
@@ -1013,7 +1030,7 @@ _subagent_turn() {
   wake_tank_recovered() { return 1; }
   local tank; tank="$(_tankname)"
   local out="$BATS_TEST_TMPDIR/typed"
-  tmux new-session -d -s "$(_sess)" "printf 'banner-one\nbanner-two\n'; read -r line; printf '%s' \"\$line\" > '$out'; sleep 10"
+  tmux new-session -d -s "$(_sess)" "printf 'banner-one\nbanner-two\n'; read -r -t 20 line || exit 0; printf '%s' \"\$line\" > '$out'; sleep 10"
   sleep 1
   run wake_sit "$(_sess)" "$(date +%s)" claude "$tank"
   local log="$CLIKAE_HOME/state/wake/claude-$tank.log"
@@ -1041,7 +1058,7 @@ printf ' What do you want to do?\n\n ❯ 1. Stop and wait for limit to reset\n  
 while IFS= read -rsn1 k; do
   if [ "$closes" = 1 ] && [ "$k" = $'\e' ]; then
     clear; printf '> '
-    IFS= read -r line; printf 'ESC+%s' "$line" > "$out"; sleep 30; exit 0
+    IFS= read -r -t 20 line || exit 0; printf 'ESC+%s' "$line" > "$out"; sleep 30; exit 0
   fi
   printf 'KEY:%q\n' "$k" >> "$out"
 done
@@ -1132,7 +1149,7 @@ printf 'export ANTHROPIC_API_KEY=%s\n%s\n\n ❯ 1. %s\n   2. %s\n' "$secret" "$c
 while IFS= read -rsn1 k; do
   if [ "$k" = $'\e' ]; then
     clear; printf '%s\n%s\n> ' "$secret" "$cust"
-    IFS= read -r line; printf 'ESC+%s' "$line" > "$out"; sleep 30; exit 0
+    IFS= read -r -t 20 line || exit 0; printf 'ESC+%s' "$line" > "$out"; sleep 30; exit 0
   fi
 done
 SH
@@ -1194,7 +1211,7 @@ SH
   wake_tank_recovered() { return 1; }
   local tank; tank="$(_tankname)"
   local out="$BATS_TEST_TMPDIR/typed"
-  tmux new-session -d -s "$(_sess)" "printf '❯ 1. First customer item\n  2. Second customer item\n\n> '; IFS= read -r line; printf '%q' \"\$line\" > '$out'; sleep 10"
+  tmux new-session -d -s "$(_sess)" "printf '❯ 1. First customer item\n  2. Second customer item\n\n> '; IFS= read -r -t 20 line || exit 0; printf '%q' \"\$line\" > '$out'; sleep 10"
   sleep 1
   run wake_sit "$(_sess)" "$(date +%s)" claude "$tank"
   sleep 1
@@ -1314,7 +1331,7 @@ _holding() { printf '( exec 3<%q; exec sleep 30 ) & ' "$1"; }
   _two_convs "$tank" "$a" "$b" "2026-09-16T15:00:00.000Z"
   local out="$BATS_TEST_TMPDIR/typed" proj="$CLIKAE_HOME/profiles/claude/$tank/projects/p"
   # The pane's engine holds B open: the /clear is proven, not inferred (r3).
-  tmux new-session -d -s "$(_sess)" "$(_holding "$proj/$b.jsonl")read -r line; printf '%s' \"\$line\" > '$out'; sleep 10"
+  tmux new-session -d -s "$(_sess)" "$(_holding "$proj/$b.jsonl")read -r -t 20 line || exit 0; printf '%s' \"\$line\" > '$out'; sleep 10"
   tmux set-option -t "=$(_sess):" @clikae_session_id "$a"
   sleep 1
   run wake_sit "$(_sess)" "$(date +%s)" claude "$tank"
@@ -1348,7 +1365,7 @@ _holding() { printf '( exec 3<%q; exec sleep 30 ) & ' "$1"; }
   # shellcheck disable=SC2059
   printf "$_LIMIT_LINE" "$phrase" "$now.900Z" > "$proj/$a/subagents/agent-a1.jsonl"
   local out="$BATS_TEST_TMPDIR/typed"
-  tmux new-session -d -s "$(_sess)" "$(_holding "$proj/$b.jsonl")read -r line; printf '%s' \"\$line\" > '$out'; sleep 60"
+  tmux new-session -d -s "$(_sess)" "$(_holding "$proj/$b.jsonl")read -r -t 20 line || exit 0; printf '%s' \"\$line\" > '$out'; sleep 60"
   tmux set-option -t "=$(_sess):" @clikae_session_id "$a"
   sleep 1
   # Control: on the stamped transcript alone this limit IS parked, and so is
@@ -1415,7 +1432,7 @@ _parked_and_later() {
   a="aaaaaaaa-a4a4-4a4a-8a4a-a4a4a4a4a4a4"; b="bbbbbbbb-b4b4-4b4b-8b4b-b4b4b4b4b4b4"
   _parked_and_later "$tank" "$a" "$b" "$_USER_LINE"
   local out="$BATS_TEST_TMPDIR/typed"
-  tmux new-session -d -s "$(_sess)" "read -r line; printf '%s' \"\$line\" > '$out'; sleep 10"
+  tmux new-session -d -s "$(_sess)" "read -r -t 20 line || exit 0; printf '%s' \"\$line\" > '$out'; sleep 10"
   tmux set-option -t "=$(_sess):" @clikae_session_id "$a"
   sleep 1
   run wake_sit "$(_sess)" "$(date +%s)" claude "$tank"
@@ -1433,7 +1450,7 @@ _parked_and_later() {
   a="aaaaaaaa-a5a5-4a5a-8a5a-a5a5a5a5a5a5"; b="bbbbbbbb-b5b5-4b5b-8b5b-b5b5b5b5b5b5"
   _parked_and_later "$tank" "$a" "$b" "$_TURN_LINE"
   local out="$BATS_TEST_TMPDIR/typed"
-  tmux new-session -d -s "$(_sess)" "read -r line; printf '%s' \"\$line\" > '$out'; sleep 10"
+  tmux new-session -d -s "$(_sess)" "read -r -t 20 line || exit 0; printf '%s' \"\$line\" > '$out'; sleep 10"
   tmux set-option -t "=$(_sess):" @clikae_session_id "$a"
   sleep 1
   run wake_sit "$(_sess)" "$(date +%s)" claude "$tank"
@@ -1455,7 +1472,7 @@ _parked_and_later() {
   _parked_and_later "$tank" "$a" "$b" "$fmt\n"
   proj="$CLIKAE_HOME/profiles/claude/$tank/projects/p"
   local out="$BATS_TEST_TMPDIR/typed"
-  tmux new-session -d -s "$(_sess)" "$(_holding "$proj/$b.jsonl")read -r line; printf '%s' \"\$line\" > '$out'; sleep 10"
+  tmux new-session -d -s "$(_sess)" "$(_holding "$proj/$b.jsonl")read -r -t 20 line || exit 0; printf '%s' \"\$line\" > '$out'; sleep 10"
   tmux set-option -t "=$(_sess):" @clikae_session_id "$a"
   sleep 1
   run wake_sit "$(_sess)" "$(date +%s)" claude "$tank"

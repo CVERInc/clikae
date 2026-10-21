@@ -111,7 +111,10 @@ burn_status_str() {
   printf '%s' "$v"
 }
 
-# burn_status_state <json> -> the `state` field (running|done|dry|fail|infra),
+# burn_status_state <json> -> the `state` field (running|waiting-reset|done|
+# dry|dry-paused|fail|infra — `dry-paused` is #178's terminal "a --no-reroute
+# tank ran dry and this burn will not retry; `reset_at` says when it is back";
+# one that WILL re-fire says `waiting-reset` while it sleeps),
 # or empty if unreadable.
 burn_status_state() { burn_status_str "$1" state; }
 

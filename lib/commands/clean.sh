@@ -1509,13 +1509,16 @@ _clean_tmux_gc() {
       # Orphans under any older name are swept by _clean_scrollback_gc, which
       # keys on the writer's pid rather than on the prefix.
       local _sb_old=""
-      local CLIKAE_TMUX_SESS CLIKAE_TMUX_SESS_EXISTS
+      local CLIKAE_TMUX_SESS CLIKAE_TMUX_SESS_EXISTS CLIKAE_TMUX_SESS_SOCK
       tmux_sessv "$sid"
       if [ "$CLIKAE_TMUX_SESS_EXISTS" -eq 1 ]; then
         if [ "$dry_run" = "1" ]; then
           log_info "GC: [Dry Run] Would clean up abandoned tmux session $CLIKAE_TMUX_SESS"
         else
-          tmux kill-session -t "=$CLIKAE_TMUX_SESS"
+          # On the server tmux_sessv found it on (DESIGN-tmux Rule 13) — a bare
+          # kill-session would miss one on the other server and, under set -e,
+          # end the sweep there.
+          tmux -S "$CLIKAE_TMUX_SESS_SOCK" kill-session -t "=$CLIKAE_TMUX_SESS"
           log_info "GC: Cleaned up abandoned tmux session $CLIKAE_TMUX_SESS"
           rm -f "$lock_file" "$HOME/.clikae/state/${sid}.sh" "$HOME/.clikae/state/${sid}_exit" "$_sb_new" "$_sb_old"
         fi

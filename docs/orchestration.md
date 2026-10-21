@@ -265,7 +265,7 @@ object can't give it:
   "rerouted_from": [],      // ["codex/T1", …] — every tank tried before this one
   "elapsed_s": 4,
   "run_id": "burn-28186",   // stable across this burn's whole reroute walk
-  "state": "running",       // running | waiting-reset | done | dry | fail | infra
+  "state": "running",       // running | waiting-reset | done | dry | dry-paused | fail | infra
   "started_at": 1757400000, "updated_at": 1757400004,
   "pid": 28186,
   "log": "/Users/…/.clikae/logs/codex-T1-burn-28186.log",  // this attempt's own capture log, or null
@@ -282,8 +282,9 @@ artifact, quota, and infrastructure classification still take precedence.
 running`, `tank` and `rerouted_from` updated), a tank going dry (`state: dry`
 — transient if a reroute follows, terminal if `--no-reroute` or the reserve is
 exhausted), an infra retry (`state: infra`, transient while retries remain),
-`--wait-for-reset` sleeping to a near reset (`state: waiting-reset`, always
-transient — see below), and the run's own terminal outcome. A reader polling
+`--wait-for-reset` (or a pinned burn's default dry pause, #178) sleeping to a
+near reset (`state: waiting-reset`, always transient — see below), and the
+run's own terminal outcome. A reader polling
 the file sees exactly what `--json` would have printed at exit, at any point
 along the way, from a different process.
 
@@ -356,10 +357,43 @@ or `dry` among the others):
 a burn that exhausted its whole auto-reroute reserve (`reason:
 no-tank-available`) and a burn that stopped after ONE dry tank because
 `--no-reroute` said to (`reason: "tank ran dry and --no-reroute is set"`).
-Both write `state: dry` and both give burn's own process rc 2 — `wait`'s rc
-above answers "is anything left to do", which is the same question either
-way. A caller that needs to tell the two apart reads `reason` off the
-printed status object, not `wait`'s own exit code.
+Both give burn's own process rc 2 — `wait`'s rc above answers "is anything
+left to do", which is the same question either way. A caller that needs to
+tell the two apart reads `reason` off the printed status object, not
+`wait`'s own exit code.
+
+**A pinned (`--no-reroute`) burn that runs dry (#178) is either waiting or
+paused — never both.** The quota window closing is a normal, designed-for
+outcome, and what the status file says follows ONE question: will this
+process fire the same tank again?
+
+- **Yes — `waiting-reset` (not terminal).** The reset parses and lands
+  inside the window (`--wait-for-reset <dur>`, default
+  `$CLIKAE_BURN_DRY_PAUSE_WAIT` = 6h). The burn sleeps in its own process,
+  the file says `state: waiting-reset` (ok:null, `reset_at`, `reason: "tank
+  ran dry and --no-reroute is set; waiting for its reset, then re-firing the
+  same tank"`), then it re-fires the SAME tank and goes `running` → `done`
+  (or a fresh outcome). For the whole sleep the tank stays busy: a second
+  burn on it is refused, `--queue` waits behind it, and `wait` keeps
+  waiting — one `clikae wait <run>` covers the pause and returns on the
+  real outcome. A sleeper killed mid-wait reads as `stale`, like any other
+  `waiting-reset` with a dead pid. (#183 review round 2: this used to say
+  `dry-paused` during the sleep, which released the tank to a second burn
+  and made every `wait` return the same terminal row until the re-fire.)
+- **No — `dry-paused` (terminal, ok:false; `wait` rc 2, the dry class).**
+  `--wait-for-reset 0` (checked first: zero means never retry, even for a
+  reset that is already in the past), no parseable reset, a reset beyond
+  the window, or a reset already behind us that this burn already re-fired
+  on once. `reset` / `reset_at` say when the tank is back; the process
+  exits rc 2: re-run the same burn after the reset. A reset that is already
+  in the past gets at most ONE immediate re-fire per burn, so a vendor that
+  keeps naming a passed instant can never make the burn spin.
+
+Either way a one-line pause note is left AT THE ARTIFACT PATH if nothing is
+there yet, so a waiter that only polls "does the report exist" wakes up and
+reads why. It is created exclusively (never over or through anything already
+at that path), and before a re-fire it is removed only if the file is still
+exactly the line this burn wrote — anything appended under it stays.
 
 **A dead burn can never hang `wait` (2026-09-09 round-1 review, P1-1.)** A
 `running` status whose recorded `pid` is no longer alive is read as a

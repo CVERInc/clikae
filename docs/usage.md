@@ -37,6 +37,7 @@ clikae tanks                    # alias: clikae list
 #   ENGINE       TANK
 #   claude       work
 clikae tanks -p                 # also print the tank directory paths
+clikae tanks --available [engine] [--order expiring] [--include-cockpit] [--json]
 
 # Tear it all down (tank dir + alias + .app, asks to confirm)
 clikae remove claude work
@@ -67,6 +68,15 @@ start on the desktop, pick it up from a tablet over ssh.
 
 Two clients can stay attached at once; clikae does not kick anyone off. If you
 want the other one gone, `tmux attach -d` does that.
+
+The tmux socket lives under `~/.clikae/state/tmux`, not `/tmp`, so a `/tmp`
+cleanup cannot make a running session vanish from the board (it did once —
+the session kept running, nothing could reach it). A session started by an
+older clikae stays on the `/tmp` socket until you restart it: the board still
+lists it and `clikae <engine> <tank>` still lands in it, but the migration is
+the restart — quit the engine, run the same command again. If a cleanup does
+delete the socket file of a running server, the next `clikae` asks that
+server to re-create it and the session is back on the board.
 
 **The bottom row is the command back, the fuel, and what is red** — e.g.
 `clikae resume a52bdc12 │ 5h 42% · 7d 65% │ !2`. The fuel is this tank's
@@ -508,6 +518,7 @@ rest of the sweep from being cleaned up.
 |---|---|
 | *(no args)* | Open the **home dashboard** — your "tank board": every tank grouped by engine, the one active in this shell marked, account + alias name, a **Continue** list of recent sessions **in the directory you are standing in** (the heading says which one; when the store holds more than the list shows, a dim line says how many and points at `clikae resume`, which covers every directory), an "Also available" list of engines/targets you can open without a tank (e.g. `codex`, `agy`). On a terminal it's an **interactive launcher**; press `?` for the full key legend. Keys: ↑/↓·`j`/`k`·Tab/Shift-Tab move, `g`/`G` top/bottom, `1`-`9` jump, `[`/`]` reorder (the board IS the burn order), ⏎ open (a Continue row offers _resume_ vs _switch fresh_), `r` carry session, `R` open the full cross-tank resume picker, `x` incognito, `n` new, `a` rename the tank, `d` delete, `s` toggle solo (in/out of the fleet), `m` the memory (Soul) dial, `c` clean up disk space (opens `clikae clean`, returns to the board), `/` filter, `A` cycle autonomy (ask/safe/full · BETA), `l` pick language, `q`/Esc quit. Piped/scripted it prints the same board as plain text (`CLIKAE_NO_INTERACTIVE` forces that). |
 | `lang [<locale>]` | Show or set the interface language (dashboard + prompts) — nine of them: `en-US`, `ja-JP`, `zh-TW`, `zh-Hans`, `ko-KR`, `es-ES`, `de-DE`, `fr-FR`, `pt-BR`. Bare `clikae lang` lists them. Persists to `$CLIKAE_HOME/lang`; the board's `l` key opens a language picker. Resolution when unset: `$CLIKAE_LANG` > saved choice > `$LC_ALL` > `$LANG` > en-US. Adding a tenth is a self-contained PR — see [Adding a language](adding-a-locale.md). |
+| `tanks --available [engine] [--order expiring] [--include-cockpit] [--json]` | List eligible tank names, highest remaining percentage per hour to reset first (minimum half an hour, as in the prototype). Uses the weekly window when present, otherwise the single window and its reset. Skips unreadable readings, usage ≥90% (≥98% with less than 24h until reset), a separate 5h window ≥95%, and the recorded cockpit unless included explicitly. JSON lists every tank in scope as `{engine, tank, available, score, reason}`; reasons are `unreadable`, `quota`, `window`, `cockpit`, or null for eligible tanks. Scores are null when unreadable; eligible rows come first. |
 | `tanks [-p\|--paths] [--json]` | List all tanks, with the logged-in account where the adapter can tell. (Aliases: `list`, `ls`.) `--json` emits machine-readable output `{cli, profile, account, path}` for scripts and the GUI. 🔴 **Do not build a path out of `cli` + `profile`** — `cli` is the name you *invoke* (`agy`) while the store directory keeps the engine's own name (`antigravity`), so the two differ for Antigravity. `path` is authoritative for where the tank lives; use it. |
 | `status [<engine>] [--json]` | Show which tank each engine is on **in this shell**. `--json` emits one object per engine with a `state` enum. |
 | `doctor [--adopt]` | Read-only health check: which supported engines are installed and logged in, how many tanks each has, the environment, and what to do next — including whether this store's tanks are adopted (see the marker note above). `--adopt` retries writing the adoption flag for a store where it never persisted; harmless when the store is already adopted. |
@@ -765,6 +776,7 @@ clikae watch github --org CVERInc              # foreground, polls every 10m, Ct
 clikae watch github --org CVERInc --interval 5m # a tighter poll interval
 clikae watch github --org CVERInc --once        # poll exactly once and exit — cron / a Stop hook
 clikae watch github --org CVERInc --since 2026-09-01T00:00:00Z  # cold-start bound, default 24h ago
+clikae watch github --org CVERInc --status      # failures / last_ok_at counted from the records now (no poll, no gh)
 ```
 
 `--org` defaults to the login `gh repo view` reports for this directory's
