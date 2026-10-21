@@ -16,7 +16,7 @@
 # a surprise.
 set -uo pipefail
 
-SIGNET_REF="${SIGNET_REF:-18d380bfcb6d3e5bc89e302f7f9ecf7adffc8c7a}"
+SIGNET_REF="${SIGNET_REF:-8849770667b54667ac33bd0b59ff8c8c8131b2f0}"
 LINT=""
 
 # --self-test proves the LOCAL clock-glyph scan below still fires — no
@@ -68,9 +68,9 @@ raw="$(bash "$LINT" "${files[@]}" 2>&1)"
 # ---- the gap the fetched linter's own ranges leave (2026-09-22) -------------
 #
 # `⏳` (U+23F3) reached the tmux status row and stayed there — the standing
-# no-emoji rule breached, silently, because the ranges signet's own scan (and
-# this wrapper's cursor-exception check just below) cover — U+2600–27BF,
-# U+1F300–1FAFF, U+2B00–2BFF, U+FE0F — never touched Miscellaneous Technical
+# no-emoji rule breached, silently, because the ranges signet's own scan
+# covers — U+2600–27BF, U+1F300–1FAFF, U+2B00–2BFF, U+FE0F — never touched
+# Miscellaneous Technical
 # (U+2300–23FF) at all. That block also holds `⌘` (U+2318) and `⌥` (U+2325),
 # which ARE legitimate key names clikae prints on purpose, so the fix is not
 # "ban the block" — it is naming the SUBSET that is actually
@@ -91,37 +91,14 @@ done
 raw="${raw}
 ${clockraw}"
 
-# ---- the one accepted exception, named rather than hidden -------------------
-#
-# `❯` is the selection CURSOR on the board, the resume picker, the clean list and
-# the relay menu. The linter flags it because U+276F happens to fall inside the
-# emoji block it scans, not because anyone decided the mark was wrong: signet's
-# roles table has a `selection mark` of `[x]` / `[ ]`, which is a CHECKBOX — "this
-# one is chosen" — and a cursor answers a different question, "you are here".
-# A row can be under the cursor without being chosen, so the two are not the same
-# job, and signet's own first ruler is that a mark earns its place by doing a job
-# no other mark does.
-#
-# Reported upstream; the fix belongs in signet's table, not in clikae's muscle
-# memory ("Change the look, never the keys" — SPEC.md). Until that lands, these
-# are filtered by MATCHING THE CURSOR ITSELF rather than by file and line, so the
-# exception cannot silently widen: any other printed emoji, anywhere, still fails.
+# No local exceptions. `❯` (U+276F), the selection cursor, used to be filtered
+# here because the fetched linter's emoji range happened to contain it; since
+# CVERInc/signet#3 the cursor is a role in signet's own table and its linter
+# whitelists it (#158). Every printed emoji the linter reports now stands.
 kept=""
 while IFS= read -r line; do
   [ -n "$line" ] || continue
   case "$line" in
-    *': [emoji]'*)
-      f="${line%%:*}"; rest="${line#*:}"; n="${rest%%:*}"
-      # Skip ONLY when the cursor is the whole reason. Testing "does the line
-      # contain ❯" would let a second glyph ride along on the same line, which is
-      # how a named exception quietly becomes a general one: strip the cursors
-      # first, then ask whether anything in the scanned ranges is left.
-      if [ -f "$f" ] && [ -n "$n" ] \
-         && ! sed -n "${n}p" "$f" 2>/dev/null \
-            | perl -CSD -pe 's/\x{276F}//g' \
-            | perl -CSD -ne 'exit(/[\x{2600}-\x{27BF}\x{1F300}-\x{1FAFF}\x{2B00}-\x{2BFF}\x{FE0F}]/ ? 0 : 1)'; then
-        continue
-      fi ;;
     'signet-cli-lint: '*) continue ;;   # the linter's own tally
   esac
   kept="${kept}${line}
@@ -136,5 +113,5 @@ if [ -n "$kept" ]; then
   printf 'signet-lint: %s violation(s)\n' "$(printf '%s\n' "$kept" | grep -c .)" >&2
   exit 1
 fi
-echo "signet-lint: clean (cursor exception: $(printf '%s\n' "$raw" | grep -c ': \[emoji\]') known ❯ line(s))"
+echo "signet-lint: clean"
 exit 0
