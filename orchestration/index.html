@@ -274,7 +274,7 @@ object can't give it:</p>
 <span class="line"><span style="--shiki-light:#005CC5;--shiki-dark:#7EE787">  "rerouted_from"</span><span style="--shiki-light:#24292E;--shiki-dark:#E6EDF3">: [],      </span><span style="--shiki-light:#6A737D;--shiki-dark:#8B949E">// ["codex/T1", …] — every tank tried before this one</span></span>
 <span class="line"><span style="--shiki-light:#005CC5;--shiki-dark:#7EE787">  "elapsed_s"</span><span style="--shiki-light:#24292E;--shiki-dark:#E6EDF3">: </span><span style="--shiki-light:#005CC5;--shiki-dark:#79C0FF">4</span><span style="--shiki-light:#24292E;--shiki-dark:#E6EDF3">,</span></span>
 <span class="line"><span style="--shiki-light:#005CC5;--shiki-dark:#7EE787">  "run_id"</span><span style="--shiki-light:#24292E;--shiki-dark:#E6EDF3">: </span><span style="--shiki-light:#032F62;--shiki-dark:#A5D6FF">"burn-28186"</span><span style="--shiki-light:#24292E;--shiki-dark:#E6EDF3">,   </span><span style="--shiki-light:#6A737D;--shiki-dark:#8B949E">// stable across this burn's whole reroute walk</span></span>
-<span class="line"><span style="--shiki-light:#005CC5;--shiki-dark:#7EE787">  "state"</span><span style="--shiki-light:#24292E;--shiki-dark:#E6EDF3">: </span><span style="--shiki-light:#032F62;--shiki-dark:#A5D6FF">"running"</span><span style="--shiki-light:#24292E;--shiki-dark:#E6EDF3">,       </span><span style="--shiki-light:#6A737D;--shiki-dark:#8B949E">// running | waiting-reset | done | dry | fail | infra</span></span>
+<span class="line"><span style="--shiki-light:#005CC5;--shiki-dark:#7EE787">  "state"</span><span style="--shiki-light:#24292E;--shiki-dark:#E6EDF3">: </span><span style="--shiki-light:#032F62;--shiki-dark:#A5D6FF">"running"</span><span style="--shiki-light:#24292E;--shiki-dark:#E6EDF3">,       </span><span style="--shiki-light:#6A737D;--shiki-dark:#8B949E">// running | waiting-reset | done | dry | dry-paused | fail | infra</span></span>
 <span class="line"><span style="--shiki-light:#005CC5;--shiki-dark:#7EE787">  "started_at"</span><span style="--shiki-light:#24292E;--shiki-dark:#E6EDF3">: </span><span style="--shiki-light:#005CC5;--shiki-dark:#79C0FF">1757400000</span><span style="--shiki-light:#24292E;--shiki-dark:#E6EDF3">, </span><span style="--shiki-light:#005CC5;--shiki-dark:#7EE787">"updated_at"</span><span style="--shiki-light:#24292E;--shiki-dark:#E6EDF3">: </span><span style="--shiki-light:#005CC5;--shiki-dark:#79C0FF">1757400004</span><span style="--shiki-light:#24292E;--shiki-dark:#E6EDF3">,</span></span>
 <span class="line"><span style="--shiki-light:#005CC5;--shiki-dark:#7EE787">  "pid"</span><span style="--shiki-light:#24292E;--shiki-dark:#E6EDF3">: </span><span style="--shiki-light:#005CC5;--shiki-dark:#79C0FF">28186</span><span style="--shiki-light:#24292E;--shiki-dark:#E6EDF3">,</span></span>
 <span class="line"><span style="--shiki-light:#005CC5;--shiki-dark:#7EE787">  "log"</span><span style="--shiki-light:#24292E;--shiki-dark:#E6EDF3">: </span><span style="--shiki-light:#032F62;--shiki-dark:#A5D6FF">"/Users/…/.clikae/logs/codex-T1-burn-28186.log"</span><span style="--shiki-light:#24292E;--shiki-dark:#E6EDF3">,  </span><span style="--shiki-light:#6A737D;--shiki-dark:#8B949E">// this attempt's own capture log, or null</span></span>
@@ -287,8 +287,9 @@ artifact, quota, and infrastructure classification still take precedence.</p>
 <p><strong>Written at every transition:</strong> run start, each reroute hop (<code>state: running</code>, <code>tank</code> and <code>rerouted_from</code> updated), a tank going dry (<code>state: dry</code>
 — transient if a reroute follows, terminal if <code>--no-reroute</code> or the reserve is
 exhausted), an infra retry (<code>state: infra</code>, transient while retries remain),
-<code>--wait-for-reset</code> sleeping to a near reset (<code>state: waiting-reset</code>, always
-transient — see below), and the run's own terminal outcome. A reader polling
+<code>--wait-for-reset</code> (or a pinned burn's default dry pause, #178) sleeping to a
+near reset (<code>state: waiting-reset</code>, always transient — see below), and the
+run's own terminal outcome. A reader polling
 the file sees exactly what <code>--json</code> would have printed at exit, at any point
 along the way, from a different process.</p>
 <p><strong>Guaranteed to reach a terminal state, with one exception (2026-09-09
@@ -350,10 +351,40 @@ just because some other target happened to already be <code>done</code>.</li>
 <p><strong><code>dry</code> here is ONE state covering TWO shapes (#61 round-1 review, P2-5):</strong>
 a burn that exhausted its whole auto-reroute reserve (<code>reason: no-tank-available</code>) and a burn that stopped after ONE dry tank because
 <code>--no-reroute</code> said to (<code>reason: &quot;tank ran dry and --no-reroute is set&quot;</code>).
-Both write <code>state: dry</code> and both give burn's own process rc 2 — <code>wait</code>'s rc
-above answers &quot;is anything left to do&quot;, which is the same question either
-way. A caller that needs to tell the two apart reads <code>reason</code> off the
-printed status object, not <code>wait</code>'s own exit code.</p>
+Both give burn's own process rc 2 — <code>wait</code>'s rc above answers &quot;is anything
+left to do&quot;, which is the same question either way. A caller that needs to
+tell the two apart reads <code>reason</code> off the printed status object, not
+<code>wait</code>'s own exit code.</p>
+<p><strong>A pinned (<code>--no-reroute</code>) burn that runs dry (#178) is either waiting or
+paused — never both.</strong> The quota window closing is a normal, designed-for
+outcome, and what the status file says follows ONE question: will this
+process fire the same tank again?</p>
+<ul>
+<li><strong>Yes — <code>waiting-reset</code> (not terminal).</strong> The reset parses and lands
+inside the window (<code>--wait-for-reset &lt;dur&gt;</code>, default
+<code>$CLIKAE_BURN_DRY_PAUSE_WAIT</code> = 6h). The burn sleeps in its own process,
+the file says <code>state: waiting-reset</code> (ok:null, <code>reset_at</code>, <code>reason: &quot;tank ran dry and --no-reroute is set; waiting for its reset, then re-firing the same tank&quot;</code>), then it re-fires the SAME tank and goes <code>running</code> → <code>done</code>
+(or a fresh outcome). For the whole sleep the tank stays busy: a second
+burn on it is refused, <code>--queue</code> waits behind it, and <code>wait</code> keeps
+waiting — one <code>clikae wait &lt;run&gt;</code> covers the pause and returns on the
+real outcome. A sleeper killed mid-wait reads as <code>stale</code>, like any other
+<code>waiting-reset</code> with a dead pid. (#183 review round 2: this used to say
+<code>dry-paused</code> during the sleep, which released the tank to a second burn
+and made every <code>wait</code> return the same terminal row until the re-fire.)</li>
+<li><strong>No — <code>dry-paused</code> (terminal, ok:false; <code>wait</code> rc 2, the dry class).</strong>
+<code>--wait-for-reset 0</code> (checked first: zero means never retry, even for a
+reset that is already in the past), no parseable reset, a reset beyond
+the window, or a reset already behind us that this burn already re-fired
+on once. <code>reset</code> / <code>reset_at</code> say when the tank is back; the process
+exits rc 2: re-run the same burn after the reset. A reset that is already
+in the past gets at most ONE immediate re-fire per burn, so a vendor that
+keeps naming a passed instant can never make the burn spin.</li>
+</ul>
+<p>Either way a one-line pause note is left AT THE ARTIFACT PATH if nothing is
+there yet, so a waiter that only polls &quot;does the report exist&quot; wakes up and
+reads why. It is created exclusively (never over or through anything already
+at that path), and before a re-fire it is removed only if the file is still
+exactly the line this burn wrote — anything appended under it stays.</p>
 <p><strong>A dead burn can never hang <code>wait</code> (2026-09-09 round-1 review, P1-1.)</strong> A
 <code>running</code> status whose recorded <code>pid</code> is no longer alive is read as a
 terminal, <code>fail</code>-equivalent outcome — printed with <code>&quot;state&quot;:&quot;stale&quot;</code> (a
