@@ -40,6 +40,16 @@ _src_wake() {
   WAKE_VERIFY_SECONDS=2
   # shellcheck disable=SC2034  # read by the wake loop sourced above
   WAKE_VERIFY_INTERVAL=1
+  # bin/clikae sets its own version before it ever sources lib/; helpers.bash
+  # unsets the inherited one, so a fixture that stops there is a watcher that
+  # cannot say what it is. #168's reload check then reads bin/clikae's
+  # "0.42.0" against "" as an upgrade and EXECS the real binary — every stub
+  # below is gone, and the real watcher watches a pane nobody types into. That
+  # was the 6-hour ubuntu hang on #183. Read straight off the file, not via
+  # wake_installed_version: the fixture must not agree with the code under
+  # test by construction.
+  CLIKAE_VERSION="$(sed -nE 's/^CLIKAE_VERSION="([^"]*)"$/\1/p' "$CLIKAE_TEST_ROOT/bin/clikae")"
+  [ -n "$CLIKAE_VERSION" ] || { echo "_src_wake: no CLIKAE_VERSION in bin/clikae" >&2; return 1; }
 }
 
 # _responder <transcript> <out> <answer>... -> path of a script that stands in
