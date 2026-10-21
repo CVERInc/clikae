@@ -12,6 +12,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `clikae tanks --available`: list tanks that can take work, ordered by remaining
   quota per hour until reset. Supports an engine filter, cockpit inclusion, and
   JSON with scores and skip reasons; reads the current inventory and usage.
+
+### Changed
+
+- **`scripts/signet-lint.sh` no longer carries a local exception for the `❯`
+  cursor** (#158). The pinned signet ref moves to `8849770` (signet main,
+  2026-10-14), which includes CVERInc/signet#3: the cursor is a role in
+  signet's own table and its linter whitelists U+276F, so the wrapper's
+  strip-then-rescan block and the "cursor exception: N known ❯ line(s)" tally
+  on the clean line are gone. Every emoji the linter reports now stands. The
+  local clock-glyph scan (U+231A–231B, U+23E9–23FA) and `--self-test` are
+  untouched.
+
 ### Fixed
 
 - **`clikae usage codex --wake` refreshes a tank outside a git work tree** (#186).
