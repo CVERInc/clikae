@@ -16,7 +16,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - **`clikae usage codex --wake` refreshes a tank outside a git work tree** (#186).
   Its one-prompt burn uses a temporary directory and now passes codex's
-  `--skip-git-repo-check` through the existing burn option before re-reading usage.
+  `--skip-git-repo-check` through the existing burn option before re-reading usage;
+  this also covers the #177 codex auto-wake path (`usage_read` → `usage_wake_burn`).
 - **A `--no-reroute` burn that runs dry is paused, not silently stopped**
   (#178). The quota window closing is a normal outcome of a pinned burn. By
   default the burn waits the reset out in place and re-fires the same tank

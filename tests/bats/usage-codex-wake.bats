@@ -28,6 +28,7 @@ for arg in "$@"; do
   [ "$prev" != -C ] || cwd="$arg"
   prev="$arg"
 done
+# Burn's pre-flight git check refuses first; this preserves codex's real error message.
 if [ "$(git -C "$cwd" rev-parse --is-inside-work-tree 2>/dev/null)" != true ] && [ "$skip" -ne 1 ]; then
   printf "codex cwd '%s' is not inside a git work tree; put the repository first in --add-dir, or pass --codex-skip-git-check.\n" "$cwd" >&2
   exit 1
