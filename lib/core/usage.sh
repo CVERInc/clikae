@@ -94,8 +94,9 @@ _USAGE_WAKE_TIMEOUT_SEC=60
 # stderr; stdout is left alone for the reading. Used by `clikae usage --wake`
 # and by usage_read's own refresh-before-measure (#177).
 usage_wake_burn() {
-  local e="$1" t="$2" force="${3:-0}" work rc=0 fc=""
+  local e="$1" t="$2" force="${3:-0}" work rc=0 fc="" skip_git=""
   [ "$force" != 1 ] || fc=--force-cockpit
+  [ "$e" != codex ] || skip_git=--codex-skip-git-check
   work="$(mktemp -d "${TMPDIR:-/tmp}/clikae-wake.XXXXXX")" || { log_err "wake: could not create a temp directory"; return 1; }
   # The artifact is the proof the engine actually answered. The prompt names
   # it verbatim; nothing else is asked for.
@@ -103,7 +104,7 @@ usage_wake_burn() {
     --timeout "$_USAGE_WAKE_TIMEOUT_SEC" \
     --artifact "$work/wake-ok" --add-dir "$work" \
     --prompt "Write the single word ok into the file $work/wake-ok and do nothing else." \
-    ${fc:+"$fc"} 1>&2 || rc=$?
+    ${skip_git:+"$skip_git"} ${fc:+"$fc"} 1>&2 || rc=$?
   rm -rf "$work"
   return "$rc"
 }
