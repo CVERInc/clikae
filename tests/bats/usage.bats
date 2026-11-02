@@ -37,6 +37,7 @@ if [ -n "${USAGE_HTTP:-}" ]; then
 fi
 if [ "${USAGE_NETFAIL:-0}" = 1 ]; then printf '000' >&2; exit 6; fi
 if [ "${USAGE_GARBAGE:-0}" = 1 ]; then printf '200' >&2; echo 'not json'; exit 0; fi
+if [ -n "${USAGE_BODY:-}" ]; then printf '200' >&2; printf '%s' "$USAGE_BODY"; exit 0; fi
 # P2-3 (round-1 review): the vendor's real shape is microseconds + a numeric
 # UTC offset, never a bare "…Z" — the old fixture used "2099-01-01T00:00:00Z"
 # and so never exercised the format the vendor actually sends.
@@ -1623,7 +1624,7 @@ _usage107_calls() { if [ -f "$USAGE_CALLS" ]; then wc -l < "$USAGE_CALLS" | tr -
   # #179: a reader that may not spend (the shape under test is the no-number one).
   USAGE_HTTP=401 CLIKAE_USAGE_AUTO_WAKE=0 run --separate-stderr clikae usage claude work --json
   [ "$status" -eq 0 ]
-  echo "$output" | jq -e '(keys | sort) == (["engine","tank","window_pct","weekly_pct","window_resets_at","weekly_resets_at","source","reason","age_sec","gap","last_window_pct","last_weekly_pct","last_at","last_age_sec","dry_marked_at"] | sort)' \
+  echo "$output" | jq -e '(keys | sort) == (["engine","tank","window_pct","weekly_pct","window_used_pct","weekly_used_pct","window_resets_at","weekly_resets_at","source","reason","age_sec","gap","last_window_pct","last_weekly_pct","last_at","last_age_sec","dry_marked_at"] | sort)' \
     || { echo "got: $output"; false; }
   [ "$(printf '%s\n' "$output" | wc -l | tr -d ' ')" = 1 ]
   # --json never carries the human hint; the plain form puts it on stderr, so
@@ -1939,37 +1940,37 @@ _usage179_reset_stamp() {
   echo "$output" | jq -e '.source == "vendor" and .window_pct == 3 and .weekly_pct == 99' \
     || { echo "got: $output"; false; }
   [[ "$output" != *expired* ]] || { echo "the retired word is back: $output"; false; }
-  # The refresh ran the engine exactly once, through burn's composed argv.
-  [ "$(wc -l < "$WAKE_ARGV_LOG" | tr -d ' ')" = 1 ] || { echo "argv log: $(cat "$WAKE_ARGV_LOG")"; false; }
-  # And said so on stderr, naming the tank — stdout stays the reading.
-  [[ "$stderr" == *"claude/work"*"refresh"* ]] || { echo "stderr: $stderr"; false; }
+  # The refresh ran once and sent no prompt: reading a number never spends quota.
+  [ "$(cat "$WAKE_ARGV_LOG")" = "auth status --json" ] || { echo "argv log: $(cat "$WAKE_ARGV_LOG")"; false; }
   # The cache holds the vendor reading, not an auth failure.
   jq -e '.source == "vendor"' "$CLIKAE_HOME/state/usage/claude/work.json" >/dev/null
 }
 
-@test "#177: only a refresh that FAILS is relogin-required — and that word, not expired, reaches stdout and the cache" {
+@test "#177: only a prompt that ran can conclude relogin-required, and a plain read stays needs-refresh" {
   usage_fixture
   _usage107_creds rt-stub-value "$(( ($(date +%s) - 3600) * 1000 ))"
   _usage179_wake_stubs
-  # The engine runs and writes its artifact, but the vendor keeps refusing
-  # the token: the refresh token itself is dead.
+  # The vendor keeps refusing the token: the refresh token itself is dead.
   printf '#!/usr/bin/env bash\nprintf "call\\n" >> "$USAGE_CALLS"\ncat >/dev/null\nprintf 401 >&2; exit 22\n' \
     > "$TEST_HOME/.testbin/curl"
   chmod +x "$TEST_HOME/.testbin/curl"
   run --separate-stderr clikae usage claude work --json
   [ "$status" -eq 0 ] || { echo "stderr: $stderr"; false; }
+  echo "$output" | jq -e '.source == "unknown" and .reason == "needs-refresh"' || { echo "got: $output"; false; }
+  [ "$(cat "$WAKE_ARGV_LOG")" = "auth status --json" ] || { echo "argv log: $(cat "$WAKE_ARGV_LOG")"; false; }
+  run --separate-stderr clikae usage claude --wake work --json
+  [ "$status" -eq 0 ] || { echo "stderr: $stderr"; false; }
   echo "$output" | jq -e '.source == "unknown" and .reason == "relogin-required" and .gap == "relogin-required"' \
     || { echo "got: $output"; false; }
   [[ "$output" != *expired* ]] || { echo "the retired word is back: $output"; false; }
-  [ "$(wc -l < "$WAKE_ARGV_LOG" | tr -d ' ')" = 1 ]
   jq -e '.reason == "relogin-required"' "$CLIKAE_HOME/state/usage/claude/work.json" >/dev/null
   # The plain form says what a person does next, on stderr.
-  run --separate-stderr clikae usage claude work --fresh
+  run --separate-stderr clikae usage claude work
   [[ "$stderr" == *"relogin"*"clikae claude work"* ]] || { echo "stderr: $stderr"; false; }
   [[ "$stderr" != *"token expired"* ]] || { echo "old hint: $stderr"; false; }
 }
 
-@test "#177: a reader that may not spend (CLIKAE_USAGE_AUTO_WAKE=0, or the cockpit gate) reads needs-refresh and keeps the last numbers with their age" {
+@test "#177: with the refresh off (CLIKAE_USAGE_AUTO_WAKE=0), a lapsed token reads needs-refresh and keeps the last numbers with their age" {
   usage_fixture
   # A good reading first, then it ages 5h.
   run clikae usage claude work --json
@@ -1984,13 +1985,6 @@ _usage179_reset_stamp() {
     || { echo "got: $output"; false; }
   [ ! -e "$WAKE_ARGV_LOG" ] || { echo "the engine ran although spending was off"; false; }
   [[ "$output" != *expired* ]] || false
-  # The recorded cockpit: burn's own gate refuses the refresh, and the
-  # reading says needs-refresh — not relogin-required (nothing was tried).
-  mkdir -p "$CLIKAE_HOME/state"; printf 'claude/work\n' > "$CLIKAE_HOME/state/cockpit"
-  run --separate-stderr clikae usage claude work --fresh --json
-  [ "$status" -eq 0 ]
-  echo "$output" | jq -e '.reason == "needs-refresh" and .last_weekly_pct == 92' || { echo "cockpit got: $output"; false; }
-  [ ! -e "$WAKE_ARGV_LOG" ] || { echo "the engine ran on the cockpit"; false; }
   # A cache written by a previous version with source:"expired" is read as
   # "unknown, refresh first": it is never served, whatever the TTL.
   jq -c '.source = "expired" | .reason = "expired-token"' "$CLIKAE_HOME/state/usage/claude/work.json" > "$TEST_HOME/old.json"
@@ -2116,25 +2110,26 @@ _usage184_reader() {
 for f in core/log.sh core/i18n.sh core/profile_store.sh core/adapter_loader.sh core/dry_store.sh core/limit.sh core/usage.sh; do
   source "$CLIKAE_LIB/$f"
 done
-CLIKAE_BIN="$(type -P true)"   # only has to be executable: the wake is stubbed below
-_bar_wait() { local i=0; while ! "$@"; do i=$((i + 1)); [ "$i" -le 100 ] || return 1; sleep 0.1; done; }
-_vendor_cached() { jq -e '.source == "vendor"' "$CLIKAE_HOME/state/usage/claude/work.json" >/dev/null 2>&1; }
-usage_wake_burn() {
-  printf '%s\n' "$READER" >> "$BAR/wakes"
-  case "$READER:$SCENARIO" in
-    # A holds the tank (its burn is the one that runs) until B is refused.
-    A:busy)     : > "$BAR/a-waking"; _bar_wait test -e "$BAR/b-waking"; : > "$WAKE_REFRESHED"; return 0 ;;
-    # B is refused (a burn already holds the tank) — and resumes only after
-    # A has published the vendor's numbers.
-    B:busy)     : > "$BAR/b-waking"; _bar_wait _vendor_cached; return 1 ;;
-    # A renews only once B's post-wake measurement is in flight.
-    A:obsolete) _bar_wait test -e "$BAR/b-measuring"; : > "$WAKE_REFRESHED"; return 0 ;;
-    B:obsolete) return 1 ;;
-  esac
-}
 usage_read claude work
 SH
   chmod +x "$TEST_HOME/reader.sh"
+  # The refresh command, holding each reader at a barrier.
+  cat > "$TEST_HOME/.testbin/claude" <<'STUB'
+#!/usr/bin/env bash
+_bar_wait() { local i=0; while ! "$@"; do i=$((i + 1)); [ "$i" -le 100 ] || return 1; sleep 0.1; done; }
+_vendor_cached() { jq -e '.source == "vendor"' "$CLIKAE_HOME/state/usage/claude/work.json" >/dev/null 2>&1; }
+printf '%s\n' "$READER" >> "$BAR/wakes"
+case "$READER:$SCENARIO" in
+  # A's refresh is the one that works, once B has started its own.
+  A:busy)     : > "$BAR/a-waking"; _bar_wait test -e "$BAR/b-waking"; : > "$WAKE_REFRESHED"; exit 0 ;;
+  # B's does nothing, and returns only after A has published the vendor's numbers.
+  B:busy)     : > "$BAR/b-waking"; _bar_wait _vendor_cached; exit 1 ;;
+  # A renews only once B's post-refresh measurement is in flight.
+  A:obsolete) _bar_wait test -e "$BAR/b-measuring"; : > "$WAKE_REFRESHED"; exit 0 ;;
+  B:obsolete) exit 1 ;;
+esac
+STUB
+  chmod +x "$TEST_HOME/.testbin/claude"
   # 401 until the token is renewed. In the `obsolete` scenario B's SECOND
   # call decides 401 at once (the token is not renewed yet) but answers only
   # after A has published: a measurement that started before the refresh
@@ -2505,4 +2500,62 @@ SH
   OSTYPE=darwin22 run clikae usage claude work --fresh --json
   echo "$output" | jq -e '.source == "vendor" and .reason == "keychain-denied" and .weekly_pct == 92 and .age_sec >= 10800' \
     || { echo "control got: $output"; false; }
+}
+
+# --- plans with one window ----------------------------------------------------
+
+@test "claude with no 5-hour window: weekly reads, the gap is named, every reader accepts it" {
+  usage_fixture
+  # Real shape from a plan with no 5-hour window (2026-11-02).
+  export USAGE_BODY='{"five_hour":null,"seven_day":{"utilization":5.0,"resets_at":"2099-01-07T00:00:00.189960+00:00"},"limits":[{"kind":"weekly_all","percent":5}]}'
+  run clikae usage claude work --json
+  [ "$status" -eq 0 ]
+  echo "$output" | jq -e '.source == "vendor" and .window_pct == null and .weekly_pct == 5 and .window_absent == true and .weekly_used_pct == 5 and (has("reason")|not)'
+  # shellcheck source=/dev/null
+  . "$CLIKAE_TEST_ROOT/lib/core/usage.sh"
+  run usage_cache_peek claude work
+  [ "$status" -eq 0 ]
+  [ "$(printf '%s' "$output" | cut -f1)" = 0 ]
+  [ "$(printf '%s' "$output" | cut -f2 | cut -d. -f1)" = 5 ]
+}
+
+@test "claude with neither window is still unparseable, and a present-but-odd window is not called absent" {
+  usage_fixture
+  export USAGE_BODY='{"five_hour":null,"seven_day":null}'
+  run clikae usage claude work --json --fresh
+  echo "$output" | jq -e '.source == "unknown" and .reason == "unparseable" and (has("window_absent")|not)'
+  export USAGE_BODY='{"five_hour":{"utilization":"x"},"seven_day":{"utilization":7,"resets_at":"2099-01-07T00:00:00.189960+00:00"}}'
+  run clikae usage claude work --json --fresh
+  echo "$output" | jq -e '.weekly_pct == 7 and (has("window_absent")|not)'
+}
+
+_codex_rollout_one() {
+  clikae init codex work
+  mkdir -p "$CLIKAE_HOME/profiles/codex/work/sessions/2026/09/10"
+  printf '{"timestamp":"%s","type":"event_msg","payload":{"type":"token_count","info":{},"rate_limits":%s}}\n' "$1" "$2" \
+    > "$CLIKAE_HOME/profiles/codex/work/sessions/2026/09/10/rollout-a.jsonl"
+}
+
+@test "codex with one 7-day window: it lands in the weekly slot, not by position" {
+  usage_fixture
+  _codex_rollout_one 2026-09-10T09:00:00.000Z '{"limit_id":"codex","primary":{"used_percent":72.0,"window_minutes":10080,"resets_at":4102444800},"secondary":null,"plan_type":"prolite"}'
+  run clikae usage codex work --json
+  [ "$status" -eq 0 ]
+  echo "$output" | jq -e '.window_pct == null and .weekly_pct == 72 and .window_absent == true and .weekly_resets_at == "2100-01-01T00:00:00Z" and .weekly_used_pct == 72'
+}
+
+@test "codex with both windows: each by its own length, even when swapped" {
+  usage_fixture
+  _codex_rollout_one 2026-09-10T09:00:00.000Z '{"primary":{"used_percent":96,"window_minutes":10080,"resets_at":4102444800},"secondary":{"used_percent":10,"window_minutes":300,"resets_at":4102444800}}'
+  run clikae usage codex work --json
+  echo "$output" | jq -e '.window_pct == 10 and .weekly_pct == 96 and (has("window_absent")|not) and (has("weekly_absent")|not)'
+}
+
+@test "a reading over 6 hours old says stale, a fresh one does not" {
+  usage_fixture
+  _codex_rollout_one 2026-09-10T09:00:00.000Z '{"primary":{"used_percent":10,"window_minutes":300,"resets_at":4102444800},"secondary":{"used_percent":20,"window_minutes":10080,"resets_at":4102444800}}'
+  run clikae usage codex work --json
+  echo "$output" | jq -e '.stale == true'
+  run clikae usage claude work --json
+  echo "$output" | jq -e 'has("stale")|not'
 }

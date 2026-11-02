@@ -838,18 +838,29 @@ adapter_all_transcripts() {
 # carries no usable event time of its own, so a week-old rollout is never
 # stamped as freshly read.
 adapter_usage() {
-  local fields pu _pw pr su _sw sr ts
+  local fields pu pw pr su sw sr ts
   if ! fields="$(_limit_codex_rate_limits "$1" 2>/dev/null)"; then
     _codex_usage_probe "$1"; return
   fi
-  IFS=$'\037' read -r pu _pw pr su _sw sr ts <<< "$fields"
-  jq -cn --arg pu "$pu" --arg su "$su" --arg pr "$pr" --arg sr "$sr" --arg ts "$ts" '
+  IFS=$'\037' read -r pu pw pr su sw sr ts <<< "$fields"
+  # Each side is classified by its own window length, as _codex_usage_probe does.
+  # Plans with one window report a 7-day window as `primary`. A side with no
+  # length falls back to its position (primary = window, secondary = weekly).
+  jq -cn --arg pu "$pu" --arg pw "$pw" --arg pr "$pr" --arg su "$su" --arg sw "$sw" --arg sr "$sr" --arg ts "$ts" '
     def pct: try tonumber catch null;
     def stamp: try (tonumber | todateiso8601) catch null;
     def norm_stamp: sub("\\.[0-9]+";"") | sub("[+-]00:00$";"Z");
-    {window_pct:($pu|pct),weekly_pct:($su|pct),
-     window_resets_at:($pr|stamp),weekly_resets_at:($sr|stamp),source:"transcript",
-     event_epoch:(if $ts == "" then null else ($ts|norm_stamp|try fromdateiso8601 catch null) end)}'
+    def class($mins; $fallback): ($mins|pct) as $m | if $m == null then $fallback elif $m <= 360 then "window" else "weekly" end;
+    [{c:class($pw;"window"),pct:($pu|pct),at:($pr|stamp),known:($pw != "")},
+     {c:class($sw;"weekly"),pct:($su|pct),at:($sr|stamp),known:($sw != "")}]
+    | map(select(.pct != null)) as $sides
+    | ([$sides[]|select(.c == "window")][0]) as $w
+    | ([$sides[]|select(.c == "weekly")][0]) as $k
+    | {window_pct:$w.pct,weekly_pct:$k.pct,
+     window_resets_at:$w.at,weekly_resets_at:$k.at,source:"transcript"}
+    + (if $w == null and ($k.known // false) then {window_absent:true} else {} end)
+    + (if $k == null and ($w.known // false) then {weekly_absent:true} else {} end)
+    + {event_epoch:(if $ts == "" then null else ($ts|norm_stamp|try fromdateiso8601 catch null) end)}'
 }
 
 # #149: the per-tank LIVE reading codex itself exposes. `codex app-server`

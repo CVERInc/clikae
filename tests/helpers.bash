@@ -69,6 +69,9 @@ _strip_installed_shims() {
 
 setup() {
   TEST_HOME="$(mktemp -d "${BATS_TMPDIR:-/tmp}/clikae-test.XXXXXX")"
+  # The real path: macOS temp dirs go through /var -> /private/var, and an engine
+  # keys a project by the resolved path, so a fixture slugging $PWD must match it.
+  TEST_HOME="$(cd "$TEST_HOME" && pwd -P)"
   export HOME="$TEST_HOME"
   export CLIKAE_HOME="$TEST_HOME/.clikae"
   export SHELL="/bin/zsh"
