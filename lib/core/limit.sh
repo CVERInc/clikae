@@ -429,6 +429,29 @@ limit_output_dry() {
   esac
 }
 
+# limit_dry_at_exit <engine> <dir> <started_epoch> -> 0 + the vendor's reset phrase
+# when the session that started at <started_epoch> just ran into a limit; 1
+# otherwise. limit_profile_dry answers "is the newest evidence a limit", which can
+# be days old for codex, so opening a tank and closing it again used to announce
+# a limit nothing had just hit. For codex, a tank that reads dry is also checked
+# live (no model runs), and a live reading with room left is recorded so the old
+# marker stops counting everywhere.
+limit_dry_at_exit() {
+  local engine="$1" dir="$2" started="$3" out stamp reading
+  out="$(_LIMIT_WITH_STAMP=1 limit_profile_dry "$engine" "$dir" 2>/dev/null)" || return 1
+  stamp="${out##*$'\037'}"
+  if [ "$engine" = codex ] && declare -F _codex_usage_probe >/dev/null 2>&1; then
+    reading="$(_codex_usage_probe "$dir" 2>/dev/null)" || reading=""
+    if printf '%s' "$reading" | jq -e '
+        [.window_pct, .weekly_pct] | map(numbers) | length > 0 and all(. < 100)' >/dev/null 2>&1; then
+      date -u +%Y-%m-%dT%H:%M:%SZ > "$dir/$_LIMIT_CODEX_RECOVERED" 2>/dev/null || true
+      return 1
+    fi
+  fi
+  [ "$(_limit_iso_epoch "$stamp" 0)" -ge "$started" ] || return 1
+  printf '%s' "${out%%$'\037'*}"
+}
+
 # limit_profile_dry <cli> <config_dir>
 # Is this profile/tank currently rate-limited? Returns 0 (dry) / 1 (fine).
 # When dry, prints the vendor's own reset phrase (e.g. "resets 11pm (Asia/Tokyo)")
@@ -444,13 +467,9 @@ limit_output_dry() {
 # limit resets and any session completes a real turn, the newer success timestamp
 # clears the badge automatically.
 #
-# Only claude transcripts are scanned here. Confirmed reasons the others aren't:
-#   · codex — a real limit is an exec-stdout-only event, NEVER written to the
-#     rollout transcript (burn-verified 2026-06-01; see limit_line_is_real). There
-#     is nothing in a transcript to scan, so codex is correctly absent.
-#   · agy   — records its limit in a log file, not a transcript. That path is
-#     handled separately by limit_log_dry (below), used for log-only targets.
-# Any other cli returns "not dry" rather than guess.
+# claude and codex transcripts are scanned here. agy records its limit in a log
+# file instead, handled by limit_log_dry (below). Any other cli returns "not dry"
+# rather than guess.
 # _limit_codex_dry <dir> -> 0 (dry) + echo the vendor's verbatim reset phrase, 1 otherwise.
 #
 # For a long time this project recorded that codex's usage limit was
@@ -472,6 +491,7 @@ limit_output_dry() {
 # month out), so the scan window is far wider than claude's 5h rolling one — but
 # still bounded, because a tank nobody has touched in a week showing ○ is the
 # honest answer, not a lie.
+_LIMIT_CODEX_RECOVERED=".clikae-recovered-at"
 _limit_codex_dry() {
   local dir="$1"
   local sess_root="$dir/sessions"
@@ -501,6 +521,17 @@ EOF
   # plan quota: report that state by name. It never carries a reset phrase;
   # _limit_tank_dry_self ages it like any other phrase-less codex limit.
   [ "$mtag" = credits ] && [ "$maxM" = "$maxL" ] && reset="$LIMIT_STATE_CREDITS"
+
+  # A quota restored out of band (a reset credit) writes nothing to any rollout.
+  # limit_dry_at_exit records the live reading that proved it, and it counts as a
+  # success, so a newer limit still wins.
+  local recovered=""
+  if [ -f "$dir/$_LIMIT_CODEX_RECOVERED" ]; then
+    IFS= read -r recovered < "$dir/$_LIMIT_CODEX_RECOVERED" || true
+    if [ -n "$recovered" ]; then
+      maxS="$(printf '%s\n%s\n' "$maxS" "$recovered" | LC_ALL=C sort | tail -n 1)"
+    fi
+  fi
 
   if [ -n "$maxS" ]; then
     local newer
@@ -2069,7 +2100,11 @@ function scan(s,   t, m) {
       if (s ~ /out of credits/) side(t, "credits")
       return
     }
-    if (s ~ /"type": *"agent_message"/) {
+    # `codex exec` never writes agent_message (0 of 1,966 rollouts, 0.160-0.166),
+    # so it cannot be the only success signal: every later run would leave an old
+    # marker standing. A task_complete with no error object is the success both
+    # modes write. The bracket is deliberate: a brace opens an interval on some awks.
+    if (s ~ /"type": *"agent_message"/ || (s ~ /"type": *"task_complete"/ && s !~ /"error": *[{]/)) {
       t = ts(s); if (t != "" && (maxS == "" || t > maxS)) maxS = t
     }
     return

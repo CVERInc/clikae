@@ -30,7 +30,9 @@ _reading_cache_keyv() {
 # 🔴 It rides INSIDE the size field ("<path>:v2-<size>:<mtime>"), never ahead of
 # the path: clean's _clean_readings_gc recovers the path by stripping the last
 # two ":"-fields, and a "v2:" prefix made every live entry read as orphaned.
-READING_CACHE_FORMAT=2
+# 3: a clean codex task_complete counts as a success (#196), which changes the
+# verdict for rollouts that will never change again.
+READING_CACHE_FORMAT=3
 
 reading_cache_run() {
   local kind="$1" f="$2"; shift 2

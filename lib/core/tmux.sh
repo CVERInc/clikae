@@ -1366,6 +1366,12 @@ tmux_status_fuelv() {
       _TSTAT_FUEL_AGE="$suffix"
       return 0
     fi
+    if [ "$fresh" = 1 ] && { [ -n "$w" ] || [ -n "$k" ]; }; then
+      if [ -n "$k" ]; then _TSTAT_FUEL="${USAGE_LABEL_WEEKLY:-7d} ${k}%"
+      else _TSTAT_FUEL="${USAGE_LABEL_WINDOW:-5h} ${w}%"; fi
+      _TSTAT_FUEL_AGE="$suffix"
+      return 0
+    fi
     # AN EXPIRED TOKEN IS NOT "NO READING". #107's whole point: an idle tank at
     # 99% weekly used to read exactly like a tank with no login at all. The
     # cache says which of the two this is (`source:"expired"`, written only with
