@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **Shared memory, `--ephemeral`, and session lookups work from a symlinked
+  directory** (#194). clikae built the project path from the logical `$PWD` while
+  Claude Code uses the resolved one, so a run from such a directory logged that
+  memory was linked but never saw it. The log line now names the path it linked.
+
 ## [0.43.0] — 2026-10-21
 
 ### Added

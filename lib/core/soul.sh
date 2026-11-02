@@ -354,5 +354,5 @@ _soul_prelaunch_link() {
   fi
   mkdir -p "$(dirname "$mem")"
   ln -s "$store" "$mem"
-  log_dim "soul: linked this directory into shared memory '$group'."
+  log_dim "soul: linked $mem into shared memory '$group'."
 }

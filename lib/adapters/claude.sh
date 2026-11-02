@@ -464,8 +464,13 @@ _claude_recap_uncached() {
 # Returns non-zero (without exec'ing) if there's no transcript to carry, so the
 # caller can fall back to starting a fresh session.
 _claude_project_slug() {
+  # Claude Code keys a project by its RESOLVED path, so a directory reached through
+  # a symlink (macOS: /var -> /private/var) must slug the same way, or clikae reads
+  # and links a project directory the engine never opens (#194).
+  local p="$1" real
+  if [ -d "$p" ] && real="$(cd "$p" 2>/dev/null && pwd -P)"; then p="$real"; fi
   # Mirror Claude Code's own slugify: [^A-Za-z0-9] -> '-'.
-  printf '%s' "$1" | LC_ALL=C sed 's/[^A-Za-z0-9]/-/g'
+  printf '%s' "$p" | LC_ALL=C sed 's/[^A-Za-z0-9]/-/g'
 }
 
 # Optional hook: where Claude Code keeps THIS directory's long-term memory, for
