@@ -90,10 +90,10 @@ load '../helpers'
 
 @test "list shows the logged-in account label for claude" {
   clikae init claude a
-  printf '{"oauthAccount":{"emailAddress":"hi@cver.net"}}' > "$CLIKAE_HOME/profiles/claude/a/.claude.json"
+  printf '{"oauthAccount":{"emailAddress":"user5@example.com"}}' > "$CLIKAE_HOME/profiles/claude/a/.claude.json"
   run clikae list
   [ "$status" -eq 0 ]
-  [[ "$output" == *"hi@cver.net"* ]] || false
+  [[ "$output" == *"user5@example.com"* ]] || false
 }
 
 @test "list reads the account label from pretty-printed .claude.json (real format)" {

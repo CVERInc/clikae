@@ -56,7 +56,7 @@ hard-to-reverse consequence, and clikae is currently silent there.
 
 It already happened (HANDOFF.md §13, 2026-06-04): a run authored **9 commits**
 across `reef` + `bleedblend` whose author/committer email was the engine's account
-email (`mr.crazyx2@gmail.com`). All 9 rendered under the wrong GitHub account
+email (`user4@example.com`). All 9 rendered under the wrong GitHub account
 (`@lersiann`) instead of the intended `@chodaict` / `<x@cver.net>`. It was fixed
 out-of-band with `git filter-repo` + force-push. That cleanup is **not** something
 clikae can do — clikae can only ever influence the *next* commit, never re-map old
