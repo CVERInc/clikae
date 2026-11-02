@@ -2107,7 +2107,7 @@ _usage184_reader() {
   export BAR="$TEST_HOME/bar"; mkdir -p "$BAR"
   cat > "$TEST_HOME/reader.sh" <<'SH'
 #!/usr/bin/env bash
-for f in core/log.sh core/i18n.sh core/profile_store.sh core/adapter_loader.sh core/dry_store.sh core/limit.sh core/usage.sh; do
+for f in core/log.sh core/timeout_bin.sh core/i18n.sh core/profile_store.sh core/adapter_loader.sh core/dry_store.sh core/limit.sh core/usage.sh; do
   source "$CLIKAE_LIB/$f"
 done
 usage_read claude work
