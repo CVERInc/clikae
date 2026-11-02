@@ -318,9 +318,7 @@ Since then, reach. Nine languages, transcreated against each one's own Apple
 system strings and translated *by grade* — the sentences you must understand
 in order to consent are fully localized; what you type stays technical.
 `clikae clean` reclaims disk with one list, one red confirm, and the Trash
-instead of `rm`. New engines keep joining the board. A macOS menu bar app
-(`gui/ClikaeMenuBar`) exists as a build-verified skeleton; it ships when it
-earns it.
+instead of `rm`. New engines keep joining the board.
 
 And then the sessions stopped ending. Tanks run inside tmux now, so the thing
 that used to end a conversation — closing the window, an ssh link dropping —

@@ -60,36 +60,23 @@ line — the moment the words promise "the same AI on a different engine",
 they've exceeded the thing (that overclaim was independently torn apart by
 two seats of the 2026-07-11 red team; we keep the scar as the rule).
 
-## Two faces
+## One face
 
-1. **`clikae` — the bash CLI (MIT, the soul).** The continue list, recap, status
-   dots, relay, ephemeral (incognito). Pure bash, no daemons, auditable. This is the
-   product; everything else wraps it.
-2. **`clikae.app` — the native Mac front door (clioil family, later).** A thin
-   launcher: click it → it opens your favourite terminal (Ghostty / iTerm2 /
-   Terminal) landing **inside the CLI board** → Enter to resume. Plus a **GUI for
-   tank management** (add / log in / alias / delete accounts) so setup never needs
-   a memorized command. GUI for setup; CLI for the actual work.
+**`clikae` is the bash CLI (MIT, the soul).** The continue list, recap, status dots,
+relay, ephemeral (incognito). Pure bash, no daemons, auditable.
 
-This dissolves the "first command" problem: clikae isn't a command you must
-remember to type — it's the app you click (which is already muscle memory).
+There is no GUI, and none is planned. clikae lives in the terminal because that is
+where this work happens, and anyone who prefers a window already has the vendors'
+own apps. `clikae app --board` makes a local launcher for people who like to click:
+it opens their terminal on the board, and that is all it does.
 
-## Two audiences
-
-- **Power users** — `brew install clikae`. Hardcore, auditable, MIT. Power-user tone.
-- **Newcomers** — download `clikae.app`. Friendlier on-ramp for people who want to
-  use Claude/Codex but aren't at home setting up accounts in a terminal.
-
-Two landing pages, two tones. (Accepted cost: double the copy/maintenance.)
-
-## Roadmap (sequencing — core first, front door later)
+## Roadmap
 
 1. **v0.5.2 — the CLI board.** Continue list, recap (Claude's `away_summary`),
    status dots, single-write flicker fix, ASCII-safe glyphs, bottom-right logo +
    margins, hover detail (recap or age). _(this release)_
 2. **Lazy cross-engine recap.** On-device local generation for engines without an
    `away_summary`, only for the hovered row — making "cross-engine recap" 100% true.
-3. **`clikae.app`.** The native launcher + GUI tank management. The killer app.
 
 ## Honest limits
 

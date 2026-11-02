@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Removed
+
+- **The menu bar app skeleton (`gui/`) and the plan for a GUI.** It never shipped, and
+  clikae stays a terminal tool. `clikae app --board`, the local launcher, is unchanged.
+
 ### Added
 
 - **A size ruler in CI.** A pull request that grows a file already over 1500 lines
