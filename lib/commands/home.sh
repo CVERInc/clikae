@@ -4239,6 +4239,58 @@ EOF_ROO
 
 # _home_usage_refresh_one <engine> <tank> <marker> -> the body of one
 # background refresh (a plain usage_read); always clears its in-flight marker.
+# _home_board_saved_dir -> where this directory's last board is kept. Per directory
+# because Resume is, and keyed on the version and language because rows carry both.
+_home_board_saved_dir() {
+  local id
+  id="$(printf '%s\037%s\037%s' "$PWD" "${CLIKAE_VERSION:-}" "${T_TANKS:-}" | cksum)"
+  printf '%s/state/board-saved/%s' "$CLIKAE_HOME" "${id%% *}"
+}
+
+# _home_board_saved_save: items, dry and the footer's counts. Rows hold session
+# titles, so the directory is private, and it is replaced whole.
+_home_board_saved_save() {
+  local d tmp
+  d="$(_home_board_saved_dir)"
+  ( umask 077
+    mkdir -p "${d%/*}" 2>/dev/null || exit 0
+    tmp="$(mktemp -d "$d.XXXXXX" 2>/dev/null)" || exit 0
+    printf '%s' "$items" > "$tmp/items"
+    printf '%s' "$dry" > "$tmp/dry"
+    printf '%s\t%s\t%s\n' "${_HOME_RESUME_TRUNC:-0}" "${_HOME_RESUME_ELSEWHERE:-0}" "${_HOME_TOTAL_SESSIONS:-0}" > "$tmp/meta"
+    rm -rf "$d"
+    mv "$tmp" "$d" 2>/dev/null || rm -rf "$tmp"
+  )
+}
+
+# _home_board_saved_load: 0 and the saved board in items/dry, or 1 with nothing
+# changed. A day-old board is not worth showing.
+_home_board_saved_load() {
+  local d
+  d="$(_home_board_saved_dir)"
+  [ -s "$d/items" ] && [ -f "$d/meta" ] || return 1
+  [ -n "$(find "$d/items" -mmin -1440 2>/dev/null)" ] || return 1
+  items="$(cat "$d/items" 2>/dev/null)" || return 1
+  [ -n "$items" ] || return 1
+  dry="$(cat "$d/dry" 2>/dev/null || true)"
+  IFS=$'\t' read -r _HOME_RESUME_TRUNC _HOME_RESUME_ELSEWHERE _HOME_TOTAL_SESSIONS < "$d/meta" || true
+  return 0
+}
+
+# _home_board_refresh_start -> $_HOME_BG_DONE, a file that appears once a fresh board
+# has been saved. Nothing here touches the terminal.
+_home_board_refresh_start() {
+  _HOME_BG_DONE="$(mktemp "${TMPDIR:-/tmp}/clikae-board.XXXXXX" 2>/dev/null)" || { _HOME_BG_DONE=""; return 0; }
+  rm -f "$_HOME_BG_DONE"
+  (
+    _BOARD_STALE_OK=0 _BOARD_ROWS_SUFFIX=.bg
+    _home_refresh
+    _home_board_saved_save
+    : > "$_HOME_BG_DONE"
+  ) >/dev/null 2>&1 </dev/null &
+  disown 2>/dev/null || true
+}
+
 _home_usage_refresh_one() {
   # usage_read's refresh runs no model, so opening the board spends no quota.
   usage_read "$1" "$2" || true
@@ -4294,6 +4346,7 @@ _home_pick() {
   # were fired, the idle wait repaints every 5s for a minute so the new
   # readings land without a keypress.
   [ "$(_home_usage_refresh_on_open)" = 0 ] || _rf_left=12
+  _home_board_refresh_start
   while :; do
     view="$(_home_filter "$items" "$filter")"
     # 🔴 `|| true`. `grep -c .` exits 1 on ZERO matches and the board runs under
@@ -4378,6 +4431,12 @@ _home_pick() {
         if [ "$_rf_tick" -ge 5 ]; then
           _rf_tick=0; _rf_left=$((_rf_left - 1)); _home_board_invalidate; TUI_KEY="__resized"; break
         fi
+      fi
+      # The refresh behind the first paint finished: show what it found.
+      if [ -n "$_HOME_BG_DONE" ] && [ -e "$_HOME_BG_DONE" ]; then
+        rm -f "$_HOME_BG_DONE"; _HOME_BG_DONE=""
+        _home_board_saved_load || true
+        _home_board_invalidate; TUI_KEY="__resized"; break
       fi
       # Ages and fuel notes in cached rows stay honest: refresh while nobody is
       # pressing anything, so the rebuild never lands on a keypress.
@@ -4698,15 +4757,22 @@ EOF
   fi
 
   local _CLIKAE_BOARD=1
-  local items dry; _home_refresh
+  local items dry
   # Interactive only on a real TTY (both stdin and stdout); otherwise plain text.
   if [ -t 0 ] && [ -t 1 ] && [ -z "${CLIKAE_NO_INTERACTIVE:-}" ]; then
+    # Paint what this directory's board last showed, and refresh behind the frame.
+    # Scanning first made every open wait seconds. With nothing saved, the last
+    # per-tank snapshots still spare it the rebuild.
+    if ! _home_board_saved_load; then
+      _BOARD_STALE_OK=1; _home_refresh; _BOARD_STALE_OK=0
+    fi
     # A newer clikae out? Offer it first (codex-style), before the board. If an
     # upgrade ran (return 10), stop so the user relaunches on the new binary.
     local _u=0; _home_update_prompt || _u=$?
     [ "$_u" -eq 10 ] && return 0
     _home_pick "$items" "$dry"
   else
+    _home_refresh
     _home_render_static "$items" "$dry"
   fi
 }

@@ -715,7 +715,17 @@ board_generation() {
   root="$(board_root "$dir")"
   [ -f "$root/current" ] && IFS= read -r gen < "$root/current"
   case "$gen" in generation.*) gen="$root/$gen" ;; *) gen="" ;; esac
-  local rows_tmp="$root/.rows.$$"
+  # The board's first paint takes the last snapshot as it is, and refreshes behind
+  # it (_home_board_refresh_start). Only a usable snapshot: with none, build one now.
+  if [ "${_BOARD_STALE_OK:-0}" = 1 ] && [ -n "$gen" ] && _board_gen_format_ok "$gen"; then
+    printf -v "$varg" '%s' "$gen"
+    printf -v "$vark" '%s' "$cachekey"
+    _BOARD_GEN_CACHE_KEYS+=("$san")
+    printf '%s' "$gen"
+    return 0
+  fi
+  # The suffix keeps a background refresh, which shares this $$, off a foreground one.
+  local rows_tmp="$root/.rows.$$${_BOARD_ROWS_SUFFIX:-}"
   rm -f "$rows_tmp"
   if [ -z "$gen" ] || board_stale "$engine" "$dir" "$gen" "$rows_tmp"; then
     # `$rows_tmp` exists only if board_stale got far enough to collect them

@@ -9,6 +9,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **The board opens at once with what it last showed**, then updates in place when
+  the scan behind it finishes. Opening used to wait for that scan. The saved board
+  is per directory and private, and one over a day old is not used. A piped or
+  redirected board still reads current data.
 - **Moving the cursor on the board no longer recomposes the frame.** Rows are
   cached and only the two that change are redrawn. Rows rebuild after any other
   key, and every 60 seconds while idle.
