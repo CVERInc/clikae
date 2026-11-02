@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- **Moving the cursor on the board no longer recomposes the frame.** Rows are
+  cached and only the two that change are redrawn. Rows rebuild after any other
+  key, and every 60 seconds while idle.
+
 ## [0.43.0] — 2026-10-21
 
 ### Added
