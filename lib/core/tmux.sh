@@ -1362,13 +1362,14 @@ tmux_status_fuelv() {
     if [ -n "$w" ] && [ -n "$k" ] && [ "$fresh" = 1 ]; then
       # #179: the labels are lib/core/usage.sh's, defined once; this leaf
       # may be sourced without it, so the same two words are the fallback.
-      _TSTAT_FUEL="${USAGE_LABEL_WINDOW:-5h} ${w}% · ${USAGE_LABEL_WEEKLY:-7d} ${k}%"
+      # Percent LEFT, as on the board. This row has no width for the bar.
+      _TSTAT_FUEL="${USAGE_LABEL_WINDOW:-5h} $((100 - w))% · ${USAGE_LABEL_WEEKLY:-7d} $((100 - k))%"
       _TSTAT_FUEL_AGE="$suffix"
       return 0
     fi
     if [ "$fresh" = 1 ] && { [ -n "$w" ] || [ -n "$k" ]; }; then
-      if [ -n "$k" ]; then _TSTAT_FUEL="${USAGE_LABEL_WEEKLY:-7d} ${k}%"
-      else _TSTAT_FUEL="${USAGE_LABEL_WINDOW:-5h} ${w}%"; fi
+      if [ -n "$k" ]; then _TSTAT_FUEL="${USAGE_LABEL_WEEKLY:-7d} $((100 - k))%"
+      else _TSTAT_FUEL="${USAGE_LABEL_WINDOW:-5h} $((100 - w))%"; fi
       _TSTAT_FUEL_AGE="$suffix"
       return 0
     fi
