@@ -269,6 +269,7 @@ _rc_setup() {
   _n155_setup
   cd "$TEST_HOME/w" || return 1
   local f
+  # shellcheck source=/dev/null
   while IFS= read -r f; do source "$CLIKAE_LIB/$f" 2>/dev/null; done \
     < <(sed -n 's#^source "$CLIKAE_LIB/\(core/[^"]*\)".*#\1#p' "$CLIKAE_TEST_ROOT/bin/clikae")
   source "$CLIKAE_LIB/commands/home.sh"

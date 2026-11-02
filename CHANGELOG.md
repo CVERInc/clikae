@@ -16,16 +16,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   prompt to any tank whose access token had lapsed. It now refreshes with `claude
   auth status`, which runs no model, and only `--wake` sends a prompt. The board
   does the same on open, so idle tanks show real numbers.
-
-### Added
-
-- `clikae usage --json` states its unit and its gaps: `window_used_pct` and
-  `weekly_used_pct` (`window_pct` and `weekly_pct` stay as older names),
-  `window_absent` or `weekly_absent` when a plan has no such window, and
-  `stale:true` on a reading over 6 hours old.
+- **Reading usage never spends quota** (#195). `clikae usage` used to send a
+  prompt to any tank whose access token had lapsed. It now refreshes with `claude
+  auth status`, which runs no model, and only `--wake` sends a prompt. The board
+  does the same on open, so idle tanks show real numbers.
 
 ### Fixed
 
+- **`burn agy` no longer reports a failed run as DONE** (#192). Its exit code was
+  discarded, so a lapsed login's error text was saved as the artifact. A non-zero
+  exit is now a failure, and a login failure names the tank to log in to. The
+  claim that no OAuth is needed when switching tanks is gone from the burn log,
+  because it can be false.
 - **A plan with no 5-hour window reads correctly** (#195, #198). Claude tanks
   without one reported `unparseable`, and codex tanks had their 7-day number
   filed as the 5-hour one. Each window is now classified by its own length, and
@@ -39,6 +41,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   carry-on prompt now needs a limit newer than the session that just ended. For
   codex, a tank that reads dry is checked live on exit (no model runs), so a
   quota restored by a reset credit stops reading as dry.
+- **A plan with no 5-hour window reads correctly** (#195, #198). Claude tanks
+  without one reported `unparseable`, and codex tanks had their 7-day number
+  filed as the 5-hour one. Each window is now classified by its own length, and
+  every reader accepts a tank with one window: usage, burn's ordering, and the
+  tmux row.
+- **A codex tank no longer reads as dry after it has recovered** (#196). Only
+  `agent_message` counted as success and `codex exec` never writes it, so any
+  limit marker from the last 7 days outlived every later run. A `task_complete`
+  with no error now counts too.
+- **Leaving a session no longer announces a limit it did not hit** (#196). The
+  carry-on prompt now needs a limit newer than the session that just ended. For
+  codex, a tank that reads dry is checked live on exit (no model runs), so a
+  quota restored by a reset credit stops reading as dry.
+
+### Added
+
+- `clikae usage --json` states its unit and its gaps: `window_used_pct` and
+  `weekly_used_pct` (`window_pct` and `weekly_pct` stay as older names),
+  `window_absent` or `weekly_absent` when a plan has no such window, and
+  `stale:true` on a reading over 6 hours old.
 
 ## [0.43.0] — 2026-10-21
 
