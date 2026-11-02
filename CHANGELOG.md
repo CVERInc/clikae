@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.45.0] — 2026-11-03
+
 ### Removed
 
 - **Simplified Chinese, German, French, and Brazilian Portuguese.** The interface now ships in
