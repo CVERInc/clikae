@@ -341,3 +341,67 @@ _rc_compare_all() {
   [ "$(_home_frame_height "$f")" = 400 ]
 }
 
+@test "board opens from its snapshot, then shows what changed without a keypress" {
+  _n155_setup
+  local p sock="$TEST_HOME/swr.sock" slug
+  slug="$(printf '%s' "$TEST_HOME/w" | LC_ALL=C sed 's/[^A-Za-z0-9]/-/g')"
+  p="$CLIKAE_HOME/profiles/claude/work/projects/$slug"
+  mkdir -p "$p"
+  { printf '{"type":"user","message":{"role":"user","content":[{"type":"text","text":"x"}]}}\n'
+    printf '{"type":"ai-title","aiTitle":"ARRIVED-AFTER-THE-SNAPSHOT","sessionId":"cafe0000-0000-0000-0000-000000000000"}\n'
+  } > "$p/cafe0000-0000-0000-0000-000000000000.jsonl"
+  tmux -S "$sock" -f /dev/null new-session -d -s b -x 100 -y 60 \
+    "cd '$TEST_HOME/w' && env -i HOME='$TEST_HOME' CLIKAE_HOME='$CLIKAE_HOME' PATH='$TEST_HOME/pbin:/usr/bin:/bin' TERM=xterm-256color '$CLIKAE_TEST_ROOT/bin/clikae'; sleep 5"
+  local i seen=0
+  for i in $(seq 1 200); do
+    if tmux -S "$sock" capture-pane -p -t b 2>/dev/null | grep -q 'ARRIVED-AFTER'; then seen=1; break; fi
+    sleep 0.1
+  done
+  tmux -S "$sock" kill-server 2>/dev/null || true
+  [ "$seen" = 1 ] || { echo "the refreshed row never appeared"; false; }
+}
+
+@test "saved board: a save and load round trip keeps rows and counts, and a stale one is refused" {
+  _n155_source
+  export CLIKAE_HOME="$TEST_HOME/.clikae"
+  local sep=$'\037' items dry
+  items="tank${sep}claude${sep}a${sep}${sep}${sep}0${sep}"$'\n'"resume${sep}claude${sep}a${sep}中文 title"
+  dry="claude/a"$'\t'"resets 5pm"
+  _HOME_RESUME_TRUNC=1 _HOME_RESUME_ELSEWHERE=2 _HOME_TOTAL_SESSIONS=583
+  _home_board_saved_save
+  local want_items="$items" want_dry="$dry" d
+  d="$(_home_board_saved_dir)"
+  [ "$(ls -ld "$d" | cut -c1-10)" = drwx------ ]
+  items="" dry="" _HOME_RESUME_TRUNC=0 _HOME_RESUME_ELSEWHERE=0 _HOME_TOTAL_SESSIONS=0
+  _home_board_saved_load
+  [ "$items" = "$want_items" ]
+  [ "$dry" = "$want_dry" ]
+  [ "$_HOME_TOTAL_SESSIONS" = 583 ] && [ "$_HOME_RESUME_ELSEWHERE" = 2 ]
+  touch -t 202001010000 "$d/items"
+  items="unchanged"
+  run _home_board_saved_load
+  [ "$status" -eq 1 ]
+  [ "$items" = "unchanged" ]
+}
+
+@test "resize while composing: the old size is never painted, and the wait loop has the new baseline" {
+  _n155_source
+  local sizefile="$TEST_HOME/size" composed="$TEST_HOME/composed"
+  printf '30 120\n' > "$sizefile"
+  _home_tty_size() { cat "$sizefile"; }
+  # The first compose is where the resize lands.
+  _home_board_framev() {
+    printf '%s\n' "$1" >> "$composed"
+    printf '30 52\n' > "$sizefile"
+    _HC_FRAME="frame for $1"
+  }
+  _home_frame_height() { printf '1'; }
+  local out
+  out="$TEST_HOME/out"
+  _home_pick_draw "row" 0 "" "" > "$out"
+  [ "$(tr '\n' '|' < "$composed")" = '30 120|30 52|' ] || { cat "$composed"; false; }
+  grep -q 'frame for 30 52' "$out"
+  if grep -q 'frame for 30 120' "$out"; then false; fi
+  [ "$_HOME_DRAWN_SIZE" = 52x30 ]
+}
+

@@ -25,6 +25,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **The board opens at once with what it last showed**, then updates in place when
+  the scan behind it finishes. Opening used to wait for that scan. The saved board
+  is per directory and private, and one over a day old is not used. A piped or
+  redirected board still reads current data.
 - **`--available` trusts less.** A model share above the weekly number now gates the
   tank, and a reading over six hours old is skipped with the reason `stale`.
 - **Moving the cursor on the board no longer recomposes the frame.** Rows are
