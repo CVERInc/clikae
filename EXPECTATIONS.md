@@ -8,7 +8,7 @@ canonical: "https://clikae.cver.net/EXPECTATIONS"
 A field guide to clikae behaviours that **look** like bugs but are deliberate —
 usually because a vendor's real nature leaks through clikae's uniform "tank" model.
 If something here surprised you, it's working as intended; the *why* is below.
-(For things that are actually broken, see the [CHANGELOG](https://github.com/CVERInc/clikae/blob/67ce0b8c04c12f88cddc63612e4a0385a30b2334/CHANGELOG.md) /
+(For things that are actually broken, see the [CHANGELOG](https://github.com/CVERInc/clikae/blob/15172e3348976dd10c2c1085cb472e4bb9f1f7d5/CHANGELOG.md) /
 [issues](https://github.com/CVERInc/clikae/issues).)
 
 ## Fuel gauge & limits

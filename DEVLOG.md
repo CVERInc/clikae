@@ -8,7 +8,7 @@ canonical: "https://clikae.cver.net/DEVLOG"
 A narrative history of clikae, from the first commit through a deliberate park, the
 v0.6 that earned its way out of it, and the stretch after — where a tank stopped
 being a fuel tank and the front page finally said so.
-For the precise, per-release record see [CHANGELOG.md](https://github.com/CVERInc/clikae/blob/67ce0b8c04c12f88cddc63612e4a0385a30b2334/CHANGELOG.md) — this is
+For the precise, per-release record see [CHANGELOG.md](https://github.com/CVERInc/clikae/blob/15172e3348976dd10c2c1085cb472e4bb9f1f7d5/CHANGELOG.md) — this is
 the story around it: the itch, the wrong turns, and the lessons that made each
 version what it is. Dates are the real tag dates (JST); claims map to the
 changelog. Nothing here is roadmap or aspiration — only what actually shipped.
