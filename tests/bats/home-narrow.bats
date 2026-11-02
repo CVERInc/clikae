@@ -384,3 +384,24 @@ _rc_compare_all() {
   [ "$items" = "unchanged" ]
 }
 
+@test "resize while composing: the old size is never painted, and the wait loop has the new baseline" {
+  _n155_source
+  local sizefile="$TEST_HOME/size" composed="$TEST_HOME/composed"
+  printf '30 120\n' > "$sizefile"
+  _home_tty_size() { cat "$sizefile"; }
+  # The first compose is where the resize lands.
+  _home_board_framev() {
+    printf '%s\n' "$1" >> "$composed"
+    printf '30 52\n' > "$sizefile"
+    _HC_FRAME="frame for $1"
+  }
+  _home_frame_height() { printf '1'; }
+  local out
+  out="$TEST_HOME/out"
+  _home_pick_draw "row" 0 "" "" > "$out"
+  [ "$(tr '\n' '|' < "$composed")" = '30 120|30 52|' ] || { cat "$composed"; false; }
+  grep -q 'frame for 30 52' "$out"
+  ! grep -q 'frame for 30 120' "$out"
+  [ "$_HOME_DRAWN_SIZE" = 52x30 ]
+}
+

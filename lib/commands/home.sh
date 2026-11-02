@@ -2571,9 +2571,11 @@ _home_wrap_items() {
 # notice a resize; two calls to _home_cols/_home_rows would fork twice a second
 # for the life of an idle board. Empty when there is no controlling terminal —
 # which then never changes, so an idle non-tty board never repaints either.
+_home_tty_size() { { stty size </dev/tty; } 2>/dev/null || true; }
+
 _home_size() {
   local sz
-  sz="$( { stty size </dev/tty; } 2>/dev/null || true )"
+  sz="$(_home_tty_size)"
   case "$sz" in
     *[!0-9\ ]*|'') printf '' ;;
     *) printf '%sx%s' "${sz##* }" "${sz%% *}" ;;
@@ -3616,14 +3618,24 @@ _home_pick_draw() {
   # Single-write flicker fix: _home_pick_draw_body composes the whole frame via
   # printf to a captured string; we then write it to the terminal in ONE printf.
   # Repainting line-by-line (a write per row) is what still flickered.
-  local _lsz _lrows
-  _lsz="$( { stty size </dev/tty; } 2>/dev/null || true )"
+  local _lsz _lrows _try
+  local _frame
+  # Composing can take a while when rows were invalidated, so a resize can land in
+  # the middle. Compose again for the new size rather than paint the old one.
+  for _try in 1 2; do
+    _lsz="$(_home_tty_size)"
+    _home_board_framev "$_lsz" "$@"
+    _frame="$_HC_FRAME"
+    [ "$(_home_tty_size)" != "$_lsz" ] || break
+  done
   _lrows="${_lsz%% *}"
   case "$_lrows" in ''|*[!0-9]*) _lrows=24 ;; esac
-
-  local _frame
-  _home_board_framev "$_lsz" "$@"
-  _frame="$_HC_FRAME"
+  # The size this frame was composed for. The wait loop compares against this, not
+  # a size read after the paint, so a resize after this point is still noticed.
+  case "$_lsz" in
+    *[!0-9\ ]*|'') _HOME_DRAWN_SIZE="" ;;
+    *) _HOME_DRAWN_SIZE="${_lsz##* }x${_lsz%% *}" ;;
+  esac
 
   # 🔴 THE BOARD HAD NO HEIGHT. 0.28.0 made every row fit the terminal's WIDTH;
   # nothing ever made the frame fit its HEIGHT, and the frame is a constant size
@@ -4443,7 +4455,7 @@ _home_pick() {
     # empty-filter branch above. Same bug, same fix: capture `_lastsize` right
     # after this draw, not after the first second-long `tui_read_key` timeout,
     # or a resize inside that first blocking wait is lost forever.
-    _lastsize="$(_home_size)"
+    _lastsize="$_HOME_DRAWN_SIZE"
     TUI_KEY=""
     while :; do
       tui_read_key 3 1 && break
