@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- **The board shows fuel left, as a bar**: `5h ███████░ 97%  7d ███████░ 89%`.
+  Vendors disagree on used versus left, so one unit is shown everywhere a person
+  reads a number: the board, the tmux row (no bar), and the `clikae usage` summary.
+  `--json` still reports percent used, in `window_used_pct` and `weekly_used_pct`.
+
 ### Added
 
 - `clikae usage --json` states its unit and its gaps: `window_used_pct` and

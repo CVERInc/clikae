@@ -1451,13 +1451,38 @@ _home_weekly_read() {
 # weekly limit" — the cache starts at the digits; "week limit" and a leading
 # "used " are accepted too) -> "weekly 85%", else verbatim — a phrase the
 # parser cannot read is still the vendor's word, and better long than guessed.
+# _home_gaugev <label> <used%> -> $_UGAUGE: "5h ███████░ 97%", the fuel LEFT. Vendors
+# disagree on the unit (claude shows used, codex and agy left), so a person reads
+# one: a bar that empties as a tank does, and the percent beside it. Used is rounded
+# up, so a part-spent tank never reads fuller than it is. Anything left lights at
+# least one cell, because 2% and empty are the difference that matters. Below the
+# narrow width the bar halves.
+_home_gaugev() {
+  local label="$1" raw="$2" ip dp u left cells=8 lit i bar=""
+  ip="${raw%%.*}"; dp=""; case "$raw" in *.*) dp="${raw#*.}" ;; esac
+  case "$ip" in ''|*[!0-9]*) _UGAUGE="$label $raw%"; return 0 ;; esac
+  u=$((10#$ip)); case "$dp" in *[1-9]*) u=$((u + 1)) ;; esac
+  [ "$u" -le 100 ] || u=100
+  left=$((100 - u))
+  if declare -F _home_narrowv >/dev/null 2>&1; then
+    _home_narrowv; [ "${_HOME_NARROW:-0}" != 1 ] || cells=4
+  fi
+  lit=$((left * cells / 100))
+  [ "$left" -eq 0 ] || [ "$lit" -gt 0 ] || lit=1
+  for (( i = 0; i < cells; i++ )); do
+    # Braces: bash 3.2 in a UTF-8 locale reads a multibyte character as part of a name.
+    if [ "$i" -lt "$lit" ]; then bar="${bar}█"; else bar="${bar}░"; fi
+  done
+  _UGAUGE="$label $bar ${left}%"
+}
+
 _home_weekly_normv() {
   local n
   _WNORM="$1"
   case "$1" in
     *%\ of\ your\ week*limit*)
       n="${1%%\%*}"; n="${n##*[!0-9]}"
-      case "$n" in '') ;; *) _WNORM="${USAGE_LABEL_WEEKLY:-7d} $((10#$n))%" ;; esac ;;
+      case "$n" in '') ;; *) _home_gaugev "${USAGE_LABEL_WEEKLY:-7d}" "$((10#$n))"; _WNORM="$_UGAUGE" ;; esac ;;
   esac
 }
 
@@ -1548,7 +1573,7 @@ _home_codex_segv() {
        elif [ "$win" -le 10080 ]; then label="${USAGE_LABEL_WEEKLY:-7d}"
        else label="$((win / 1440))d"; fi ;;
   esac
-  _CSEG="$label ${u}%"
+  _home_gaugev "$label" "$u"; _CSEG="$_UGAUGE"
   return 0
 }
 
@@ -1726,9 +1751,12 @@ _home_fuel_dotv_compute() {
       # Whole percents: the vendor sends "99.0" and "21.7"; the board does
       # not (the dot's own thresholds truncate the same way, _home_fuel_glyphv).
       # #179: the labels are lib/core/usage.sh's (5h / 7d), defined once.
-      if [ "$up" = - ]; then _FNOTE="${USAGE_LABEL_WEEKLY:-7d} ${uw%%.*}%"; up=0
-      elif [ "$uw" = - ]; then _FNOTE="${USAGE_LABEL_WINDOW:-5h} ${up%%.*}%"; uw=0
-      else _FNOTE="${USAGE_LABEL_WINDOW:-5h} ${up%%.*}% · ${USAGE_LABEL_WEEKLY:-7d} ${uw%%.*}%"; fi
+      if [ "$up" = - ]; then _home_gaugev "${USAGE_LABEL_WEEKLY:-7d}" "$uw"; _FNOTE="$_UGAUGE"; up=0
+      elif [ "$uw" = - ]; then _home_gaugev "${USAGE_LABEL_WINDOW:-5h}" "$up"; _FNOTE="$_UGAUGE"; uw=0
+      else
+        _home_gaugev "${USAGE_LABEL_WINDOW:-5h}" "$up"; _FNOTE="$_UGAUGE"
+        _home_gaugev "${USAGE_LABEL_WEEKLY:-7d}" "$uw"; _FNOTE="$_FNOTE  $_UGAUGE"
+      fi
       # 🔴 The `declare -F` is on THIS line on purpose. `_human_age` lives in
       # lib/core/duration.sh and 20+ test files source home.sh on its own, so
       # tests/bats/home.bats ("every _human_age call in home.sh is guarded by
@@ -1748,7 +1776,10 @@ _home_fuel_dotv_compute() {
         _bind_one="${_bind_rest%%,*}"
         [ "$_bind_one" != "$_bind_rest" ] && _bind_rest="${_bind_rest#*,}" || _bind_rest=""
         _bind_pct="${_bind_one##*:}"; _bind_pct="${_bind_pct%%.*}"
-        _FNOTE="$_FNOTE · ${_bind_one%:*} ${_bind_pct}%"
+        case "$_bind_pct" in
+          ''|*[!0-9]*) _FNOTE="$_FNOTE · ${_bind_one%:*} ${_bind_pct}%" ;;
+          *) _home_gaugev "${_bind_one%:*}" "$_bind_pct"; _FNOTE="$_FNOTE · ${_bind_one%:*} ${_UGAUGE##* }" ;;
+        esac
         case "$_bind_pct" in ''|*[!0-9]*) ;; *) [ "$_bind_pct" -lt 100 ] || _bind_spent=1 ;; esac
       done
       # The age comes after the model segment (grammar: model, then age).
@@ -1878,8 +1909,8 @@ _home_last_goodv() {
   [ -n "$at" ] && [ $(( $2 - at )) -lt 1209600 ] || return 1
   case "$w" in ''|null) ;; *) _LGW="$w" ;; esac
   case "$k" in ''|null) ;; *) _LGK="$k" ;; esac
-  if [ "$k" != null ] && [ -n "$k" ]; then _LGN="${USAGE_LABEL_WEEKLY:-7d} ${k%%.*}%"
-  elif [ "$w" != null ] && [ -n "$w" ]; then _LGN="${USAGE_LABEL_WINDOW:-5h} ${w%%.*}%"
+  if [ "$k" != null ] && [ -n "$k" ]; then _home_gaugev "${USAGE_LABEL_WEEKLY:-7d}" "$k"; _LGN="$_UGAUGE"
+  elif [ "$w" != null ] && [ -n "$w" ]; then _home_gaugev "${USAGE_LABEL_WINDOW:-5h}" "$w"; _LGN="$_UGAUGE"
   else return 1; fi
   local _lg_age=""
   declare -F _human_agev >/dev/null 2>&1 && _human_agev _lg_age "$at" "$2" && _LGN="$_LGN · $_lg_age"
