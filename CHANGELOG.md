@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **agy shows its Gemini quota again.** agy's quota summary stopped naming the Gemini
+  group, so a tank read as Claude/GPT only. clikae now builds that group from agy's
+  per-model quota when the summary leaves it out.
+- **An idle agy tank gets a number without spending anything.** A lapsed token is
+  renewed through `agy models`, which runs no model, then measured. A login that
+  really died stays `needs-refresh`.
+
 ### Changed
 
 - **Moving the cursor on the board no longer recomposes the frame.** Rows are
