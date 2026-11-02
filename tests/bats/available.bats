@@ -98,3 +98,67 @@ reading() {
   [ "$status" -eq 0 ]
   echo "$output" | jq -e '.[0].tank == "elapsed" and .[0].score == 160 and .[1].available == true'
 }
+
+# agy_reading <tank> <gemini weekly|null> <claude weekly|null> [age seconds]
+agy_reading() {
+  local t="$1" gem="$2" cla="$3" age="${4:-0}" d="$CLIKAE_HOME/profiles/antigravity/$1"
+  printf '#!/usr/bin/env bash\ntrue\n' > "$TEST_HOME/.testbin/agy"; chmod +x "$TEST_HOME/.testbin/agy"
+  mkdir -p "$d/antigravity-cli" "$CLIKAE_HOME/state/usage/antigravity"
+  printf 'antigravity\n' > "$d/.clikae-tank"
+  jq -cn --argjson now "$(date +%s)" --argjson gem "$gem" --argjson cla "$cla" --argjson age "$age" '
+    (($now+100*3600)|todateiso8601) as $rs |
+    {weekly_pct:$gem,window_pct:null,weekly_resets_at:$rs,source:"quota-api",headline_group:"gemini",
+     cached_at:($now-$age),scanned_at:($now-$age),
+     groups:[{name:"claude",weekly_pct:$cla,window_pct:null,weekly_resets_at:$rs,disabled:false},
+             {name:"gemini",weekly_pct:$gem,window_pct:null,weekly_resets_at:$rs,disabled:false}],
+     models:[{name:"claude weekly",pct:$cla},{name:"gemini weekly",pct:$gem}]}' \
+    > "$CLIKAE_HOME/state/usage/antigravity/$t.json"
+}
+
+@test "available agy: each group has its own verdict and order, and one group never gates the other" {
+  agy_reading gemfull 95 10
+  agy_reading clafull 10 95
+  agy_reading both 50 50
+  run clikae tanks --available agy
+  [ "$status" -eq 0 ]
+  [ "$output" = $'gemini  clafull both\nclaude  gemfull both' ] || { echo "$output"; false; }
+  run clikae tanks --available agy --group claude
+  [ "$output" = $'gemfull\nboth' ] || { echo "$output"; false; }
+  run clikae tanks --available agy --json
+  echo "$output" | jq -e '
+    (map({key:.tank,value:.reason})|from_entries) == {gemfull:"quota",clafull:null,both:null}
+    and (.[] | select(.tank == "gemfull") | .groups | map({key:.name,value:.reason}) | from_entries)
+        == {claude:null,gemini:"quota"}'
+}
+
+@test "available agy: --group needs agy and one of the two names" {
+  run clikae tanks --available claude --group gemini
+  [ "$status" -ne 0 ]
+  run clikae tanks --available agy --group gpt
+  [ "$status" -ne 0 ]
+  run clikae tanks --group gemini
+  [ "$status" -ne 0 ]
+}
+
+@test "available: a model share over the weekly number gates the tank, for claude" {
+  reading claude capped 65 0 48
+  reading claude open 65 0 48
+  local f="$CLIKAE_HOME/state/usage/claude/capped.json"
+  jq '.models = [{name:"Fable",pct:97}]' "$f" > "$f.new" && mv "$f.new" "$f"
+  f="$CLIKAE_HOME/state/usage/claude/open.json"
+  jq '.models = [{name:"Fable",pct:40}]' "$f" > "$f.new" && mv "$f.new" "$f"
+  run clikae tanks --available claude --json
+  echo "$output" | jq -e '(map({key:.tank,value:.reason})|from_entries) == {capped:"quota",open:null}'
+}
+
+@test "available: a reading over six hours old is stale, not a number to act on" {
+  reading codex old null 10 48
+  reading codex recent null 10 48
+  local f="$CLIKAE_HOME/state/usage/codex/old.json" at
+  at=$(( $(date +%s) - 21700 ))
+  jq --argjson a "$at" '.cached_at = $a | .scanned_at = $a' "$f" > "$f.new" && mv "$f.new" "$f"
+  CLIKAE_USAGE_TTL=999999 run clikae tanks --available codex --json
+  [ "$status" -eq 0 ]
+  echo "$output" | jq -e '(map({key:.tank,value:.reason})|from_entries) == {old:"stale",recent:null}'
+}
+
