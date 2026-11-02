@@ -47,14 +47,14 @@ cmd_list() {
       --available) available=1; shift ;;
       --include-cockpit) include_cockpit=1; shift ;;
       --group)
-        case "${2:-}" in gemini|claude) group="$2"; shift 2 ;; *) log_fail "--group requires gemini or claude" ;; esac ;;
+        case "${2:-}" in gemini|claude|argon) group="$2"; shift 2 ;; *) log_fail "--group requires gemini, claude or argon" ;; esac ;;
       --order)
         [ "${2:-}" = expiring ] || log_fail "--order requires expiring"
         order="$2"; shift 2 ;;
       -h|--help)
         cat <<'EOF'
 Usage: clikae tanks [-p|--paths] [--json]      (alias: clikae list / ls)
-       clikae tanks --available [engine] [--group gemini|claude] [--order expiring] [--include-cockpit] [--json]
+       clikae tanks --available [engine] [--group gemini|claude|argon] [--order expiring] [--include-cockpit] [--json]
 
 --available lists eligible tank names, highest remaining quota per hour to reset
 first. Uses the weekly window, or the single window when no weekly value exists;
@@ -64,8 +64,8 @@ reset), a separate 5h window >=95%, and the cockpit unless --include-cockpit is
 given. JSON includes all tanks in scope: {engine, tank, available, score, reason}.
 Reasons are unreadable / stale / quota / window / cockpit, or null when eligible.
 
-agy's Gemini and Claude/GPT quotas are separate, so `--available agy` prints one
-line per group, and JSON adds `groups` with each group's own verdict. --group
+agy's quota groups are separate (Gemini, Claude/GPT, and Argon on plans that have
+it), so `--available agy` prints one line per group, and JSON adds `groups` with each group's own verdict. --group
 prints names for that group alone; without it, a mixed list judges agy on the
 quota its work spends by default.
 
@@ -205,7 +205,9 @@ EOF_PROFILES
     printf '%s\n' "$result"
   elif [ "$engine" = antigravity ] && [ -z "$group" ]; then
     printf '%s' "$result" | jq -r '
-      . as $rows | ("gemini", "claude") | . as $g |
+      . as $rows | ("gemini", "claude", "argon") | . as $g |
+      # A group only some plans have gets a line only when a tank has it.
+      select($g != "argon" or ([ $rows[] | (.groups // [])[] | select(.name == $g) ] | length > 0)) |
       [ $rows[] | .tank as $t | (.groups // [])[] | select(.name == $g and .available) | {t:$t,score} ] |
       sort_by(-.score) | map(.t) | "\($g)  \(if length > 0 then join(" ") else "-" end)"'
   else

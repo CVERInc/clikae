@@ -593,12 +593,10 @@ adapter_recent_sids() {
 #              buckets:[Bucket]}], description}
 #   Bucket    {bucketId, displayName, description, window, disabled,
 #              remainingFraction | remainingAmount, resetTime}
-# Each bucket is classified by its OWN reset distance, the same 24 h line
-# limit.sh draws for the 429 sentence (LIMIT_AGY_WEEKLY_MIN_SEC): more than a
-# day away is the weekly bucket, anything else the rolling window. The most
-# spent bucket of each class is that class's number; every bucket rides along
-# as `models` (at most 8). source is "quota-api", so a reader can tell this
-# number from claude's vendor endpoint while treating it the same.
+# Each bucket says which window it is. The most spent bucket of each class is that
+# class's number; every bucket rides along as `models` (at most 8). source is
+# "quota-api", so a reader can tell this number from claude's vendor endpoint while
+# treating it the same.
 #
 # The token file is the Linux "file" backend's (lib/commands/antigravity.sh,
 # #96). No file (the macOS Keychain backend, or a tank that never logged in) or
@@ -615,22 +613,24 @@ adapter_recent_sids() {
 #   groups: "Gemini Models"         buckets gemini-weekly (window "weekly"),
 #                                           gemini-5h     (window "5h")
 #           "Claude and GPT models" buckets 3p-weekly, 3p-5h (may be disabled)
-# `window` names the bucket, so it decides the class; reset distance is only
-# the fallback for a window string this does not know. (Distance alone would
-# misfile a weekly bucket in the last day of its week, when its reset is under
-# 24 h away; the one measured tank had its two weekly resets 59 h and 108 h out.)
-# The two groups are SEPARATE quotas: Claude spent to 100% while Gemini has
+# `window` names the bucket, so it alone decides the class. A window string this
+# does not know is not given a class: it stays out of the 5h and 7d numbers and
+# still shows in `models`.
+# The groups are SEPARATE quotas: Claude spent to 100% while Gemini has
 # room is a usable tank for Gemini work, and the reverse. So each group gets its
 # own numbers under `groups`, and the top-level window/weekly are ONE group's:
 # `headline_group`, the one the work will spend (CLIKAE_AGY_USAGE_MODEL, set by
 # burn from the model it passes agy; Gemini, agy's default, when there is none).
 #
-# MEASURED 2026-11-02 on three tanks (free and Pro): the summary had stopped naming
-# the Gemini group, for every tank, while `retrieveUserQuota` still lists each Gemini
-# model with the shared fraction and reset. So a summary without Gemini gets a group
-# built from that list. Its buckets name no window, so the reset distance classes
-# them. No dry Gemini model has been observed: a model with no fraction is skipped,
-# as in the summary, not assumed dry.
+# MEASURED 2026-11-02, agy 1.4.12, one Pro tank and one workspace tank, one change per
+# request: the server decides what to show from the version in the User-Agent.
+#   antigravity, antigravity/cli    Claude/GPT group only
+#   antigravity/cli/1.0.0           no Gemini group
+#   antigravity/cli/1.4.12          every group agy's own /usage shows
+# So the request names the agy that is installed. Without a version there is no Gemini
+# reading, and the row says so rather than building one from another endpoint.
+# Which windows exist differs by plan: Pro had Gemini 5h + weekly, Claude/GPT 5h +
+# weekly, and an Argon weekly; workspace had one weekly for Gemini and one for Claude/GPT.
 _AGY_USAGE_BASE="${CLIKAE_AGY_USAGE_BASE:-https://daily-cloudcode-pa.googleapis.com}"
 
 # _agy_usage_platform -> the ClientMetadata.Platform value for this host.
@@ -652,7 +652,7 @@ _AGY_USAGE_MAX_BYTES=65536
 _agy_usage_post() {
   local out
   out="$(
-    printf 'header = "Authorization: Bearer %s"\nheader = "User-Agent: antigravity"\n' "$1" |
+    printf 'header = "Authorization: Bearer %s"\nheader = "User-Agent: %s"\n' "$1" "${_AGY_USAGE_UA:-antigravity}" |
       curl -q -s -K - --fail --connect-timeout 3 --max-time 8 \
         --max-filesize "$_AGY_USAGE_MAX_BYTES" \
         -X POST -H 'Content-Type: application/json' --data "$3" \
@@ -662,6 +662,16 @@ _agy_usage_post() {
   )" || return 1
   [ "${#out}" -le "$_AGY_USAGE_MAX_BYTES" ] || return 1
   printf '%s' "$out"
+}
+
+# _agy_usage_ua -> the User-Agent for the installed agy, or the bare name without one.
+_agy_usage_ua() {
+  local v
+  v="$(_bounded_run 5 agy --version 2>/dev/null </dev/null | head -n 1)"
+  case "$v" in
+    ''|*[!0-9.]*) printf 'antigravity' ;;
+    *) printf 'antigravity/cli/%s' "$v" ;;
+  esac
 }
 
 # adapter_usage_refresh <dir>: renew a lapsed access token with no model call and
@@ -682,26 +692,10 @@ adapter_usage_refresh() {
   return "$rc"
 }
 
-# _agy_usage_with_models <summary> <per-model quota> -> the summary, with a Gemini
-# group made from the per-model list: one bucket per distinct reset, its lowest
-# fraction. Unchanged when the list has no Gemini model.
-_agy_usage_with_models() {
-  printf '%s\n%s' "$1" "$2" | jq -cs '
-    .[0] as $s |
-    [ (.[1].buckets // [])[]? | select(type == "object") |
-      select((.modelId | type) == "string" and (.modelId | startswith("gemini-"))) |
-      select((.remainingFraction | type) == "number") ] |
-    if length == 0 then $s else
-      [ group_by(.resetTime)[] | min_by(.remainingFraction) |
-        {bucketId: "gemini-models", remainingFraction, resetTime} ] as $b |
-      $s | .groups = ((.groups // []) + [{displayName: "Gemini Models", buckets: $b}])
-    end' 2>/dev/null
-}
-
 adapter_usage() (
   set +x
   set +a
-  local dir="$1" tokf token project body now models merged
+  local dir="$1" tokf token project body now _AGY_USAGE_UA
   export -n token
   tokf="$dir/antigravity-cli/antigravity-oauth-token"
   [ -f "$tokf" ] && command -v jq >/dev/null 2>&1 || exit 1
@@ -719,6 +713,7 @@ adapter_usage() (
     exit 1
   }
   case "$token" in *[!a-zA-Z0-9._~+/-]*) token=""; exit 1 ;; esac
+  _AGY_USAGE_UA="$(_agy_usage_ua)"
   project="$(_agy_usage_post "$token" loadCodeAssist \
       "{\"metadata\":{\"ideType\":\"ANTIGRAVITY\",\"platform\":\"$(_agy_usage_platform)\",\"pluginType\":\"GEMINI\"}}" |
     jq -r '.cloudaicompanionProject | if type == "string" then .
@@ -727,32 +722,27 @@ adapter_usage() (
   body="$(_agy_usage_post "$token" retrieveUserQuotaSummary \
     "$(jq -cn --arg p "$project" 'if $p == "" then {} else {project:$p} end')")" ||
     { token=""; exit 1; }
-  if ! printf '%s' "$body" | jq -e '[.groups[]?.buckets[]?.bucketId | tostring] | any(startswith("gemini"))' >/dev/null 2>&1 &&
-     models="$(_agy_usage_post "$token" retrieveUserQuota \
-       "$(jq -cn --arg p "$project" 'if $p == "" then {} else {project:$p} end')")" &&
-     merged="$(_agy_usage_with_models "$body" "$models")" && [ -n "$merged" ]; then
-    body="$merged"
-  fi
   token=""
   local hint=""
   hint="$(_agy_usage_group_hint "${CLIKAE_AGY_USAGE_MODEL:-}")"
-  printf '%s' "$body" | jq -ce -s --argjson now "$now" --argjson weekly "${LIMIT_AGY_WEEKLY_MIN_SEC:-86400}" \
-    --arg hint "$hint" '
+  printf '%s' "$body" | jq -ce -s --arg hint "$hint" '
     def secs: if type == "string" then (sub("\\.[0-9]+"; "") | try fromdateiso8601 catch null) else null end;
-    # A bucket names its own window; only a string this does not know falls
-    # back to the reset distance. "<N>h" is hours: 5h is the window, 168h/120h
-    # (anything of 24 h or more) is weekly.
-    def klass($r):
+    # A bucket names its own window. "<N>h" is hours: 5h is the window, 168h/120h
+    # (anything of 24 h or more) is weekly. Anything else has no class.
+    def klass:
       if .window == "weekly" then "weekly"
       elif (.window|type) == "string" and (.window|test("^[0-9]{1,6}h$")) then
         (if (.window[:-1]|tonumber) >= 24 then "weekly" else "window" end)
       elif (.window|type) == "string" and (.window|test("^[0-9]{1,6}m$")) then "window"
-      elif $r != null and ($r - $now) > $weekly then "weekly" else "window" end;
+      else "other" end;
     # The group key: bucketId prefix ("gemini-5h" -> gemini, "3p-weekly" ->
     # claude, the Claude and GPT group), else the display name first word.
+    # Argon is its own quota though its bucketId starts with gemini
+    # (gemini-argon-wtu-weekly), and folding it in would read all Gemini as spent.
     def gkey($gname):
-      ((.bucketId // "") | tostring | split("-")[0]) as $p |
-      if $p == "gemini" then "gemini" elif $p == "3p" then "claude"
+      ((.bucketId // "") | tostring) as $id | ($id | split("-")[0]) as $p |
+      if ($id | test("argon")) then "argon"
+      elif $p == "gemini" then "gemini" elif $p == "3p" then "claude"
       elif $gname != "" then ($gname | ascii_downcase | split(" ")[0])
       else "default" end;
     if (length != 1) or ((.[0]|type) != "object") then empty else .[0] end |
@@ -762,7 +752,7 @@ adapter_usage() (
         select((.remainingFraction|type) == "number" and
                .remainingFraction >= 0 and .remainingFraction <= 1) |
         (.resetTime | secs) as $r |
-        {key: (gkey($g) | .[0:20]), class: klass($r), disabled: (.disabled == true),
+        {key: (gkey($g) | .[0:20]), class: klass, disabled: (.disabled == true),
          pct: (((1 - .remainingFraction) * 1000 | round) / 10),
          resets_at: (if $r == null then null else .resetTime end)}) |
     select(length > 0) | . as $buckets |
@@ -789,12 +779,13 @@ adapter_usage() (
 )
 
 # _agy_usage_group_hint <model> -> the quota group that model spends:
-# "gemini", "claude" (agy's Claude and GPT group), or nothing (no hint).
+# "argon", "gemini", "claude" (agy's Claude and GPT group), or nothing (no hint).
 _agy_usage_group_hint() {
   local m
   m="$(printf '%s' "${1:-}" | tr '[:upper:]' '[:lower:]')"
   case "$m" in
     '') ;;
+    *argon*) printf 'argon' ;;
     *gemini*) printf 'gemini' ;;
     *claude*|*gpt*|*opus*|*sonnet*|*haiku*) printf 'claude' ;;
   esac
