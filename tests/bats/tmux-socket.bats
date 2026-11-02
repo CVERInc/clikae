@@ -241,14 +241,29 @@ _sockfile() {
   printf -v "$1" '%s' "$_sf"
 }
 
-# _fake_tmux_proc <var> — a live process whose comm is exactly `tmux` (a copy
-# of sleep under that name: SIGUSR1 kills it, so "alive afterwards" is "not
-# signalled"). Waits until ps can see its start time.
-_fake_tmux_proc() {
+# _idle_bin <name> — a program with that comm that can wait: a copy of bash. Not a
+# copy of sleep: on uutils (Ubuntu 26.04) sleep is one multicall binary that exits
+# at once under a name it does not know.
+_idle_bin() {
   mkdir -p "$TEST_HOME/fakebin"
-  [ -x "$TEST_HOME/fakebin/tmux" ] || cp "$(command -v sleep)" "$TEST_HOME/fakebin/tmux"
+  [ -x "$TEST_HOME/fakebin/$1" ] || cp "$(command -v bash)" "$TEST_HOME/fakebin/$1"
+  [ -p "$TEST_HOME/fakebin/.idle" ] || mkfifo "$TEST_HOME/fakebin/.idle"
+}
+
+# _idle_run <name> — wait 30 s under that name, with no child process. Reading a
+# FIFO that nothing writes is the wait; the read builtin leaves SIGUSR1 fatal.
+_idle_run() {
+  # shellcheck disable=SC2016  # $0 is expanded by the copy of bash.
+  "$TEST_HOME/fakebin/$1" -c 'read -r -t 30 _ <> "$0"' "$TEST_HOME/fakebin/.idle"
+}
+
+# _fake_tmux_proc <var> — a live process whose comm is exactly `tmux`: SIGUSR1
+# kills it, so "alive afterwards" is "not signalled". Waits until ps can see its
+# start time.
+_fake_tmux_proc() {
+  _idle_bin tmux
   # _ft_ names: printf -v below must not land on a local of the caller's name.
-  "$TEST_HOME/fakebin/tmux" 30 & local _ft_pid=$!
+  _idle_run tmux & local _ft_pid=$!
   OWN_PIDS="${OWN_PIDS:-} $_ft_pid"
   local _ft_i=0
   while [ "$_ft_i" -lt 50 ] && [ -z "$(_lstart "$_ft_pid")" ]; do sleep 0.05; _ft_i=$((_ft_i + 1)); done
@@ -259,8 +274,7 @@ _fake_tmux_proc() {
 # tmux_rescue_orphans returns at once when no tmux is installed (the macOS CI
 # image has none), which would turn the pruning/race tests into no-ops.
 _fakebin_tmux() {
-  mkdir -p "$TEST_HOME/fakebin"
-  [ -x "$TEST_HOME/fakebin/tmux" ] || cp "$(command -v sleep)" "$TEST_HOME/fakebin/tmux"
+  _idle_bin tmux
 }
 
 # _dead_pid <var> — a pid that has certainly exited.
@@ -356,9 +370,8 @@ EOF
 @test "rescue: a live non-tmux process named tmux-helper is never signalled" {
   _src_tmux
   cd "$TEST_HOME"
-  mkdir -p "$TEST_HOME/fakebin"
-  cp "$(command -v sleep)" "$TEST_HOME/fakebin/tmux-helper"
-  "$TEST_HOME/fakebin/tmux-helper" 30 & local other=$!
+  _idle_bin tmux-helper
+  _idle_run tmux-helper & local other=$!
   OWN_PIDS="$other"
   sleep 0.2
   _seed "$other" "$(_lstart "$other")" "$TEST_HOME/never/default"
