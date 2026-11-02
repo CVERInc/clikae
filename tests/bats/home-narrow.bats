@@ -401,7 +401,7 @@ _rc_compare_all() {
   _home_pick_draw "row" 0 "" "" > "$out"
   [ "$(tr '\n' '|' < "$composed")" = '30 120|30 52|' ] || { cat "$composed"; false; }
   grep -q 'frame for 30 52' "$out"
-  ! grep -q 'frame for 30 120' "$out"
+  if grep -q 'frame for 30 120' "$out"; then false; fi
   [ "$_HOME_DRAWN_SIZE" = 52x30 ]
 }
 
