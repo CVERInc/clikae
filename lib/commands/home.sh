@@ -4240,9 +4240,8 @@ EOF_ROO
 # _home_usage_refresh_one <engine> <tank> <marker> -> the body of one
 # background refresh (a plain usage_read); always clears its in-flight marker.
 _home_usage_refresh_one() {
-  # #179: opening the board must never spend model quota (the rule stated
-  # above this function), now that a plain usage_read can refresh (#177).
-  CLIKAE_USAGE_AUTO_WAKE=0 usage_read "$1" "$2" || true
+  # usage_read's refresh runs no model, so opening the board spends no quota.
+  usage_read "$1" "$2" || true
   rmdir "$3" 2>/dev/null || true
 }
 

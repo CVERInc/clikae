@@ -5,20 +5,14 @@
 #   needs-refresh   the access token is past its expiry (by the vendor's 401/
 #                   403, or by the credentials' own recorded expiry) AND a
 #                   refresh token is beside it. The login is fine; the token
-#                   needs the refresh a session does. A reader that is ALLOWED
-#                   to spend does that refresh itself before it ever prints
-#                   this word (see `usage_read` below, and #177): this reason
-#                   only reaches disk from a reader that may not spend (the
-#                   board's refresh-on-open, a live session's wake window,
-#                   burn's ranking) or whose refresh was refused by burn's own
-#                   gates (the recorded cockpit, a running burn). It is never
-#                   "this tank cannot be used".
-#   relogin-required the refresh was ATTEMPTED — the engine ran one trivial
-#                   prompt — and the vendor still refused the token. Only
-#                   this needs a person (`clikae claude <tank>`, then /login).
-#                   #177: the two words exist so that "needs a session" and
-#                   "needs a person" can never look alike again; the old
-#                   single word `expired` is retired.
+#                   needs the refresh a session does. `usage_read` tries one
+#                   with no model call first, so this word means that did not
+#                   work, or this reader opted out. It is never "this tank
+#                   cannot be used".
+#   relogin-required `--wake` ran a real prompt and the vendor still refused the
+#                   token. Only this needs a person (`clikae claude <tank>`,
+#                   then /login). The two words exist so that "needs a session"
+#                   and "needs a person" can never look alike.
 #   keychain-denied the Keychain read itself was REFUSED (macOS: no ACL for
 #                   this process, interaction not allowed, a locked keychain
 #                   — exactly what a tmux-hosted wake window gets). Nothing is
@@ -64,18 +58,13 @@ USAGE_LABEL_WINDOW="5h"
 # shellcheck disable=SC2034
 USAGE_LABEL_WEEKLY="7d"
 
-# #177: may THIS reader refresh an expired token by running the engine for
-# one trivial prompt (through `clikae burn`, the same way `--wake` does)? On
-# by default — `clikae usage` and `clikae watch` are a person or a cockpit
-# asking, and an eleven-second refresh is cheaper than a wrong reroute. A
-# reader that must never spend quota sets CLIKAE_USAGE_AUTO_WAKE=0: the
-# board's refresh-on-open (home.sh), a live session's own wake window
-# (wake.sh — the session IS the refresh), burn's run-end and reroute-ranking
-# reads (burn.sh — the burn is the session). The wake child inherits 0 so a
-# refresh can never recurse into another refresh.
+# May THIS reader renew a lapsed token through adapter_usage_refresh? Reading a
+# number never spends quota: the refresh runs no model, and only an explicit
+# `--wake` sends a prompt. CLIKAE_USAGE_AUTO_WAKE=0 is for readers where it would
+# be redundant: a live session's wake window (the session IS the refresh), and
+# burn's and watch's reads.
 _usage_auto_wake_allowed() {
   case "${CLIKAE_USAGE_AUTO_WAKE:-1}" in 0|off|no|false) return 1 ;; esac
-  [ -n "${CLIKAE_BIN:-}" ] && [ -x "${CLIKAE_BIN:-}" ] || return 1
   return 0
 }
 
@@ -166,7 +155,7 @@ _USAGE_NUMERIC_RECORD_JQ='type == "object"
 
 usage_read() (
   local engine="$1" tank="$2" fresh="${3:-0}" cache now ttl reading tmp
-  local adapter_out="" adapter_reason="" adapter_retry="" measured_at="" measured_seen="" can_wake=0 wake_rc
+  local adapter_out="" adapter_reason="" adapter_retry="" measured_at="" measured_seen="" can_wake=0
   _usage_auto_wake_allowed && can_wake=1
   cache="$CLIKAE_HOME/state/usage/$engine/$tank.json"
   now="$(date +%s)"; ttl="${CLIKAE_USAGE_TTL:-120}"
@@ -207,35 +196,14 @@ usage_read() (
     load_adapter "$engine"
     if declare -F adapter_usage >/dev/null; then
       _usage_adapter_call "$engine" "$tank"
-      # #177: REFRESH BEFORE MEASURE. The access token is past its expiry and
-      # a refresh token sits beside it — the one state that used to be printed
-      # as the terminal word `expired`. Run the engine for one trivial prompt
-      # (the same burn `--wake` runs; its cockpit gate and running-burn lock
-      # apply unchanged), then ask again. Only a refresh that RAN and still
-      # left the vendor refusing is `relogin-required`; a refresh that could
-      # not run (gated, no engine, timed out) leaves `needs-refresh`, which
-      # says what it is: stale, not broken.
-      # Review of #184, finding 1: the burn's exit code says whether the
-      # BURN worked (engine answered, artifact written), not whether the
-      # CREDENTIALS were renewed — a run that renewed them can still end in a
-      # limit (rc 2) or a missing artifact, and a refusal because another
-      # burn holds the tank (rc 1/2) is usually that other burn renewing
-      # them. So every wake, whatever its rc, is followed by one more
-      # measurement — never by a second wake — and only that measurement
-      # decides. The pre-wake `needs-refresh` is never published as is.
-      if [ "$adapter_reason" = needs-refresh ] && [ "$can_wake" = 1 ]; then
-        # stderr: this function's stdout IS the reading, captured by callers.
-        declare -F log_info >/dev/null && log_info "$engine/$tank: access token lapsed — refreshing it (one trivial prompt, ≤${_USAGE_WAKE_TIMEOUT_SEC}s)" >&2
-        wake_rc=0
-        usage_wake_burn "$engine" "$tank" || wake_rc=$?
+      # REFRESH BEFORE MEASURE (#177), with no model call. Only the measurement
+      # after it decides. A refresh that changed nothing stays `needs-refresh`,
+      # never `relogin-required`: that word needs a prompt that really ran
+      # (`--wake`), because this command can succeed without renewing anything.
+      if [ "$adapter_reason" = needs-refresh ] && [ "$can_wake" = 1 ] &&
+         declare -F adapter_usage_refresh >/dev/null; then
+        adapter_usage_refresh "$(profile_dir "$engine" "$tank")" || true
         _usage_adapter_call "$engine" "$tank"
-        if [ "$adapter_reason" = needs-refresh ]; then
-          if [ "$wake_rc" = 0 ]; then
-            adapter_reason=relogin-required
-          else
-            declare -F log_warn >/dev/null && log_warn "$engine/$tank: the refresh did not complete (burn rc $wake_rc) and the token still reads lapsed — reading stays needs-refresh (a session on the tank refreshes it)"
-          fi
-        fi
       elif [ "$adapter_reason" = needs-refresh ] && [ "${_CLIKAE_USAGE_AFTER_WAKE:-0}" = 1 ]; then
         # `clikae usage --wake` re-reading after ITS burn completed: the
         # engine ran and the vendor still refuses — this is the failed case.
@@ -366,6 +334,9 @@ _usage_read_finish() {
           disabled: (.disabled == true)} | select(.name != null) ] | .[0:8]
      else [] end) as $groups |
     (.headline_group | gname) as $head |
+    # A window this plan does not have, as opposed to one that could not be read.
+    (.window_absent == true) as $window_absent |
+    (.weekly_absent == true) as $weekly_absent |
     # #179: an auth reason never carries a number — whatever else an adapter
     # put beside it is dropped here (the same rule #107 gave `expired`).
     if $reason == "needs-refresh" or $reason == "relogin-required" or $reason == "keychain-denied" then
@@ -376,6 +347,8 @@ _usage_read_finish() {
      window_resets_at:(.window_resets_at|stamp),weekly_resets_at:(.weekly_resets_at|stamp),
      source:(if .source == "vendor" or .source == "transcript" or .source == "quota-api" then .source else "unknown" end)} |
     if .source == "unknown" and $reason != null then . + {reason:$reason} else . end |
+    if .source != "unknown" and $window_absent and .window_pct == null then . + {window_absent:true} else . end |
+    if .source != "unknown" and $weekly_absent and .weekly_pct == null then . + {weekly_absent:true} else . end |
     if .source == "unknown" and $reason == "rate-limited" and $retry != null
     then . + {retry_after:$retry} else . end |
     if (.source == "vendor" or .source == "quota-api") and ($models|length) > 0 then . + {models:$models} else . end |
@@ -593,6 +566,8 @@ usage_agy_last_used() {
 #   dry_marked_at    epoch of this tank's dry_store marker (the last burn that
 #                    hit a limit), or null.
 #   last_used_at     antigravity only: usage_agy_last_used, or null.
+# A reading older than this says so in the JSON (`stale:true`).
+_USAGE_STALE_SEC=21600
 _usage_public() {
   local engine="$1" tank="$2" now="$3" dry_at="" used_at="" _t
   if [ -f "$CLIKAE_HOME/dry/$engine/$tank" ]; then
@@ -603,6 +578,9 @@ _usage_public() {
   jq -c --arg engine "$engine" --argjson now "$now" --arg dry "$dry_at" --arg used "$used_at" "$_USAGE_NORM_STAMP_JQ"'
     . as $r | del(.cached_at, .scanned_at, .last_good) |
     . + {age_sec:(if ($r.cached_at|type) == "number" then ([$now - $r.cached_at, 0]|max) else null end)} |
+    . + {window_used_pct:.window_pct, weekly_used_pct:.weekly_pct} |
+    (if (.window_pct != null or .weekly_pct != null) and (.age_sec // 0) > '"$_USAGE_STALE_SEC"'
+     then . + {stale:true} else . end) |
     (if (.window_pct != null) and (.window_resets_at|expired) then . + {window_reset_passed:true} else . end) |
     (if (.weekly_pct != null) and (.weekly_resets_at|expired) then . + {weekly_reset_passed:true} else . end) |
     if (.window_pct == null and .weekly_pct == null) then
@@ -812,15 +790,15 @@ usage_cache_peek() {
   [ -n "$now" ] || now="$(date +%s)"
   jq -er --argjson now "$now" --argjson max_age "$_USAGE_CACHE_PEEK_MAX_AGE_SEC" "$_USAGE_NORM_STAMP_JQ"'
     select(.source == "vendor" or .source == "transcript" or .source == "quota-api") |
-    select(.window_pct != null and .weekly_pct != null) |
+    select(.window_pct != null or .weekly_pct != null) |
     (.cached_at) as $evidence |
     select($evidence != null) |
     # P3-7 (round-6 review): one clock-skew rule, shared with the board.
     # A timestamp in the FUTURE counts as age 0. See this function header.
     (if ($now - $evidence) < 0 then 0 else ($now - $evidence) end) as $age |
     select($age <= $max_age) |
-    (if (.window_resets_at|expired) then 0 else .window_pct end) as $w |
-    (if (.weekly_resets_at|expired) then 0 else .weekly_pct end) as $k |
+    (if (.window_resets_at|expired) then 0 else (.window_pct // 0) end) as $w |
+    (if (.weekly_resets_at|expired) then 0 else (.weekly_pct // 0) end) as $k |
     [$w,$k,([$w,$k]|max)] | @tsv' "$cache" 2>/dev/null
 }
 
@@ -840,7 +818,7 @@ usage_cache_has_reading() {
   local cache="$CLIKAE_HOME/state/usage/$1/$2.json"
   [ -f "$cache" ] || return 1
   command -v jq >/dev/null 2>&1 || return 1
-  jq -e '(.source == "vendor" or .source == "transcript" or .source == "quota-api") and .window_pct != null and .weekly_pct != null' \
+  jq -e '(.source == "vendor" or .source == "transcript" or .source == "quota-api") and (.window_pct != null or .weekly_pct != null)' \
     "$cache" >/dev/null 2>&1
 }
 
@@ -897,7 +875,7 @@ usage_cached_fields() {
   jq -er --argjson now "$now" --argjson ttl "$ttl" "$_USAGE_NORM_STAMP_JQ"'
     (.scanned_at // .cached_at) as $scanned |
     select((.source == "vendor" or .source == "transcript" or .source == "quota-api") and $scanned <= $now and ($now-$scanned < $ttl)) |
-    select(.window_pct != null and .weekly_pct != null) |
+    select(.window_pct != null or .weekly_pct != null) |
     select(all(.window_resets_at, .weekly_resets_at; expired | not)) |
-    [.window_pct,.weekly_pct,([.window_pct,.weekly_pct]|max)] | @tsv' "$cache" 2>/dev/null
+    [(.window_pct // 0),(.weekly_pct // 0),([.window_pct,.weekly_pct]|max)] | @tsv' "$cache" 2>/dev/null
 }

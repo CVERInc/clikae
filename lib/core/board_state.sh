@@ -291,7 +291,8 @@ _board_entry_key() {
 # per-model / credits side fact, lib/core/limit.sh's _LIMIT_READING_AWK), and a
 # per-model limit no longer counts as the tank's — an 8 generation would keep
 # serving the old false-dry reading for every transcript that did not change.
-_BOARD_GEN_FORMAT=9
+# 10: a clean codex task_complete counts as a success (#196).
+_BOARD_GEN_FORMAT=10
 _board_gen_format_ok() {
   local v=""
   [ -f "$1/format" ] || return 1
