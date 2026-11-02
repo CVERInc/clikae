@@ -96,7 +96,7 @@ the restart — quit the engine, run the same command again. If a cleanup does
 delete the socket file of a running server, the next <code>clikae</code> asks that
 server to re-create it and the session is back on the board.</p>
 <p><strong>The bottom row is the command back, the fuel, and what is red</strong> — e.g.
-<code>clikae resume a52bdc12 │ 5h 42% · 7d 65% │ !2</code>. The fuel is this tank's
+<code>clikae resume a52bdc12 │ 5h 58% · 7d 35% │ !2</code>. The fuel is this tank's
 vendor usage (how much of the 5-hour and 7-day window is spent), and the
 session keeps it current itself: it takes one reading a few seconds after you
 start, and one every five minutes after that, for as long as the session is
@@ -179,7 +179,7 @@ axis's own <code>resets_at</code> is already behind now, <code>window_reset_pass
 says nothing about the current window (#174). The summary line prints the age
 past an hour (<code>claude 92 3h ago</code>) and says <code>reset</code> instead of a percentage
 whose window has since reset.</p>
-<p>On the board that reads <code>7d 85% · 5h ago · needs-refresh</code>. An agy tank whose
+<p>On the board that reads <code>7d █░░░░░░░ 15% · 5h ago · needs-refresh</code>. An agy tank whose
 saved access token is still live (Linux file backend; the token lives an hour
 and only agy refreshes it) is read through agy's own
 <code>v1internal:retrieveUserQuotaSummary</code>, <code>source:&quot;quota-api&quot;</code>: each quota bucket
