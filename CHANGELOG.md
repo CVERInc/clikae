@@ -18,6 +18,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **The board shows fuel left, as a bar**: `5h ███████░ 97%  7d ███████░ 89%`.
+  Vendors disagree on used versus left, so one unit is shown everywhere a person
+  reads a number: the board, the tmux row (no bar), and the `clikae usage` summary.
+  `--json` still reports percent used, in `window_used_pct` and `weekly_used_pct`.
 - **Moving the cursor on the board no longer recomposes the frame.** Rows are
   cached and only the two that change are redrawn. Rows rebuild after any other
   key, and every 60 seconds while idle.
@@ -29,6 +33,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   prompt to any tank whose access token had lapsed. It now refreshes with `claude
   auth status`, which runs no model, and only `--wake` sends a prompt. The board
   does the same on open, so idle tanks show real numbers.
+
+### Added
+
+- `clikae usage --json` states its unit and its gaps: `window_used_pct` and
+  `weekly_used_pct` (`window_pct` and `weekly_pct` stay as older names),
+  `window_absent` or `weekly_absent` when a plan has no such window, and
+  `stale:true` on a reading over 6 hours old.
+- `clikae usage --json` states its unit and its gaps: `window_used_pct` and
+  `weekly_used_pct` (`window_pct` and `weekly_pct` stay as older names),
+  `window_absent` or `weekly_absent` when a plan has no such window, and
+  `stale:true` on a reading over 6 hours old.
 
 ### Fixed
 
@@ -67,13 +82,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   carry-on prompt now needs a limit newer than the session that just ended. For
   codex, a tank that reads dry is checked live on exit (no model runs), so a
   quota restored by a reset credit stops reading as dry.
-
-### Added
-
-- `clikae usage --json` states its unit and its gaps: `window_used_pct` and
-  `weekly_used_pct` (`window_pct` and `weekly_pct` stay as older names),
-  `window_absent` or `weekly_absent` when a plan has no such window, and
-  `stale:true` on a reading over 6 hours old.
 
 ## [0.43.0] — 2026-10-21
 

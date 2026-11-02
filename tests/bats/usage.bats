@@ -93,7 +93,7 @@ live_usage() {
   [ "$(wc -l < "$USAGE_CALLS" | tr -d ' ')" = 1 ]
   run clikae
   [ "$status" -eq 0 ]
-  [[ "$output" == *'5h 65% · 7d 92%'* ]] || false
+  [[ "$output" == *'5h ██░░░░░░ 35%  7d █░░░░░░░ 8%'* ]] || false
   printf '%s\n' "$output" >> "$TEST_HOME/output.log"
   run clikae usage --fresh --json
   [ "$status" -eq 0 ]
@@ -613,7 +613,7 @@ STUB
   # Green under the 2026-09-22 thresholds (window 65 < 90, weekly 20 < 85);
   # this case is about the reading being SHOWN with its age, not its colour.
   [ "$_FDOT" = G● ]
-  [ "$_FNOTE" = '5h 65% · 7d 20% · 3h ago' ]
+  [ "$_FNOTE" = '5h ██░░░░░░ 35%  7d ██████░░ 80% · 3h ago' ]
 
   # 25h old — past the 24h line: too stale to show as a number at all, falls
   # through to whatever the rest of the chain says below (weekly/codex/
@@ -768,7 +768,7 @@ STUB
   # (age 0 is inside the 120s TTL), which is what the ranking ruler now
   # agrees with rather than contradicting.
   _home_fuel_dotv_compute '' claude work "$now"
-  [ "$_FNOTE" = '5h 30% · 7d 30%' ] || { echo "board note: $_FNOTE"; false; }
+  [ "$_FNOTE" = '5h █████░░░ 70%  7d █████░░░ 70%' ] || { echo "board note: $_FNOTE"; false; }
 
   # Skew cannot LAUNDER a genuinely old reading: a stamp 30 minutes in the
   # past is still past the 900s ceiling and still unknown for ranking.
@@ -2005,11 +2005,11 @@ _usage179_reset_stamp() {
   echo "$output" | jq -e '.source == "vendor" and .weekly_pct == 92 and .age_sec >= 10800 and .age_sec < 10900' \
     || { echo "aged got: $output"; false; }
   CLIKAE_USAGE_TTL=999999 run --separate-stderr clikae usage claude work
-  [ "$(printf '%s\n' "$stderr" | tail -n 1)" = "claude 92 3h ago" ] || { echo "summary: $stderr"; false; }
+  [ "$(printf '%s\n' "$stderr" | tail -n 1)" = "claude 8 3h ago" ] || { echo "summary: $stderr"; false; }
   # Under an hour the token is bare, as before.
   _usage107_age 600
   CLIKAE_USAGE_TTL=999999 run --separate-stderr clikae usage claude work
-  [ "$(printf '%s\n' "$stderr" | tail -n 1)" = "claude 92" ] || { echo "summary: $stderr"; false; }
+  [ "$(printf '%s\n' "$stderr" | tail -n 1)" = "claude 8" ] || { echo "summary: $stderr"; false; }
 }
 
 @test "#174: a window whose reset has passed since the reading is shown as reset, not as its old percentage" {
@@ -2080,7 +2080,7 @@ _usage179_security() {
   run clikae usage claude work --json
   run clikae
   [ "$status" -eq 0 ]
-  [[ "$output" == *'5h 65% · 7d 92%'* ]] || { echo "$output"; false; }
+  [[ "$output" == *'5h ██░░░░░░ 35%  7d █░░░░░░░ 8%'* ]] || { echo "$output"; false; }
   [[ "$output" != *'window 65%'* ]] || false
   source "$CLIKAE_TEST_ROOT/lib/core/usage.sh"
   [ "$USAGE_LABEL_WINDOW" = 5h ] && [ "$USAGE_LABEL_WEEKLY" = 7d ]

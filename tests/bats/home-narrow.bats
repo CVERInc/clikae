@@ -147,7 +147,7 @@ _n155_setup() {
   [[ "$N155_OUT" == *"⟳"[0-9]*[mhd]* ]] || { echo "no relative reset:"; echo "$N155_OUT"; false; }
   [[ "$N155_OUT" != *"Asia/Tokyo"* ]] || { echo "the timezone is still printed:"; echo "$N155_OUT"; false; }
   # …and a status is never split mid-token: the whole reading is on one line.
-  grep -qF '5h 44% · 7d 20% · Fable 100%' <<< "$N155_OUT" || {
+  grep -qF '5h ██░░ 56%  7d ███░ 80% · Fable 0%' <<< "$N155_OUT" || {
     echo "the usage status was split:"; echo "$N155_OUT"; false; }
 }
 
@@ -177,7 +177,7 @@ _n155_setup() {
   next="$(grep -A1 -m1 ' busy ' <<< "$N155_OUT" | sed -n 2p)"
   ncol="$(_n155_col "$row" busy)"
   lead="${next%%[! ]*}"
-  [ "${#lead}" -eq "$ncol" ] && [[ "$next" == *"5h 44%"* ]] || {
+  [ "${#lead}" -eq "$ncol" ] && [[ "$next" == *"5h ██░░ 56%"* ]] || {
     echo "status continuation at col ${#lead}, name at col $ncol:"; echo "$row"; echo "$next"; false; }
   # The selected resume row's hover line (5 × Down: 4 tanks, then the 2nd session).
   _n155_render 46 Down Down Down Down Down
