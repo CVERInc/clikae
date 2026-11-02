@@ -137,7 +137,11 @@ and when it resets. No engine/tank = every tank. --json prints one object
 per tank, adding "engine"/"tank" to the reading; the plain form prints
 "<engine>/<tank> <reading>".
 
-Reading fields: window_pct, weekly_pct (0-100, or null), window_resets_at,
+Reading fields: window_used_pct, weekly_used_pct (percent USED, 0-100, or null;
+window_pct and weekly_pct are the same numbers under their older names),
+window_absent or weekly_absent (true: this plan has no such window, which is not
+the same as could-not-read), stale (true: the reading is over 6 hours old),
+window_resets_at,
 weekly_resets_at (ISO instants, or null), source. source is "vendor" (a
 live call answered), "quota-api" (agy: its own retrieveUserQuotaSummary
 answered; the top-level numbers are one quota group's, headline_group,

@@ -37,6 +37,7 @@ if [ -n "${USAGE_HTTP:-}" ]; then
 fi
 if [ "${USAGE_NETFAIL:-0}" = 1 ]; then printf '000' >&2; exit 6; fi
 if [ "${USAGE_GARBAGE:-0}" = 1 ]; then printf '200' >&2; echo 'not json'; exit 0; fi
+if [ -n "${USAGE_BODY:-}" ]; then printf '200' >&2; printf '%s' "$USAGE_BODY"; exit 0; fi
 # P2-3 (round-1 review): the vendor's real shape is microseconds + a numeric
 # UTC offset, never a bare "…Z" — the old fixture used "2099-01-01T00:00:00Z"
 # and so never exercised the format the vendor actually sends.
@@ -1623,7 +1624,7 @@ _usage107_calls() { if [ -f "$USAGE_CALLS" ]; then wc -l < "$USAGE_CALLS" | tr -
   # #179: a reader that may not spend (the shape under test is the no-number one).
   USAGE_HTTP=401 CLIKAE_USAGE_AUTO_WAKE=0 run --separate-stderr clikae usage claude work --json
   [ "$status" -eq 0 ]
-  echo "$output" | jq -e '(keys | sort) == (["engine","tank","window_pct","weekly_pct","window_resets_at","weekly_resets_at","source","reason","age_sec","gap","last_window_pct","last_weekly_pct","last_at","last_age_sec","dry_marked_at"] | sort)' \
+  echo "$output" | jq -e '(keys | sort) == (["engine","tank","window_pct","weekly_pct","window_used_pct","weekly_used_pct","window_resets_at","weekly_resets_at","source","reason","age_sec","gap","last_window_pct","last_weekly_pct","last_at","last_age_sec","dry_marked_at"] | sort)' \
     || { echo "got: $output"; false; }
   [ "$(printf '%s\n' "$output" | wc -l | tr -d ' ')" = 1 ]
   # --json never carries the human hint; the plain form puts it on stderr, so
@@ -2505,4 +2506,62 @@ SH
   OSTYPE=darwin22 run clikae usage claude work --fresh --json
   echo "$output" | jq -e '.source == "vendor" and .reason == "keychain-denied" and .weekly_pct == 92 and .age_sec >= 10800' \
     || { echo "control got: $output"; false; }
+}
+
+# --- plans with one window ----------------------------------------------------
+
+@test "claude with no 5-hour window: weekly reads, the gap is named, every reader accepts it" {
+  usage_fixture
+  # Real shape from a plan with no 5-hour window (2026-11-02).
+  export USAGE_BODY='{"five_hour":null,"seven_day":{"utilization":5.0,"resets_at":"2099-01-07T00:00:00.189960+00:00"},"limits":[{"kind":"weekly_all","percent":5}]}'
+  run clikae usage claude work --json
+  [ "$status" -eq 0 ]
+  echo "$output" | jq -e '.source == "vendor" and .window_pct == null and .weekly_pct == 5 and .window_absent == true and .weekly_used_pct == 5 and (has("reason")|not)'
+  # shellcheck source=/dev/null
+  . "$CLIKAE_TEST_ROOT/lib/core/usage.sh"
+  run usage_cache_peek claude work
+  [ "$status" -eq 0 ]
+  [ "$(printf '%s' "$output" | cut -f1)" = 0 ]
+  [ "$(printf '%s' "$output" | cut -f2 | cut -d. -f1)" = 5 ]
+}
+
+@test "claude with neither window is still unparseable, and a present-but-odd window is not called absent" {
+  usage_fixture
+  export USAGE_BODY='{"five_hour":null,"seven_day":null}'
+  run clikae usage claude work --json --fresh
+  echo "$output" | jq -e '.source == "unknown" and .reason == "unparseable" and (has("window_absent")|not)'
+  export USAGE_BODY='{"five_hour":{"utilization":"x"},"seven_day":{"utilization":7,"resets_at":"2099-01-07T00:00:00.189960+00:00"}}'
+  run clikae usage claude work --json --fresh
+  echo "$output" | jq -e '.weekly_pct == 7 and (has("window_absent")|not)'
+}
+
+_codex_rollout_one() {
+  clikae init codex work
+  mkdir -p "$CLIKAE_HOME/profiles/codex/work/sessions/2026/09/10"
+  printf '{"timestamp":"%s","type":"event_msg","payload":{"type":"token_count","info":{},"rate_limits":%s}}\n' "$1" "$2" \
+    > "$CLIKAE_HOME/profiles/codex/work/sessions/2026/09/10/rollout-a.jsonl"
+}
+
+@test "codex with one 7-day window: it lands in the weekly slot, not by position" {
+  usage_fixture
+  _codex_rollout_one 2026-09-10T09:00:00.000Z '{"limit_id":"codex","primary":{"used_percent":72.0,"window_minutes":10080,"resets_at":4102444800},"secondary":null,"plan_type":"prolite"}'
+  run clikae usage codex work --json
+  [ "$status" -eq 0 ]
+  echo "$output" | jq -e '.window_pct == null and .weekly_pct == 72 and .window_absent == true and .weekly_resets_at == "2100-01-01T00:00:00Z" and .weekly_used_pct == 72'
+}
+
+@test "codex with both windows: each by its own length, even when swapped" {
+  usage_fixture
+  _codex_rollout_one 2026-09-10T09:00:00.000Z '{"primary":{"used_percent":96,"window_minutes":10080,"resets_at":4102444800},"secondary":{"used_percent":10,"window_minutes":300,"resets_at":4102444800}}'
+  run clikae usage codex work --json
+  echo "$output" | jq -e '.window_pct == 10 and .weekly_pct == 96 and (has("window_absent")|not) and (has("weekly_absent")|not)'
+}
+
+@test "a reading over 6 hours old says stale, a fresh one does not" {
+  usage_fixture
+  _codex_rollout_one 2026-09-10T09:00:00.000Z '{"primary":{"used_percent":10,"window_minutes":300,"resets_at":4102444800},"secondary":{"used_percent":20,"window_minutes":10080,"resets_at":4102444800}}'
+  run clikae usage codex work --json
+  echo "$output" | jq -e '.stale == true'
+  run clikae usage claude work --json
+  echo "$output" | jq -e 'has("stale")|not'
 }

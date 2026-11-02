@@ -7,6 +7,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- `clikae usage --json` states its unit and its gaps: `window_used_pct` and
+  `weekly_used_pct` (`window_pct` and `weekly_pct` stay as older names),
+  `window_absent` or `weekly_absent` when a plan has no such window, and
+  `stale:true` on a reading over 6 hours old.
+
+### Fixed
+
+- **A plan with no 5-hour window reads correctly** (#195, #198). Claude tanks
+  without one reported `unparseable`, and codex tanks had their 7-day number
+  filed as the 5-hour one. Each window is now classified by its own length, and
+  every reader accepts a tank with one window: usage, burn's ordering, and the
+  tmux row.
+
 ## [0.43.0] — 2026-10-21
 
 ### Added

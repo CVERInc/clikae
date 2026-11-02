@@ -1405,8 +1405,7 @@ adapter_usage() (
   # usage`'s output (and the cache) and stop there; see docs/usage.md.
   printf '%s' "$response" | jq -ce -s '
     if (length != 1) or ((.[0]|type) != "object") then empty else .[0] end |
-    select(.five_hour.utilization|type == "number") |
-    select(.seven_day.utilization|type == "number") |
+    select((.five_hour.utilization|type) == "number" or (.seven_day.utilization|type) == "number") |
     . as $r |
     ([ (if ($r.limits|type) == "array" then $r.limits[] else empty end) |
        select(type == "object") | select(.kind == "weekly_scoped") |
@@ -1417,6 +1416,8 @@ adapter_usage() (
      ] | .[0:8]) as $models |
     {window_pct:$r.five_hour.utilization,weekly_pct:$r.seven_day.utilization,
      window_resets_at:$r.five_hour.resets_at,weekly_resets_at:$r.seven_day.resets_at,source:"vendor"} +
+    (if $r.five_hour == null then {window_absent:true} else {} end) +
+    (if $r.seven_day == null then {weekly_absent:true} else {} end) +
     (if ($models|length) > 0 then {models:$models} else {} end)' 2>/dev/null ||
     { _claude_usage_unreadable unparseable; return 1; }
 )
