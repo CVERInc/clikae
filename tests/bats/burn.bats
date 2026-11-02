@@ -1035,6 +1035,42 @@ STUB
   [[ "$output" == *"declined"* ]] || false
 }
 
+@test "burn agy: a lapsed login fails loudly and names the tank, with no artifact (#192)" {
+  # Measured on agy 1.4.12: the auth wait ends with exit 1 and this text.
+  local bin="$BATS_TEST_TMPDIR/bin"; mkdir -p "$bin"
+  cat > "$bin/agy" <<'STUB'
+#!/usr/bin/env bash
+log="$HOME/.gemini/antigravity-cli/cli.log"; mkdir -p "$(dirname "$log")"; : > "$log"
+printf 'Authentication required. Please visit the URL to log in:\nWaiting for authentication (timeout 60s)...\nError: authentication timed out.\nerror: authentication failed or timed out\n' >&2
+exit 1
+STUB
+  chmod +x "$bin/agy"; PATH="$bin:$PATH"; export PATH
+  printf 'y\n' | "$CLIKAE_BIN" init agy default >/dev/null 2>&1
+  local art="$BATS_TEST_TMPDIR/auth.md"
+  run clikae burn agy default --artifact "$art" --prompt "x"
+  [ "$status" -ne 0 ]
+  [ ! -f "$art" ]
+  [[ "$output" == *"agy/default is not logged in"* ]] || false
+  [[ "$output" != *"CAPTURED"* ]] || false
+}
+
+@test "burn agy: any other non-zero exit is a failure too, never a captured answer (#192)" {
+  local bin="$BATS_TEST_TMPDIR/bin"; mkdir -p "$bin"
+  cat > "$bin/agy" <<'STUB'
+#!/usr/bin/env bash
+log="$HOME/.gemini/antigravity-cli/cli.log"; mkdir -p "$(dirname "$log")"; : > "$log"
+echo "something broke"
+exit 3
+STUB
+  chmod +x "$bin/agy"; PATH="$bin:$PATH"; export PATH
+  printf 'y\n' | "$CLIKAE_BIN" init agy default >/dev/null 2>&1
+  local art="$BATS_TEST_TMPDIR/err.md"
+  run clikae burn agy default --artifact "$art" --prompt "x"
+  [ "$status" -ne 0 ]
+  [ ! -f "$art" ]
+  [[ "$output" == *"failed (exit 3)"* ]] || false
+}
+
 @test "burn agy: success says CAPTURED, not verified" {
   # burn's artifact means "the ENGINE did the work" for claude/codex. For agy
   # clikae only relocates stdout, which proves nothing — the wording must not

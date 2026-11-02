@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **`burn agy` no longer reports a failed run as DONE** (#192). Its exit code was
+  discarded, so a lapsed login's error text was saved as the artifact. A non-zero
+  exit is now a failure, and a login failure names the tank to log in to. The
+  claim that no OAuth is needed when switching tanks is gone from the burn log,
+  because it can be false.
+
 ## [0.43.0] — 2026-10-21
 
 ### Added
