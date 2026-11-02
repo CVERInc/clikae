@@ -74,22 +74,23 @@ _usage_summary_add() {
   # says `reset` instead of the percentage it had before the reset.
   tok="$(printf '%s' "$2" | jq -r --argjson now "$(date +%s)" '
     def r: if type == "number" then (. + 0.5 | floor | tostring) else null end;
+    def l: if type == "number" then (100 - (. + 0.5 | floor) | tostring) else null end;
     def age: if . == null or . < 3600 then "" elif . < 86400 then " \(./3600|floor)h ago" else " \(./86400|floor)d ago" end;
     (.weekly_pct | numbers // -1) as $wk |
-    ([(.models // [])[] | select(.pct > $wk) | "\(.name) \(.pct|r)"] | join(",")) as $bind |
+    ([(.models // [])[] | select(.pct > $wk) | "\(.name) \(.pct|l)"] | join(",")) as $bind |
     (if $bind == "" then "" else "(" + $bind + ")" end) as $sp |
     (.age_sec | age) as $a |
     (.last_age_sec | age) as $la |
     if (.weekly_pct|r) != null then
-      (if .weekly_reset_passed == true then "reset" else (.weekly_pct|r) + $sp end) + $a
+      (if .weekly_reset_passed == true then "reset" else (.weekly_pct|l) + $sp end) + $a
     elif (.window_pct|r) != null then
-      (if .window_reset_passed == true then "reset" else (.window_pct|r) + $sp end) + $a
+      (if .window_reset_passed == true then "reset" else (.window_pct|l) + $sp end) + $a
     elif (.last_used_at|type) == "number" then
       ($now - .last_used_at) as $d |
       "@" + (if $d < 3600 then "\($d/60|floor)m" elif $d < 86400 then "\($d/3600|floor)h" else "\($d/86400|floor)d" end)
     elif .gap == "no-signal" and has("last_used_at") then "no-signal"
-    elif (.last_weekly_pct|r) != null then (.last_weekly_pct|r) + "?" + $la
-    elif (.last_window_pct|r) != null then (.last_window_pct|r) + "?" + $la
+    elif (.last_weekly_pct|r) != null then (.last_weekly_pct|l) + "?" + $la
+    elif (.last_window_pct|r) != null then (.last_window_pct|l) + "?" + $la
     else "??" end' 2>/dev/null)" || tok="??"
   [ -n "$tok" ] || tok="??"
   var="_USAGE_SUM_$(printf '%s' "$e" | tr -c 'A-Za-z0-9' '_')"
@@ -153,7 +154,7 @@ is) and, when an axis's own resets_at is already behind now,
 it is from before a reset.
 
 Reading never spends quota. An access token past its expiry is refreshed first
-with no model call (claude: `claude auth status`), then measured. --wake is the
+with no model call (`claude auth status`, `agy models`), then measured. --wake is the
 one form that sends a prompt. CLIKAE_USAGE_AUTO_WAKE=0 turns the refresh off.
 
 A reading with no numbers may carry one more field, "reason" — present only

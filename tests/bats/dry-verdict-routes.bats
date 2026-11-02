@@ -151,7 +151,7 @@ _wrasse_usage() {
   [ "$status" -eq 0 ]
 }
 
-@test "route B: the board row reads 'Fable dry · 7d 79%' on a non-red dot" {
+@test "route B: the board row reads 'Fable dry · 7d █░░░░░░░ 21%' on a non-red dot" {
   _boot
   _claude_tank wrasse _wrasse_line
   _wrasse_usage wrasse
@@ -159,7 +159,7 @@ _wrasse_usage() {
   _home_fuel_memo_reset
   _home_fuel_dotv "$dry" claude wrasse
   [[ "$_FNOTE" == "Fable dry · "* ]] || { echo "note: $_FNOTE"; false; }
-  [[ "$_FNOTE" == *"7d 79%"* ]] || { echo "note: $_FNOTE"; false; }
+  [[ "$_FNOTE" == *"7d █░░░░░░░ 21%"* ]] || { echo "note: $_FNOTE"; false; }
   [[ "$_FDOT" != RED* ]] || { echo "dot: $_FDOT"; false; }
   ! _home_is_dryv "$dry" claude wrasse || false
 }

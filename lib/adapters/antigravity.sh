@@ -601,12 +601,10 @@ adapter_recent_sids() {
 # number from claude's vendor endpoint while treating it the same.
 #
 # The token file is the Linux "file" backend's (lib/commands/antigravity.sh,
-# #96). No file (the macOS Keychain backend, or a tank that never logged in),
-# an access token past its own recorded expiry, or a refusal: print nothing
-# and fail, so usage_read falls back to exactly today's "no-signal" row. An
-# expired agy token is the NORMAL idle state (it lives an hour and only agy
-# refreshes it), and `clikae usage --wake` is a claude-shaped remedy — calling
-# it "expired" would put a wrong instruction on most agy rows.
+# #96). No file (the macOS Keychain backend, or a tank that never logged in) or
+# a refusal: print nothing and fail, so usage_read falls back to the "no-signal"
+# row. An access token past its own expiry is the NORMAL idle state (it lives an
+# hour): it says needs-refresh, and adapter_usage_refresh below renews it.
 # The token lives in this subshell and curl's stdin only, never argv/env/disk.
 # MEASURED 2026-09-27 on a real tank: both calls must look like agy's own.
 # loadCodeAssist with ideType IDE_UNSPECIFIED answers 200 but names no project
@@ -626,6 +624,13 @@ adapter_recent_sids() {
 # own numbers under `groups`, and the top-level window/weekly are ONE group's:
 # `headline_group`, the one the work will spend (CLIKAE_AGY_USAGE_MODEL, set by
 # burn from the model it passes agy; Gemini, agy's default, when there is none).
+#
+# MEASURED 2026-11-02 on three tanks (free and Pro): the summary had stopped naming
+# the Gemini group, for every tank, while `retrieveUserQuota` still lists each Gemini
+# model with the shared fraction and reset. So a summary without Gemini gets a group
+# built from that list. Its buckets name no window, so the reset distance classes
+# them. No dry Gemini model has been observed: a model with no fraction is skipped,
+# as in the summary, not assumed dry.
 _AGY_USAGE_BASE="${CLIKAE_AGY_USAGE_BASE:-https://daily-cloudcode-pa.googleapis.com}"
 
 # _agy_usage_platform -> the ClientMetadata.Platform value for this host.
@@ -659,10 +664,44 @@ _agy_usage_post() {
   printf '%s' "$out"
 }
 
+# adapter_usage_refresh <dir>: renew a lapsed access token with no model call and
+# no quota. `agy models` refreshes as a side effect (measured on 1.4.12: 2s, and a
+# token a day past expiry came back good for an hour; a dead login exits 1). HOME
+# points at a throwaway directory so this tank is read without repointing the
+# shared ~/.gemini another agy may be using, and --log-file keeps the run out of
+# the tank's own logs, which are what "last used" reads.
+adapter_usage_refresh() {
+  local dir="$1" h rc=0
+  [ -f "$dir/antigravity-cli/antigravity-oauth-token" ] || return 1
+  command -v agy >/dev/null 2>&1 || return 1
+  h="$(mktemp -d "${TMPDIR:-/tmp}/clikae-agy.XXXXXX" 2>/dev/null)" || return 1
+  ln -s "$dir" "$h/.gemini" || { rm -rf "$h"; return 1; }
+  HOME="$h" _bounded_run 30 agy --log-file "$h/agy.log" models >/dev/null 2>&1 </dev/null || rc=$?
+  rm -f "$h/.gemini"
+  rm -rf "$h"
+  return "$rc"
+}
+
+# _agy_usage_with_models <summary> <per-model quota> -> the summary, with a Gemini
+# group made from the per-model list: one bucket per distinct reset, its lowest
+# fraction. Unchanged when the list has no Gemini model.
+_agy_usage_with_models() {
+  printf '%s\n%s' "$1" "$2" | jq -cs '
+    .[0] as $s |
+    [ (.[1].buckets // [])[]? | select(type == "object") |
+      select((.modelId | type) == "string" and (.modelId | startswith("gemini-"))) |
+      select((.remainingFraction | type) == "number") ] |
+    if length == 0 then $s else
+      [ group_by(.resetTime)[] | min_by(.remainingFraction) |
+        {bucketId: "gemini-models", remainingFraction, resetTime} ] as $b |
+      $s | .groups = ((.groups // []) + [{displayName: "Gemini Models", buckets: $b}])
+    end' 2>/dev/null
+}
+
 adapter_usage() (
   set +x
   set +a
-  local dir="$1" tokf token project body now
+  local dir="$1" tokf token project body now models merged
   export -n token
   tokf="$dir/antigravity-cli/antigravity-oauth-token"
   [ -f "$tokf" ] && command -v jq >/dev/null 2>&1 || exit 1
@@ -672,7 +711,13 @@ adapter_usage() (
     (.expiry // "" | if type == "string" and . != ""
        then (sub("\\.[0-9]+"; "") | try fromdateiso8601 catch 0) else 0 end) as $exp |
     select($exp > $now + 30) | .access_token | select(type == "string" and . != "")' \
-    "$tokf" 2>/dev/null)" || { token=""; exit 1; }
+    "$tokf" 2>/dev/null)" || {
+    token=""
+    # No refresh token: nothing here can renew it, so it stays no-signal.
+    jq -e '.token.refresh_token | type == "string" and . != ""' "$tokf" >/dev/null 2>&1 &&
+      printf '{"source":"unknown","reason":"needs-refresh"}\n'
+    exit 1
+  }
   case "$token" in *[!a-zA-Z0-9._~+/-]*) token=""; exit 1 ;; esac
   project="$(_agy_usage_post "$token" loadCodeAssist \
       "{\"metadata\":{\"ideType\":\"ANTIGRAVITY\",\"platform\":\"$(_agy_usage_platform)\",\"pluginType\":\"GEMINI\"}}" |
@@ -682,6 +727,12 @@ adapter_usage() (
   body="$(_agy_usage_post "$token" retrieveUserQuotaSummary \
     "$(jq -cn --arg p "$project" 'if $p == "" then {} else {project:$p} end')")" ||
     { token=""; exit 1; }
+  if ! printf '%s' "$body" | jq -e '[.groups[]?.buckets[]?.bucketId | tostring] | any(startswith("gemini"))' >/dev/null 2>&1 &&
+     models="$(_agy_usage_post "$token" retrieveUserQuota \
+       "$(jq -cn --arg p "$project" 'if $p == "" then {} else {project:$p} end')")" &&
+     merged="$(_agy_usage_with_models "$body" "$models")" && [ -n "$merged" ]; then
+    body="$merged"
+  fi
   token=""
   local hint=""
   hint="$(_agy_usage_group_hint "${CLIKAE_AGY_USAGE_MODEL:-}")"
