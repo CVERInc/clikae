@@ -92,8 +92,8 @@ _dead_pid() { printf '2147483647'; }
   _src
   _usage_cache claude wrasse 42.0 65.0
   run tmux_status_render claude wrasse '' '' 120
-  [[ "$output" == *"5h 42%"* ]] || { echo "$output"; false; }
-  [[ "$output" == *"7d 65%"* ]] || { echo "$output"; false; }
+  [[ "$output" == *"5h 58%"* ]] || { echo "$output"; false; }
+  [[ "$output" == *"7d 35%"* ]] || { echo "$output"; false; }
   # `wk` was the first wording and chodaict corrected it: both windows are
   # written as time spans, so the weekly one is `7d`.
   [[ "$output" != *"wk "* ]] || { echo "$output"; false; }
@@ -144,7 +144,7 @@ _dead_pid() { printf '2147483647'; }
   _src
   _usage_cache claude wrasse 42.0 65.0 1800   # 30m
   run tmux_status_render claude wrasse '' '' 120
-  [[ "$output" == *"5h 42% · 7d 65%"* ]] || { echo "$output"; false; }
+  [[ "$output" == *"5h 58% · 7d 35%"* ]] || { echo "$output"; false; }
   [[ "$output" != *"ago"* ]] || { echo "$output"; false; }
 }
 
@@ -152,7 +152,7 @@ _dead_pid() { printf '2147483647'; }
   _src
   _usage_cache claude wrasse 42.0 65.0 10800   # 3h
   run tmux_status_render claude wrasse '' '' 120
-  [[ "$output" == *"5h 42% · 7d 65% · 3h ago"* ]] || { echo "$output"; false; }
+  [[ "$output" == *"5h 58% · 7d 35% · 3h ago"* ]] || { echo "$output"; false; }
 }
 
 # P2-2 (2026-09-14 round-2 review): the row calls the fork-free `_human_agev`,
@@ -198,7 +198,7 @@ _dead_pid() { printf '2147483647'; }
   for ahead in 30 7200 90000; do
     _usage_cache claude wrasse 42.0 65.0 "-$ahead"
     run tmux_status_render claude wrasse '' '' 120
-    [[ "$output" == *"5h 42% · 7d 65%"* ]] || { echo "+${ahead}s: $output"; false; }
+    [[ "$output" == *"5h 58% · 7d 35%"* ]] || { echo "+${ahead}s: $output"; false; }
     [[ "$output" != *"ago"* ]] || { echo "+${ahead}s: $output"; false; }
     [[ "$output" != *"-"[0-9]* ]] || { echo "+${ahead}s negative: $output"; false; }
   done
@@ -216,7 +216,7 @@ _dead_pid() { printf '2147483647'; }
   printf '{"window_pct":999999,"weekly_pct":888888,"cached_at":%s}\n' "$(date +%s)" \
     > "$CLIKAE_HOME/state/usage/claude/wrasse.json"
   run tmux_status_render claude wrasse '' '' 120
-  [[ "$output" == *"5h 100% · 7d 100%"* ]] || { echo "$output"; false; }
+  [[ "$output" == *"5h 0% · 7d 0%"* ]] || { echo "$output"; false; }
 }
 
 # P3-2 / P2-5 (same review): `cached_at` PRESENT but not a shape this reader
@@ -243,7 +243,7 @@ _dead_pid() { printf '2147483647'; }
   printf '{"window_pct":42,"weekly_pct":65,"source":"vendor"}\n' \
     > "$CLIKAE_HOME/state/usage/claude/wrasse.json"
   run tmux_status_render claude wrasse '' '' 120
-  [[ "$output" == *"5h 42% · 7d 65%"* ]] || { echo "$output"; false; }
+  [[ "$output" == *"5h 58% · 7d 35%"* ]] || { echo "$output"; false; }
   [[ "$output" != *"ago"* ]] || { echo "$output"; false; }
 }
 
@@ -256,7 +256,7 @@ _dead_pid() { printf '2147483647'; }
   printf '{"window_pct":42,"weekly_pct":65,"cached_at":%s}' "$(date +%s)" \
     > "$CLIKAE_HOME/state/usage/claude/wrasse.json"
   run tmux_status_render claude wrasse '' '' 120
-  [[ "$output" == *"5h 42% · 7d 65%"* ]] || { echo "$output"; false; }
+  [[ "$output" == *"5h 58% · 7d 35%"* ]] || { echo "$output"; false; }
 }
 
 @test "fuel: a cache with null percentages is no reading, not 0%" {
@@ -818,7 +818,7 @@ _usage_expired_cache() {
   _usage_cache claude wrasse 42.0 65.0
   run tmux_status_render claude wrasse 'a52bdc12-1111-2222-3333-444455556666' reefbox 120
   [[ "$output" == *"ssh reefbox -t clikae resume a52bdc12"* ]] || { echo "$output"; false; }
-  [[ "$output" == *"5h 42%"* ]] || { echo "$output"; false; }
+  [[ "$output" == *"5h 58%"* ]] || { echo "$output"; false; }
 }
 
 @test "width: 100 columns is the floor, not the first casualty" {
@@ -836,7 +836,7 @@ _usage_expired_cache() {
   run tmux_status_render claude wrasse 'a52bdc12-1111-2222-3333-444455556666' reefbox 80
   [[ "$output" != *"ssh "* ]] || { echo "$output"; false; }
   [[ "$output" == *"clikae resume a52bdc12"* ]] || { echo "$output"; false; }
-  [[ "$output" == *"5h 42%"* ]] || { echo "$output"; false; }
+  [[ "$output" == *"5h 58%"* ]] || { echo "$output"; false; }
   [[ "$output" == *"!1"* ]] || { echo "$output"; false; }
 }
 
@@ -844,7 +844,7 @@ _usage_expired_cache() {
   # The acceptance criterion, measured on the row rather than argued about:
   # tmux styles are not columns, so they come out before counting.
   _src
-  _usage_cache claude wrasse 100.0 100.0
+  _usage_cache claude wrasse 0.0 0.0
   _dry_marker codex goby
   _burn_status burn-1 running "$(_dead_pid)"
   local plain w
@@ -884,7 +884,7 @@ _SEP=' #[fg=colour244]│#[default] '
 
 @test "width: at 100 columns the ssh prefix yields to the fuel age, never the clock" {
   _src
-  _usage_cache claude wrasse 100.0 100.0 82800   # 23h: the widest suffix
+  _usage_cache claude wrasse 0.0 0.0 82800   # 23h: the widest suffix
   local d; for d in 1 2 3 4 5 6 7 8 9 10; do _dry_marker codex "t$d"; done   # !10
   local h29 h30
   h29="$(printf '%029d' 0 | tr 0 h)"; h30="${h29}h"
@@ -900,7 +900,7 @@ _SEP=' #[fg=colour244]│#[default] '
 
   # Without the suffix the same 30-character host fits again — it is the
   # measured width that decides, not the hostname alone.
-  _usage_cache claude wrasse 100.0 100.0 0
+  _usage_cache claude wrasse 0.0 0.0 0
   run tmux_status_render claude wrasse '' "$h30" 100
   [[ "$output" == *"ssh $h30 -t "* ]] || { echo "$output"; false; }
 }
@@ -1070,7 +1070,7 @@ _SEP=' #[fg=colour244]│#[default] '
 
   # A session id makes the command fixed-width: rungs 3 and 4 have no subject,
   # and the row must not invent one.
-  tmux_status_rowv 40 '' claude "$(_tank 42)" a52bdc12 '5h 1% · 7d 2%' '23h ago' 7
+  tmux_status_rowv 40 '' claude "$(_tank 42)" a52bdc12 '5h 99% · 7d 98%' '23h ago' 7
   [ "$_TSTAT_ROW" = "clikae resume a52bdc12${_SEP}#[fg=red]!7#[default] " ] || { echo "$_TSTAT_ROW"; false; }
 }
 
@@ -1078,8 +1078,8 @@ _SEP=' #[fg=colour244]│#[default] '
   # The exact cells REVIEW-status77-r3.md measured red on 25a35ff, through the
   # whole render (cache 23h old, ten dry markers) rather than the pure function.
   _src
-  _usage_cache claude "$(_tank 24)" 100.0 100.0 82800
-  _usage_cache antigravity "$(_tank 27)" 100.0 100.0 82800
+  _usage_cache claude "$(_tank 24)" 0.0 0.0 82800
+  _usage_cache antigravity "$(_tank 27)" 0.0 0.0 82800
   local d; for d in 1 2 3 4 5 6 7 8 9 10; do _dry_marker codex "t$d"; done
   run tmux_status_render claude "$(_tank 24)" '' '' 80
   [ "$status" -eq 0 ]
@@ -1161,7 +1161,7 @@ INNER
   run bash "$CLIKAE_TEST_ROOT/lib/core/status_line.sh" \
     "$HOME" "$CLIKAE_HOME" claude wrasse clikae-claude-wrasse '' 120
   [ "$status" -eq 0 ] || { echo "$output"; false; }
-  [[ "$output" == *"5h 42%"* ]] || { echo "$output"; false; }
+  [[ "$output" == *"5h 58%"* ]] || { echo "$output"; false; }
   [ ! -f "$trip" ] || { echo "the helper called: $(cat "$trip")"; false; }
 }
 
@@ -1431,3 +1431,27 @@ _twelve_sessions_sharing_a_prefix() {
   [ "$status" -ne 0 ]
   [[ "$output" == *"No session 'zzzzzzzz'"* ]] || { echo "$output"; false; }
 }
+
+@test "fuel: no number now, one on record: the last reading with its age, like the board" {
+  _src
+  _tstat_lastgood() {
+    mkdir -p "$CLIKAE_HOME/state/usage/antigravity"
+    jq -cn --argjson now "$1" --argjson at "$2" --argjson lg "$3" \
+      '{source:"unknown",reason:"needs-refresh",window_pct:null,weekly_pct:null,cached_at:($now-400000),
+        last_good:($lg + {at:$at})}' > "$CLIKAE_HOME/state/usage/antigravity/pike.json"
+  }
+  local now=2000000000
+  _tstat_lastgood "$now" $((now - 7200)) '{"window_pct":null,"weekly_pct":6.7}'
+  tmux_status_fuelv antigravity pike "$now"
+  [ "$_TSTAT_FUEL" = "7d 94%" ] || { echo "fuel: $_TSTAT_FUEL"; false; }
+  [ "$_TSTAT_FUEL_AGE" = "2h ago" ] || { echo "age: $_TSTAT_FUEL_AGE"; false; }
+  # A window-only tank names its one window.
+  _tstat_lastgood "$now" $((now - 7200)) '{"window_pct":30,"weekly_pct":null}'
+  tmux_status_fuelv antigravity pike "$now"
+  [ "$_TSTAT_FUEL" = "5h 70%" ] || { echo "fuel: $_TSTAT_FUEL"; false; }
+  # Past the board's 14 days it is not a reading any more.
+  _tstat_lastgood "$now" $((now - 1300000)) '{"window_pct":null,"weekly_pct":6.7}'
+  tmux_status_fuelv antigravity pike "$now"
+  [ "$_TSTAT_FUEL" = "·" ] || { echo "fuel: $_TSTAT_FUEL"; false; }
+}
+
