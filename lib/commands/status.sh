@@ -4,7 +4,7 @@
 # Shows which profile each CLI is *currently* pointed at **in this shell**, by
 # reading the live value of each adapter's env var and resolving it back to a
 # clikae profile. This is a per-shell view: a different terminal (or one
-# launched from a different `clikae app`) can be on a different profile.
+# started from a launcher) can be on a different profile.
 #
 # Two renderers off ONE canonical row:
 #   human table (default) — aligned columns for the terminal
@@ -159,7 +159,7 @@ live value of each adapter's env var (e.g. $CLAUDE_CONFIG_DIR) and resolving it
 back to a clikae tank.
 
 This is a per-shell view: another terminal — or one started from a different
-`clikae app` launcher — may be on a different tank. An engine shows "(default)"
+launcher — may be on a different tank. An engine shows "(default)"
 when its env var is unset (the engine's own system default), or "(external)"
 when the var points somewhere that isn't a clikae tank.
 

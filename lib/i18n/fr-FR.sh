@@ -124,7 +124,6 @@ T_ENGINES_HERE="%s moteurs, ici :"
 T_ENGINES_SUPPORTED="%s moteurs pris en charge"
 T_NONE_DETECTED="(aucun détecté dans le PATH ici)"
 T_FILL_FIRST="Remplissez votre premier réservoir :"
-T_CURIOUS_DEMO="Curieux ?  clikae demo"
 # resume submenu
 T_RESUME_TITLE="Cette session — la suite ?"
 T_RESUME_OPT_RESUME="Reprendre là où vous en étiez"

@@ -65,20 +65,6 @@ Three dispatch shapes — full field guide in
   meanwhile (tank still busy; `clikae wait` keeps waiting for the real
   outcome). Only a burn that will NOT retry (`--wait-for-reset 0`, no
   usable reset) ends at `state: dry-paused` with `reset_at` — `wait` rc 2.
-- **`clikae conduct --leg <e>/<t> … --prompt-file <f>`** — fan ONE read-only prompt
-  across N accounts in parallel (best-of-N audits/analyses); collect every leg's
-  output. clikae never judges — you pick the winner, which is exactly why
-  `--json` matters here: it hands you the legs in a form you can rank.
-
-  ```sh
-  clikae conduct --leg claude/h --leg codex/m --prompt-file q.md --json \
-    | jq -r '.legs[] | select(.status=="CAPTURED") | .output'
-  ```
-
-  `{out_dir, captured, dry, other, legs:[{engine, tank, status, detail, output,
-  output_bytes}]}`. `status` is `CAPTURED` / `DRY` / `EMPTY` / `NORECIPE` /
-  `NOPATH` / `NOTANK` / `NOTACTIVE` — read it instead of inferring from an empty
-  file, because "no answer" and "out of fuel" are not the same result.
 - **`clikae to <target>`** — carry a live session onward when a tank runs dry.
 
 Which shape for which situation — the decision layer above these mechanics — is
@@ -157,9 +143,7 @@ purpose rather than by accident. clikae now takes a lock per slot and refuses th
 second run with an explanation instead of a bare `ln:` error — but the lock is a
 guard, not a feature. `cd "$(mktemp -d)"` per run is the shape that works.
 
-For ONE prompt across N tanks, prefer `clikae conduct` — it already fans out and
-collects every leg. Reach for hand-rolled parallel ephemerals when the prompts
-differ.
+For ONE prompt across N tanks, run one of these per tank and compare what each wrote.
 ## agy (Antigravity) is the trap — read its recipe first
 
 agy is the one engine agents fumble most. Its Google login is **one global Keychain
@@ -170,8 +154,7 @@ can never run at once.
 to the next agy tank on dry, because the Keychain carry made a tank switch
 non-interactive. What it can't do is run in parallel — the hop *moves* the one global
 active tank. Also fine: a one-shot on the already-active account with
-`clikae agy <tank> -- -p`, or a read-only `conduct` leg (`--leg agy/<active-tank>`,
-which reports `NOTACTIVE` rather than silently using the wrong account).
+`clikae agy <tank> -- -p`.
 
 Its output buffers (collect via a written file, not stdout), it wanders without a
 fenced task + long `--print-timeout`, `-i` dies without a TTY, and dry shows in

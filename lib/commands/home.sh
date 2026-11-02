@@ -2900,7 +2900,7 @@ EOF
   # budget at all — it did not even call _home_cols. Reported 2026-08-16 from a
   # PineNote over ssh: it is the row that overflows first, at anything under 69
   # columns, and it was the last line of the board so it was the one you saw.
-  _home_wrap_prefixed "clikae status · clikae doctor · clikae demo · clikae help" \
+  _home_wrap_prefixed "clikae status · clikae doctor · clikae help" \
     "  $(_home_lpad "$T_MORE" 9) " 12 "" ""
 }
 
@@ -2947,8 +2947,6 @@ EOF
   BODY+=("")
   BODY+=("${__C_BOLD}${T_FILL_FIRST}${__C_RESET}")
   BODY+=("  clikae init ${example} work --alias")
-  BODY+=("")
-  BODY+=("${__C_DIM}${T_CURIOUS_DEMO}${__C_RESET}")
 
   # Wide TTY → side-by-side; else stacked. (BODY is visible to the renderers via
   # bash's dynamic scope.)

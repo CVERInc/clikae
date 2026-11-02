@@ -152,9 +152,7 @@ fuel words forced on them.
 | `clikae watch <engine> [tank]` | Notice a dry tank; offer/auto carry onward to the next tank in the burn order. |
 | `clikae burn <engine> <tank> --artifact <path> (--prompt-file <f> \| -- <cmd…>)` | Run a **headless** task on a tank, verify it by the artifact it must produce (never the exit code — `codex exec` exits 0 even when limited), and re-fire the same task on the next reserve tank if this one runs dry. Give the task the **easy way** (`--prompt-file`/`--prompt` + `--add-dir`: clikae fills each engine's headless-write flags from its adapter, so a cross-engine reroute stays sound) or the **power-user way** (raw `-- <cmd…>`). The headless sibling of the switch: batch/parallelism stays the orchestrator's job; `burn` is the single-task unit it fans out and re-fires. `--to` forces an explicit next hop. `--infra-retries <n>` (0–10, default 2) retries tool-host infrastructure failures on the same tank; `--infra-delay <s>` (0–86400, default 5) sets the initial delay, doubled per retry — retries exhausted reports `reason: infra` (rc 1). A dry tank auto-reroutes to the next reserve tank; the WHOLE reserve going dry reports `reason: no-tank-available` (rc 2, #61) — distinct from a real task failure (rc 1) and from `--no-reroute` stopping after one dry tank (`reason: "tank ran dry and --no-reroute is set"`, also rc 2). |
 | `clikae wait <run_id\|status-file>…` | Block until a burn (or several) reaches a terminal state — the composable half of `burn`'s `&`/background pattern, never a hand-rolled poll loop. |
-| `clikae conduct --leg <e>/<t>… (--prompt-file <f> \| --prompt <s>)` | **(BETA)** The vertical-orchestration primitive: fan ONE prompt across N accounts **in parallel**, each running headless **read-only** on its own tank (its own quota), then collect every leg's full output and print a captured/dry table. clikae does **not** judge — it hands you N result files and an honest table; you (or the session model acting as conductor) pick the winner. Brain/muscle split: clikae is the muscle (accounts, dry-detection, parallel routing), the conductor is the brain. Read-only by design so legs can't clobber a shared tree; write/impl tournaments stay an orchestrator's job. |
-| `clikae migrate [cli]` | Adopt a hand-rolled config-dir + alias setup. |
-| `clikae app` / `clikae alias` | Generate a macOS launcher / write a shell alias. |
+| `clikae alias` | Write a shell alias. |
 | `clikae lang [<locale>]` | Show or set the interface language (dashboard + prompts); bare `clikae lang` lists the supported locales, and the board's `l` key opens a language picker. |
 | `clikae doctor` / `info` / `adapters` / `demo` / `help` / `version` | Inspect / meta. |
 
@@ -165,9 +163,9 @@ fuel words forced on them.
 `bin/clikae` resolves the first argument in this order:
 
 1. **Reserved command?** (`init`, `remove`, `list`, `tanks`, `status`, `to`,
-   `watch`, `auto`, `burn`, `conduct`, `clean`, `rename`, `git-id`, `memory`, `migrate`, `env`, `app`, `alias`,
-   `lang`, `run`, `continue`, `relay`, `handoff`, `doctor`, `info`, `adapters`,
-   `demo`, `home`, `help`, `version`, plus the `agy`/`dashboard`/`ls`/`rm` aliases
+   `watch`, `auto`, `burn`, `clean`, `rename`, `git-id`, `memory`, `env`, `alias`,
+   `lang`, `run`, `continue`, `relay`, `handoff`, `doctor`, `adapters`,
+   `home`, `help`, `version`, plus the `agy`/`dashboard`/`ls`/`rm` aliases
    and `-h/--help/-v/--version`) → run that command. (`git-id` routes to the
    `git_id.sh` command — the only verb whose file/function uses `_` for the `-`.)
 2. **Else, a known CLI?** (an adapter in `lib/adapters/` or a target in
@@ -509,13 +507,3 @@ engine's brain.
 
 *This grammar is a decision, not a sketch. Change it here first, with the
 maintainer, before changing the code.*
-
-### Launcher icons
-
-`clikae app` copies the target terminal's icon into each generated macOS bundle,
-including `--force` rebuilds, and re-seals it. The terminal's bundle is resolved
-by app name (checking `/Applications`, `~/Applications`, then Spotlight/Launch
-Services), not assumed to live in `/Applications` — an install anywhere else
-still gets its icon. If unavailable, it uses `assets/clikae.icns` when that is
-shipped; if neither exists, it keeps the applet icon and warns. Icon failures do
-not fail launcher creation.

@@ -329,6 +329,5 @@ EOF
   echo ""
   log_bold "Next steps:"
   echo "  clikae $cli $profile           # switch to it and run"
-  echo "  clikae app $cli $profile       # generate a macOS .app launcher"
   echo "  clikae alias $cli $profile     # add a shell alias"
 }

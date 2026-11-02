@@ -1075,9 +1075,8 @@ _burn_compose() {
 # tail and a second `--` inside argv is exactly the ambiguity this is fixing.
 # agy's own burn loop. agy has no adapter (no per-shell env; one global
 # ~/.gemini symlink), so it can't go through cmd_burn's adapter-driven engine
-# loop below — this is a dedicated SEQUENTIAL dry→next-tank loop, reusing the
-# read-only headless recipe + cli.log dry-detection from
-# lib/commands/conduct.sh's _conduct_one_agy, and the Keychain carry from
+# loop below — this is a dedicated SEQUENTIAL dry→next-tank loop, using the
+# Keychain carry from
 # lib/commands/antigravity.sh (now that a tank switch is non-interactive, this
 # can drive it programmatically instead of refusing outright — see 32507a8's
 # revert). Only sequential: agy can't run two tanks in parallel (one global

@@ -67,8 +67,8 @@ relay, ephemeral (incognito). Pure bash, no daemons, auditable.
 
 There is no GUI, and none is planned. clikae lives in the terminal because that is
 where this work happens, and anyone who prefers a window already has the vendors'
-own apps. `clikae app --board` makes a local launcher for people who like to click:
-it opens their terminal on the board, and that is all it does.
+own apps. For people who like to click, `contrib/make-launcher.sh` makes a local launcher that
+opens their terminal on the board. It is a separate script, not part of clikae.
 
 ## Roadmap
 

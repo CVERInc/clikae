@@ -60,7 +60,7 @@ Translation is **graded**, not wall-to-wall:
   confirmations, menu items, status lines, warnings. These are the point —
   a consent question you can only read in English isn't informed consent.
 - **Keep technical** the tokens that ARE the interface: command lines
-  (`clikae to`, `clikae demo`), flags, paths (`~/.gemini`), engine/tank names,
+  (`clikae to`, `clikae doctor`), flags, paths (`~/.gemini`), engine/tank names,
   sizes and unit suffixes (`MB`). Users copy-paste, run, and search for these
   verbatim — translating them breaks that.
 

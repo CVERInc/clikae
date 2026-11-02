@@ -284,14 +284,12 @@ _limit_codex_anchor_line() {
 # reasoning that "the caller only reaches this function once the artifact
 # check has already failed, so 'no artifact' is a given here" (limit.sh's
 # old comment on this function). That premise holds for exactly ONE of this
-# function's three real callers — burn.sh's no-artifact branch — and not
-# for the other two: burn.sh's ARTIFACT-PRODUCED branch (the run kept going
+# function's two real callers — burn.sh's no-artifact branch — and not
+# for the other: burn.sh's ARTIFACT-PRODUCED branch (the run kept going
 # and finished the task, so the vendor's limit line is often nowhere near
-# the tail) and conduct.sh's per-leg capture (which has no concept of an
-# artifact at all). On both of those, a genuine limit line beyond line 20
+# the tail). There, a genuine limit line beyond line 20
 # read as "no limit here" — on the artifact path that silently cleared a
-# real dry marker (round-2 P2-2's own guarantee, undone); on conduct it
-# reported a dried-out leg as CAPTURED. The false-dry guard the window
+# real dry marker (round-2 P2-2's own guarantee, undone). The false-dry guard the window
 # bought by POSITION is now bought by PRECISION instead (the anchor above):
 # scan the WHOLE captured reply, every line, and lean on the anchor being
 # narrow rather than on the line being near the end.
@@ -324,7 +322,7 @@ limit_codex_output_dry() {
 # Built-in fragility (honest): the per-engine matchers below lean on each vendor's
 # CURRENT wording. If a vendor rewords its limit line, a dry tank would be misread
 # as a real task failure. $CLIKAE_LIMIT_PATTERN is the escape hatch — the SAME env
-# var `clikae watch` honours (--pattern) — so a user can teach burn/conduct a new
+# var `clikae watch` honours (--pattern) — so a user can teach burn a new
 # phrase in the field without a code change. It is a deliberate override: it is
 # tried FIRST and, when it matches, wins (and even gives a signal to an engine that
 # has no built-in matcher). It never relays a reset phrase (clikae doesn't know the

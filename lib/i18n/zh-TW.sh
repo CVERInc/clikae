@@ -122,7 +122,6 @@ T_ENGINES_HERE="%s個引擎，就在這："
 T_ENGINES_SUPPORTED="%s個引擎支援"
 T_NONE_DETECTED="(此處 PATH 上未偵測到)"
 T_FILL_FIRST="裝滿你的第一個油箱："
-T_CURIOUS_DEMO="好奇？  clikae demo"
 # resume submenu
 T_RESUME_TITLE="這個 session — 接下來？"
 T_RESUME_OPT_RESUME="接回上次離開的進度"

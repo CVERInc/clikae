@@ -119,7 +119,6 @@ T_ENGINES_HERE="%s エンジンを検出:"
 T_ENGINES_SUPPORTED="%s エンジン対応"
 T_NONE_DETECTED="(PATH 上に見つかりません)"
 T_FILL_FIRST="最初のタンクを作成:"
-T_CURIOUS_DEMO="お試し:  clikae demo"
 # resume submenu
 T_RESUME_TITLE="このセッション — どうする?"
 T_RESUME_OPT_RESUME="続きから再開する"

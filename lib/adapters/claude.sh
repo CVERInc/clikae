@@ -256,27 +256,6 @@ adapter_burn_flags() {
   local d; for d in "$@"; do printf -- '--add-dir\0%s\0' "$d"; done
 }
 
-# Optional hook: how to run claude HEADLESS READ-ONLY for `clikae conduct`'s
-# fan-out (no --dangerously-skip-permissions → reads/reasons, edits blocked). The
-# prompt is data; <dirs> are extra read roots (claude reads $PWD by default).
-adapter_audit_flags() {
-  local prompt="$1"; shift
-  printf -- '-p\0%s\0' "$prompt"
-  # A leg is one arm of a fan-out, not a session anybody resumes, and its output
-  # is already collected into --out-dir — so it leaves no transcript, the same as
-  # a headless `--ephemeral` run. Claude Code only honours this with --print,
-  # which this recipe always passes.
-  printf -- '--no-session-persistence\0'
-  # 🔴 READ-ONLY has to be ENFORCED, not merely not-granted. Withholding
-  # --dangerously-skip-permissions is not a boundary: a tank whose own settings
-  # carry permissions.defaultMode "auto" approves writes without asking, and a
-  # leg told to create a file created it (measured 2026-08-16, in this repo —
-  # a conduct leg edited two tracked files while conduct's help says READ-ONLY).
-  # codex's recipe has always passed -s read-only; this one enforced nothing.
-  printf -- '--permission-mode\0plan\0'
-  local d; for d in "$@"; do printf -- '--add-dir\0%s\0' "$d"; done
-}
-
 # Optional hook: the per-run flags that make `--ephemeral` actually incognito.
 # <headless> is 1 when the caller is running a print-mode job, 0 for interactive.
 #
@@ -1065,8 +1044,8 @@ adapter_account_label() {
 # CLAUDE_CONFIG_DIR. The keychain service name is
 #   "Claude Code-credentials-<suffix>"
 # where <suffix> is the first 8 hex chars of sha256(<absolute CLAUDE_CONFIG_DIR>)
-# (no trailing slash). So `clikae migrate`, which MOVES the config dir to a new
-# path, changes the suffix and orphans the saved token — claude can't find it at
+# (no trailing slash). So moving a config dir to a new
+# path, as `clikae rename` does, changes the suffix and orphans the saved token — claude can't find it at
 # the new path and asks you to log in again. Full write-up: docs/claude-on-macos.md.
 #
 # Map a config dir to its keychain service name (macOS sha256 via `shasum`).
@@ -1077,7 +1056,7 @@ _claude_keychain_service() {
   printf 'Claude Code-credentials-%s\n' "$hash"
 }
 
-# Optional adapter hook: `clikae migrate --keep-login` calls this after moving a
+# Optional adapter hook: `clikae rename` calls this after moving a
 # profile's config dir, to carry the saved login from the old path's keychain
 # slot to the new path's slot so the session survives the move.
 #

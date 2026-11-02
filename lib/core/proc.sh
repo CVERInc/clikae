@@ -1,6 +1,6 @@
 # shellcheck shell=bash
 # lib/core/proc.sh — detect live processes still bound to a tank's config dir, so
-# rename/migrate/remove never move or delete a dir out from under a running engine.
+# rename/remove never move or delete a dir out from under a running engine.
 #
 # WHY: the old in-use guard checked only the env var of the shell running clikae.
 # An engine open in ANOTHER terminal — or a background daemon/spare — kept writing
@@ -35,7 +35,7 @@ live_dir_users() {
       # space would split across fields — acceptable: clikae profile dirs have none).
       # The trailing `|| true` is LOAD-BEARING: on a locked-down host (CI runners,
       # some sandboxes) `ps eww` can exit non-zero, and under the caller's
-      # `set -eo pipefail` a leaked failure would abort rename/migrate/remove
+      # `set -eo pipefail` a leaked failure would abort rename/remove
       # entirely (this MUST be best-effort — no reading ⇒ no users,
       # never a hard error).
       ps eww -o pid=,command= 2>/dev/null | awk -v self="$self" -v var="$envvar" -v want="$want" '
@@ -74,7 +74,7 @@ live_dir_users() {
 # CRITICAL ASYMMETRY: this guard fails CLOSED. A false *negative* (a real
 # background worker read as interactive) only over-warns — harmless. A false
 # *positive* (an interactive session read as background) downgrades the hard-fail
-# to a warning, so rename/migrate/remove proceed and CORRUPT the live session.
+# to a warning, so rename/remove proceed and CORRUPT the live session.
 # So the markers must be SPECIFIC to Claude's real background spawns, never broad
 # substrings. WHY this matters on macOS: `ps eww` appends each process's whole
 # ENVIRONMENT to the command column (see live_dir_users), so <cmdline> here carries
@@ -90,7 +90,7 @@ _proc_is_background() {
 }
 
 # assert_dir_free <dir> <envvar> <binary> <action> — shared in-use guard for
-# rename/migrate/remove, run AFTER the caller's own current-shell env check. Scans
+# rename/remove, run AFTER the caller's own current-shell env check. Scans
 # OTHER processes bound to <dir>:
 #   any interactive session -> hard log_fail (data integrity; NOT --force-able)
 #   only background workers  -> log_warn, return 0 (caller may proceed)

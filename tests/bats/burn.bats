@@ -899,21 +899,14 @@ STUB
 # THE BLIND SPOT (independent-audit catch 2026-06-13): a MULTI-LINE prompt must
 # survive as ONE argv item, not be shattered into one item per line. Every other
 # burn/conduct test uses a single-line prompt, which hid this.
-@test "adapter_burn_flags / adapter_audit_flags do NOT leak across adapters (leak-guard)" {
+@test "adapter_burn_flags does NOT leak across adapters (leak-guard)" {
   # The new optional hooks are in adapter_loader's unset list, so an adapter that
   # doesn't define them (gh) must not inherit claude's.
   _src_burn
   load_adapter claude
   declare -F adapter_burn_flags >/dev/null   # claude HAS it
-  declare -F adapter_audit_flags >/dev/null
   load_adapter gh
   run declare -F adapter_burn_flags # gh must NOT have inherited it
-  [ "$status" -ne 0 ]
-  # P3-5 (#81 round-1 fix review): matches the line above — `! cmd` (like a
-  # bare `[[ ]]`) is exempt from `set -e`, so a failing bare assertion here
-  # would be silently ignored mid-body, not just stylistically inconsistent
-  # with its neighbour.
-  run declare -F adapter_audit_flags
   [ "$status" -ne 0 ]
 }
 

@@ -106,7 +106,7 @@ EOF
 
 # adapter_env_prefix <profile_dir>  -> one line: KEY="VAL" KEY2="VAL2" ...
 # Renders the adapter's env vars as a shell-quoted prefix string, used to build
-# both the alias body (`clikae alias`) and the .app command (`clikae app`).
+# the alias body (`clikae alias`).
 # Requires the adapter to already be loaded (adapter_export_env in scope).
 adapter_env_prefix() {
   local profile_dir="$1" prefix="" line key val
@@ -195,7 +195,7 @@ load_adapter() {
     # agy (Antigravity) is a known engine with no adapter on purpose: its login is
     # one global Keychain entry (state follows $HOME, but the account doesn't), so
     # accounts switch globally — not per-shell. Give that guidance instead of the
-    # generic "no adapter" whenever a generic path (env/app/alias/run/relay/migrate) is handed it.
+    # generic "no adapter" whenever a generic path (env/alias/run/relay) is handed it.
     case "$cli" in
       agy|antigravity)
         log_err "agy (Antigravity) login is global — clikae can't route its account per-shell."
@@ -215,7 +215,7 @@ load_adapter() {
   #
   # 🔴 THE LIST IS THE GATE, AND IT DRIFTS SILENTLY. Adding a hook to one
   # adapter and forgetting this list has already shipped twice (#81's
-  # adapter_burn_flags/adapter_audit_flags, #60's
+  # adapter_burn_flags, #60's
   # adapter_meta_permission_modes), and a leaked hook does not look like a bug:
   # `declare -F` says the hook is there, so the caller believes the NEW engine
   # supports whatever it gates. Four more were missing when round 12 checked
@@ -231,7 +231,7 @@ load_adapter() {
            adapter_relay adapter_transcript_path adapter_handoff_extract adapter_start_with_prompt \
            adapter_account_label adapter_migrate_credentials adapter_flag_args \
            adapter_memory_dir adapter_memory_pointer_path adapter_install_hint adapter_burn_flags \
-           adapter_audit_flags adapter_usage adapter_usage_refresh adapter_launch_binary \
+           adapter_usage adapter_usage_refresh adapter_launch_binary \
            adapter_find_session adapter_session_cwd \
            adapter_resume_args adapter_session_meta adapter_list_sessions \
            adapter_session_title adapter_title_for_file adapter_recent_sids adapter_session_recap \

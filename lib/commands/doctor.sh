@@ -140,8 +140,7 @@ EOF
   fi
 
   # claude: one slot PER TANK, keyed by a hash of that tank's config dir. A tank
-  # with no slot is simply logged out — `clikae migrate` without --keep-login is
-  # the usual way to orphan one.
+  # with no slot is simply logged out.
   if declare -F _claude_keychain_service >/dev/null 2>&1; then
     local cli name path found=0 missing=""
     while IFS=$'\t' read -r cli name path; do
@@ -1072,5 +1071,4 @@ EOF
     log_dim "  · when a tank runs dry, carry on to the next one:  clikae to"
   fi
   log_dim "  · See your tanks at a glance:  clikae"
-  log_dim "  · Take a risk-free tour:       clikae demo"
 }

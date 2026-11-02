@@ -44,14 +44,6 @@ _seed_trailing_non_tank_store() {
   [ "${#lines[@]}" -gt 0 ] || false
 }
 
-@test "enumerator rc #61 P1-1: info exits 0 with output when the trailing candidate is not a tank" {
-  _seed_trailing_non_tank_store
-  run clikae info
-  [ "$status" -eq 0 ] || { echo "status=$status output=$output"; false; }
-  [ -n "$output" ] || false
-  [ "${#lines[@]}" -gt 0 ] || false
-}
-
 @test "enumerator rc #61 P1-1: bare board exits 0 with output when the trailing candidate is not a tank" {
   _seed_trailing_non_tank_store
   run clikae
