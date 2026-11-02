@@ -9,6 +9,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **A `burn` test no longer fails at random.** The process-group probe stopped its child with TERM,
+  and a child that had not started `sleep` yet could run the test's traps. It now uses KILL. `burn`
+  itself runs the probe in a subshell without those traps, so real runs were not affected.
 - **agy shows every quota window its plan has.** clikae now asks as the installed agy version,
   which is what makes the server answer with Gemini's 5h and weekly windows and Argon's weekly.
   Argon is its own group, so `tanks --available agy --group argon` can tell a tank with Argon left
