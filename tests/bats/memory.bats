@@ -8,7 +8,7 @@ load '../helpers'
 
 # The memory dir clikae uses for claude/<tank> at the CURRENT $PWD (slug of $PWD).
 _memdir() {
-  local slug; slug="$(printf '%s' "$PWD" | LC_ALL=C sed 's/[^A-Za-z0-9]/-/g')"
+  local slug; slug="$(pwd -P | tr -d '\n' | LC_ALL=C sed 's/[^A-Za-z0-9]/-/g')"
   printf '%s\n' "$CLIKAE_HOME/profiles/claude/$1/projects/$slug/memory"
 }
 
@@ -406,7 +406,7 @@ _stub_claude() {
   mkdir -p "$BATS_TEST_TMPDIR/bin"
   cat > "$BATS_TEST_TMPDIR/bin/claude" <<'STUB'
 #!/usr/bin/env bash
-slug="$(printf '%s' "$PWD" | LC_ALL=C sed 's/[^A-Za-z0-9]/-/g')"
+slug="$(pwd -P | tr -d '\n' | LC_ALL=C sed 's/[^A-Za-z0-9]/-/g')"
 mkdir -p "$CLAUDE_CONFIG_DIR/projects/$slug/memory" 2>/dev/null || true
 echo "FROM-STUB" > "$CLAUDE_CONFIG_DIR/projects/$slug/memory/stub-fact.md" 2>/dev/null || true
 STUB
@@ -513,7 +513,7 @@ STUB
   mkdir -p "$BATS_TEST_TMPDIR/bin"
   cat > "$BATS_TEST_TMPDIR/bin/claude" <<'STUB'
 #!/usr/bin/env bash
-slug="$(printf '%s' "$PWD" | LC_ALL=C sed 's/[^A-Za-z0-9]/-/g')"
+slug="$(pwd -P | tr -d '\n' | LC_ALL=C sed 's/[^A-Za-z0-9]/-/g')"
 mkdir -p "$CLAUDE_CONFIG_DIR/projects/$slug/memory" 2>/dev/null || true
 echo "FROM-BURN" > "$CLAUDE_CONFIG_DIR/projects/$slug/memory/burn-fact.md" 2>/dev/null || true
 [ -n "$STUB_ARTIFACT" ] && : > "$STUB_ARTIFACT"
