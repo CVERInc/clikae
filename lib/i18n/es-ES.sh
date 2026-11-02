@@ -120,7 +120,6 @@ T_ENGINES_HERE="%s motores, aquí:"
 T_ENGINES_SUPPORTED="%s motores compatibles"
 T_NONE_DETECTED="(ninguno detectado en el PATH)"
 T_FILL_FIRST="Llena tu primer tanque:"
-T_CURIOUS_DEMO="¿Curiosidad?  clikae demo"
 # resume submenu
 T_RESUME_TITLE="Esta sesión — ¿qué hacemos?"
 T_RESUME_OPT_RESUME="Reanudar donde lo dejaste"

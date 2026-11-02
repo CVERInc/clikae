@@ -168,8 +168,8 @@ with it that one account can't:
   clean room that holds no memory of your work (`clikae agy … -p`, or `--ephemeral`).
 - **Grunt work off your main quota** — `clikae burn` a mechanical job onto a cheap tank,
   verified by the file it produces; the expensive model stays free for the hard part.
-- **A real second opinion** — `clikae conduct` fans one prompt across rival vendors and
-  hands you every answer to judge: a vote, not a coin flip.
+- **A real second opinion** — burn one prompt on rival vendors and compare what each one
+  wrote: a vote, not a coin flip.
 - **A long job that survives a dry tank** — burn re-fires it on your next reserve
   automatically, so unattended work finishes *somewhere*.
 - **See the runway before you hit it** — `clikae usage [engine] [tank]` reports
@@ -205,7 +205,7 @@ on a different engine." See **[docs/memory.md](docs/memory.md)**.
 
 Driving this headless — or letting an **LLM agent** drive it (fanning a job across
 accounts, best-of-N across vendors)? The **[orchestration playbook](docs/orchestration.md)**
-is the field guide: when to use `burn` vs `conduct`, the rules that keep it honest
+is the field guide: when to use `burn`, the rules that keep it honest
 (judge by the artifact, never the exit code), the misconfigured-burn anti-pattern,
 and how to see your fleet from inside a Claude Code session. Routing cheap breadth to
 Antigravity? The **[agy dispatch recipe](docs/agy-dispatch.md)** is the one engine an
@@ -284,10 +284,10 @@ clikae                            # your home board (run `clikae doctor` for a h
 - **[Usage](docs/usage.md)** — full command reference, the `migrate` command, how it works, supported CLIs.
 - **[Grammar](docs/grammar.md)** — the language clikae speaks: why it's a verb, engine/tank/fuel, `clikae to`, agy.
 - **[Memory (Soul)](docs/memory.md)** — share one markdown brain across your tanks and engines; what stays isolated, and `clikae solo`.
-- **[Troubleshooting](docs/troubleshooting.md)** — aliases not loading, Gatekeeper on `.app`, AWS profiles, undoing rc edits.
-- **[Orchestration](docs/orchestration.md)** — driving clikae headless (or letting an agent drive it): `burn` vs `conduct`, the honesty rules, anti-patterns, seeing your fleet.
+- **[Troubleshooting](docs/troubleshooting.md)** — aliases not loading, Gatekeeper on a launcher, AWS profiles, undoing rc edits.
+- **[Orchestration](docs/orchestration.md)** — driving clikae headless (or letting an agent drive it): `burn`, the honesty rules, anti-patterns, seeing your fleet.
 - **[Expectations](docs/EXPECTATIONS.md)** — "is this a bug?" — behaviours that look surprising but are deliberate (the fuel dot, codex resume/time, agy's global switch, …).
-- **[Claude on macOS](docs/claude-on-macos.md)** — why migrating asks you to log in again (Keychain), and why the startup screen can look different (it's not clikae).
+- **[Claude on macOS](docs/claude-on-macos.md)** — why moving a config dir asks you to log in again (Keychain), and why the startup screen can look different (it's not clikae).
 - **[Adding an adapter](docs/adding-an-adapter.md)** — teach clikae a new CLI.
 - **[Adding a language](docs/adding-a-locale.md)** — give the board and prompts a new locale: one string file + one resolver line, CI enforces the rest.
 
@@ -346,7 +346,7 @@ else in clikae needs nothing but bash. Held to a deliberate bar:
 - The **Homebrew formula is `brew audit`- and `brew test`-clean**; each release pins and verifies the tarball SHA‑256.
 - Behaviour-critical paths — the `burn` headless runner, limit/dry detection, the in-use guard — have dedicated regression tests, several added straight from real dogfood failures.
 
-Runs on **macOS and Linux** — both hand-tested, not just CI. The Linux side was verified on real **ARM64** hardware (a PineNote, aarch64/bash 5.2) as well as the x86 CI runners: the whole test suite and the interactive pty checks pass there, and clikae has driven a real Claude Code session on it. Roaming is hand-verified between two physical machines rather than simulated — the same tank attached from an e-ink tablet at 90x28 and a Mac at 200x50, both live at once, engine started exactly once. The one macOS-only piece is `clikae app` (the double-clickable `.app` launcher) — everything else is plain bash. **WSL / BSD field reports and PRs are very welcome** (see [Contributing](#contributing)) — the thing to watch is `clikae burn --artifact` behaviour.
+Runs on **macOS and Linux** — both hand-tested, not just CI. The Linux side was verified on real **ARM64** hardware (a PineNote, aarch64/bash 5.2) as well as the x86 CI runners: the whole test suite and the interactive pty checks pass there, and clikae has driven a real Claude Code session on it. Roaming is hand-verified between two physical machines rather than simulated — the same tank attached from an e-ink tablet at 90x28 and a Mac at 200x50, both live at once, engine started exactly once. **WSL / BSD field reports and PRs are very welcome** (see [Contributing](#contributing)) — the thing to watch is `clikae burn --artifact` behaviour.
 
 ## Contributing
 

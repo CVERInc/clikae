@@ -124,7 +124,6 @@ T_ENGINES_HERE="%s Engines, hier:"
 T_ENGINES_SUPPORTED="%s Engines unterstützt"
 T_NONE_DETECTED="(keine im PATH gefunden)"
 T_FILL_FIRST="Fülle deinen ersten Tank:"
-T_CURIOUS_DEMO="Neugierig?  clikae demo"
 # resume submenu
 T_RESUME_TITLE="Diese Sitzung — wie weiter?"
 T_RESUME_OPT_RESUME="Dort fortfahren, wo du aufgehört hast"

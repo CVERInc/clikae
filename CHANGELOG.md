@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Removed
+
+- **`clikae conduct`, `demo`, `info`, and `migrate`.** Usage records on the maintainer's
+  machines showed no use of the first three and almost none of `migrate`. For one prompt on
+  several tanks, run one `burn` per tank. For a health check, use `clikae doctor`.
+- **`clikae app` moved out of clikae** to the standalone `contrib/make-launcher.sh`. It is not
+  installed by Homebrew; `clikae app` prints where to get it. Launchers you already made keep
+  working. New tank launchers run `clikae <engine> <tank>` instead of the engine directly.
+
 ### Fixed
 
 - **A `burn` test no longer fails at random.** The process-group probe stopped its child with TERM,

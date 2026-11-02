@@ -41,7 +41,6 @@ Make & manage tanks:
   memory <share|isolate|status>    share one markdown "brain" across your tanks (claude·codex·agy)
   solo <engine> <tank>             make a tank standalone (out of relay/burn/share)
   settings apply [engine] [tank]   merge permissions template (--check or --dry-run)
-  migrate [engine]                 adopt a hand-rolled config-dir + alias setup
   cockpit [engine] <tank>          mark the tank that dispatches build/review
                                    lanes with `burn` instead of spawning them
                                    in-session (--off removes it; bare = show)
@@ -57,11 +56,8 @@ Keep burning when a tank runs dry:
                                    re-fire it on the next (verify by --artifact)
   wait <run_id|status-file>...     block until a burn (or several) reaches a
                                    terminal state — never a hand-rolled loop
-  conduct --leg <e>/<t>... --prompt-file <f>   (BETA) fan ONE prompt across N
-                                   accounts in parallel, collect each full result
 
 Use & inspect:
-  app <engine> <tank>              generate a macOS launcher .app
   alias <engine> <tank>            write a shell alias for the tank
   lang [<locale>]                  interface language (bare `clikae lang` lists them)
   touch drag [status|on|off]       finger drag scrolls tmux (default on; off gives
@@ -74,7 +70,6 @@ Use & inspect:
                                    session data, preview first, asks before deleting
   doctor                           read-only health check: what clikae can do here
   adapters                         list supported engines
-  demo                             a 30-second guided tour in a throwaway sandbox
 
 Meta:
   help [command]                   show help (run `clikae help <cmd>` for details)

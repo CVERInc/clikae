@@ -69,34 +69,6 @@ adapter_burn_flags() {
   printf -- '--permission-mode\0bypassPermissions\0--sandbox\0workspace\0-p\0%s\0' "$prompt"
 }
 
-# Optional hook: how to run grok HEADLESS READ-ONLY for `clikae conduct`'s
-# fan-out. Two independent fences, because either one alone has a hole:
-#
-#   --sandbox read-only   Kernel-enforced (Seatbelt/Landlock). Verified by doing:
-#                         a leg told to write outside a temp dir is refused and
-#                         grok logs an FsViolation to sandbox-events.jsonl. NOTE
-#                         its documented shape — read-only still permits writes to
-#                         GROK_HOME and to /tmp, /var/tmp & friends. A leg CAN
-#                         write to a temp dir; it cannot touch your project.
-#   --tools <read set>    In-process, for the platforms where the kernel profile
-#                         can't be applied (18-sandbox.md warns and continues).
-#
-# The tool fence is an ALLOWLIST on purpose. The denylist form was tried first
-# (--disallowed-tools with the mutating tools named) and it did NOT hold: with the
-# sandbox off, a leg still created the file. An allowlist needs no correct guess
-# at what the write tool is called, and keeps holding when grok ships a new one.
-# Verified both ways with the sandbox off: writes refused, `list_dir` still
-# answers — a fenced leg is read-only, not useless. (The model's own account of
-# which tools it has is NOT evidence; it named the very tools the denylist run
-# proved were still working.) NUL-separated items.
-adapter_audit_flags() {
-  local prompt="$1"; shift
-  [ $# -gt 0 ] && printf -- '--cwd\0%s\0' "$1"
-  printf -- '--permission-mode\0bypassPermissions\0--sandbox\0read-only\0'
-  printf -- '--tools\0read_file,grep,list_dir\0'
-  printf -- '-p\0%s\0' "$prompt"
-}
-
 # Optional hook: the logged-in account label, shown by `clikae list` / `status`
 # and the dashboard. Grok stores identity in auth.json keyed by issuer+client,
 # with the email as a PLAIN field (no JWT decode needed, unlike codex). Never

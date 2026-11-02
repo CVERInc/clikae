@@ -29,9 +29,6 @@ clikae claude work -- --help    # args after -- go straight to the engine
 source ~/.zshrc                 # or your rc file
 claude-work
 
-# Generate a macOS launcher you can double-click from ~/Applications
-clikae app claude work
-
 # See what you've got
 clikae tanks                    # alias: clikae list
 #   ENGINE       TANK
@@ -308,17 +305,7 @@ way.
 | `init <engine> <tank> --adopt` | Mark an EXISTING directory a tank instead of creating one — refuses unless it already looks like that engine's own content. The way back for a directory that lands there after the one-time adoption sweep (below) has already closed: a restored backup, or a stray you've since confirmed is real. Never touches the directory's content; `clikae doctor` names any candidate. |
 | `remove <engine> <tank> [--force] [--keep-data]` | Remove dir + alias + `.app`. `--keep-data` keeps the directory. |
 | `rename <engine> <old> <new> [--force]` | Rename a tank (moves the dir, rewrites the alias, carries the login). |
-| `migrate [<engine>] [--dry-run] [--force] [--keep-login]` | Adopt a hand-rolled config-dir + alias setup. |
 | `alias <engine> <tank> [--name <n>]` | Write (or replace) a shell alias. Default name `<engine>-<tank>`. |
-| `app <engine> <tank> [--terminal <app>] [--force] [--out <dir>]` | Generate a macOS `.app` launcher (default `~/Applications`). macOS only. `--terminal`: `terminal` (default), `iterm2`, `ghostty`. |
-| `app --board [--terminal <app>] [--force] [--out <dir>]` | Generate a `clikae.app` that opens the **board** (the menu of recent sessions + tanks) instead of one tank — a single double-click button for the whole on-ramp. |
-
-> **Ghostty launchers** pass their command through a trusted Ghostty **config file**
-> (`--config-file=`), not `-e`. Ghostty pops an "Allow Ghostty to execute…?" dialog
-> for an externally-injected `-e` command (so a `-e` launcher looks like an empty
-> shell until you click Allow); a config file is trusted, so the window just opens.
-> The config lives inside the `.app` and is found via `path to me`, so the launcher
-> keeps working if you move it.
 
 > **What makes a directory a tank.** Every tank carries a `.clikae-tank` marker
 > file (just the engine name, one line) inside it — that marker, not the
@@ -555,49 +542,6 @@ syntax — `alias <name> 'env VAR=val <binary>'` — because fish has no inline
 `VAR=val cmd`; the result behaves identically. `clikae remove` cleans up the
 block in any of them.
 
-## Migrating an existing setup
-
-Already juggling accounts by hand — say a `~/.claude-acct-a` / `~/.claude-acct-b`
-pair with aliases in your `~/.zshrc`? `clikae migrate` adopts that into clikae:
-
-```bash
-clikae migrate --dry-run   # preview: which dirs move where, which aliases change
-clikae migrate             # do it (asks to confirm first)
-```
-
-It scans your shell rc for aliases that set the engine's config env var and
-invoke the engine. For each one it:
-
-1. moves the referenced config directory under `~/.clikae/profiles/<engine>/<p>/`,
-2. rewrites the alias into clikae's managed sentinel block.
-
-The rc file is backed up to `<rc>.clikae.bak.<timestamp>` first, and an existing
-clikae tank is never overwritten. Pass an engine name (`clikae migrate gh`) to
-migrate a different tool's aliases. Default is `claude`.
-
-> ⚠️ **Don't migrate a config dir that's currently in use.** `migrate` *moves*
-> the directory, so if a process is running against it right now (e.g. you run
-> `clikae migrate` from inside the very `claude` session whose
-> `CLAUDE_CONFIG_DIR` points at the dir being moved), you pull the directory out
-> from under that live process — it can fail to write, or recreate an empty dir
-> at the old path and leave you with two half-states. Run `migrate` from a fresh
-> shell with no instance of that engine active. `--dry-run` is always safe.
->
-> As of v0.4, `migrate` guards against the most common form of this: if
-> `$CLAUDE_CONFIG_DIR` (or whichever env var the adapter uses) currently points
-> at a directory slated to move, it refuses and tells you to retry from a fresh
-> shell. The guard is not bypassed by `--force` — it protects your data, it
-> isn't a confirmation prompt.
-
-> 🔑 **macOS + claude: expect a one-time re-login per migrated tank.** On
-> macOS, Claude Code keeps its login token in the **login Keychain**, not inside
-> `CLAUDE_CONFIG_DIR` — and the keychain entry is keyed by the config-dir path.
-> Because `migrate` moves the dir to a new path, claude no longer finds the token
-> and asks you to log in once for each migrated tank. Your data is intact;
-> only the saved login doesn't follow the move. To avoid the re-login, pass
-> `--keep-login`, which copies the saved token from the old path's keychain entry
-> to the new one (macOS only; it never reads or transmits the token anywhere — it
-> stays in your Keychain). macOS may prompt you to allow keychain access.
 
 ## Carrying a session when you hit a usage limit — `clikae to`
 
@@ -1369,7 +1313,7 @@ clikae status claude     # just one
 
 `status` reads the **live** value of each adapter's env var in the current shell
 and resolves it back to a clikae tank. It's a per-shell view: another terminal
-(or one launched from a different `clikae app`) can be on a different tank.
+(or one started from a launcher) can be on a different tank.
 `(default)` means the env var is unset (the engine's own default); `(external)`
 means it points somewhere that isn't a clikae tank. The ACCOUNT column shows
 the logged-in account when the adapter can tell.
@@ -1390,7 +1334,7 @@ clikae rename claude a cver        # a → cver; login + alias follow
 
 It refuses if the new name is taken or if that engine is currently using the tank
 in this shell (run it from a fresh shell). A pre-existing `.app` launcher is left
-alone but flagged — recreate it with `clikae app claude cver`.
+alone but flagged, because it still names the old tank.
 
 ## Ephemeral memory (`--ephemeral`)
 
@@ -1454,23 +1398,6 @@ For each tank, `clikae`:
    # <<< clikae:claude.work <<<
    ```
    The sentinels make safe, exact removal possible.
-3. (`app`, macOS) Generates an AppleScript-compiled `.app` that opens a terminal,
-   runs the env-var-prefixed engine, and sets the window title to `claude (work)`
-   so you can tell windows apart. The terminal **defaults to the one you're
-   running in** when that's a supported one (read from `$TERM_PROGRAM`, and only
-   if it's actually installed) — otherwise Terminal.app. `$CLIKAE_TERMINAL`
-   overrides the guess, and `--terminal terminal|iterm2|ghostty` overrides both;
-   the choice is printed on the `terminal:` line so it's never a silent guess.
-   Terminal.app and iTerm2 are driven by AppleScript; Ghostty has no
-   window-opening CLI on macOS, so its launcher goes through
-   `open -na Ghostty.app --args … -e …`.
-
-   **Warp is not a target, and it isn't an oversight**: it has no supported way
-   to open a window running a given command (its URL scheme opens a tab in a
-   directory and stops; the only command-running door is a Launch Configuration
-   YAML, a different shape from every other target here). `clikae app --terminal
-   warp` says exactly that instead of a generic "unknown". A launcher built for
-   any other target still works fine when you double-click it from Warp.
 
 No daemons, no global state, no network calls. You can read every line.
 

@@ -83,7 +83,7 @@ Refuses if <new> already exists, or if the engine is currently using <old> in
 this shell (run it from a fresh shell with that engine idle). The rc file is
 backed up
 before editing. A pre-existing `.app` launcher for <old> is left alone but
-flagged — regenerate it with `clikae app <engine> <new>`.
+flagged, because it still names <old>.
 EOF
         return 0
         ;;
@@ -194,7 +194,6 @@ EOF
   for old_app in "$HOME/Applications/$cli ($old).app" "$HOME/Desktop/$cli ($old).app"; do
     if [ -e "$old_app" ]; then
       log_warn "Launcher still points at the old path: $old_app"
-      log_dim "  Recreate it:  clikae app $cli $new   (then delete the old one)"
     fi
   done
 

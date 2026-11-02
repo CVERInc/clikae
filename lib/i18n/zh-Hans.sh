@@ -121,7 +121,6 @@ T_ENGINES_HERE="%s个引擎，就在这里："
 T_ENGINES_SUPPORTED="%s个引擎受支持"
 T_NONE_DETECTED="（此处 PATH 上未检测到）"
 T_FILL_FIRST="装满你的第一个油箱："
-T_CURIOUS_DEMO="好奇？  clikae demo"
 # resume submenu
 T_RESUME_TITLE="这个会话 — 接下来？"
 T_RESUME_OPT_RESUME="从上次离开的地方继续"

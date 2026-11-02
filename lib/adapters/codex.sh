@@ -83,17 +83,6 @@ adapter_burn_flags() {
   printf '%s\0' "$prompt"
 }
 
-# Optional hook: how to run codex HEADLESS READ-ONLY for `clikae conduct`'s
-# fan-out. `-s read-only` sandboxes it to reads; --skip-git-repo-check lets it run
-# outside a repo. First <dir> is the cwd (-C); the prompt is the trailing data.
-# NUL-separated items (multi-line prompt survives as one argv item).
-adapter_audit_flags() {
-  local prompt="$1"; shift
-  printf 'exec\0--skip-git-repo-check\0'
-  [ $# -gt 0 ] && printf -- '-C\0%s\0' "$1"
-  printf -- '-s\0read-only\0%s\0' "$prompt"
-}
-
 # Optional hook: start a session seeded with an initial prompt (for
 # `clikae handoff --to codex/<profile>`). Codex takes a positional prompt.
 adapter_start_with_prompt() {
@@ -689,7 +678,7 @@ EOF
 # by a counter-specimen in tests/bats/adapters/codex.bats.
 #
 # Then "originator": "codex_exec" is `codex exec` — headless, what `clikae
-# burn` and `conduct` run — and "codex-tui" is the interactive TUI. Anything
+# burn` runs — and "codex-tui" is the interactive TUI. Anything
 # else, or no originator at all, is `unknown` and stays on the board.
 adapter_session_mode() {
   local dir="$1" sid="$2" f
