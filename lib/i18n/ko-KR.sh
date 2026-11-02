@@ -123,7 +123,6 @@ T_ENGINES_HERE="%s개 엔진 감지:"
 T_ENGINES_SUPPORTED="%s개 엔진 지원"
 T_NONE_DETECTED="(여기 PATH에서는 감지되지 않음)"
 T_FILL_FIRST="첫 탱크를 채우세요:"
-T_CURIOUS_DEMO="궁금하다면:  clikae demo"
 # resume submenu
 T_RESUME_TITLE="이 세션 — 다음은?"
 T_RESUME_OPT_RESUME="멈춘 곳에서 이어가기"

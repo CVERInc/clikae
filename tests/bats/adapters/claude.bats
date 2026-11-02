@@ -17,14 +17,6 @@ load '../../helpers'
   [[ "$output" == *"claude"*"env-dir"*"CLAUDE_CONFIG_DIR"* ]] || false
 }
 
-@test "info reports a profile count that tracks init" {
-  clikae init claude work
-  clikae init gh personal
-  run clikae info
-  [ "$status" -eq 0 ]
-  [[ "$output" == *"tanks"*"2"* ]] || false
-}
-
 @test "claude alias exports CLAUDE_CONFIG_DIR at the profile path" {
   clikae init claude work
   clikae alias claude work

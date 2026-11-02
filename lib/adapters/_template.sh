@@ -64,12 +64,3 @@ adapter_run() {
 #   local d; for d in "$@"; do printf -- '--add-dir\0%s\0' "$d"; done   # writable dirs
 # }
 
-# Optional: the READ-ONLY sibling of adapter_burn_flags, for `clikae conduct`'s
-# parallel fan-out (best-of-N audits/analyses). Same NUL-per-item contract, but
-# the recipe must NOT grant write access (so N legs can't clobber each other).
-#
-# adapter_audit_flags() {
-#   local prompt="$1"; shift
-#   printf -- '-p\0%s\0' "$prompt"            # headless, no write permission
-#   local d; for d in "$@"; do printf -- '--add-dir\0%s\0' "$d"; done   # read roots
-# }

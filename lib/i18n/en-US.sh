@@ -133,7 +133,6 @@ T_ENGINES_HERE="%s engines, here:"
 T_ENGINES_SUPPORTED="%s engines supported"
 T_NONE_DETECTED="(none detected on PATH here)"
 T_FILL_FIRST="Fill your first tank:"
-T_CURIOUS_DEMO="Curious?  clikae demo"
 # resume submenu (item 5)
 T_RESUME_TITLE="This session — what next?"
 T_RESUME_OPT_RESUME="Resume where you left off"

@@ -24,8 +24,7 @@ So:
 - `clikae agy <tank>` swaps `~/.gemini` (and its login, carried via Keychain)
   **machine-wide** — one agy account is active across *all* terminals at once.
   It's exclusive, not parallel: `clikae burn agy <tank>` walks agy's OWN tanks
-  sequentially (dry → switch → retry), never two at once, and `clikae conduct`
-  still refuses a leg naming a non-active agy tank (parallelism is a structural
+  sequentially (dry → switch → retry), never two at once (parallelism is a structural
   limit, unrelated to the OAuth friction that used to gate sequential switching).
   See `agy-gemini-shared-quota` notes for why same-account agy↔gemini is a fake
   relay (same quota bucket) — that's still true; it's cross-ACCOUNT tanks that
@@ -167,12 +166,6 @@ unprinted. Check the state before you re-fire.
 - **Big file-writing jobs offloaded from your main quota** — a whole translation
   dictionary, written to a file (rule 3), on the agy bucket, untouched by your
   Claude budget. This is the cost-aware-routing payoff.
-- **A cheap breadth leg in `clikae conduct`** — `conduct --leg agy/<tank>` fans a
-  read-only audit/analysis prompt to agy alongside claude/codex legs, then hands you
-  every leg's output to judge. agy is cheap and fast, so it's a good extra
-  perspective for best-of-N. Caveat: the agy leg runs on the **currently active**
-  agy tank only (a leg naming another tank is reported, not run — clikae can't
-  switch agy in parallel). Its dry state is read from `cli.log`, not stdout.
 
 ⚠️ **agy's review suggestions need triage.** It will confidently recommend things
 that violate already-decided product calls. Never auto-apply an agy review's fixes —
@@ -187,7 +180,7 @@ first. See `agy-gemini-shared-quota` for the running ground-truth.
 
 ## See also
 
-- `docs/orchestration.md` — the general headless dispatch playbook (burn/conduct/legs).
+- `docs/orchestration.md` — the general headless dispatch playbook (burn/legs).
 - `clikae agy --help` — the command surface for switching/managing agy tanks.
 - `scripts/verify-agy-shapes.sh` — run this after `agy update`. The adapter reads
   agy's own `history.jsonl` and transcripts with grep, and agy updates itself, so

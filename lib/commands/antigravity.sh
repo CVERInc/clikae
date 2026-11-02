@@ -488,7 +488,7 @@ Run agy headless on the active account (route work to your Antigravity quota,
 sparing your main claude/codex budget), or hand it to `clikae burn agy <tank>` —
 since a tank switch no longer needs an interactive OAuth pick, burn can auto-hop
 to the next agy tank when one runs dry (sequential only; agy can't run two tanks
-in parallel — see `clikae conduct --help`). Drive it directly like this:
+in parallel). Drive it directly like this:
 
   clikae agy <tank> -- --print-timeout 900s -p "$(cat /tmp/prompt.txt)"
 

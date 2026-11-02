@@ -182,3 +182,54 @@ load '../helpers'
   clikae rename claude a cver --force
   [ -f "$CLIKAE_HOME/profiles/claude/cver/clikae-meta/solo" ]
 }
+
+@test "rename carries the saved login to the new keychain slot (macOS, stubbed security)" {
+  [[ "$OSTYPE" == darwin* ]] || skip "keychain carry-over is macOS-only"
+  clikae init claude a
+
+  # Stub `security` so the test never touches the real login keychain. State
+  # lives as one file per service name under $STUB_STATE.
+  local stub_bin="$TEST_HOME/stubbin"
+  export STUB_STATE="$TEST_HOME/keychain"
+  mkdir -p "$stub_bin" "$STUB_STATE"
+  cat > "$stub_bin/security" <<'STUB'
+#!/usr/bin/env bash
+state="$STUB_STATE"
+sub="$1"; shift
+svc=""; want_w=0; secret=""
+while [ $# -gt 0 ]; do
+  case "$1" in
+    -s) svc="$2"; shift 2 ;;
+    -w) shift
+        if [ "$sub" = "add-generic-password" ]; then secret="$1"; shift; else want_w=1; fi ;;
+    -a|-l) shift 2 ;;
+    -U) shift ;;
+    *) shift ;;
+  esac
+done
+file="$state/$svc"
+case "$sub" in
+  find-generic-password)
+    [ -f "$file" ] || exit 1
+    if [ "$want_w" -eq 1 ]; then cat "$file"; else echo '    "acct"<blob>="testacct"'; fi
+    exit 0 ;;
+  add-generic-password)
+    printf '%s' "$secret" > "$file"; exit 0 ;;
+esac
+exit 1
+STUB
+  chmod +x "$stub_bin/security"
+  PATH="$stub_bin:$PATH"; export PATH
+
+  local old_svc new_svc
+  old_svc="Claude Code-credentials-$(printf '%s' "$CLIKAE_HOME/profiles/claude/a" | shasum -a 256 | cut -c1-8)"
+  printf 'secret-token-a' > "$STUB_STATE/$old_svc"
+
+  run clikae rename claude a cver --force
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  [[ "$output" == *"Carried over the saved login"* ]] || { echo "$output"; false; }
+
+  new_svc="Claude Code-credentials-$(printf '%s' "$CLIKAE_HOME/profiles/claude/cver" | shasum -a 256 | cut -c1-8)"
+  [ -f "$STUB_STATE/$new_svc" ]
+  [ "$(cat "$STUB_STATE/$new_svc")" = "secret-token-a" ]
+}

@@ -73,18 +73,18 @@ workers burn whatever account still has gas.
 **Reach for this when** one model's confident answer isn't enough to bet on (a design
 decision, a security-adjacent review). You want a vote, not a speed-up.
 
-**The move** — fan the SAME read-only prompt across *different families/tiers*, then have
-a separate model grade the outputs:
+**The move** — burn the SAME prompt on *different families/tiers*, each writing its own
+file, then have a separate model grade the files:
 
 ```bash
-clikae conduct --prompt-file /tmp/review.md \
-  --leg claude/main --leg codex/work --leg agy/g --add-dir "$PWD"
+clikae burn claude main --artifact /tmp/review-claude.md --prompt-file /tmp/review.md
+clikae burn codex work --artifact /tmp/review-codex.md --prompt-file /tmp/review.md
 ```
 
-**Verify / gotcha:** conduct never judges — it hands you every leg's output. Route those
+**Verify / gotcha:** burn can write, so ask for a review in the prompt and run each one in
+its own checkout. Nothing here judges for you. Route the files
 through a *neutral grader* (a model that sees only the outputs, not the reasoning that
 produced them); it catches the confident-wrong error a producer's self-assessment misses.
-The agy leg runs on its currently-active tank only.
 
 **Why a switcher can't:** fanning the same prompt across the same account is parallelism,
 not a correctness vote. The vote needs *different vendors* plus a *third grader* — that's

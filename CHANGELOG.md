@@ -12,9 +12,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Simplified Chinese, German, French, and Brazilian Portuguese.** The interface now ships in
   English, Traditional Chinese, Japanese, Korean, and Spanish. A saved or detected setting for
   any other language falls back to English.
+- **`clikae conduct`, `demo`, `info`, and `migrate`.** Usage records on the maintainer's
+  machines showed no use of the first three and almost none of `migrate`. For one prompt on
+  several tanks, run one `burn` per tank. For a health check, use `clikae doctor`.
+- **`clikae app` moved out of clikae** to the standalone `contrib/make-launcher.sh`. It is not
+  installed by Homebrew; `clikae app` prints where to get it. Launchers you already made keep
+  working. New tank launchers run `clikae <engine> <tank>` instead of the engine directly.
 
 ### Fixed
 
+- **A `burn` test no longer fails at random.** The process-group probe stopped its child with TERM,
+  and a child that had not started `sleep` yet could run the test's traps. It now uses KILL. `burn`
+  itself runs the probe in a subshell without those traps, so real runs were not affected.
+- **agy shows every quota window its plan has.** clikae now asks as the installed agy version,
+  which is what makes the server answer with Gemini's 5h and weekly windows and Argon's weekly.
+  Argon is its own group, so `tanks --available agy --group argon` can tell a tank with Argon left
+  from one without. A window clikae does not recognize is listed but never counted as 5h or 7d, and
+  no window is inferred from its reset time any more.
 - **`clikae resume` and the board work on Ubuntu 26.04.** Its `stat` comes from uutils and does not
   call itself GNU, so clikae read files with the BSD flags and took file system details for session
   data. clikae now goes by whether `stat --version` answers at all.

@@ -379,12 +379,12 @@ lost, whoever they belonged to (#111).
 
 ## Management verbs
 
-**`clikae migrate` makes claude ask you to log in again.** claude stores its OAuth
-token in the macOS Keychain, keyed by a **hash of the config-dir path** — not inside
-the dir. Move the dir and the hash changes, so the token no longer matches. Use
-`clikae migrate --keep-login` to copy the Keychain item across.
+**Moving a config dir by hand makes claude ask you to log in again.** claude stores its
+OAuth token in the macOS Keychain, keyed by a **hash of the config-dir path** — not inside
+the dir. Move the dir and the hash changes, so the token no longer matches. `clikae rename`
+copies the Keychain item across for you.
 
-**The "in-use" guard on `rename`/`migrate`/`remove` is best-effort.** It scans live
+**The "in-use" guard on `rename`/`remove` is best-effort.** It scans live
 processes for a tank in use *right now*; it can't catch a check-then-open race, and
 the TUI-vs-daemon classification is a command-string heuristic. It errs toward warning,
 not silent damage.
