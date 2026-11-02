@@ -200,12 +200,13 @@ _CLIKAE_STAT_FMT=""
 # filesystem info; 2026-09-10 round-7 review, R7-P3-3, correcting this
 # comment's own "EXITS 0" claim). This repo has been caught by the two flags
 # four times; the fourth was a helper written three functions away from this
-# one, which had already solved it. BSD stat has no `--version`, so the grep
-# failing IS the BSD answer.
+# one, which had already solved it. BSD stat has no `--version`, so that failing
+# IS the BSD answer. Do not look for "GNU" in the text: Ubuntu 26.04's stat says
+# "uutils coreutils", takes the GNU flags, and read as BSD broke `clikae resume`.
 _clikae_statv() {
   [ -n "$_CLIKAE_STAT_FMT" ] && return 0
-  if stat --version 2>/dev/null | grep -q GNU; then
-    _CLIKAE_STAT_FMT='%Y %n'            # GNU
+  if stat --version >/dev/null 2>&1; then
+    _CLIKAE_STAT_FMT='%Y %n'            # GNU, uutils
   else
     _CLIKAE_STAT_FMT='%m %N'            # BSD
   fi
