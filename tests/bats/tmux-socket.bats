@@ -52,6 +52,7 @@ teardown() {
   fi
   [ -n "${LEGACY_SOCK:-}" ] && tmux -S "$LEGACY_SOCK" kill-server 2>/dev/null
   [ -n "${ORPHAN_SOCK:-}" ] && tmux -S "$ORPHAN_SOCK" kill-server 2>/dev/null
+  [ -z "${SHORT_HOME:-}" ] || rm -rf "$SHORT_HOME"
   # Processes this test started itself, by pid — never a name match.
   local p
   for p in ${OWN_PIDS:-}; do kill "$p" 2>/dev/null; done
@@ -85,6 +86,9 @@ teardown() {
 
 @test "socket dir: a server born by the real binary lives under \$CLIKAE_HOME/state/tmux" {
   command -v tmux >/dev/null 2>&1 || skip "tmux not installed"
+  # A socket path has a 104-byte limit, and a macOS user's temp dir alone uses half of it.
+  SHORT_HOME="$(mktemp -d /tmp/ck-sock.XXXXXX)"
+  export CLIKAE_HOME="$SHORT_HOME/.clikae"; mkdir -p "$CLIKAE_HOME"
   local bin="$BATS_TEST_TMPDIR/bin"; mkdir -p "$bin"
   printf '#!/usr/bin/env bash\nsleep 3\n[ "$1" = run ] && : > "$2"\nexit 0\n' > "$bin/codex"
   chmod +x "$bin/codex"; PATH="$bin:$PATH"; export PATH
@@ -241,17 +245,18 @@ _sockfile() {
   printf -v "$1" '%s' "$_sf"
 }
 
-# _idle_bin <name> — a program with that comm that can wait. A copy of sleep where
-# one runs under another name. On uutils (Ubuntu 26.04) sleep is one multicall binary
-# that refuses a name it does not know, so there it is a copy of bash; macOS kills a
-# copy of its bash, so that cannot be the only way.
+# _idle_bin <name> — a program with that comm that can wait. A symlink to sleep names
+# the process on macOS and GNU, and macOS 27 kills a copy of a system binary. On uutils
+# (Ubuntu 26.04) sleep is one multicall binary that refuses a name it does not know, so
+# there it is a copy of bash.
 _idle_bin() {
   local bin="$TEST_HOME/fakebin/$1"
   mkdir -p "$TEST_HOME/fakebin"
   [ -x "$bin" ] && return 0
-  cp "$(command -v sleep)" "$bin"
+  ln -s "$(command -v sleep)" "$bin"
   "$bin" 0 >/dev/null 2>&1 && return 0
-  cp -f "$(command -v bash)" "$bin"
+  rm -f "$bin"
+  cp "$(command -v bash)" "$bin"
   [ -p "$TEST_HOME/fakebin/.idle" ] || mkfifo "$TEST_HOME/fakebin/.idle"
 }
 
