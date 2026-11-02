@@ -1310,6 +1310,31 @@ tmux_spawn_session() {
 # the live catchers (burn's stdout classifier, `_switch_supervise`) already
 # wrote the moment they saw a limit, so it is the same fact, read the cheap way
 # — and `·` honestly says "no reading" rather than inventing a green dot.
+# _tmux_status_last_goodv <cache json> <now>: the record's `last_good` into
+# $_TSTAT_FUEL and $_TSTAT_FUEL_AGE, rc=1 when there is none or it is over 14 days
+# old. Same limit as the board's _home_last_goodv, which this row cannot source.
+_tmux_status_last_goodv() {
+  local lg w k at age=""
+  case "$1" in *'"last_good":{'*) ;; *) return 1 ;; esac
+  lg="${1#*\"last_good\":\{}"; lg="${lg%%\}*}"
+  w="${lg#*\"window_pct\":}"; w="${w%%[,\}]*}"; w="${w%%.*}"
+  k="${lg#*\"weekly_pct\":}"; k="${k%%[,\}]*}"; k="${k%%.*}"
+  at="${lg#*\"at\":}"; at="${at%%[!0-9]*}"
+  [ -n "$at" ] && [ $(( $2 - at )) -lt 1209600 ] || return 1
+  case "$k" in
+    ''|*[!0-9]*)
+      case "$w" in ''|*[!0-9]*) return 1 ;; esac
+      [ "$w" -le 100 ] || w=100
+      _TSTAT_FUEL="${USAGE_LABEL_WINDOW:-5h} $((100 - w))%" ;;
+    *)
+      [ "$k" -le 100 ] || k=100
+      _TSTAT_FUEL="${USAGE_LABEL_WEEKLY:-7d} $((100 - k))%" ;;
+  esac
+  declare -F _human_agev >/dev/null 2>&1 && _human_agev age "$at" "$2"
+  _TSTAT_FUEL_AGE="$age"
+  return 0
+}
+
 tmux_status_fuelv() {
   local engine="$1" tank="$2" now="${3:-}" f json w k ca ca_raw age fresh suffix src
   _TSTAT_FUEL=""; _TSTAT_FUEL_AGE=""
@@ -1373,6 +1398,8 @@ tmux_status_fuelv() {
       _TSTAT_FUEL_AGE="$suffix"
       return 0
     fi
+    # No number now, but one on record: show it with its age, as the board does.
+    _tmux_status_last_goodv "$json" "$now" && return 0
     # AN EXPIRED TOKEN IS NOT "NO READING". #107's whole point: an idle tank at
     # 99% weekly used to read exactly like a tank with no login at all. The
     # cache says which of the two this is (`source:"expired"`, written only with

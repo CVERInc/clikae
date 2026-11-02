@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **The tmux row shows a tank's last reading when it has no current one**, with its
+  age, as the board already did. It used to show `·` for a number the board could see.
+
 ### Changed
 
 - **The board shows fuel left, as a bar**: `5h ███████░ 97%  7d ███████░ 89%`.
