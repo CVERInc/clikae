@@ -9,6 +9,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **A size ruler in CI.** A pull request that grows a file already over 1500 lines
+  gets a warning naming the file and the growth. It never fails the build.
 - **`clikae tanks --available agy` shows Gemini and Claude/GPT separately.** The two
   quotas are independent, so one line names who can take each. `--group gemini` or
   `--group claude` prints names for one, and JSON carries each group's verdict.
