@@ -1259,7 +1259,9 @@ _two_convs() {
 
 # _holding <file> -> a pane-command prefix that starts a child of the pane's
 # shell holding <file> open, the way an engine process holds a transcript.
-_holding() { printf '( exec 3<%q; exec sleep 30 ) & ' "$1"; }
+# 180 s and the 120 s reads below: on a Mac where lsof takes seconds per call, wake_sit
+# spends 20 s or more reading who holds the transcript, and the pane must still be there.
+_holding() { printf '( exec 3<%q; exec sleep 180 ) & ' "$1"; }
 
 @test "#182r2 scope: after /clear the pane's conversation is the NEW transcript, never the launch stamp" {
   # #182 round 3: "after /clear" is proven by the pane's OWN process tree
@@ -1331,7 +1333,7 @@ _holding() { printf '( exec 3<%q; exec sleep 30 ) & ' "$1"; }
   _two_convs "$tank" "$a" "$b" "2026-09-16T15:00:00.000Z"
   local out="$BATS_TEST_TMPDIR/typed" proj="$CLIKAE_HOME/profiles/claude/$tank/projects/p"
   # The pane's engine holds B open: the /clear is proven, not inferred (r3).
-  tmux new-session -d -s "$(_sess)" "$(_holding "$proj/$b.jsonl")read -r -t 20 line || exit 0; printf '%s' \"\$line\" > '$out'; sleep 10"
+  tmux new-session -d -s "$(_sess)" "$(_holding "$proj/$b.jsonl")read -r -t 120 line || exit 0; printf '%s' \"\$line\" > '$out'; sleep 10"
   tmux set-option -t "=$(_sess):" @clikae_session_id "$a"
   sleep 1
   run wake_sit "$(_sess)" "$(date +%s)" claude "$tank"
@@ -1365,7 +1367,7 @@ _holding() { printf '( exec 3<%q; exec sleep 30 ) & ' "$1"; }
   # shellcheck disable=SC2059
   printf "$_LIMIT_LINE" "$phrase" "$now.900Z" > "$proj/$a/subagents/agent-a1.jsonl"
   local out="$BATS_TEST_TMPDIR/typed"
-  tmux new-session -d -s "$(_sess)" "$(_holding "$proj/$b.jsonl")read -r -t 20 line || exit 0; printf '%s' \"\$line\" > '$out'; sleep 60"
+  tmux new-session -d -s "$(_sess)" "$(_holding "$proj/$b.jsonl")read -r -t 120 line || exit 0; printf '%s' \"\$line\" > '$out'; sleep 60"
   tmux set-option -t "=$(_sess):" @clikae_session_id "$a"
   sleep 1
   # Control: on the stamped transcript alone this limit IS parked, and so is
@@ -1432,7 +1434,7 @@ _parked_and_later() {
   a="aaaaaaaa-a4a4-4a4a-8a4a-a4a4a4a4a4a4"; b="bbbbbbbb-b4b4-4b4b-8b4b-b4b4b4b4b4b4"
   _parked_and_later "$tank" "$a" "$b" "$_USER_LINE"
   local out="$BATS_TEST_TMPDIR/typed"
-  tmux new-session -d -s "$(_sess)" "read -r -t 20 line || exit 0; printf '%s' \"\$line\" > '$out'; sleep 10"
+  tmux new-session -d -s "$(_sess)" "read -r -t 120 line || exit 0; printf '%s' \"\$line\" > '$out'; sleep 10"
   tmux set-option -t "=$(_sess):" @clikae_session_id "$a"
   sleep 1
   run wake_sit "$(_sess)" "$(date +%s)" claude "$tank"
@@ -1450,7 +1452,7 @@ _parked_and_later() {
   a="aaaaaaaa-a5a5-4a5a-8a5a-a5a5a5a5a5a5"; b="bbbbbbbb-b5b5-4b5b-8b5b-b5b5b5b5b5b5"
   _parked_and_later "$tank" "$a" "$b" "$_TURN_LINE"
   local out="$BATS_TEST_TMPDIR/typed"
-  tmux new-session -d -s "$(_sess)" "read -r -t 20 line || exit 0; printf '%s' \"\$line\" > '$out'; sleep 10"
+  tmux new-session -d -s "$(_sess)" "read -r -t 120 line || exit 0; printf '%s' \"\$line\" > '$out'; sleep 10"
   tmux set-option -t "=$(_sess):" @clikae_session_id "$a"
   sleep 1
   run wake_sit "$(_sess)" "$(date +%s)" claude "$tank"
@@ -1472,7 +1474,7 @@ _parked_and_later() {
   _parked_and_later "$tank" "$a" "$b" "$fmt\n"
   proj="$CLIKAE_HOME/profiles/claude/$tank/projects/p"
   local out="$BATS_TEST_TMPDIR/typed"
-  tmux new-session -d -s "$(_sess)" "$(_holding "$proj/$b.jsonl")read -r -t 20 line || exit 0; printf '%s' \"\$line\" > '$out'; sleep 10"
+  tmux new-session -d -s "$(_sess)" "$(_holding "$proj/$b.jsonl")read -r -t 120 line || exit 0; printf '%s' \"\$line\" > '$out'; sleep 10"
   tmux set-option -t "=$(_sess):" @clikae_session_id "$a"
   sleep 1
   run wake_sit "$(_sess)" "$(date +%s)" claude "$tank"
