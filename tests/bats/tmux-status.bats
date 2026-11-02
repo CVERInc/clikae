@@ -1431,3 +1431,27 @@ _twelve_sessions_sharing_a_prefix() {
   [ "$status" -ne 0 ]
   [[ "$output" == *"No session 'zzzzzzzz'"* ]] || { echo "$output"; false; }
 }
+
+@test "fuel: no number now, one on record: the last reading with its age, like the board" {
+  _src
+  _tstat_lastgood() {
+    mkdir -p "$CLIKAE_HOME/state/usage/antigravity"
+    jq -cn --argjson now "$1" --argjson at "$2" --argjson lg "$3" \
+      '{source:"unknown",reason:"needs-refresh",window_pct:null,weekly_pct:null,cached_at:($now-400000),
+        last_good:($lg + {at:$at})}' > "$CLIKAE_HOME/state/usage/antigravity/pike.json"
+  }
+  local now=2000000000
+  _tstat_lastgood "$now" $((now - 7200)) '{"window_pct":null,"weekly_pct":6.7}'
+  tmux_status_fuelv antigravity pike "$now"
+  [ "$_TSTAT_FUEL" = "7d 94%" ] || { echo "fuel: $_TSTAT_FUEL"; false; }
+  [ "$_TSTAT_FUEL_AGE" = "2h ago" ] || { echo "age: $_TSTAT_FUEL_AGE"; false; }
+  # A window-only tank names its one window.
+  _tstat_lastgood "$now" $((now - 7200)) '{"window_pct":30,"weekly_pct":null}'
+  tmux_status_fuelv antigravity pike "$now"
+  [ "$_TSTAT_FUEL" = "5h 70%" ] || { echo "fuel: $_TSTAT_FUEL"; false; }
+  # Past the board's 14 days it is not a reading any more.
+  _tstat_lastgood "$now" $((now - 1300000)) '{"window_pct":null,"weekly_pct":6.7}'
+  tmux_status_fuelv antigravity pike "$now"
+  [ "$_TSTAT_FUEL" = "·" ] || { echo "fuel: $_TSTAT_FUEL"; false; }
+}
+
