@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **`clikae tanks --available agy` shows Gemini and Claude/GPT separately.** The two
+  quotas are independent, so one line names who can take each. `--group gemini` or
+  `--group claude` prints names for one, and JSON carries each group's verdict.
+
+### Changed
+
+- **`--available` trusts less.** A model share above the weekly number now gates the
+  tank, and a reading over six hours old is skipped with the reason `stale`.
+
 ### Changed
 
 - **Moving the cursor on the board no longer recomposes the frame.** Rows are
