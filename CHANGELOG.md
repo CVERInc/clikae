@@ -13,6 +13,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   directory** (#194). clikae built the project path from the logical `$PWD` while
   Claude Code uses the resolved one, so a run from such a directory logged that
   memory was linked but never saw it. The log line now names the path it linked.
+- **`burn agy` no longer reports a failed run as DONE** (#192). Its exit code was
+  discarded, so a lapsed login's error text was saved as the artifact. A non-zero
+  exit is now a failure, and a login failure names the tank to log in to. The
+  claim that no OAuth is needed when switching tanks is gone from the burn log,
+  because it can be false.
 - **A plan with no 5-hour window reads correctly** (#195, #198). Claude tanks
   without one reported `unparseable`, and codex tanks had their 7-day number
   filed as the 5-hour one. Each window is now classified by its own length, and
