@@ -241,14 +241,37 @@ _sockfile() {
   printf -v "$1" '%s' "$_sf"
 }
 
-# _fake_tmux_proc <var> — a live process whose comm is exactly `tmux` (a copy
-# of sleep under that name: SIGUSR1 kills it, so "alive afterwards" is "not
-# signalled"). Waits until ps can see its start time.
-_fake_tmux_proc() {
+# _idle_bin <name> — a program with that comm that can wait. A copy of sleep where
+# one runs under another name. On uutils (Ubuntu 26.04) sleep is one multicall binary
+# that refuses a name it does not know, so there it is a copy of bash; macOS kills a
+# copy of its bash, so that cannot be the only way.
+_idle_bin() {
+  local bin="$TEST_HOME/fakebin/$1"
   mkdir -p "$TEST_HOME/fakebin"
-  [ -x "$TEST_HOME/fakebin/tmux" ] || cp "$(command -v sleep)" "$TEST_HOME/fakebin/tmux"
+  [ -x "$bin" ] && return 0
+  cp "$(command -v sleep)" "$bin"
+  "$bin" 0 >/dev/null 2>&1 && return 0
+  cp -f "$(command -v bash)" "$bin"
+  [ -p "$TEST_HOME/fakebin/.idle" ] || mkfifo "$TEST_HOME/fakebin/.idle"
+}
+
+# _idle_run <name> — wait 30 s under that name. `exec`, so the pid a caller gets from
+# `_idle_run name &` is the process with that comm, not a subshell around it. The bash
+# form reads a FIFO nothing writes: no child process, and SIGUSR1 stays fatal.
+_idle_run() {
+  local bin="$TEST_HOME/fakebin/$1"
+  [ -p "$TEST_HOME/fakebin/.idle" ] || exec "$bin" 30
+  # shellcheck disable=SC2016  # $0 is expanded by the copy of bash.
+  exec "$bin" -c 'read -r -t 30 _ <> "$0"' "$TEST_HOME/fakebin/.idle"
+}
+
+# _fake_tmux_proc <var> — a live process whose comm is exactly `tmux`: SIGUSR1
+# kills it, so "alive afterwards" is "not signalled". Waits until ps can see its
+# start time.
+_fake_tmux_proc() {
+  _idle_bin tmux
   # _ft_ names: printf -v below must not land on a local of the caller's name.
-  "$TEST_HOME/fakebin/tmux" 30 & local _ft_pid=$!
+  _idle_run tmux & local _ft_pid=$!
   OWN_PIDS="${OWN_PIDS:-} $_ft_pid"
   local _ft_i=0
   while [ "$_ft_i" -lt 50 ] && [ -z "$(_lstart "$_ft_pid")" ]; do sleep 0.05; _ft_i=$((_ft_i + 1)); done
@@ -259,8 +282,7 @@ _fake_tmux_proc() {
 # tmux_rescue_orphans returns at once when no tmux is installed (the macOS CI
 # image has none), which would turn the pruning/race tests into no-ops.
 _fakebin_tmux() {
-  mkdir -p "$TEST_HOME/fakebin"
-  [ -x "$TEST_HOME/fakebin/tmux" ] || cp "$(command -v sleep)" "$TEST_HOME/fakebin/tmux"
+  _idle_bin tmux
 }
 
 # _dead_pid <var> — a pid that has certainly exited.
@@ -356,9 +378,8 @@ EOF
 @test "rescue: a live non-tmux process named tmux-helper is never signalled" {
   _src_tmux
   cd "$TEST_HOME"
-  mkdir -p "$TEST_HOME/fakebin"
-  cp "$(command -v sleep)" "$TEST_HOME/fakebin/tmux-helper"
-  "$TEST_HOME/fakebin/tmux-helper" 30 & local other=$!
+  _idle_bin tmux-helper
+  _idle_run tmux-helper & local other=$!
   OWN_PIDS="$other"
   sleep 0.2
   _seed "$other" "$(_lstart "$other")" "$TEST_HOME/never/default"

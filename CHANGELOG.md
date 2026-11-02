@@ -16,6 +16,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   installed by Homebrew; `clikae app` prints where to get it. Launchers you already made keep
   working. New tank launchers run `clikae <engine> <tank>` instead of the engine directly.
 
+### Fixed
+
+- **`clikae resume` and the board work on Ubuntu 26.04.** Its `stat` comes from uutils and does not
+  call itself GNU, so clikae read files with the BSD flags and took file system details for session
+  data. clikae now goes by whether `stat --version` answers at all.
+
 ## [0.44.0] — 2026-11-02
 
 ### Removed
