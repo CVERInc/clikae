@@ -67,7 +67,7 @@ _agree_on() {
 @test "_dw_walk: ASCII shortcut agrees with the full walk, at every budget" {
   _boot
   _agree_on "claude" ascii-word
-  _agree_on "hi@tniop.tw" ascii-email
+  _agree_on "user6@example.com" ascii-email
   _agree_on "7f66142c-b7b6-4931-ab95-4a9620dd83ff" ascii-uuid
   _agree_on "" empty
   _agree_on "x" single
