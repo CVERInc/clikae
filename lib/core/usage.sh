@@ -5,20 +5,14 @@
 #   needs-refresh   the access token is past its expiry (by the vendor's 401/
 #                   403, or by the credentials' own recorded expiry) AND a
 #                   refresh token is beside it. The login is fine; the token
-#                   needs the refresh a session does. A reader that is ALLOWED
-#                   to spend does that refresh itself before it ever prints
-#                   this word (see `usage_read` below, and #177): this reason
-#                   only reaches disk from a reader that may not spend (the
-#                   board's refresh-on-open, a live session's wake window,
-#                   burn's ranking) or whose refresh was refused by burn's own
-#                   gates (the recorded cockpit, a running burn). It is never
-#                   "this tank cannot be used".
-#   relogin-required the refresh was ATTEMPTED — the engine ran one trivial
-#                   prompt — and the vendor still refused the token. Only
-#                   this needs a person (`clikae claude <tank>`, then /login).
-#                   #177: the two words exist so that "needs a session" and
-#                   "needs a person" can never look alike again; the old
-#                   single word `expired` is retired.
+#                   needs the refresh a session does. `usage_read` tries one
+#                   with no model call first, so this word means that did not
+#                   work, or this reader opted out. It is never "this tank
+#                   cannot be used".
+#   relogin-required `--wake` ran a real prompt and the vendor still refused the
+#                   token. Only this needs a person (`clikae claude <tank>`,
+#                   then /login). The two words exist so that "needs a session"
+#                   and "needs a person" can never look alike.
 #   keychain-denied the Keychain read itself was REFUSED (macOS: no ACL for
 #                   this process, interaction not allowed, a locked keychain
 #                   — exactly what a tmux-hosted wake window gets). Nothing is
@@ -64,18 +58,13 @@ USAGE_LABEL_WINDOW="5h"
 # shellcheck disable=SC2034
 USAGE_LABEL_WEEKLY="7d"
 
-# #177: may THIS reader refresh an expired token by running the engine for
-# one trivial prompt (through `clikae burn`, the same way `--wake` does)? On
-# by default — `clikae usage` and `clikae watch` are a person or a cockpit
-# asking, and an eleven-second refresh is cheaper than a wrong reroute. A
-# reader that must never spend quota sets CLIKAE_USAGE_AUTO_WAKE=0: the
-# board's refresh-on-open (home.sh), a live session's own wake window
-# (wake.sh — the session IS the refresh), burn's run-end and reroute-ranking
-# reads (burn.sh — the burn is the session). The wake child inherits 0 so a
-# refresh can never recurse into another refresh.
+# May THIS reader renew a lapsed token through adapter_usage_refresh? Reading a
+# number never spends quota: the refresh runs no model, and only an explicit
+# `--wake` sends a prompt. CLIKAE_USAGE_AUTO_WAKE=0 is for readers where it would
+# be redundant: a live session's wake window (the session IS the refresh), and
+# burn's and watch's reads.
 _usage_auto_wake_allowed() {
   case "${CLIKAE_USAGE_AUTO_WAKE:-1}" in 0|off|no|false) return 1 ;; esac
-  [ -n "${CLIKAE_BIN:-}" ] && [ -x "${CLIKAE_BIN:-}" ] || return 1
   return 0
 }
 
@@ -166,7 +155,7 @@ _USAGE_NUMERIC_RECORD_JQ='type == "object"
 
 usage_read() (
   local engine="$1" tank="$2" fresh="${3:-0}" cache now ttl reading tmp
-  local adapter_out="" adapter_reason="" adapter_retry="" measured_at="" measured_seen="" can_wake=0 wake_rc
+  local adapter_out="" adapter_reason="" adapter_retry="" measured_at="" measured_seen="" can_wake=0
   _usage_auto_wake_allowed && can_wake=1
   cache="$CLIKAE_HOME/state/usage/$engine/$tank.json"
   now="$(date +%s)"; ttl="${CLIKAE_USAGE_TTL:-120}"
@@ -207,35 +196,14 @@ usage_read() (
     load_adapter "$engine"
     if declare -F adapter_usage >/dev/null; then
       _usage_adapter_call "$engine" "$tank"
-      # #177: REFRESH BEFORE MEASURE. The access token is past its expiry and
-      # a refresh token sits beside it — the one state that used to be printed
-      # as the terminal word `expired`. Run the engine for one trivial prompt
-      # (the same burn `--wake` runs; its cockpit gate and running-burn lock
-      # apply unchanged), then ask again. Only a refresh that RAN and still
-      # left the vendor refusing is `relogin-required`; a refresh that could
-      # not run (gated, no engine, timed out) leaves `needs-refresh`, which
-      # says what it is: stale, not broken.
-      # Review of #184, finding 1: the burn's exit code says whether the
-      # BURN worked (engine answered, artifact written), not whether the
-      # CREDENTIALS were renewed — a run that renewed them can still end in a
-      # limit (rc 2) or a missing artifact, and a refusal because another
-      # burn holds the tank (rc 1/2) is usually that other burn renewing
-      # them. So every wake, whatever its rc, is followed by one more
-      # measurement — never by a second wake — and only that measurement
-      # decides. The pre-wake `needs-refresh` is never published as is.
-      if [ "$adapter_reason" = needs-refresh ] && [ "$can_wake" = 1 ]; then
-        # stderr: this function's stdout IS the reading, captured by callers.
-        declare -F log_info >/dev/null && log_info "$engine/$tank: access token lapsed — refreshing it (one trivial prompt, ≤${_USAGE_WAKE_TIMEOUT_SEC}s)" >&2
-        wake_rc=0
-        usage_wake_burn "$engine" "$tank" || wake_rc=$?
+      # REFRESH BEFORE MEASURE (#177), with no model call. Only the measurement
+      # after it decides. A refresh that changed nothing stays `needs-refresh`,
+      # never `relogin-required`: that word needs a prompt that really ran
+      # (`--wake`), because this command can succeed without renewing anything.
+      if [ "$adapter_reason" = needs-refresh ] && [ "$can_wake" = 1 ] &&
+         declare -F adapter_usage_refresh >/dev/null; then
+        adapter_usage_refresh "$(profile_dir "$engine" "$tank")" || true
         _usage_adapter_call "$engine" "$tank"
-        if [ "$adapter_reason" = needs-refresh ]; then
-          if [ "$wake_rc" = 0 ]; then
-            adapter_reason=relogin-required
-          else
-            declare -F log_warn >/dev/null && log_warn "$engine/$tank: the refresh did not complete (burn rc $wake_rc) and the token still reads lapsed — reading stays needs-refresh (a session on the tank refreshes it)"
-          fi
-        fi
       elif [ "$adapter_reason" = needs-refresh ] && [ "${_CLIKAE_USAGE_AFTER_WAKE:-0}" = 1 ]; then
         # `clikae usage --wake` re-reading after ITS burn completed: the
         # engine ran and the vendor still refuses — this is the failed case.

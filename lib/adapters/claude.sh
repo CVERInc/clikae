@@ -1129,6 +1129,22 @@ adapter_migrate_credentials() {
 # _claude_usage_call_failed below for which observation produces which (#107
 # took the old `network` catch-all apart: an HTTP 401/403 is now observed,
 # not inferred, and an unparseable body has its own word).
+# adapter_usage_refresh <dir>: renew a lapsed access token with no model call and
+# no quota. `claude auth status` refreshes as a side effect (measured on 2.1.312:
+# a token 148 minutes past expiry came back valid for 10 hours). The CLI does the
+# OAuth work and writes its own credentials, so the single-use refresh token stays
+# its business. Only the next measurement decides whether it worked.
+adapter_usage_refresh() {
+  local dir="$1" tbin=""
+  command -v claude >/dev/null 2>&1 || return 1
+  declare -F _burn_timeout_bin >/dev/null && tbin="$(_burn_timeout_bin 2>/dev/null)"
+  case "$tbin" in
+    timeout|gtimeout) CLAUDE_CONFIG_DIR="$dir" "$tbin" 30 claude auth status --json ;;
+    perl) CLAUDE_CONFIG_DIR="$dir" perl -e 'alarm shift; exec @ARGV or exit 127' 30 claude auth status --json ;;
+    *) CLAUDE_CONFIG_DIR="$dir" claude auth status --json ;;
+  esac >/dev/null 2>&1 </dev/null
+}
+
 _claude_usage_unreadable() {
   printf '{"source":"unknown","reason":"%s"}\n' "$1"
 }

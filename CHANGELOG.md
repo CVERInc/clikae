@@ -14,6 +14,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `window_absent` or `weekly_absent` when a plan has no such window, and
   `stale:true` on a reading over 6 hours old.
 
+### Changed
+
+- **Reading usage never spends quota** (#195). `clikae usage` used to send a
+  prompt to any tank whose access token had lapsed. It now refreshes with `claude
+  auth status`, which runs no model, and only `--wake` sends a prompt. The board
+  does the same on open, so idle tanks show real numbers.
+
 ### Fixed
 
 - **A plan with no 5-hour window reads correctly** (#195, #198). Claude tanks

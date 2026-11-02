@@ -3,9 +3,8 @@
 # _usage_wake <engine> <tank> <force_cockpit> <json>
 # `--wake`: refresh the token unconditionally (one trivial prompt through
 # `clikae burn` — usage_wake_burn, lib/core/usage.sh), then re-read usage with
-# no cache. Since #177 a plain `clikae usage` does the same refresh on its own
-# when the token is past its expiry; --wake stays for "I want it refreshed
-# now, whatever the reading says" and for --force-cockpit.
+# no cache. A plain `clikae usage` refreshes with no model call; --wake is for
+# when that is not enough, and for --force-cockpit.
 _usage_wake() {
   local e="$1" t="$2" force="$3" json="$4" rc=0 reading
   usage_wake_burn "$e" "$t" "$force" || rc=$?
@@ -153,20 +152,16 @@ is) and, when an axis's own resets_at is already behind now,
 "window_reset_passed" / "weekly_reset_passed": true — the percentage beside
 it is from before a reset.
 
-An access token past its expiry with a refresh token beside it is REFRESHED
-BEFORE IT IS MEASURED: one trivial headless prompt through `clikae burn`
-(the same thing --wake does), then the real reading. CLIKAE_USAGE_AUTO_WAKE=0
-turns that off for a reader that must not spend (the board, a session's wake
-window, burn and `clikae watch` set it).
+Reading never spends quota. An access token past its expiry is refreshed first
+with no model call (claude: `claude auth status`), then measured. --wake is the
+one form that sends a prompt. CLIKAE_USAGE_AUTO_WAKE=0 turns the refresh off.
 
 A reading with no numbers may carry one more field, "reason" — present only
 when it is actually known, never on a vendor/transcript reading:
-  needs-refresh   the token lapsed, the login is fine, and this reader was
-                  not allowed to refresh it (or burn's own gates refused the
-                  refresh: the recorded cockpit, a running burn). A session
-                  clears it; so does `clikae usage` from a terminal. Cached
-                  for at most 60s.
-  relogin-required the refresh ran and the vendor still refused the token:
+  needs-refresh   the token lapsed, the login is fine, and the refresh did not
+                  renew it or was turned off. A session or --wake clears it.
+                  Cached for at most 60s.
+  relogin-required --wake ran a prompt and the vendor still refused the token:
                   `clikae <engine> <tank>`, then /login. Cached 60s.
   keychain-denied macOS: this process may not read the tank's Keychain item.
                   The last reading is served with its age (the reason rides

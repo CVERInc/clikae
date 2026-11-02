@@ -1940,37 +1940,37 @@ _usage179_reset_stamp() {
   echo "$output" | jq -e '.source == "vendor" and .window_pct == 3 and .weekly_pct == 99' \
     || { echo "got: $output"; false; }
   [[ "$output" != *expired* ]] || { echo "the retired word is back: $output"; false; }
-  # The refresh ran the engine exactly once, through burn's composed argv.
-  [ "$(wc -l < "$WAKE_ARGV_LOG" | tr -d ' ')" = 1 ] || { echo "argv log: $(cat "$WAKE_ARGV_LOG")"; false; }
-  # And said so on stderr, naming the tank — stdout stays the reading.
-  [[ "$stderr" == *"claude/work"*"refresh"* ]] || { echo "stderr: $stderr"; false; }
+  # The refresh ran once and sent no prompt: reading a number never spends quota.
+  [ "$(cat "$WAKE_ARGV_LOG")" = "auth status --json" ] || { echo "argv log: $(cat "$WAKE_ARGV_LOG")"; false; }
   # The cache holds the vendor reading, not an auth failure.
   jq -e '.source == "vendor"' "$CLIKAE_HOME/state/usage/claude/work.json" >/dev/null
 }
 
-@test "#177: only a refresh that FAILS is relogin-required — and that word, not expired, reaches stdout and the cache" {
+@test "#177: only a prompt that ran can conclude relogin-required, and a plain read stays needs-refresh" {
   usage_fixture
   _usage107_creds rt-stub-value "$(( ($(date +%s) - 3600) * 1000 ))"
   _usage179_wake_stubs
-  # The engine runs and writes its artifact, but the vendor keeps refusing
-  # the token: the refresh token itself is dead.
+  # The vendor keeps refusing the token: the refresh token itself is dead.
   printf '#!/usr/bin/env bash\nprintf "call\\n" >> "$USAGE_CALLS"\ncat >/dev/null\nprintf 401 >&2; exit 22\n' \
     > "$TEST_HOME/.testbin/curl"
   chmod +x "$TEST_HOME/.testbin/curl"
   run --separate-stderr clikae usage claude work --json
   [ "$status" -eq 0 ] || { echo "stderr: $stderr"; false; }
+  echo "$output" | jq -e '.source == "unknown" and .reason == "needs-refresh"' || { echo "got: $output"; false; }
+  [ "$(cat "$WAKE_ARGV_LOG")" = "auth status --json" ] || { echo "argv log: $(cat "$WAKE_ARGV_LOG")"; false; }
+  run --separate-stderr clikae usage claude --wake work --json
+  [ "$status" -eq 0 ] || { echo "stderr: $stderr"; false; }
   echo "$output" | jq -e '.source == "unknown" and .reason == "relogin-required" and .gap == "relogin-required"' \
     || { echo "got: $output"; false; }
   [[ "$output" != *expired* ]] || { echo "the retired word is back: $output"; false; }
-  [ "$(wc -l < "$WAKE_ARGV_LOG" | tr -d ' ')" = 1 ]
   jq -e '.reason == "relogin-required"' "$CLIKAE_HOME/state/usage/claude/work.json" >/dev/null
   # The plain form says what a person does next, on stderr.
-  run --separate-stderr clikae usage claude work --fresh
+  run --separate-stderr clikae usage claude work
   [[ "$stderr" == *"relogin"*"clikae claude work"* ]] || { echo "stderr: $stderr"; false; }
   [[ "$stderr" != *"token expired"* ]] || { echo "old hint: $stderr"; false; }
 }
 
-@test "#177: a reader that may not spend (CLIKAE_USAGE_AUTO_WAKE=0, or the cockpit gate) reads needs-refresh and keeps the last numbers with their age" {
+@test "#177: with the refresh off (CLIKAE_USAGE_AUTO_WAKE=0), a lapsed token reads needs-refresh and keeps the last numbers with their age" {
   usage_fixture
   # A good reading first, then it ages 5h.
   run clikae usage claude work --json
@@ -1985,13 +1985,6 @@ _usage179_reset_stamp() {
     || { echo "got: $output"; false; }
   [ ! -e "$WAKE_ARGV_LOG" ] || { echo "the engine ran although spending was off"; false; }
   [[ "$output" != *expired* ]] || false
-  # The recorded cockpit: burn's own gate refuses the refresh, and the
-  # reading says needs-refresh — not relogin-required (nothing was tried).
-  mkdir -p "$CLIKAE_HOME/state"; printf 'claude/work\n' > "$CLIKAE_HOME/state/cockpit"
-  run --separate-stderr clikae usage claude work --fresh --json
-  [ "$status" -eq 0 ]
-  echo "$output" | jq -e '.reason == "needs-refresh" and .last_weekly_pct == 92' || { echo "cockpit got: $output"; false; }
-  [ ! -e "$WAKE_ARGV_LOG" ] || { echo "the engine ran on the cockpit"; false; }
   # A cache written by a previous version with source:"expired" is read as
   # "unknown, refresh first": it is never served, whatever the TTL.
   jq -c '.source = "expired" | .reason = "expired-token"' "$CLIKAE_HOME/state/usage/claude/work.json" > "$TEST_HOME/old.json"
@@ -2117,25 +2110,26 @@ _usage184_reader() {
 for f in core/log.sh core/i18n.sh core/profile_store.sh core/adapter_loader.sh core/dry_store.sh core/limit.sh core/usage.sh; do
   source "$CLIKAE_LIB/$f"
 done
-CLIKAE_BIN="$(type -P true)"   # only has to be executable: the wake is stubbed below
-_bar_wait() { local i=0; while ! "$@"; do i=$((i + 1)); [ "$i" -le 100 ] || return 1; sleep 0.1; done; }
-_vendor_cached() { jq -e '.source == "vendor"' "$CLIKAE_HOME/state/usage/claude/work.json" >/dev/null 2>&1; }
-usage_wake_burn() {
-  printf '%s\n' "$READER" >> "$BAR/wakes"
-  case "$READER:$SCENARIO" in
-    # A holds the tank (its burn is the one that runs) until B is refused.
-    A:busy)     : > "$BAR/a-waking"; _bar_wait test -e "$BAR/b-waking"; : > "$WAKE_REFRESHED"; return 0 ;;
-    # B is refused (a burn already holds the tank) — and resumes only after
-    # A has published the vendor's numbers.
-    B:busy)     : > "$BAR/b-waking"; _bar_wait _vendor_cached; return 1 ;;
-    # A renews only once B's post-wake measurement is in flight.
-    A:obsolete) _bar_wait test -e "$BAR/b-measuring"; : > "$WAKE_REFRESHED"; return 0 ;;
-    B:obsolete) return 1 ;;
-  esac
-}
 usage_read claude work
 SH
   chmod +x "$TEST_HOME/reader.sh"
+  # The refresh command, holding each reader at a barrier.
+  cat > "$TEST_HOME/.testbin/claude" <<'STUB'
+#!/usr/bin/env bash
+_bar_wait() { local i=0; while ! "$@"; do i=$((i + 1)); [ "$i" -le 100 ] || return 1; sleep 0.1; done; }
+_vendor_cached() { jq -e '.source == "vendor"' "$CLIKAE_HOME/state/usage/claude/work.json" >/dev/null 2>&1; }
+printf '%s\n' "$READER" >> "$BAR/wakes"
+case "$READER:$SCENARIO" in
+  # A's refresh is the one that works, once B has started its own.
+  A:busy)     : > "$BAR/a-waking"; _bar_wait test -e "$BAR/b-waking"; : > "$WAKE_REFRESHED"; exit 0 ;;
+  # B's does nothing, and returns only after A has published the vendor's numbers.
+  B:busy)     : > "$BAR/b-waking"; _bar_wait _vendor_cached; exit 1 ;;
+  # A renews only once B's post-refresh measurement is in flight.
+  A:obsolete) _bar_wait test -e "$BAR/b-measuring"; : > "$WAKE_REFRESHED"; exit 0 ;;
+  B:obsolete) exit 1 ;;
+esac
+STUB
+  chmod +x "$TEST_HOME/.testbin/claude"
   # 401 until the token is renewed. In the `obsolete` scenario B's SECOND
   # call decides 401 at once (the token is not renewed yet) but answers only
   # after A has published: a measurement that started before the refresh
