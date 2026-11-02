@@ -241,20 +241,28 @@ _sockfile() {
   printf -v "$1" '%s' "$_sf"
 }
 
-# _idle_bin <name> — a program with that comm that can wait: a copy of bash. Not a
-# copy of sleep: on uutils (Ubuntu 26.04) sleep is one multicall binary that exits
-# at once under a name it does not know.
+# _idle_bin <name> — a program with that comm that can wait. A copy of sleep where
+# one runs under another name. On uutils (Ubuntu 26.04) sleep is one multicall binary
+# that refuses a name it does not know, so there it is a copy of bash; macOS kills a
+# copy of its bash, so that cannot be the only way.
 _idle_bin() {
+  local bin="$TEST_HOME/fakebin/$1"
   mkdir -p "$TEST_HOME/fakebin"
-  [ -x "$TEST_HOME/fakebin/$1" ] || cp "$(command -v bash)" "$TEST_HOME/fakebin/$1"
+  [ -x "$bin" ] && return 0
+  cp "$(command -v sleep)" "$bin"
+  "$bin" 0 >/dev/null 2>&1 && return 0
+  cp -f "$(command -v bash)" "$bin"
   [ -p "$TEST_HOME/fakebin/.idle" ] || mkfifo "$TEST_HOME/fakebin/.idle"
 }
 
-# _idle_run <name> — wait 30 s under that name, with no child process. Reading a
-# FIFO that nothing writes is the wait; the read builtin leaves SIGUSR1 fatal.
+# _idle_run <name> — wait 30 s under that name. `exec`, so the pid a caller gets from
+# `_idle_run name &` is the process with that comm, not a subshell around it. The bash
+# form reads a FIFO nothing writes: no child process, and SIGUSR1 stays fatal.
 _idle_run() {
+  local bin="$TEST_HOME/fakebin/$1"
+  [ -p "$TEST_HOME/fakebin/.idle" ] || exec "$bin" 30
   # shellcheck disable=SC2016  # $0 is expanded by the copy of bash.
-  "$TEST_HOME/fakebin/$1" -c 'read -r -t 30 _ <> "$0"' "$TEST_HOME/fakebin/.idle"
+  exec "$bin" -c 'read -r -t 30 _ <> "$0"' "$TEST_HOME/fakebin/.idle"
 }
 
 # _fake_tmux_proc <var> — a live process whose comm is exactly `tmux`: SIGUSR1
