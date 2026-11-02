@@ -32,6 +32,18 @@ jobs:
       - name: Lint the CLI surface against the design system
         run: bash scripts/signet-lint.sh
 
+  size-ruler:
+    # Warns only: this job has no way to fail a pull request.
+    name: size ruler
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+      - name: Warn when a change grows a large file
+        run: bash scripts/size-ruler.sh "origin/${{ github.base_ref }}"
+
   smoke:
     name: smoke test (${{ matrix.os }})
     runs-on: ${{ matrix.os }}

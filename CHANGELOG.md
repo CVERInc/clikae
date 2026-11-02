@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **A size ruler in CI.** A pull request that grows a file already over 1500 lines
+  gets a warning naming the file and the growth. It never fails the build.
+
 ### Changed
 
 - **Moving the cursor on the board no longer recomposes the frame.** Rows are
