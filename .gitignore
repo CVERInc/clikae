@@ -13,9 +13,6 @@
 /website/
 /build/
 
-# SwiftPM build output (gui/ClikaeMenuBar)
-.build/
-**/.swiftpm/
 
 # Test outputs
 /tests/.bats-tmp/
