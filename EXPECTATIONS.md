@@ -8,7 +8,7 @@ canonical: "https://clikae.cver.net/EXPECTATIONS"
 A field guide to clikae behaviours that **look** like bugs but are deliberate —
 usually because a vendor's real nature leaks through clikae's uniform "tank" model.
 If something here surprised you, it's working as intended; the *why* is below.
-(For things that are actually broken, see the [CHANGELOG](https://github.com/CVERInc/clikae/blob/15172e3348976dd10c2c1085cb472e4bb9f1f7d5/CHANGELOG.md) /
+(For things that are actually broken, see the [CHANGELOG](https://github.com/CVERInc/clikae/blob/21252414043b5594005c4c405918b2acacbf4e70/CHANGELOG.md) /
 [issues](https://github.com/CVERInc/clikae/issues).)
 
 ## Fuel gauge & limits
@@ -384,12 +384,12 @@ lost, whoever they belonged to (#111).
 
 ## Management verbs
 
-**`clikae migrate` makes claude ask you to log in again.** claude stores its OAuth
-token in the macOS Keychain, keyed by a **hash of the config-dir path** — not inside
-the dir. Move the dir and the hash changes, so the token no longer matches. Use
-`clikae migrate --keep-login` to copy the Keychain item across.
+**Moving a config dir by hand makes claude ask you to log in again.** claude stores its
+OAuth token in the macOS Keychain, keyed by a **hash of the config-dir path** — not inside
+the dir. Move the dir and the hash changes, so the token no longer matches. `clikae rename`
+copies the Keychain item across for you.
 
-**The "in-use" guard on `rename`/`migrate`/`remove` is best-effort.** It scans live
+**The "in-use" guard on `rename`/`remove` is best-effort.** It scans live
 processes for a tank in use *right now*; it can't catch a check-then-open race, and
 the TUI-vs-daemon classification is a command-string heuristic. It errs toward warning,
 not silent damage.

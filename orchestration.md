@@ -7,7 +7,7 @@ canonical: "https://clikae.cver.net/orchestration"
 
 This is the field guide for **fanning work across your accounts** with clikae —
 whether *you* are at the keyboard or an **LLM agent is driving clikae for you**
-(e.g. Claude Code running `clikae burn` / `clikae conduct` in the background).
+(e.g. Claude Code running `clikae burn` in the background).
 It's task-oriented; for the full command reference see [usage.md](/usage.md), for
 the language see [grammar.md](/grammar.md).
 
@@ -32,14 +32,11 @@ state lives*, it never sits in the middle of a request and never grades output.
 | Want | Use | Shape |
 |---|---|---|
 | One task, headless, survive a dry tank | **`clikae burn`** | one tank → artifact-verified → auto-reroute to the next reserve tank on dry |
-| The SAME prompt across N accounts, pick a winner | **`clikae conduct`** (BETA) | fan read-only in parallel → collect N outputs → you judge |
 | One conductor-decided shot with an effort knob + full-fidelity capture | **conductor skill legs** (`claude-leg.sh` / `codex-leg.sh`) | single shot on a named tank; back-and-forth is the conductor's call |
 
 - **`burn`** owns the reserve walk (dry → next tank, account-aware, skips the tank
   your interactive session is on). Use it for an unattended task that must finish
   *somewhere*.
-- **`conduct`** is best-of-N / breadth: audits, analyses, design proposals across
-  accounts. It never reroutes and never judges — it hands you the files.
 - **legs** (the [`conductor`](https://github.com/CVERInc/clikae) Claude Code skill)
   add the `--effort` knob the Agent tool doesn't expose, and `--tank <name>` routes
   through `clikae env` so a leg runs on a real named account (and, for a `--write`
@@ -105,18 +102,13 @@ composed.
 
 agy's login is one **global** Keychain entry, so there's no per-shell env to
 switch — it can never run two tanks in **parallel**, which is a structural limit,
-not a friction one. That's why `conduct` legs still refuse to switch: a leg naming
-a non-active agy tank is reported, not run (the `~/.gemini` swap is machine-wide
-and exclusive):
+not a friction one (the `~/.gemini` swap is machine-wide and exclusive):
 
 ```bash
-# agy as a best-of-N breadth leg, alongside claude/codex (agy runs on its active tank):
-clikae conduct --prompt-file review.md --leg claude/C --leg codex/H --leg agy/c --add-dir "$PWD"
-
-# Or drive agy directly headless to spend its quota instead of your main budget:
+# Drive agy directly headless to spend its quota instead of your main budget:
 clikae agy <tank> -- --print-timeout 900s -p "$(cat /tmp/prompt.txt)"
 
-# `burn`, unlike `conduct`, CAN reroute agy — sequentially, one tank at a time
+# `burn` CAN reroute agy — sequentially, one tank at a time
 # (a tank switch carries the Google login via Keychain, no interactive OAuth):
 clikae burn agy <tank> --artifact out.md --prompt-file task.txt
 ```
@@ -133,8 +125,7 @@ a real paid engine; the recipe is how you stop wasting it.
    or `claude -p` exits `0` even when it hit its usage limit and wrote nothing.
    `burn` snapshots the artifact's presence, fresh mtime, and byte count when the
    engine exits, before publishing completion. Later cockpit consumption cannot
-   change that verdict; `conduct` by the
-   captured output; the legs by `--out` content. Never trust `$?`.
+   change that verdict; the legs by `--out` content. Never trust `$?`.
 
    That first snapshot is taken the instant the engine's own process exits. If
    it isn't fresh, `burn` takes one more look at the artifact's mtime right
@@ -983,8 +974,7 @@ for free.)
 - **Dry handling.** Claude weekly-limit messages follow the same dry path as
   session limits, including the vendor's verbatim reset time in JSON. `burn` auto-reroutes to the next reserve tank on a dry hit
   (account-aware: it skips siblings that share an already-dried login, and the tank
-  an interactive session is live on). `conduct` doesn't reroute — it reports each
-  leg as captured / dry / empty so you decide.
+  an interactive session is live on).
 - **Same-account fan-out shares one bucket.** Three legs on the *same* tank run in
   parallel but draw from one quota — wall-clock parallelism, not 3× throughput, and
   they go dry together. For independent quota, fan across *different* accounts.
@@ -1027,7 +1017,7 @@ to be as capable as the implementer to catch a subtle bug.
 
 **Parallelism ≠ redundancy.** Fanning the same task across accounts (same tier)
 gives you speed + a dry-tank fallback, not a correctness vote. For a correctness
-vote, use `clikae conduct` and a *different* model tier per leg — then a neutral
+vote, run the task on a *different* model tier per `burn` — then a neutral
 third model grades the outputs, not the same one that produced them.
 
 ## 9. Independent verification — the neutral-grader principle
@@ -1043,7 +1033,7 @@ Practical checks in a clikae fleet:
   the file doesn't exist or is empty, the job failed regardless of what the agent said.
 - **Run the test suite or a targeted invariant check** from the orchestrator after a
   write leg — not from the same leg that wrote the code.
-- **Use `clikae conduct`** (N legs, same task) and route the outputs through a
+- **Run N `burn`s on the same task** and route the outputs through a
   *separate* model acting as grader — a model that only sees the outputs, not the
   reasoning that produced them. A grader reading N blind outputs spots errors the
   producer's self-assessment misses.
@@ -1057,10 +1047,6 @@ for themselves.
 ## 8. Quick recipes
 
 ```bash
-# Best-of-N audit across accounts — read-only, parallel, you pick the winner
-clikae conduct --prompt-file review.md \
-  --leg codex/H --leg claude/C --leg claude/L --add-dir "$PWD"
-
 # Headless codegen with automatic failover when a tank runs dry
 clikae burn claude C --artifact out/feature.ts \
   --prompt-file task.md --add-dir "$PWD" --timeout 900

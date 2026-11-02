@@ -31,8 +31,7 @@ fails on purpose and points you here.</li>
 <li><code>clikae agy &lt;tank&gt;</code> swaps <code>~/.gemini</code> (and its login, carried via Keychain)
 <strong>machine-wide</strong> — one agy account is active across <em>all</em> terminals at once.
 It's exclusive, not parallel: <code>clikae burn agy &lt;tank&gt;</code> walks agy's OWN tanks
-sequentially (dry → switch → retry), never two at once, and <code>clikae conduct</code>
-still refuses a leg naming a non-active agy tank (parallelism is a structural
+sequentially (dry → switch → retry), never two at once (parallelism is a structural
 limit, unrelated to the OAuth friction that used to gate sequential switching).
 See <code>agy-gemini-shared-quota</code> notes for why same-account agy↔gemini is a fake
 relay (same quota bucket) — that's still true; it's cross-ACCOUNT tanks that
@@ -166,12 +165,6 @@ check — don't spend agy quota on &quot;is the site up?&quot;.</li>
 <li><strong>Big file-writing jobs offloaded from your main quota</strong> — a whole translation
 dictionary, written to a file (rule 3), on the agy bucket, untouched by your
 Claude budget. This is the cost-aware-routing payoff.</li>
-<li><strong>A cheap breadth leg in <code>clikae conduct</code></strong> — <code>conduct --leg agy/&lt;tank&gt;</code> fans a
-read-only audit/analysis prompt to agy alongside claude/codex legs, then hands you
-every leg's output to judge. agy is cheap and fast, so it's a good extra
-perspective for best-of-N. Caveat: the agy leg runs on the <strong>currently active</strong>
-agy tank only (a leg naming another tank is reported, not run — clikae can't
-switch agy in parallel). Its dry state is read from <code>cli.log</code>, not stdout.</li>
 </ul>
 <p>⚠️ <strong>agy's review suggestions need triage.</strong> It will confidently recommend things
 that violate already-decided product calls. Never auto-apply an agy review's fixes —
@@ -184,7 +177,7 @@ use agy as a <code>burn</code>-style code-editing worker, validate it with a con
 first. See <code>agy-gemini-shared-quota</code> for the running ground-truth.</p>
 <h2 id="see-also">See also</h2>
 <ul>
-<li><code>docs/orchestration.md</code> — the general headless dispatch playbook (burn/conduct/legs).</li>
+<li><code>docs/orchestration.md</code> — the general headless dispatch playbook (burn/legs).</li>
 <li><code>clikae agy --help</code> — the command surface for switching/managing agy tanks.</li>
 <li><code>scripts/verify-agy-shapes.sh</code> — run this after <code>agy update</code>. The adapter reads
 agy's own <code>history.jsonl</code> and transcripts with grep, and agy updates itself, so

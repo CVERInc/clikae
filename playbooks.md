@@ -7,7 +7,7 @@ canonical: "https://clikae.cver.net/playbooks"
 
 Every other page documents a *capability*. This one maps **situations to moves**: which
 play to reach for, and the exact call. If you are an agent driving clikae, this is your
-decision layer — [AGENTS.md](https://github.com/CVERInc/clikae/blob/15172e3348976dd10c2c1085cb472e4bb9f1f7d5/AGENTS.md) and [orchestration.md](/orchestration.md) give
+decision layer — [AGENTS.md](https://github.com/CVERInc/clikae/blob/21252414043b5594005c4c405918b2acacbf4e70/AGENTS.md) and [orchestration.md](/orchestration.md) give
 the mechanics and the non-negotiable rules; this gives the *when*.
 
 The through-line: an account switcher gives you another **login**. clikae gives you a
@@ -78,18 +78,18 @@ workers burn whatever account still has gas.
 **Reach for this when** one model's confident answer isn't enough to bet on (a design
 decision, a security-adjacent review). You want a vote, not a speed-up.
 
-**The move** — fan the SAME read-only prompt across *different families/tiers*, then have
-a separate model grade the outputs:
+**The move** — burn the SAME prompt on *different families/tiers*, each writing its own
+file, then have a separate model grade the files:
 
 ```bash
-clikae conduct --prompt-file /tmp/review.md \
-  --leg claude/main --leg codex/work --leg agy/g --add-dir "$PWD"
+clikae burn claude main --artifact /tmp/review-claude.md --prompt-file /tmp/review.md
+clikae burn codex work --artifact /tmp/review-codex.md --prompt-file /tmp/review.md
 ```
 
-**Verify / gotcha:** conduct never judges — it hands you every leg's output. Route those
+**Verify / gotcha:** burn can write, so ask for a review in the prompt and run each one in
+its own checkout. Nothing here judges for you. Route the files
 through a *neutral grader* (a model that sees only the outputs, not the reasoning that
 produced them); it catches the confident-wrong error a producer's self-assessment misses.
-The agy leg runs on its currently-active tank only.
 
 **Why a switcher can't:** fanning the same prompt across the same account is parallelism,
 not a correctness vote. The vote needs *different vendors* plus a *third grader* — that's

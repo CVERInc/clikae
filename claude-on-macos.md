@@ -6,7 +6,7 @@ canonical: "https://clikae.cver.net/claude-on-macos"
 # Notes: Claude Code on macOS
 
 A record of two macOS-specific Claude Code behaviours that affect (or merely
-*look* like they affect) clikae. Both were found while dogfooding `clikae migrate`
+*look* like they affect) clikae. Both were found while moving config dirs
 on a real dual-account Mac on 2026-05-29, then confirmed from the Claude Code
 2.1.156 binary. Kept here so the next person who hits them doesn't have to
 re-derive the cause.
@@ -22,8 +22,8 @@ screen is driven by counters in `.claude.json`. clikae only sets
 
 ### What you see
 
-After `clikae migrate` adopts a hand-rolled `~/.claude-acct-*` setup, opening
-each migrated profile asks you to **log in again**, even though all your
+After a hand-rolled `~/.claude-acct-*` setup is moved to a new path, opening
+each moved profile asks you to **log in again**, even though all your
 settings, history, and projects clearly moved across intact.
 
 ### Root cause
@@ -64,17 +64,14 @@ security dump-keychain 2>/dev/null | grep -o '"Claude Code-credentials[^"]*"' | 
 
 ### What clikae does about it
 
-- **By default:** nothing — you log in once per migrated profile. This is a
-  one-time cost; fresh `clikae init` + login is unaffected (each profile path
-  gets its own keychain slot, which is exactly why accounts don't collide).
-- **Opt-in:** `clikae migrate --keep-login` copies the saved token from the old
-  path's keychain entry to the new one as part of the move, so the session
-  survives. It's implemented as an optional adapter hook
-  (`adapter_migrate_credentials`) in `lib/adapters/claude.sh`, off by default.
+- **Fresh `clikae init` + login** is unaffected: each profile path gets its own
+  keychain slot, which is exactly why accounts don't collide.
+- **`clikae rename`** copies the saved token from the old path's keychain entry to
+  the new one as part of the move, so the session survives. It's implemented as an
+  optional adapter hook (`adapter_migrate_credentials`) in `lib/adapters/claude.sh`.
   The token never leaves your Keychain; macOS may prompt you to allow access.
 
-To recover *after* an already-completed migration (the hook only runs during the
-move), just log in once per profile — or copy the slot by hand:
+To recover after moving a dir by hand, just log in once per profile — or copy the slot by hand:
 
 ```bash
 old="Claude Code-credentials-$(printf '%s' "$HOME/.claude-acct-b" | shasum -a 256 | cut -c1-8)"

@@ -54,7 +54,7 @@ export PATH="$HOME/.local/bin:$PATH"   # add to your shell rc if not already the
 
 # verify
 clikae version
-clikae info        # shows resolved install paths + profile counts
+clikae doctor      # read-only health check
 ```
 
 ## Uninstall
