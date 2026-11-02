@@ -23,6 +23,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Shared memory, `--ephemeral`, and session lookups work from a symlinked
+  directory** (#194). clikae built the project path from the logical `$PWD` while
+  Claude Code uses the resolved one, so a run from such a directory logged that
+  memory was linked but never saw it. The log line now names the path it linked.
 - **`burn agy` no longer reports a failed run as DONE** (#192). Its exit code was
   discarded, so a lapsed login's error text was saved as the artifact. A non-zero
   exit is now a failure, and a login failure names the tank to log in to. The

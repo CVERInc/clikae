@@ -21,7 +21,7 @@ _sess() { printf 'clikae-codex-%s' "$(_tank)"; }
 # _claude_project_slug in lib/adapters/claude.sh, kept in sync by hand since
 # this file does not load adapters.
 _csess() { printf 'clikae-claude-%s' "$(_tank)"; }
-_slug() { printf '%s' "$PWD" | LC_ALL=C sed 's/[^A-Za-z0-9]/-/g'; }
+_slug() { pwd -P | LC_ALL=C sed 's/[^A-Za-z0-9]/-/g' | tr -d '\n'; }
 
 # Write a minimal claude transcript at <dir>/projects/<slug>/<sid>.jsonl whose
 # title resolves to <title> (adapter_title_for_file matches a bare
