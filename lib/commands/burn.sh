@@ -1120,7 +1120,7 @@ _agy_burn() {
   while :; do
     [ -d "$(_agy_slots)/$cur" ] || log_fail "No such agy tank: $cur  (create it:  clikae init agy $cur)"
     if [ "$cur" != "$(_agy_active)" ]; then
-      log_info "burn agy/$cur → switching ($(_agy_login_backend) login carry, no OAuth needed since 2026-07-05)"
+      log_info "burn agy/$cur → switching ($(_agy_login_backend) login carry)"
       _agy_assert_not_running
       local active; active="$(_agy_active)"
       [ -n "$active" ] && _agy_kc_stash "$active"
@@ -1176,12 +1176,14 @@ _agy_burn() {
         [ -n "$_agy_snap_line" ] && _agy_pre_snap+=("$_agy_snap_line")
       done < <(adapter_all_transcripts "$(_agy_slots)/$cur" 2>/dev/null || true)
     fi
-    local out; out="$(
-      "${runner[@]}" agy "${gen[@]}" </dev/null 2>&1 || true
+    local out agy_rc=0 rc_file="$evidence_file.rc"
+    out="$(
+      "${runner[@]}" agy "${gen[@]}" </dev/null 2>&1 || printf '%s' "$?" > "$rc_file"
       _burn_snapshot "$artifact" "$art_pre" "$evidence_file"
     )" || true
     read -r artifact_fresh artifact_bytes_snapshot < "$evidence_file"
-    rm -f "$evidence_file"
+    [ ! -s "$rc_file" ] || IFS= read -r agy_rc < "$rc_file" || true
+    rm -f "$evidence_file" "$rc_file"
 
     local sid_to_record=""
     if declare -F adapter_all_transcripts >/dev/null 2>&1; then
@@ -1323,6 +1325,22 @@ _agy_burn() {
       _burn_result true agy "$cur" "$artifact" "artifact produced"
       log_info "summary: tank=agy/$cur  reroutes=$((${#agy_tried[@]} - 1))  elapsed=${burn_elapsed_s:-$((SECONDS - t0))}s  artifact=${artifact_bytes_snapshot}B"
       return 0
+    elif [ "$agy_rc" != 0 ]; then
+      # A failed run's output is an error message, not an answer, so it never
+      # becomes the artifact. A lapsed login lands here: agy waits 60 s for an
+      # OAuth code nobody can type, then exits 1.
+      if printf '%s' "$out" | grep -qi "authentication"; then
+        log_err "agy/$cur is not logged in. Log in with: clikae agy $cur"
+        _burn_status_write fail false "$status_engine" "$cur" "$artifact" "agy login needed" ""
+        _burn_result false agy "$cur" "$artifact" "agy login needed"
+      else
+        log_err "agy/$cur failed (exit $agy_rc) and produced no artifact."
+        _burn_status_write fail false "$status_engine" "$cur" "$artifact" "agy exited $agy_rc" ""
+        _burn_result false agy "$cur" "$artifact" "agy exited $agy_rc"
+      fi
+      _burn_output_tail "$out" 3
+      log_info "summary: tank=agy/$cur  reroutes=$((${#agy_tried[@]} - 1))  elapsed=$((SECONDS - t0))s  artifact=none"
+      return 1
     elif printf '%s' "$out" | grep -qi "no output produced"; then
       # agy REFUSED and said so. It exits 0 either way (verified 2026-07-27), and
       # its refusal arrives on the same stdout an answer would — so capturing

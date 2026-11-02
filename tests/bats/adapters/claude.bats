@@ -191,6 +191,24 @@ _setup_claude_adapter() {
   mkdir -p "$PROJ"
 }
 
+@test "claude project slug: a directory reached through a symlink slugs by its real path (#194)" {
+  _setup_claude_adapter
+  mkdir -p "$TEST_HOME/real/project"
+  ln -s "$TEST_HOME/real/project" "$TEST_HOME/link"
+  cd "$TEST_HOME/link" || return 1
+  [ "$PWD" = "$TEST_HOME/link" ]
+  local real slug
+  real="$(pwd -P)"
+  slug="$(printf '%s' "$real" | LC_ALL=C sed 's/[^A-Za-z0-9]/-/g')"
+  [ "$(_claude_project_slug "$PWD")" = "$slug" ]
+  [ "$(adapter_memory_dir "$PROFILE")" = "$PROFILE/projects/$slug/memory" ]
+}
+
+@test "claude project slug: a path that does not exist is slugged as written" {
+  _setup_claude_adapter
+  [ "$(_claude_project_slug /no/such/dir)" = "-no-such-dir" ]
+}
+
 @test "claude adapter_transcript_is_resumable: the basename is the whole rule" {
   _setup_claude_adapter
   run adapter_transcript_is_resumable "$PROJ/11111111-2222-3333-4444-555555555555.jsonl"
