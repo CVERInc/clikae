@@ -274,7 +274,7 @@ _goby_cache() { # <weekly> <models-json-array-or-empty>
   [ "$(printf '%s\n' "$stderr" | tail -n 1)" = "claude 8" ] || { echo "below stderr: $stderr"; false; }
   # A last-known number is marked with "?".
   USAGE_NETFAIL=1 run --separate-stderr clikae usage claude --fresh
-  [ "$(printf '%s\n' "$stderr" | tail -n 1)" = "claude 92?" ] || { echo "stderr: $stderr"; false; }
+  [ "$(printf '%s\n' "$stderr" | tail -n 1)" = "claude 8?" ] || { echo "stderr: $stderr"; false; }
 }
 
 # _lg_cache <engine> <tank> <source> <cached_at> <last_good json or empty>
@@ -377,7 +377,7 @@ _lg_cache() {
   # codex segments: spent %, rounded UP on a fraction like the light itself; 5h is "window".
   _home_codex_segv 11.5 300;   [ "$_CSEG" = "5h ███████░ 88%" ] || { echo "seg: $_CSEG"; false; }
   _home_codex_segv 88 10080;   [ "$_CSEG" = "7d █░░░░░░░ 12%" ] || { echo "seg: $_CSEG"; false; }
-  _home_codex_segv 40 43200;   [ "$_CSEG" = "30d 40%" ]    || { echo "seg: $_CSEG"; false; }
+  _home_codex_segv 40 43200;   [ "$_CSEG" = "30d ████░░░░ 60%" ]    || { echo "seg: $_CSEG"; false; }
   ! _home_codex_segv "" 300 || false
 }
 
