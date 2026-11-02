@@ -1250,7 +1250,7 @@ _home_dry_targets() {
         # Same snapshot-honesty as codex: agy's "Resets in 3h" is a relative phrase
         # frozen at its last run, so tag it with the log's mtime (when we observed it).
         local lmt
-        lmt="$(stat -f '%m' "$logf" 2>/dev/null || stat -c '%Y' "$logf" 2>/dev/null || true)"
+        lmt="$(file_mtime "$logf" || true)"
         [ -n "$tre" ] && tre="$tre$(dry_seen_suffix "$lmt")"
         printf '%s\037%s\037%s\n' "$tbin" "$tname" "$tre"
       fi
