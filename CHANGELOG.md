@@ -7,8 +7,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- `clikae usage --json` states its unit and its gaps: `window_used_pct` and
+  `weekly_used_pct` (`window_pct` and `weekly_pct` stay as older names),
+  `window_absent` or `weekly_absent` when a plan has no such window, and
+  `stale:true` on a reading over 6 hours old.
+
+### Changed
+
+- **Reading usage never spends quota** (#195). `clikae usage` used to send a
+  prompt to any tank whose access token had lapsed. It now refreshes with `claude
+  auth status`, which runs no model, and only `--wake` sends a prompt. The board
+  does the same on open, so idle tanks show real numbers.
+
 ### Fixed
 
+- **A plan with no 5-hour window reads correctly** (#195, #198). Claude tanks
+  without one reported `unparseable`, and codex tanks had their 7-day number
+  filed as the 5-hour one. Each window is now classified by its own length, and
+  every reader accepts a tank with one window: usage, burn's ordering, and the
+  tmux row.
 - **A codex tank no longer reads as dry after it has recovered** (#196). Only
   `agent_message` counted as success and `codex exec` never writes it, so any
   limit marker from the last 7 days outlived every later run. A `task_complete`
