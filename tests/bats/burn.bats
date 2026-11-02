@@ -4355,6 +4355,39 @@ _burn_lb_boot() {
   source "$CLIKAE_TEST_ROOT/lib/commands/burn.sh"
 }
 
+# _burn_lb_probe_loop <extra trap command> — run the process-group probe 40 times from a
+# shell with traps set. The `sleep` on PATH leaves a line if it is allowed to finish.
+_burn_lb_probe_loop() {
+  local real_sleep; real_sleep="$(command -v sleep)"
+  mkdir -p "$BATS_TEST_TMPDIR/bin"
+  printf '#!/bin/sh\n"%s" 1\necho done >> "%s"\n' "$real_sleep" "$BATS_TEST_TMPDIR/survived" \
+    > "$BATS_TEST_TMPDIR/bin/sleep"
+  chmod +x "$BATS_TEST_TMPDIR/bin/sleep"
+  PATH="$BATS_TEST_TMPDIR/bin:$PATH" CLIKAE_LIB="$CLIKAE_TEST_ROOT/lib" \
+    OUT="$BATS_TEST_TMPDIR/trap-runs" ROOT="$CLIKAE_TEST_ROOT" EXTRA="$1" bash -c '
+    source "$ROOT/lib/core/log.sh"
+    source "$ROOT/lib/commands/burn.sh"
+    echo "$$" > "$OUT.parent"
+    trap "sh -c \"echo \\\$PPID\" >> \"\$OUT\"" EXIT
+    eval "$EXTRA"
+    i=0
+    while [ "$i" -lt 40 ]; do _burn_lb_pgroup_probe; i=$((i+1)); done
+  ' 2>/dev/null
+}
+
+@test "burn: the process-group probe's child never runs a direct caller's EXIT trap" {
+  _burn_lb_probe_loop ':'
+  local strays
+  strays="$(grep -cv "^$(cat "$BATS_TEST_TMPDIR/trap-runs.parent")\$" "$BATS_TEST_TMPDIR/trap-runs" || true)"
+  [ "$strays" -eq 0 ] || { echo "$strays forked children ran the caller's EXIT trap"; false; }
+}
+
+@test "burn: the process-group probe's child cannot swallow its stop signal" {
+  _burn_lb_probe_loop 'trap "exit 143" TERM'
+  sleep 2
+  [ ! -e "$BATS_TEST_TMPDIR/survived" ] || { echo "a child outlived the probe: $(wc -l < "$BATS_TEST_TMPDIR/survived")"; false; }
+}
+
 # P2-1 (round-5 review): TERM+KILL aimed at the single pid `$!` names leaves
 # every child that pid forked running past the deadline. `find`'s own `-exec`
 # IS that shape — `-exec test -e {}/.git \;` forks once per directory and
