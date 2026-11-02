@@ -260,3 +260,84 @@ _n155_setup() {
   [ "${#lead}" -eq "$ncol" ] && [[ "$next" == *"Enter to resume"* ]] || {
     echo "hover line at col ${#lead}, name at col $ncol:"; echo "$row"; echo "$next"; false; }
 }
+
+# --- the row cache ------------------------------------------------------------
+# A cached frame has to be the frame. Every selection, compared byte for byte with
+# what the body prints, on rows that carry CJK and every row kind.
+
+_rc_setup() {
+  _n155_setup
+  cd "$TEST_HOME/w" || return 1
+  local f
+  # shellcheck source=/dev/null
+  while IFS= read -r f; do source "$CLIKAE_LIB/$f" 2>/dev/null; done \
+    < <(sed -n 's#^source "$CLIKAE_LIB/\(core/[^"]*\)".*#\1#p' "$CLIKAE_TEST_ROOT/bin/clikae")
+  source "$CLIKAE_LIB/commands/home.sh"
+  set +e
+  _CLIKAE_BOARD=1 items="" dry=""
+  _home_refresh
+  local sep=$'\037'
+  items="$items"$'\n'"target${sep}antigravity${sep}${sep}${sep}${sep}${sep}需要先登入的引擎，說明很長很長很長很長很長很長很長很長很長很長很長很長"
+  items="$items"$'\n'"agent${sep}thing${sep}${sep}${sep}${sep}${sep}a note"
+  n=0; while IFS= read -r l; do [ -n "$l" ] && n=$((n + 1)); done <<< "$items"
+}
+
+_rc_compare_all() {
+  local s want bad=""
+  for (( s = 0; s < n; s++ )); do
+    want="$(_home_pick_draw_body "$items" "$s" "$dry" "$1"; printf x)"; want="${want%x}"
+    _home_board_framev "60 45" "$items" "$s" "$dry" "$1"
+    [ "$want" = "$_HC_FRAME" ] || bad="$bad $s"
+  done
+  [ -z "$bad" ] || { echo "cached frame differs at selections:$bad"; echo "--- want"; printf '%s\n' "$want"; echo "--- got"; printf '%s\n' "$_HC_FRAME"; false; }
+}
+
+@test "row cache: every selection is byte-identical to the uncached frame, wide and narrow" {
+  _rc_setup
+  [ "$n" -ge 4 ]
+  COLUMNS=100 _rc_compare_all ""
+  _home_board_invalidate
+  unset _HOME_COLS_CACHE
+  COLUMNS=46 _rc_compare_all ""
+}
+
+@test "row cache: moving back to a visited row renders nothing, and invalidating rebuilds" {
+  _rc_setup
+  COLUMNS=100
+  eval "_rc_real_body() $(declare -f _home_pick_draw_body | sed '1d')"
+  _home_pick_draw_body() { printf 'x\n' >> "$TEST_HOME/body-calls"; _rc_real_body "$@"; }
+  _home_board_framev "60 45" "$items" 0 "$dry" ""
+  _home_board_framev "60 45" "$items" 1 "$dry" ""
+  _home_board_framev "60 45" "$items" 0 "$dry" ""
+  # Writes in `$(...)` still reach the file, so this counts every render.
+  local before after
+  before="$(wc -l < "$TEST_HOME/body-calls")"
+  _home_board_framev "60 45" "$items" 1 "$dry" ""
+  _home_board_framev "60 45" "$items" 0 "$dry" ""
+  after="$(wc -l < "$TEST_HOME/body-calls")"
+  [ "$before" = "$after" ] || { echo "rendered again: $before -> $after"; false; }
+  _home_board_invalidate
+  _home_board_framev "60 45" "$items" 0 "$dry" ""
+  [ "$(wc -l < "$TEST_HOME/body-calls")" -gt "$after" ]
+}
+
+@test "a changed row list or terminal size rebuilds on its own" {
+  _rc_setup
+  COLUMNS=100
+  _home_board_framev "60 45" "$items" 0 "$dry" ""
+  local k="$_HC_KEY"
+  _home_board_framev "60 80" "$items" 0 "$dry" ""
+  [ "$k" != "$_HC_KEY" ]
+}
+
+@test "frame height: counts newlines, and stays linear on a large CJK frame" {
+  _n155_source
+  [ "$(_home_frame_height "")" = 0 ]
+  [ "$(_home_frame_height $'a\nb')" = 1 ]
+  [ "$(_home_frame_height $'a\n\n')" = 2 ]
+  # The quadratic form took minutes on this size in bash 3.2.
+  local f="" i line=$'  ❯ ● tuna claude "中文標題中文標題中文標題中文標題中文標題中文標題"\n'
+  for (( i = 0; i < 400; i++ )); do f="$f$line"; done
+  [ "$(_home_frame_height "$f")" = 400 ]
+}
+

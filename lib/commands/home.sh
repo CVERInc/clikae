@@ -3477,6 +3477,110 @@ _home_help_overlay() {
 }
 
 # Draw the menu (full redraw) with row index $2 highlighted, from items in $1.
+# THE ROW CACHE. Composing a frame costs about 1.8 s on a real fleet (measured on
+# macOS with bash 3.2), nearly all of it in the frame body and over half in the
+# fuel dots, while moving the cursor changes exactly two rows. So the body runs
+# once with no selection to give every row's plain form, again per row the first
+# time that row is selected, and per kind of row for the keybar. A move is then a
+# string join. Reading ages and fuel go stale until the next rebuild: see
+# _home_board_invalidate's callers.
+_HC_KEY=""; _HC_GEN=0; _HC_ROWS=(); _HC_GAPS=(); _HC_SEL=(); _HC_KIND=(); _HC_TAIL=""
+_HC_CHROME_LIVE=""; _HC_CHROME_TANK=""; _HC_CHROME_OTHER=""; _HC_FRAME=""
+
+_home_board_invalidate() { _HC_GEN=$((_HC_GEN + 1)); }
+
+# _home_row_mark <idx>: where a row's own lines start in a partial draw, after any
+# section header. \035 ends it. Separators keep a header out of the row it precedes.
+_home_row_mark() { [ -z "${_HOME_DRAW_MODE:-}" ] || printf '\036%s\n' "$1"; }
+
+# _home_board_partv <mode> <items> <sel> <dry> <filter> [vps] [vpe] -> $_HC_PART
+# The sentinel keeps the trailing newlines `$(...)` would strip.
+_home_board_partv() {
+  local mode="$1"; shift
+  _HC_PART="$(_HOME_DRAW_MODE="$mode" _home_pick_draw_body "$@"; printf 'x')"
+  _HC_PART="${_HC_PART%x}"
+}
+
+# _home_board_parse <text> [store_gaps]: row bodies into _HC_PARSED[idx], and with
+# store_gaps also the lines between rows into _HC_GAPS and _HC_TAIL.
+_home_board_parse() {
+  local line gap="" row="" idx="" in_row=0 store="${2:-0}"
+  _HC_PARSED=()
+  while IFS= read -r line; do
+    case "$line" in
+      "  "$'\036'*)
+        idx="${line#  ?}"; idx="${idx%$'\033'*}"
+        [ "$store" = 0 ] || _HC_GAPS[idx]="$gap"
+        gap=""; row=""; in_row=1 ;;
+      "  "$'\035'*) _HC_PARSED[idx]="$row"; in_row=0 ;;
+      *)
+        if [ "$in_row" = 1 ]; then row="$row$line"$'\n'; else gap="$gap$line"$'\n'; fi ;;
+    esac
+  done <<EOF
+$1
+EOF
+  # The heredoc adds one final newline to a text that already ended in one.
+  [ "$store" = 0 ] || _HC_TAIL="${gap%$'\n'}"
+}
+
+# _home_board_rebuild <items> <dry> <filter>: every row's plain form. The fuel memo
+# is filled HERE, in the parent, because `$(...)` could not write it back to a
+# shell that keeps it, and each later partial draw inherits it.
+_home_board_rebuild() {
+  local items="$1" dry="$2" filter="$3" kind cli profile rest i=0
+  _HC_ROWS=(); _HC_GAPS=(); _HC_SEL=(); _HC_KIND=(); _HC_TAIL=""
+  _HC_CHROME_LIVE=""; _HC_CHROME_TANK=""; _HC_CHROME_OTHER=""
+  _home_fuel_memo_reset
+  while IFS=$'\037' read -r kind cli profile rest; do
+    [ -n "$kind" ] || continue
+    _HC_KIND[i]="$kind"; i=$((i + 1))
+    case "$kind" in live|resume|tank) _home_fuel_dotv "$dry" "$cli" "$profile" ;; esac
+  done <<EOF
+$items
+EOF
+  _home_board_partv rows "$items" -1 "$dry" "$filter"
+  _home_board_parse "$_HC_PART" 1
+  _HC_ROWS=("${_HC_PARSED[@]}")
+}
+
+# _home_board_framev <size> <items> <sel> <dry> [filter] -> $_HC_FRAME, byte for byte
+# what _home_pick_draw_body prints (tests/bats/home-row-cache.bats holds it to that).
+_home_board_framev() {
+  local size="$1" items="$2" sel="$3" dry="$4" filter="${5:-}" key i n chrome=""
+  key="$_HC_GEN"$'\036'"$size"$'\036'"$filter"$'\036'"$dry"$'\036'"$items"
+  if [ "$key" != "$_HC_KEY" ]; then
+    _home_board_rebuild "$items" "$dry" "$filter"
+    _HC_KEY="$key"
+  fi
+  if [ -z "${_HC_SEL[sel]:-}" ]; then
+    _home_board_partv one "$items" "$sel" "$dry" "$filter" "$sel" "$sel"
+    _home_board_parse "$_HC_PART"
+    _HC_SEL[sel]="${_HC_PARSED[sel]}"
+  fi
+  case "${_HC_KIND[sel]:-}" in
+    live) chrome="$_HC_CHROME_LIVE" ;;
+    tank) chrome="$_HC_CHROME_TANK" ;;
+    *)    chrome="$_HC_CHROME_OTHER" ;;
+  esac
+  if [ -z "$chrome" ]; then
+    _home_board_partv chrome "$items" "$sel" "$dry" "$filter"
+    chrome="$_HC_PART"
+    case "${_HC_KIND[sel]:-}" in
+      live) _HC_CHROME_LIVE="$chrome" ;;
+      tank) _HC_CHROME_TANK="$chrome" ;;
+      *)    _HC_CHROME_OTHER="$chrome" ;;
+    esac
+  fi
+  _HC_FRAME=$'\033[H\033[K\n'"$chrome"
+  n="${#_HC_ROWS[@]}"
+  for (( i = 0; i < n; i++ )); do
+    _HC_FRAME="$_HC_FRAME${_HC_GAPS[i]}"
+    if [ "$i" -eq "$sel" ]; then _HC_FRAME="$_HC_FRAME${_HC_SEL[i]}"
+    else _HC_FRAME="$_HC_FRAME${_HC_ROWS[i]}"; fi
+  done
+  _HC_FRAME="$_HC_FRAME$_HC_TAIL"$'\033[J\033[H'
+}
+
 _home_pick_draw() {
   # Single-write flicker fix: _home_pick_draw_body composes the whole frame via
   # printf to a captured string; we then write it to the terminal in ONE printf.
@@ -3487,7 +3591,8 @@ _home_pick_draw() {
   case "$_lrows" in ''|*[!0-9]*) _lrows=24 ;; esac
 
   local _frame
-  _frame="$(_home_pick_draw_body "$@")"
+  _home_board_framev "$_lsz" "$@"
+  _frame="$_HC_FRAME"
 
   # 🔴 THE BOARD HAD NO HEIGHT. 0.28.0 made every row fit the terminal's WIDTH;
   # nothing ever made the frame fit its HEIGHT, and the frame is a constant size
@@ -3519,11 +3624,12 @@ _home_pick_draw() {
 }
 
 # _home_frame_height <frame> -> how many terminal lines it occupies.
-# Counts newlines with a pure substitution — no fork, and this runs on the redraw
-# path. The frame carries ANSI escapes, none of which contain a newline.
+# Counts newlines by walking them, on the redraw path. NOT `${1//[!$'\n']/}`: in
+# bash 3.2 that is quadratic on UTF-8, which measured over a second on a real frame.
 _home_frame_height() {
-  local nl="${1//[!$'\n']/}"
-  printf '%s' "${#nl}"
+  local LC_ALL=C rest="$1" n=0
+  while [ "$rest" != "${rest#*$'\n'}" ]; do rest="${rest#*$'\n'}"; n=$((n + 1)); done
+  printf '%s' "$n"
 }
 
 # _home_pick_draw_windowed <rows> <items> <sel> <dry> [filter]
@@ -3647,7 +3753,8 @@ _home_pick_draw_body() {
   local items="$1" sel="$2" dry="$3" filter="${4:-}"
   local _vps="${5:-}" _vpe="${6:-}" _vphid="${7:-0}"
   _home_cols_prime
-  _home_fuel_memo_reset     # one date/jq fork per TANK this render, not per row (P2-1)
+  # A partial draw inherits the memo _home_board_framev filled in the parent shell.
+  [ -n "${_HOME_DRAW_MODE:-}" ] || _home_fuel_memo_reset     # one date/jq fork per TANK this render, not per row (P2-1)
   # Flicker-free paint: home the cursor and overwrite in place — NO `\033[2J`
   # full-screen clear (the momentary blank frame is exactly what flickered on
   # each keypress). Leftover lines from a taller previous frame are erased with
@@ -3674,7 +3781,7 @@ _home_pick_draw_body() {
   _home_narrowv; [ "$_HOME_NARROW" = 1 ] && { _ld=""; _ahang=17; }
   _home_row_geom $(( 25 + ${#_ld} )) 20; local _resume_title_budget="$_RG_TITLE"
   _home_live_dup_keysv "$items"   # see _home_live_dup_suffixv — dup-name badging
-  printf '\033[H\033[K\n'   # home + one blank top-margin line
+  [ -n "${_HOME_DRAW_MODE:-}" ] || printf '\033[H\033[K\n'   # home + one blank top-margin line
   # Repaint the whole frame, clearing each line to end-of-line (\033[K) so a row
   # that COLLAPSES when the cursor moves away (hover → fewer chars) leaves no stale
   # tail. The logo is drawn AFTER this, so the full-width erase here can't clip it.
@@ -3709,6 +3816,7 @@ _home_pick_draw_body() {
   # ONE contextual slot, in a fixed position, so the bar does not reflow as the
   # selection moves — only what sits in that slot changes. The `?` overlay still
   # lists every key the board has; this line is what applies RIGHT NOW.
+  case "${_HOME_DRAW_MODE:-}" in rows|one) ;; *)
   local _kctx=""
   case "$(_home_row_kind_at "$items" "$sel")" in
     live) _kctx=" · K $T_K_CLOSE" ;;
@@ -3748,6 +3856,8 @@ _home_pick_draw_body() {
       "$_ld" "${#_ld}" "$__C_DIM" "$__C_RESET" $(( 2 - ${#_ld} ))
   fi
   printf '\n'
+  ;; esac
+  if [ "${_HOME_DRAW_MODE:-}" != chrome ]; then
   while IFS=$'\037' read -r kind cli profile label alias active note; do
     [ -n "$kind" ] || continue
     # Outside the window: still counted, not drawn. The section headers below
@@ -3765,6 +3875,7 @@ _home_pick_draw_body() {
           printed_live=1
           printf '%s%b▸ %s%b\n' "$_ld" "$__C_BCYAN" "$T_LIVE" "$__C_RESET"
         fi
+        _home_row_mark "$idx"
         local _lat _lage _lwake
         IFS=$'\036' read -r _lat _lage _lwake <<LIVEACT
 $active
@@ -3837,6 +3948,7 @@ LIVEACT
           if [ -n "$cur_cli" ] || [ "$printed_also" -gt 0 ]; then printf '\n'; fi
           printf '%s%b▸ %s%b\n' "$_ld" "$__C_BCYAN" "$(_home_continue_heading)" "$__C_RESET"
         fi
+        _home_row_mark "$idx"
         # active field is "<flag> <age>": flag 1 = this session is on the tank you're
         # using now (●), else ○. Age is the hover fallback when there's no recap.
         _home_fuel_dotv "$dry" "$cli" "$profile"; rdot="$_FDOT"
@@ -3873,6 +3985,7 @@ LIVEACT
         elif [ "$cur_cli" != "fleet" ]; then
           printf '%s%b▸ %s%b\n' "$_ld" "$__C_BCYAN" "$T_TANKS" "$__C_RESET"; cur_cli="fleet"
         fi
+        _home_row_mark "$idx"
         local _eng; _eng="$cli"; [ "$_eng" = "antigravity" ] && _eng="agy"
         # P3-2 (round-2 review): this used to call the ECHOING _home_fuel_dot
         # via `$( )` — a command substitution IS a subshell, so any memo
@@ -3928,6 +4041,7 @@ LIVEACT
           [ -n "$cur_cli" ] && printf '\n'
           printf '%s%b▸ %s%b\n' "$_ld" "$__C_BCYAN" "$T_ALSO_AVAILABLE" "$__C_RESET"
         fi
+        _home_row_mark "$idx"
         if _reset="$(_home_is_dry "$dry" "$cli" "$profile")"; then tdot="${__C_RED}●${__C_RESET}"
         else tdot="${__C_DIM}·${__C_RESET}"; _reset=""; fi
         # Same wrap as the static board's "Also available" row: the note is a
@@ -3948,6 +4062,7 @@ LIVEACT
           [ -n "$cur_cli" ] && printf '\n'
           printf '%s%b▸ %s%b\n' "$_ld" "$__C_BCYAN" "$T_ALSO_AVAILABLE" "$__C_RESET"
         fi
+        _home_row_mark "$idx"
         if [ "$idx" -eq "$sel" ]; then
           _home_wrap_prefixed "$note" \
             "$(printf '%s%b %b· %-12s ' "$_ld" "$mark" "$__C_BOLD" "$cli")" "$_ahang" "$__C_BOLD" "$__C_RESET" 2
@@ -3957,10 +4072,13 @@ LIVEACT
         fi
         ;;
     esac
+    [ -z "${_HOME_DRAW_MODE:-}" ] || printf '\035\n'
     idx=$((idx + 1))
   done <<EOF
 $items
 EOF
+  fi
+  case "${_HOME_DRAW_MODE:-}" in chrome|one) ;; *)
   # Say how many rows the window is holding back. Reuses T_K_MOVE rather than
   # adding a string: a new one would cost nine translations to say what the
   # keybar already says in all nine.
@@ -3990,7 +4108,9 @@ EOF
       printf '    %b%s%b\n' "$__C_DIM" "$(_home_trunc "$_foot" "$_fw")" "$__C_RESET"
     fi
   fi
+  ;; esac
   } | while IFS= read -r _line || [ -n "$_line" ]; do printf '  %s\033[K\n' "$_line"; done
+  [ -z "${_HOME_DRAW_MODE:-}" ] || return 0
   printf '\033[J'   # erase any leftover lines from a previous, taller frame
 
   # No watermark here. A logo pinned bottom-right by absolute cursor position was
@@ -4169,7 +4289,7 @@ _home_pick() {
   # repaint. So the wait polls instead, and only repaints when the width or the
   # height actually changed; an idle board with a still terminal draws nothing.
   # Reported alongside the ssh-from-PineNote report, 2026-08-16.
-  local _lastsize="" _rf_left=0 _rf_tick=0
+  local _lastsize="" _rf_left=0 _rf_tick=0 _idle_s=0
   # Refresh-on-open: stale caches are re-read in the background; while any
   # were fired, the idle wait repaints every 5s for a minute so the new
   # readings land without a keypress.
@@ -4256,11 +4376,23 @@ _home_pick() {
       if [ "$_rf_left" -gt 0 ]; then
         _rf_tick=$((_rf_tick + 1))
         if [ "$_rf_tick" -ge 5 ]; then
-          _rf_tick=0; _rf_left=$((_rf_left - 1)); TUI_KEY="__resized"; break
+          _rf_tick=0; _rf_left=$((_rf_left - 1)); _home_board_invalidate; TUI_KEY="__resized"; break
         fi
+      fi
+      # Ages and fuel notes in cached rows stay honest: refresh while nobody is
+      # pressing anything, so the rebuild never lands on a keypress.
+      _idle_s=$((_idle_s + 1))
+      if [ "$_idle_s" -ge 60 ]; then
+        _idle_s=0; _home_board_invalidate; TUI_KEY="__resized"; break
       fi
     done
     [ "$TUI_KEY" = "__resized" ] && continue
+    _idle_s=0
+    # Only moving the cursor may reuse rows. Every other key may change what they say.
+    case "$TUI_KEY" in
+      up|k|shift-tab|down|j|tab|home|pgup|g|end|pgdn|G|[1-9]) ;;
+      *) _home_board_invalidate ;;
+    esac
     sel_row="$(printf '%s\n' "$view" | sed -n "$((sel + 1))p")"
     sel_kind="$(printf '%s' "$sel_row" | cut -d$'\037' -f1)"
     sel_cli="$(printf '%s' "$sel_row" | cut -d$'\037' -f2)"
