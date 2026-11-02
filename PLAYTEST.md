@@ -10,7 +10,7 @@ canonical: "https://clikae.cver.net/PLAYTEST"
 >
 > Written against v0.10.0 and still accurate; run `clikae --version` to see what you have. Two things arrived after it that this guide doesn't walk through: **`clikae clean`** (disk cleanup — one list, Enter, red confirm) and six more interface languages.
 >
-> Note: clikae defaults to an **English interface**, and this guide highlights English UI labels with their explanations. It speaks nine languages though — `clikae lang` lists them, `clikae lang <code>` switches, and the board's `l` key does the same thing interactively. Playtesting in your own language is a genuinely useful report.
+> Note: clikae defaults to an **English interface**, and this guide highlights English UI labels with their explanations. It speaks five languages though — `clikae lang` lists them, `clikae lang <code>` switches, and the board's `l` key does the same thing interactively. Playtesting in your own language is a genuinely useful report.
 
 ---
 
