@@ -1525,7 +1525,9 @@ _burn_lb_pgroup_probe() {
   p=$!
   [ "$mflag" -eq 1 ] || { set +m; } 2>/dev/null
   kill -0 -- "-$p" 2>/dev/null && _BURN_LB_PGROUP=1
-  kill "$p" 2>/dev/null || true
+  # KILL, not TERM: a child that has not exec'd sleep yet still has a direct caller's
+  # traps, so TERM can run them there or be swallowed and leave `wait` the whole 30 s.
+  kill -KILL "$p" 2>/dev/null || true
   wait "$p" 2>/dev/null || true
   return 0
 }
