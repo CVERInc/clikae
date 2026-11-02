@@ -573,9 +573,9 @@ Pasted from a real board with fourteen tanks, the Tanks section read like this
 (one line per engine family, abridged):
 
 ```
-◐ tuna    claude   hello@cver.net          weekly 99.0% · 17h ago · expired · clikae usage --wake tuna to renew   (the word `expired` has since been retired — #179)
-◐ salmon  codex    xiaoyacomic@gmail.com   5h 100% left · weekly 12% left (resets 03:21 on 15 Oct)
-● chromis agy      chodaict@gmail.com      weekly 21.7% · 8d ago · no-signal
+◐ tuna    claude   user1@example.com          weekly 99.0% · 17h ago · expired · clikae usage --wake tuna to renew   (the word `expired` has since been retired — #179)
+◐ salmon  codex    user2@example.com   5h 100% left · weekly 12% left (resets 03:21 on 15 Oct)
+● chromis agy      user3@example.com      weekly 21.7% · 8d ago · no-signal
 ```
 
 Three defects, found by reading it cold rather than by any test:

@@ -1368,7 +1368,7 @@ clikae status            # every engine that has a tank
 clikae status claude     # just one
 
 #   ENGINE       TANK         ACCOUNT          SOURCE
-#   claude       cver         hi@cver.net      CLAUDE_CONFIG_DIR=…/profiles/claude/cver
+#   claude       cver         user5@example.com      CLAUDE_CONFIG_DIR=…/profiles/claude/cver
 #   aws          (default)    -                AWS_PROFILE unset — system default
 ```
 

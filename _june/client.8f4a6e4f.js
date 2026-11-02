@@ -1,4 +1,4 @@
-//#region \0rolldown/runtime.js
+// \0rolldown/runtime.js
 var __create = Object.create;
 var __defProp = Object.defineProperty;
 var __getOwnPropDesc = Object.getOwnPropertyDescriptor;
@@ -20,8 +20,7 @@ var __toESM = (mod, isNodeMode, target) => (target = mod != null ? __create(__ge
 	value: mod,
 	enumerable: true
 }) : target, mod));
-//#endregion
-//#region node_modules/react/cjs/react.production.js
+// node_modules/react/cjs/react.production.js
 /**
 * @license React
 * react.production.js
@@ -407,13 +406,11 @@ var require_react_production = /* @__PURE__ */ __commonJSMin(((exports) => {
 	};
 	exports.version = "19.3.1";
 }));
-//#endregion
-//#region node_modules/react/index.js
+// node_modules/react/index.js
 var require_react = /* @__PURE__ */ __commonJSMin(((exports, module) => {
 	module.exports = require_react_production();
 }));
-//#endregion
-//#region node_modules/scheduler/cjs/scheduler.production.js
+// node_modules/scheduler/cjs/scheduler.production.js
 /**
 * @license React
 * scheduler.production.js
@@ -667,13 +664,11 @@ var require_scheduler_production = /* @__PURE__ */ __commonJSMin(((exports) => {
 		};
 	};
 }));
-//#endregion
-//#region node_modules/scheduler/index.js
+// node_modules/scheduler/index.js
 var require_scheduler = /* @__PURE__ */ __commonJSMin(((exports, module) => {
 	module.exports = require_scheduler_production();
 }));
-//#endregion
-//#region node_modules/react-dom/cjs/react-dom.production.js
+// node_modules/react-dom/cjs/react-dom.production.js
 /**
 * @license React
 * react-dom.production.js
@@ -825,8 +820,7 @@ var require_react_dom_production = /* @__PURE__ */ __commonJSMin(((exports) => {
 	};
 	exports.version = "19.3.1";
 }));
-//#endregion
-//#region node_modules/react-dom/index.js
+// node_modules/react-dom/index.js
 var require_react_dom = /* @__PURE__ */ __commonJSMin(((exports, module) => {
 	function checkDCE() {
 		if (typeof __REACT_DEVTOOLS_GLOBAL_HOOK__ === "undefined" || typeof __REACT_DEVTOOLS_GLOBAL_HOOK__.checkDCE !== "function") return;
@@ -839,8 +833,7 @@ var require_react_dom = /* @__PURE__ */ __commonJSMin(((exports, module) => {
 	checkDCE();
 	module.exports = require_react_dom_production();
 }));
-//#endregion
-//#region node_modules/react-dom/cjs/react-dom-client.production.js
+// node_modules/react-dom/cjs/react-dom-client.production.js
 /**
 * @license React
 * react-dom-client.production.js
@@ -11434,8 +11427,7 @@ var require_react_dom_client_production = /* @__PURE__ */ __commonJSMin(((export
 		return new ReactDOMHydrationRoot(initialChildren);
 	};
 }));
-//#endregion
-//#region node_modules/react-dom/client.js
+// node_modules/react-dom/client.js
 var require_client = /* @__PURE__ */ __commonJSMin(((exports, module) => {
 	function checkDCE() {
 		if (typeof __REACT_DEVTOOLS_GLOBAL_HOOK__ === "undefined" || typeof __REACT_DEVTOOLS_GLOBAL_HOOK__.checkDCE !== "function") return;
@@ -11448,8 +11440,7 @@ var require_client = /* @__PURE__ */ __commonJSMin(((exports, module) => {
 	checkDCE();
 	module.exports = require_react_dom_client_production();
 }));
-//#endregion
-//#region node_modules/@junejs/core/src/islands.tsx
+// node_modules/@junejs/core/src/islands.tsx
 var import_client = require_client();
 var import_react = /* @__PURE__ */ __toESM(require_react(), 1);
 const ISLAND_TAG = "june-island";
@@ -11473,8 +11464,7 @@ function JuneSlot({ children, html }) {
 	});
 	return (0, import_react.createElement)(ISLAND_SLOT_TAG, null, children);
 }
-//#endregion
-//#region node_modules/@junejs/core/src/execute-scripts.ts
+// node_modules/@junejs/core/src/execute-scripts.ts
 const EXECUTABLE = /* @__PURE__ */ new Set([
 	"",
 	"module",
@@ -11530,8 +11520,7 @@ function executeScripts(region) {
 		old.replaceWith(fresh);
 	}
 }
-//#endregion
-//#region node_modules/@junejs/core/src/morph.ts
+// node_modules/@junejs/core/src/morph.ts
 const isIsland = (n) => n.nodeType === 1 && n.tagName.toLowerCase() === "june-island";
 const islandName = (el) => el.getAttribute("data-june-island") ?? "";
 const reusableIn = (all) => (n) => isIsland(n) && !!n.__juneHydrated && (all || n.hasAttribute("data-june-persist"));
@@ -11578,8 +11567,7 @@ function morph(oldEl, newEl, opts = {}) {
 		o = next;
 	}
 }
-//#endregion
-//#region node_modules/@junejs/core/src/nav-protocol.ts
+// node_modules/@junejs/core/src/nav-protocol.ts
 const FRAGMENT_ACCEPT = "text/vnd.june.fragment+html";
 const TITLE_HEADER = "x-june-title";
 function decodeTitle(raw) {
@@ -11594,8 +11582,7 @@ const FLIGHT_ACCEPT = "text/vnd.june.flight";
 const OUTLET_ATTR = "data-june-outlet";
 const SHELL_ATTR = "data-june-shell";
 const SEGMENT_HEADER = "x-june-segment";
-//#endregion
-//#region node_modules/@junejs/core/src/shell.ts
+// node_modules/@junejs/core/src/shell.ts
 const ROOT_ATTR = "data-june-root";
 const rootEl = () => document.querySelector(`[${ROOT_ATTR}]`);
 const outletEl = () => document.querySelector(`[${OUTLET_ATTR}]`);
@@ -11604,8 +11591,7 @@ function resolveSwapTarget(fragmentShell) {
 	if (fragmentShell === null) return rootEl();
 	return fragmentShell === mountedShellKey() ? outletEl() : null;
 }
-//#endregion
-//#region node_modules/@junejs/core/src/client-router.ts
+// node_modules/@junejs/core/src/client-router.ts
 const trimSlash = (p) => p.length > 1 && p.endsWith("/") ? p.slice(0, -1) : p;
 let cachedOutlet = null;
 let cachedShellLinks = [];
@@ -11741,8 +11727,7 @@ function startClientRouter(rehydrate) {
 		navigate(location.pathname + location.search + location.hash, false);
 	});
 }
-//#endregion
-//#region node_modules/@junejs/core/src/client-live.ts
+// node_modules/@junejs/core/src/client-live.ts
 function applyLiveUpdate(fragmentHtml, title, rehydrate, segmentShell) {
 	const fragmentShell = segmentShell ?? null;
 	const current = resolveSwapTarget(fragmentShell);
@@ -11757,8 +11742,7 @@ function applyLiveUpdate(fragmentHtml, title, rehydrate, segmentShell) {
 	rehydrate(current);
 	return true;
 }
-//#endregion
-//#region node_modules/@junejs/core/src/islands-client.ts
+// node_modules/@junejs/core/src/islands-client.ts
 function mount(el, Component) {
 	if (el.__juneHydrated) return;
 	el.__juneHydrated = true;
@@ -11813,7 +11797,7 @@ function startJuneClient(options) {
 	const routerRoot = document.querySelector("[data-june-root]");
 	if (!routerRoot) return;
 	if (routerRoot.getAttribute("data-june-router") === "flight") {
-		import("./client-router-flight-684c945d.js").then(({ startFlightRouter }) => startFlightRouter());
+		import("./client-router-flight-5fa3708c.js").then(({ startFlightRouter }) => startFlightRouter());
 		return;
 	}
 	startClientRouter(rehydrate);
@@ -11831,8 +11815,7 @@ function startJuneClient(options) {
 		}
 	};
 }
-//#endregion
-//#region node_modules/@kurajs/ctrlk/dist/core.js
+// node_modules/@kurajs/ctrlk/dist/core.js
 const DEFAULT_DEBOUNCE = 120;
 /**
 * Default static-mode scorer: case-insensitive match over `title` + `keywords`. A contiguous
@@ -12063,8 +12046,7 @@ function createCtrlk(options = {}) {
 		}
 	};
 }
-//#endregion
-//#region node_modules/@kurajs/ctrlk/dist/highlight.js
+// node_modules/@kurajs/ctrlk/dist/highlight.js
 /**
 * Split `text` into consecutive segments, marking the spans that match any `token`
 * (case-insensitive). Overlapping/adjacent matches are merged. Tokens should be the terms the
@@ -12121,8 +12103,7 @@ function highlight(text, tokens) {
 	});
 	return out;
 }
-//#endregion
-//#region node_modules/@kurajs/ctrlk/dist/styles.js
+// node_modules/@kurajs/ctrlk/dist/styles.js
 const STYLE_ID = "ctrlk-styles";
 const CSS$1 = `
 .ctrlk-overlay {
@@ -12227,8 +12208,7 @@ function injectStyles(doc = document) {
 	el.textContent = CSS$1;
 	doc.head.appendChild(el);
 }
-//#endregion
-//#region node_modules/@kurajs/ctrlk/dist/dom.js
+// node_modules/@kurajs/ctrlk/dist/dom.js
 const UNSAFE_EL = /^(script|style|iframe|object|embed|form|input|button|link|meta|base|svg)$/i;
 /** Clean TRUSTED, build-generated HTML before innerHTML (defense in depth — never a general XSS
 *  sanitizer). Parse inert in a <template> (no scripts run, no resources load), then drop dangerous
@@ -12558,8 +12538,7 @@ function mountCtrlk(ctrl, opts = {}) {
 		overlay.remove();
 	} };
 }
-//#endregion
-//#region node_modules/@kurajs/docs/dist/client.js
+// node_modules/@kurajs/docs/dist/client.js
 /** Enhance the docs search box. Safe to call before DOMContentLoaded (defers itself) and on the
 *  server (no-op). Idempotent per trigger. */
 function initSearch(opts = {}) {
@@ -12577,7 +12556,7 @@ function setup(opts) {
 	const locale = trigger?.dataset.locale || void 0;
 	let loadingHandle = null;
 	const getHandle = () => loadingHandle ??= (async () => {
-		const [{ createSearch }, res] = await Promise.all([import("./search-acde44d0.js"), fetch(endpoint, { headers: { accept: "application/json" } })]);
+		const [{ createSearch }, res] = await Promise.all([import("./search-bfd2558d.js"), fetch(endpoint, { headers: { accept: "application/json" } })]);
 		if (!res.ok) throw new Error(`search index ${res.status}`);
 		const data = await res.json();
 		return createSearch({
@@ -12667,9 +12646,7 @@ function addHint(trigger) {
 	trigger.style.paddingRight = "3.4rem";
 	host.appendChild(kbd);
 }
-//#endregion
-//#region .june/routes/_client.ts
+// .june/routes/_client.ts
 startJuneClient({ loaders: {} });
 initSearch();
-//#endregion
 export { require_react as a, require_client as i, TITLE_HEADER as n, __toESM as o, decodeTitle as r, FLIGHT_ACCEPT as t };

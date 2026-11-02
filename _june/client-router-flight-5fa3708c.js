@@ -1,5 +1,5 @@
-import { a as require_react, i as require_client, n as TITLE_HEADER, o as __toESM, r as decodeTitle, t as FLIGHT_ACCEPT } from "./client.90278050.js";
-//#region node_modules/@junejs/core/src/client-router-flight.ts
+import { a as require_react, i as require_client, n as TITLE_HEADER, o as __toESM, r as decodeTitle, t as FLIGHT_ACCEPT } from "./client.8f4a6e4f.js";
+// node_modules/@junejs/core/src/client-router-flight.ts
 var import_react = /* @__PURE__ */ __toESM(require_react(), 1);
 var import_client = require_client();
 async function defaultDecode(stream) {
@@ -70,5 +70,4 @@ function startFlightRouter(options = {}) {
 		navigate(location.href, false);
 	}, { signal });
 }
-//#endregion
 export { startFlightRouter };

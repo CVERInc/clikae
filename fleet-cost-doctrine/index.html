@@ -145,7 +145,7 @@
 <ul>
 <li><code>/usage</code> 的 <code>Prompt cache (main)</code>：命中率、miss 次數、最近一次 miss 的原因。</li>
 <li>狀態列 <code>current_usage.cache_read_input_tokens</code> vs <code>cache_creation_input_tokens</code>：write 連續偏高＝前綴在變。</li>
-<li>每週重跑 <a href="https://github.com/CVERInc/clikae/blob/ccb861b43525d513c3d2ed851832ebe47c6251fd/scripts/tank-cost.py"><code>tools/tank-cost.py</code></a>、<a href="https://github.com/CVERInc/clikae/blob/ccb861b43525d513c3d2ed851832ebe47c6251fd/scripts/tank-agents.py"><code>tools/tank-agents.py</code></a>（讀 <code>~/.clikae/profiles/claude/*/projects/**/*.jsonl</code>），看三個數：快取讀取佔比、subagent 中位步數、座艙自己幹活的呼叫數。目標：subagent 中位數從 96 往 40 走。</li>
+<li>每週重跑 <a href="https://github.com/CVERInc/clikae/blob/16773fbd734783bb792f211be975c0206b4edc73/scripts/tank-cost.py"><code>tools/tank-cost.py</code></a>、<a href="https://github.com/CVERInc/clikae/blob/16773fbd734783bb792f211be975c0206b4edc73/scripts/tank-agents.py"><code>tools/tank-agents.py</code></a>（讀 <code>~/.clikae/profiles/claude/*/projects/**/*.jsonl</code>），看三個數：快取讀取佔比、subagent 中位步數、座艙自己幹活的呼叫數。目標：subagent 中位數從 96 往 40 走。</li>
 </ul>
 <h2 id="未驗證">未驗證</h2>
 <ul>
@@ -194,4 +194,4 @@
   sync();
   var outlet=document.querySelector('[data-june-outlet]');
   if(outlet) new MutationObserver(sync).observe(outlet,{childList:true,subtree:true});
-})();</script><script type="module" src="/_june/client.90278050.js"></script></body></html>
+})();</script><script type="module" src="/_june/client.8f4a6e4f.js"></script></body></html>

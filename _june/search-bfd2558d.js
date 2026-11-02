@@ -1,4 +1,4 @@
-//#region node_modules/@kurajs/core/dist/kb.js
+// node_modules/@kurajs/core/dist/kb.js
 const popcount = (x) => {
 	x = x - (x >>> 1 & 1431655765);
 	x = (x & 858993459) + (x >>> 2 & 858993459);
@@ -267,8 +267,7 @@ var Kb = class Kb {
 		return kb;
 	}
 };
-//#endregion
-//#region node_modules/@kurajs/search/dist/tokenize.js
+// node_modules/@kurajs/search/dist/tokenize.js
 /**
 * Default tokenizer for space-delimited / alphabetic scripts (Latin, Cyrillic,
 * Greek, …): lowercase, then split on any run of non-letter / non-number
@@ -279,8 +278,7 @@ var Kb = class Kb {
 * `@kurajs/tokenizers` (via `tokenize` or {@link byLocale}).
 */
 const latinTokenizer = (text) => text.toLowerCase().split(/[^\p{L}\p{N}]+/u).filter(Boolean);
-//#endregion
-//#region node_modules/@kurajs/search/dist/bm25.js
+// node_modules/@kurajs/search/dist/bm25.js
 /**
 * In-memory BM25 index. Build with {@link Bm25.from} (or `new Bm25()` + {@link Bm25.add}),
 * then {@link Bm25.search}. Building is cheap at docs scale (a few hundred kchars/ms),
@@ -392,8 +390,7 @@ var Bm25 = class Bm25 {
 		}));
 	}
 };
-//#endregion
-//#region node_modules/@kurajs/search/dist/rrf.js
+// node_modules/@kurajs/search/dist/rrf.js
 /**
 * Fuse ranked lists by id, returning each item with its RRF score (so callers can
 * surface a score consistent with the fused ordering — a raw BM25 score or cosine
@@ -421,8 +418,7 @@ function rrfScored(lists, idOf, opts = {}) {
 		score: s
 	}));
 }
-//#endregion
-//#region node_modules/@kurajs/tokenizers/dist/bigram.js
+// node_modules/@kurajs/tokenizers/dist/bigram.js
 const CJK = /[\p{Script=Han}\p{Script=Hiragana}\p{Script=Katakana}\p{Script=Hangul}]/u;
 const WORD = /[\p{L}\p{N}]/u;
 /**
@@ -459,8 +455,7 @@ function cjkBigram() {
 		return out;
 	};
 }
-//#endregion
-//#region node_modules/@kurajs/tokenizers/dist/segmenter.js
+// node_modules/@kurajs/tokenizers/dist/segmenter.js
 /**
 * Word-segmenting CJK tokenizer backed by the native `Intl.Segmenter` (the ECMAScript
 * Intl API, dictionary-based via ICU's BreakIterator). Higher precision than bigrams,
@@ -480,8 +475,7 @@ function cjkSegmenter(locale, opts = {}) {
 		return out;
 	};
 }
-//#endregion
-//#region node_modules/@kurajs/docs/dist/nav.js
+// node_modules/@kurajs/docs/dist/nav.js
 function slugify(text) {
 	return text.trim().toLowerCase().replace(/[`*_~]/g, "").replace(/\s+/g, "-").replace(/[^\p{L}\p{N}-]/gu, "");
 }
@@ -505,8 +499,7 @@ function createSlugger() {
 		return id;
 	};
 }
-//#endregion
-//#region node_modules/@kurajs/docs/dist/util.js
+// node_modules/@kurajs/docs/dist/util.js
 /**
 * Strip JSX component tags from MDX source for the agent `.md`/llms.txt surface, so
 * agents get clean Markdown instead of raw JSX. Keeps children text; drops <Tag .../>,
@@ -516,8 +509,7 @@ function createSlugger() {
 function stripMdx(source) {
 	return source.split(/(```[\s\S]*?```|`[^`\n]*`)/g).map((seg, i) => i % 2 === 1 ? seg : seg.replace(/<([A-Z][A-Za-z0-9]*)\b[^>]*\/>/g, "").replace(/<\/?[A-Z][A-Za-z0-9]*\b[^>]*>/g, "")).join("").replace(/\n{3,}/g, "\n\n");
 }
-//#endregion
-//#region node_modules/@kurajs/docs/dist/search.js
+// node_modules/@kurajs/docs/dist/search.js
 const CJK_PRIMARY = /* @__PURE__ */ new Set([
 	"zh",
 	"ja",
@@ -871,5 +863,4 @@ function createSearch(opts) {
 		tokensOf: (query, locale) => kwFor(scope(locale)).tokensOf(query, lang(locale))
 	};
 }
-//#endregion
 export { buildIndex, chunk, createSearch, defaultTokenizer, htmlToText, splitByHeadings };
