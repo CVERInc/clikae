@@ -25,3 +25,15 @@ _burn_timeout_bin() {
   log_warn "--timeout needs \`timeout\`/\`gtimeout\` (coreutils) or \`perl\` on PATH — running WITHOUT a time bound."
   return 0
 }
+
+# _bounded_run <seconds> <command...>: run it under whichever of those exists.
+_bounded_run() {
+  local secs="$1" tbin
+  shift
+  tbin="$(_burn_timeout_bin 2>/dev/null)"
+  case "$tbin" in
+    timeout|gtimeout) "$tbin" "$secs" "$@" ;;
+    perl) perl -e 'alarm shift; exec @ARGV or exit 127' "$secs" "$@" ;;
+    *) "$@" ;;
+  esac
+}

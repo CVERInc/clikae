@@ -44,8 +44,22 @@ case "$url" in
       *'"ideType":"ANTIGRAVITY"'*) printf '{"cloudaicompanionProject":"stub-project-1","currentTier":{"id":"free-tier"}}' ;;
       *) printf '{"allowedTiers":[{"id":"standard-tier"}],"ineligibleTiers":[{"tierId":"free-tier","reasonCode":"UNSUPPORTED_CLIENT"}]}' ;;
     esac ;;
+  *:retrieveUserQuota)
+    case "$*" in *'"project":"stub-project-1"'*) ;; *) exit 22 ;; esac
+    printf '{"buckets":[
+      {"modelId":"chat_20706","remainingFraction":1,"tokenType":"WTUS"},
+      {"modelId":"claude-opus-4-6-thinking","remainingFraction":0.5,"resetTime":"%s"},
+      {"modelId":"gemini-3-flash","remainingFraction":0.75,"resetTime":"%s"},
+      {"modelId":"gemini-2.5-pro","remainingFraction":0.75,"resetTime":"%s"},
+      {"modelId":"gemini-3.1-flash-image","resetTime":"%s"}]}' \
+      "$AGY_3P_RESET" "$AGY_WK_RESET" "$AGY_WK_RESET" "$AGY_WK_RESET" ;;
   *:retrieveUserQuotaSummary)
     case "$*" in *'"project":"stub-project-1"'*) ;; *) exit 22 ;; esac
+    if [ "${AGY_NO_GEMINI_GROUP:-0}" = 1 ]; then
+      printf '{"groups":[{"displayName":"Claude and GPT models","buckets":[
+        {"bucketId":"3p-weekly","window":"weekly","remainingFraction":0.5,"resetTime":"%s"}]}]}' "$AGY_3P_RESET"
+      exit 0
+    fi
     # The real body's shape (2026-09-27), values made up: Gemini's weekly is
     # 99% spent, Claude/GPT's is untouched. 3p-weekly names its window in hours
     # ("168h") and resets in 20 h: the hours, not the distance, make it weekly.
@@ -61,6 +75,22 @@ case "$url" in
 esac
 STUB
   chmod +x "$TEST_HOME/.testbin/curl"
+}
+
+# agy_refresher [rc]: an agy whose `models` renews the token in the tank HOME's
+# ~/.gemini reaches, as the real one does, and records how it was run.
+agy_refresher() {
+  export AGY_RUNS="$TEST_HOME/agy-runs" AGY_REFRESH_RC="${1:-0}" AGY_NEW_EXPIRY
+  AGY_NEW_EXPIRY="$(_iso 3600)"
+  cat > "$TEST_HOME/.testbin/agy" <<'STUB'
+#!/usr/bin/env bash
+printf '%s|%s\n' "$HOME" "$*" >> "$AGY_RUNS"
+readlink "$HOME/.gemini" >> "$AGY_RUNS"
+[ "$AGY_REFRESH_RC" = 0 ] || exit "$AGY_REFRESH_RC"
+f="$HOME/.gemini/antigravity-cli/antigravity-oauth-token"
+jq --arg e "$AGY_NEW_EXPIRY" '.token.expiry = $e' "$f" > "$f.new" && mv "$f.new" "$f"
+STUB
+  chmod +x "$TEST_HOME/.testbin/agy"
 }
 
 @test "agy usage: each quota group keeps its own numbers; the headline is Gemini by default" {
@@ -102,11 +132,64 @@ STUB
   [[ "$stderr" == *'gemini 0/99% · claude -/0%'* ]] || false
 }
 
-@test "agy usage: an access token past its own expiry is never sent; the row stays no-signal" {
+@test "agy usage: a summary without the Gemini group gets one from the per-model list" {
+  agy_fixture
+  export AGY_NO_GEMINI_GROUP=1
+  run clikae usage agy pike --json
+  [ "$status" -eq 0 ]
+  echo "$output" | jq -e '
+    .source == "quota-api" and .headline_group == "gemini"
+    and .weekly_pct == 25 and .window_pct == null
+    and ([.groups[] | {name, weekly_pct}] ==
+         [{name:"claude",weekly_pct:50},{name:"gemini",weekly_pct:25}])'
+  [ "$(tr '\n' ' ' < "$AGY_CALLS")" = "loadCodeAssist retrieveUserQuotaSummary retrieveUserQuota " ] || false
+}
+
+@test "agy usage: a lapsed token is renewed through agy models, on the tank, with no prompt" {
   agy_fixture "$(_iso -60)"
+  agy_refresher
+  run clikae usage agy pike --json
+  [ "$status" -eq 0 ]
+  echo "$output" | jq -e '.source == "quota-api" and .weekly_pct == 99'
+  local run_home run_args
+  IFS='|' read -r run_home run_args < "$AGY_RUNS"
+  [[ "$run_args" == "--log-file "*" models" ]] || { echo "args: $run_args"; false; }
+  [[ "$run_args" != *" -p "* ]] || false
+  [ "$(sed -n 2p "$AGY_RUNS")" = "$CLIKAE_HOME/profiles/antigravity/pike" ] || false
+  # The throwaway HOME is gone, and the shared ~/.gemini was never involved.
+  [ ! -e "$run_home" ] || false
+  [ "$run_home" != "$HOME" ] || false
+  ! grep -R 'stub-agy-secret151' "$AGY_LOG" "$CLIKAE_HOME/state"
+}
+
+@test "agy usage: a refresh that fails stays needs-refresh and sends the old token nowhere" {
+  agy_fixture "$(_iso -60)"
+  agy_refresher 1
+  run clikae usage agy pike --json
+  [ "$status" -eq 0 ]
+  echo "$output" | jq -e '.source == "unknown" and .reason == "needs-refresh" and .window_pct == null'
+  [ -s "$AGY_RUNS" ] || false
+  [ ! -e "$AGY_CALLS" ] || false
+}
+
+@test "agy usage: a reader that may not refresh leaves the lapsed token alone" {
+  agy_fixture "$(_iso -60)"
+  agy_refresher
+  CLIKAE_USAGE_AUTO_WAKE=0 run clikae usage agy pike --json
+  [ "$status" -eq 0 ]
+  echo "$output" | jq -e '.reason == "needs-refresh"'
+  [ ! -e "$AGY_RUNS" ] || false
+}
+
+@test "agy usage: a lapsed token with no refresh token stays no-signal and runs nothing" {
+  agy_fixture "$(_iso -60)"
+  agy_refresher
+  local f="$CLIKAE_HOME/profiles/antigravity/pike/antigravity-cli/antigravity-oauth-token"
+  jq 'del(.token.refresh_token)' "$f" > "$f.new" && mv "$f.new" "$f"
   run clikae usage agy pike --json
   [ "$status" -eq 0 ]
   echo "$output" | jq -e '.source == "unknown" and .gap == "no-signal" and .window_pct == null'
+  [ ! -e "$AGY_RUNS" ] || false
   [ ! -e "$AGY_CALLS" ] || false
 }
 

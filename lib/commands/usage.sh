@@ -154,7 +154,7 @@ is) and, when an axis's own resets_at is already behind now,
 it is from before a reset.
 
 Reading never spends quota. An access token past its expiry is refreshed first
-with no model call (claude: `claude auth status`), then measured. --wake is the
+with no model call (`claude auth status`, `agy models`), then measured. --wake is the
 one form that sends a prompt. CLIKAE_USAGE_AUTO_WAKE=0 turns the refresh off.
 
 A reading with no numbers may carry one more field, "reason" — present only

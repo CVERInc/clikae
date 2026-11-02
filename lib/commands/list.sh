@@ -39,27 +39,35 @@ _list_render_json() {
 
 cmd_list() {
   i18n_load "$(clikae_lang)"   # T_* aren't loaded at source time; the agy note below is localised
-  local show_paths=0 as_json=0 available=0 engine="" order="" include_cockpit=0
+  local show_paths=0 as_json=0 available=0 engine="" order="" include_cockpit=0 group=""
   while [ $# -gt 0 ]; do
     case "$1" in
       -p|--paths) show_paths=1; shift ;;
       --json)     as_json=1; shift ;;
       --available) available=1; shift ;;
       --include-cockpit) include_cockpit=1; shift ;;
+      --group)
+        case "${2:-}" in gemini|claude) group="$2"; shift 2 ;; *) log_fail "--group requires gemini or claude" ;; esac ;;
       --order)
         [ "${2:-}" = expiring ] || log_fail "--order requires expiring"
         order="$2"; shift 2 ;;
       -h|--help)
         cat <<'EOF'
 Usage: clikae tanks [-p|--paths] [--json]      (alias: clikae list / ls)
-       clikae tanks --available [engine] [--order expiring] [--include-cockpit] [--json]
+       clikae tanks --available [engine] [--group gemini|claude] [--order expiring] [--include-cockpit] [--json]
 
 --available lists eligible tank names, highest remaining quota per hour to reset
-first. Uses the weekly window, or the single window when no weekly value exists.
-Skips unreadable usage, usage >=90% (>=98% with <24h until reset), a separate
-5h window >=95%, and the cockpit unless --include-cockpit is given. JSON includes
-all tanks in scope: {engine, tank, available, score, reason}. Reasons are
-unreadable / quota / window / cockpit, or null when eligible.
+first. Uses the weekly window, or the single window when no weekly value exists;
+a model's own weekly share counts when it is the higher one.
+Skips unreadable usage, a reading over 6h old, usage >=90% (>=98% with <24h until
+reset), a separate 5h window >=95%, and the cockpit unless --include-cockpit is
+given. JSON includes all tanks in scope: {engine, tank, available, score, reason}.
+Reasons are unreadable / stale / quota / window / cockpit, or null when eligible.
+
+agy's Gemini and Claude/GPT quotas are separate, so `--available agy` prints one
+line per group, and JSON adds `groups` with each group's own verdict. --group
+prints names for that group alone; without it, a mixed list judges agy on the
+quota its work spends by default.
 
 List all tanks across all engines. The ACCOUNT column shows which account each
 tank is logged in to (when the adapter can tell — e.g. the email for claude),
@@ -82,10 +90,10 @@ EOF
 
   if [ "$available" = 1 ]; then
     [ "$show_paths" = 0 ] || log_fail "--paths does not apply to --available"
-    _list_available "$engine" "$include_cockpit" "$as_json"
+    _list_available "$engine" "$include_cockpit" "$as_json" "$group"
     return
   fi
-  [ -z "$engine$order" ] && [ "$include_cockpit" = 0 ] || log_fail "Engine, --order and --include-cockpit require --available"
+  [ -z "$engine$order$group" ] && [ "$include_cockpit" = 0 ] || log_fail "Engine, --group, --order and --include-cockpit require --available"
 
   local rows
   rows="$(list_all_profiles || true)"
@@ -141,13 +149,14 @@ EOF
 # Compose the same inventory and readings as tanks/usage, without launching
 # another clikae process or waking an engine. Readers own freshness (#179).
 _list_available() {
-  local engine="$1" include_cockpit="$2" as_json="$3"
+  local engine="$1" include_cockpit="$2" as_json="$3" group="${4:-}"
   local e t path reading row rows="" cockpit now result
   command -v jq >/dev/null 2>&1 || { log_err "--available requires jq"; return 1; }
   # shellcheck source=cockpit.sh
   source "$CLIKAE_LIB/commands/cockpit.sh"
   [ "$engine" != agy ] || engine=antigravity
   [ -z "$engine" ] || validate_name engine "$engine"
+  [ -z "$group" ] || [ "$engine" = antigravity ] || log_fail "--group applies to agy"
   now="$(date +%s)"
   while IFS=$'\t' read -r e t path; do
     [ -n "$e" ] || continue
@@ -156,24 +165,37 @@ _list_available() {
     if [ "$include_cockpit" = 0 ] && _cockpit_is_recorded "$e" "$t"; then cockpit=1; fi
     reading="$(usage_read "$e" "$t")" || reading='{}'
     row="$(jq -cn --arg reading "$reading" --arg engine "$(engine_label "$e")" \
-      --arg tank "$t" --argjson cockpit "$cockpit" --argjson now "$now" \
+      --arg tank "$t" --arg group "$group" --argjson cockpit "$cockpit" --argjson now "$now" \
       "$_USAGE_NORM_STAMP_JQ"'
       def pct: type == "number" and . >= 0 and . <= 100;
       ($reading | try fromjson catch {}) as $r |
-      ($r.weekly_pct != null) as $weekly |
-      (if $weekly then $r.weekly_pct else $r.window_pct end) as $used |
-      (if $weekly then $r.weekly_resets_at else $r.window_resets_at end
-       | try norm_stamp catch null) as $reset |
-      (($used|pct) and $reset != null and
-       ($r.window_pct == null or ($r.window_pct|pct))) as $readable |
-      (if $readable then ([($reset-$now)/3600, 0.5]|max) else null end) as $hours |
-      (if $cockpit == 1 then "cockpit"
-       elif ($readable|not) then "unreadable"
-       elif $used >= (if $hours < 24 then 98 else 90 end) then "quota"
-       elif $weekly and $r.window_pct != null and $r.window_pct >= 95 then "window"
-       else null end) as $reason |
-      {engine:$engine,tank:$tank,available:($reason == null),
-       score:(if $readable then (100-$used)/$hours else null end),reason:$reason}' )" || return 1
+      # One quota judged: its own reset, weekly first, a verdict and a score.
+      def judge:
+        . as $q |
+        ($q.weekly_pct != null) as $weekly |
+        (if $weekly then $q.weekly_pct else $q.window_pct end) as $used |
+        (if $weekly then $q.weekly_resets_at else $q.window_resets_at end
+         | try norm_stamp catch null) as $reset |
+        (($used|pct) and $reset != null and
+         ($q.window_pct == null or ($q.window_pct|pct))) as $readable |
+        (if $readable then ([($reset-$now)/3600, 0.5]|max) else null end) as $hours |
+        (if $cockpit == 1 then "cockpit"
+         elif ($readable|not) then "unreadable"
+         elif (($r.age_sec // 0) > 21600) then "stale"
+         elif $used >= (if $hours < 24 then 98 else 90 end) then "quota"
+         elif $weekly and $q.window_pct != null and $q.window_pct >= 95 then "window"
+         else null end) as $reason |
+        {available:($reason == null),
+         score:(if $readable then (100-$used)/$hours else null end),reason:$reason};
+      ($r.groups // [] | map(select(.disabled | not) | {name} + judge)) as $groups |
+      (if ($r.groups | type) == "array" then
+         ($r.groups | map(select(.name == (if $group != "" then $group else $r.headline_group end))) | .[0] // {})
+       elif ($r.weekly_pct != null) then
+         # A model spent past the overall weekly number is what the work runs into.
+         ($r | .weekly_pct = ([.weekly_pct] + [(.models // [])[]?.pct | numbers] | max))
+       else $r end) as $q |
+      {engine:$engine,tank:$tank} + ($q | judge) +
+      (if ($r.groups | type) == "array" then {groups:$groups} else {} end)' )" || return 1
     rows="$rows$row"$'\n'
   done <<EOF_PROFILES
 $(list_all_profiles)
@@ -181,6 +203,11 @@ EOF_PROFILES
   result="$(printf '%s' "$rows" | jq -s 'sort_by([if .available then 0 else 1 end, -(.score // 0), .engine, .tank])')" || return 1
   if [ "$as_json" = 1 ]; then
     printf '%s\n' "$result"
+  elif [ "$engine" = antigravity ] && [ -z "$group" ]; then
+    printf '%s' "$result" | jq -r '
+      . as $rows | ("gemini", "claude") | . as $g |
+      [ $rows[] | .tank as $t | (.groups // [])[] | select(.name == $g and .available) | {t:$t,score} ] |
+      sort_by(-.score) | map(.t) | "\($g)  \(if length > 0 then join(" ") else "-" end)"'
   else
     printf '%s' "$result" | jq -r '.[] | select(.available) | .tank'
   fi

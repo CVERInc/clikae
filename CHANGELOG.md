@@ -7,12 +7,41 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **A size ruler in CI.** A pull request that grows a file already over 1500 lines
+  gets a warning naming the file and the growth. It never fails the build.
+- **`clikae tanks --available agy` shows Gemini and Claude/GPT separately.** The two
+  quotas are independent, so one line names who can take each. `--group gemini` or
+  `--group claude` prints names for one, and JSON carries each group's verdict.
+- `clikae usage --json` states its unit and its gaps: `window_used_pct` and
+  `weekly_used_pct` (`window_pct` and `weekly_pct` stay as older names),
+  `window_absent` or `weekly_absent` when a plan has no such window, and
+  `stale:true` on a reading over 6 hours old.
+- `clikae usage --json` states its unit and its gaps: `window_used_pct` and
+  `weekly_used_pct` (`window_pct` and `weekly_pct` stay as older names),
+  `window_absent` or `weekly_absent` when a plan has no such window, and
+  `stale:true` on a reading over 6 hours old.
+
 ### Changed
 
 - **The board opens at once with what it last showed**, then updates in place when
   the scan behind it finishes. Opening used to wait for that scan. The saved board
   is per directory and private, and one over a day old is not used. A piped or
   redirected board still reads current data.
+- **`--available` trusts less.** A model share above the weekly number now gates the
+  tank, and a reading over six hours old is skipped with the reason `stale`.
+- **Moving the cursor on the board no longer recomposes the frame.** Rows are
+  cached and only the two that change are redrawn. Rows rebuild after any other
+  key, and every 60 seconds while idle.
+- **Reading usage never spends quota** (#195). `clikae usage` used to send a
+  prompt to any tank whose access token had lapsed. It now refreshes with `claude
+  auth status`, which runs no model, and only `--wake` sends a prompt. The board
+  does the same on open, so idle tanks show real numbers.
+- **Reading usage never spends quota** (#195). `clikae usage` used to send a
+  prompt to any tank whose access token had lapsed. It now refreshes with `claude
+  auth status`, which runs no model, and only `--wake` sends a prompt. The board
+  does the same on open, so idle tanks show real numbers.
 - **The board shows fuel left, as a bar**: `5h ███████░ 97%  7d ███████░ 89%`.
   Vendors disagree on used versus left, so one unit is shown everywhere a person
   reads a number: the board, the tmux row (no bar), and the `clikae usage` summary.
@@ -29,19 +58,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   auth status`, which runs no model, and only `--wake` sends a prompt. The board
   does the same on open, so idle tanks show real numbers.
 
-### Added
-
-- `clikae usage --json` states its unit and its gaps: `window_used_pct` and
-  `weekly_used_pct` (`window_pct` and `weekly_pct` stay as older names),
-  `window_absent` or `weekly_absent` when a plan has no such window, and
-  `stale:true` on a reading over 6 hours old.
-- `clikae usage --json` states its unit and its gaps: `window_used_pct` and
-  `weekly_used_pct` (`window_pct` and `weekly_pct` stay as older names),
-  `window_absent` or `weekly_absent` when a plan has no such window, and
-  `stale:true` on a reading over 6 hours old.
-
 ### Fixed
 
+- **The tmux row shows a tank's last reading when it has no current one**, with its
+  age, as the board already did. It used to show `·` for a number the board could see.
+- **agy shows its Gemini quota again.** agy's quota summary stopped naming the Gemini
+  group, so a tank read as Claude/GPT only. clikae now builds that group from agy's
+  per-model quota when the summary leaves it out.
+- **An idle agy tank gets a number without spending anything.** A lapsed token is
+  renewed through `agy models`, which runs no model, then measured. A login that
+  really died stays `needs-refresh`.
 - **Shared memory, `--ephemeral`, and session lookups work from a symlinked
   directory** (#194). clikae built the project path from the logical `$PWD` while
   Claude Code uses the resolved one, so a run from such a directory logged that

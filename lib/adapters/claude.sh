@@ -1140,14 +1140,9 @@ adapter_migrate_credentials() {
 # OAuth work and writes its own credentials, so the single-use refresh token stays
 # its business. Only the next measurement decides whether it worked.
 adapter_usage_refresh() {
-  local dir="$1" tbin=""
+  local dir="$1"
   command -v claude >/dev/null 2>&1 || return 1
-  declare -F _burn_timeout_bin >/dev/null && tbin="$(_burn_timeout_bin 2>/dev/null)"
-  case "$tbin" in
-    timeout|gtimeout) CLAUDE_CONFIG_DIR="$dir" "$tbin" 30 claude auth status --json ;;
-    perl) CLAUDE_CONFIG_DIR="$dir" perl -e 'alarm shift; exec @ARGV or exit 127' 30 claude auth status --json ;;
-    *) CLAUDE_CONFIG_DIR="$dir" claude auth status --json ;;
-  esac >/dev/null 2>&1 </dev/null
+  CLAUDE_CONFIG_DIR="$dir" _bounded_run 30 claude auth status --json >/dev/null 2>&1 </dev/null
 }
 
 _claude_usage_unreadable() {
