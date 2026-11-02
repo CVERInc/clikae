@@ -172,6 +172,91 @@ _codex_reply_line() {
   printf '{"timestamp": "%s", "type": "event_msg", "payload": {"type": "agent_message", "message": "back"}}' "$1"
 }
 
+_codex_done_line() {
+  printf '{"timestamp":"%s","type":"event_msg","payload":{"type":"task_complete","turn_id":"t","last_agent_message":"mentions \\"error\\": {} in prose"}}' "$1"
+}
+_codex_failed_line() {
+  printf '{"timestamp":"%s","type":"event_msg","payload":{"type":"task_complete","error":{"message":"overloaded","codex_error_info":"server_overloaded"}}}' "$1"
+}
+_src_limit_dry() {
+  source "$CLIKAE_TEST_ROOT/lib/core/log.sh"
+  source "$CLIKAE_TEST_ROOT/lib/core/profile_store.sh" 2>/dev/null || true
+  _src_limit
+}
+
+@test "limit_profile_dry codex: a clean task_complete after a limit clears it (codex exec writes no agent_message)" {
+  _src_limit_dry
+  local d="$BATS_TEST_TMPDIR/t"
+  _seed_codex_rollout "$d" a "$(_codex_limit_line 2026-07-27T01:00:00.000Z)" "$(_codex_done_line 2026-07-27T02:00:00.000Z)"
+  run limit_profile_dry codex "$d"
+  [ "$status" -eq 2 ]
+}
+
+@test "limit_profile_dry codex: a failed task_complete after a limit does not clear it" {
+  _src_limit_dry
+  local d="$BATS_TEST_TMPDIR/t"
+  _seed_codex_rollout "$d" a "$(_codex_limit_line 2026-07-27T01:00:00.000Z)" "$(_codex_failed_line 2026-07-27T02:00:00.000Z)"
+  run limit_profile_dry codex "$d"
+  [ "$status" -eq 0 ]
+}
+
+@test "limit_profile_dry codex: a recovery stamp clears an older limit, a newer limit beats it" {
+  _src_limit_dry
+  local d="$BATS_TEST_TMPDIR/t"
+  _seed_codex_rollout "$d" a "$(_codex_limit_line 2026-07-27T01:00:00.000Z)"
+  printf '2026-07-27T02:00:00Z\n' > "$d/.clikae-recovered-at"
+  run limit_profile_dry codex "$d"
+  [ "$status" -eq 2 ]
+  printf '2026-07-27T00:00:00Z\n' > "$d/.clikae-recovered-at"
+  run limit_profile_dry codex "$d"
+  [ "$status" -eq 0 ]
+}
+
+@test "limit_dry_at_exit: an old limit is not announced by a session that hit nothing" {
+  _src_limit_dry
+  local d="$BATS_TEST_TMPDIR/t"
+  _seed_codex_rollout "$d" a "$(_codex_limit_line 2026-07-27T01:00:00.000Z)"
+  run limit_dry_at_exit codex "$d" "$(_limit_iso_epoch 2026-07-27T03:00:00Z 0)"
+  [ "$status" -eq 1 ]
+  [ -z "$output" ]
+}
+
+@test "limit_dry_at_exit: a limit from this session is announced with its reset phrase" {
+  _src_limit_dry
+  local d="$BATS_TEST_TMPDIR/t"
+  _seed_codex_rollout "$d" a "$(_codex_limit_line 2026-07-27T01:00:00.000Z)"
+  run limit_dry_at_exit codex "$d" "$(_limit_iso_epoch 2026-07-27T00:30:00Z 0)"
+  [ "$status" -eq 0 ]
+  [[ "$output" == *"try again at Aug 23rd"* ]] || false
+  [[ "$output" != *$'\037'* ]] || false
+}
+
+@test "limit_dry_at_exit: a live reading with room left records recovery, so the tank stops reading dry" {
+  _src_limit_dry
+  local d="$BATS_TEST_TMPDIR/t"
+  _seed_codex_rollout "$d" a "$(_codex_limit_line 2026-07-27T01:00:00.000Z)"
+  _codex_usage_probe() { printf '{"window_pct":null,"weekly_pct":3.0,"source":"vendor"}\n'; }
+  run limit_dry_at_exit codex "$d" "$(_limit_iso_epoch 2026-07-27T00:30:00Z 0)"
+  [ "$status" -eq 1 ]
+  [ -f "$d/.clikae-recovered-at" ]
+  run limit_profile_dry codex "$d"
+  [ "$status" -eq 2 ]
+}
+
+@test "limit_dry_at_exit: a live reading at 100% or a failed probe records nothing" {
+  _src_limit_dry
+  local d="$BATS_TEST_TMPDIR/t" s
+  _seed_codex_rollout "$d" a "$(_codex_limit_line 2026-07-27T01:00:00.000Z)"
+  s="$(_limit_iso_epoch 2026-07-27T00:30:00Z 0)"
+  _codex_usage_probe() { printf '{"window_pct":100.0,"weekly_pct":3.0}\n'; }
+  run limit_dry_at_exit codex "$d" "$s"
+  [ "$status" -eq 0 ]
+  _codex_usage_probe() { printf '{"reason":"network"}\n'; return 1; }
+  run limit_dry_at_exit codex "$d" "$s"
+  [ "$status" -eq 0 ]
+  [ ! -f "$d/.clikae-recovered-at" ]
+}
+
 @test "limit_profile_dry codex: a limit with no later success reads DRY, with the vendor's reset phrase" {
   source "$CLIKAE_TEST_ROOT/lib/core/log.sh"
   source "$CLIKAE_TEST_ROOT/lib/core/profile_store.sh"   # transcript_tail
