@@ -404,16 +404,17 @@ _switch_supervise() {
   local engine="$1" tank="$2" dir="$3"; shift 3
   # Parent ignores INT so Ctrl-C reaches the engine; we resume after it exits.
   trap '' INT
+  local started; started="$(date +%s)"
   ( trap - INT; _switch_run_tmux_wrapped "$engine" "$tank" "$dir" "$@" ) || true
   trap - INT
 
-  # Only act if THIS tank is genuinely dry as of now (self-clears if it recovered).
+  # Only act if THIS session just ran into a limit (limit_dry_at_exit).
   # NB: both engines' dry state lives in their own transcript (scannable +
   # self-clearing on the next successful turn), so we deliberately do NOT also
   # write dry_store here — a store marker would mask a real recovery. dry_store
   # stays for what a transcript can't cover (a headless codex exec, via burn).
   local reset=""
-  reset="$(limit_profile_dry "$engine" "$dir" 2>/dev/null)" || return 0
+  reset="$(limit_dry_at_exit "$engine" "$dir" "$started")" || return 0
 
   # Offered before the carry, because the two answer different questions and the
   # user only ever gets asked the second one: staying put is staying put, being

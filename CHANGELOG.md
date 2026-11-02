@@ -28,6 +28,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   filed as the 5-hour one. Each window is now classified by its own length, and
   every reader accepts a tank with one window: usage, burn's ordering, and the
   tmux row.
+- **A codex tank no longer reads as dry after it has recovered** (#196). Only
+  `agent_message` counted as success and `codex exec` never writes it, so any
+  limit marker from the last 7 days outlived every later run. A `task_complete`
+  with no error now counts too.
+- **Leaving a session no longer announces a limit it did not hit** (#196). The
+  carry-on prompt now needs a limit newer than the session that just ended. For
+  codex, a tank that reads dry is checked live on exit (no model runs), so a
+  quota restored by a reset credit stops reading as dry.
 
 ## [0.43.0] — 2026-10-21
 
