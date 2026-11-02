@@ -1507,11 +1507,11 @@ _seed_burn_flood_agy() {
   [[ "$output" == *"15 engines"* ]] || false       # English keeps the space
 }
 
-@test "_home_help_row wraps a long es/de/fr/pt description without overflowing 80 cols" {
+@test "_home_help_row wraps a long es description without overflowing 80 cols" {
   export CLIKAE_LIB="$CLIKAE_TEST_ROOT/lib"
   source "$CLIKAE_TEST_ROOT/lib/core/log.sh"
   local loc
-  for loc in es-ES de-DE fr-FR pt-BR; do
+  for loc in es-ES; do
     ( # shellcheck source=/dev/null
       source "$CLIKAE_TEST_ROOT/lib/i18n/$loc.sh"
       source "$CLIKAE_TEST_ROOT/lib/commands/home.sh"

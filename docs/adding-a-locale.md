@@ -1,7 +1,7 @@
 # Adding a language
 
-clikae's board and prompts speak nine languages today — `en-US`, `ja-JP`, `zh-TW`,
-`zh-Hans`, `ko-KR`, `es-ES`, `de-DE`, `fr-FR` and `pt-BR`. Bare `clikae lang`
+clikae's board and prompts speak five languages today — `en-US`, `ja-JP`, `zh-TW`,
+`ko-KR` and `es-ES`. Bare `clikae lang`
 always prints the live list; treat that, not this sentence, as authoritative
 (`_i18n_locales` is where both come from). Every locale ships **inside** clikae
 itself — a language switch is instant, offline, and can never fail on a
@@ -10,7 +10,7 @@ download. Adding one is a self-contained PR touching **two files**.
 ## TL;DR — the touch points
 
 1. **`lib/i18n/<code>.sh`** — copy `lib/i18n/en-US.sh` and translate. Use the
-   full code (`ko-KR`, `fr-FR`, …). `en-US.sh` is the canonical key list; your
+   full code (`ko-KR`, `es-ES`, …). `en-US.sh` is the canonical key list; your
    file must define every key it defines (the test below will list what's
    missing).
 2. **One line in `_i18n_locales`** in `lib/core/i18n.sh` — the supported-locale
@@ -24,14 +24,12 @@ download. Adding one is a self-contained PR touching **two files**.
 
 That's it for almost every language: regional variants resolve through the
 generic language-subtag rule in `_i18n_normalize` (`ko_KR.UTF-8` → `ko` →
-`ko-KR`, `fr_CA` → `fr-FR`) with no extra line. **Two honest exceptions:**
+`ko-KR`, `es_MX` → `es-ES`) with no extra line. **Two honest exceptions:**
 
 - A **script-split language** needs its own resolver case, because the writing
-  system — not the region — decides which file to load. Chinese is the shipped
-  example: `zh_TW`/`zh_HK`/`*Hant*` → `zh-TW`, `zh_CN`/`zh_SG`/`*Hans*` →
-  `zh-Hans`, and a bare `zh` keeps Traditional as the incumbent default. Both
-  cases are in `_i18n_normalize`; copy their shape if your language splits the
-  same way.
+  system — not the region — decides which file to load. Chinese ships as
+  Traditional only: Simplified inputs have their own case in `_i18n_normalize`
+  so they read English instead of `zh-TW`. Remove that case if you add a file for them.
 - Extra human spellings (`日本語`, `english`) are optional case lines in the
   same function.
 

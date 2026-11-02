@@ -478,7 +478,7 @@ _resume_pick_draw_body() {
 
   # Keybar WRAPPED, not shortened (same treatment as the board's footer): the
   # localized key labels are correct and de/es/fr legitimately need the room
-  # (de-DE measured 81 cols at 80). Hangs under the "clikae resume" wordmark.
+  # (a long locale measured 81 cols at 80). Hangs under the "clikae resume" wordmark.
   _home_wrap_prefixed \
     "· ↑↓/Tab $T_K_MOVE · ⏎ $T_RESUME · / $T_K_FILTER · a $T_K_TOGGLE_ALL · c $T_K_CLEANUP · ? $T_K_HELP · q $T_K_QUIT" \
     "$(printf '  %b%s%b  ' "$__C_BOLD" "clikae resume" "$__C_RESET")" 17 "$__C_DIM" "$__C_RESET"

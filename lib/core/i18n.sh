@@ -14,10 +14,8 @@
 # reads `$T_CONTINUE`, not `$(t continue)`, so repainting on every keypress
 # stays cheap.
 #
-# Chinese is keyed by WRITING SYSTEM, not region: Traditional (zh-TW — also
-# serves zh_HK / *Hant*) and Simplified (zh-Hans — zh_CN / zh_SG / *Hans*) are
-# SEPARATE locales, each with its own file. A bare `zh` (no script named) reads
-# Traditional — the incumbent default.
+# Chinese ships as Traditional only. A locale clikae does not ship reads English,
+# and that includes Simplified Chinese (zh_CN / zh_SG / *Hans*).
 #
 # Resolution order (first hit wins): $CLIKAE_LANG env > persisted $CLIKAE_HOME/lang
 # > $LC_ALL / $LANG > en-US. The `l` key in the dashboard and `clikae lang <code>`
@@ -46,12 +44,8 @@ _i18n_locales() {
     en-US \
     ja-JP \
     zh-TW \
-    zh-Hans \
     ko-KR \
-    es-ES \
-    de-DE \
-    fr-FR \
-    pt-BR
+    es-ES
 }
 
 # _i18n_normalize <locale-ish> — map any locale-ish string (a full code, a short
@@ -60,9 +54,9 @@ _i18n_locales() {
 # en-US, i18n_set rejects (so a typo can't silently switch you to English).
 #
 # A new locale usually needs NO line here: its exact code passes through the
-# membership check, and regional variants (ko_KR → ko-KR, fr_CA → fr-FR) match
-# through the generic language-subtag rule below. Only a script-split language
-# (Chinese) or an extra human alias needs its own case line.
+# membership check, and regional variants (ko_KR → ko-KR, es_MX → es-ES) match
+# through the generic language-subtag rule below. Only an extra human alias needs
+# its own case line.
 _i18n_normalize() {
   local raw="$1" low sub l
   # 1. An exact supported code passes through untouched.
@@ -71,13 +65,10 @@ _i18n_normalize() {
   done
   low="$(printf '%s' "$raw" | tr '[:upper:]' '[:lower:]')"
   case "$low" in
-    # 2. Chinese: split by SCRIPT, not region — Traditional reads zh-TW…
-    zh_tw*|zh-tw*|*hant*|zh_hk*|zh-hk*|繁體中文|台|台灣) printf 'zh-TW'; return 0 ;;
-    # …Simplified reads zh-Hans (Mainland + Singapore).
-    zh_cn*|zh-cn*|zh_sg*|zh-sg*|*hans*|简体中文) printf 'zh-Hans'; return 0 ;;
-    # A bare `zh` names no script, so it needs a default: Traditional, the
-    # incumbent (clikae shipped zh-TW alone for its first three releases).
-    zh*) printf 'zh-TW'; return 0 ;;
+    # 2. Simplified Chinese is not shipped: empty, so it reads English. This has to
+    # come first, or the zh* line below would catch it.
+    zh_cn*|zh-cn*|zh_sg*|zh-sg*|*hans*|简体中文) return 0 ;;
+    zh*|*hant*|繁體中文|台|台灣) printf 'zh-TW'; return 0 ;;
     # Human spellings that don't start with the language subtag:
     english)         printf 'en-US'; return 0 ;;
     *japanese*|日本語) printf 'ja-JP'; return 0 ;;

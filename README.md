@@ -314,7 +314,7 @@ portable. Quota rotation stepped down from the headline to an advanced
 chapter with an honest, dated
 [terms page](docs/terms-and-your-accounts.md).
 
-Since then, reach. Nine languages, transcreated against each one's own Apple
+Since then, reach. Five languages, transcreated against each one's own Apple
 system strings and translated *by grade* — the sentences you must understand
 in order to consent are fully localized; what you type stays technical.
 `clikae clean` reclaims disk with one list, one red confirm, and the Trash

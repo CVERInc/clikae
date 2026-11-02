@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Removed
+
+- **Simplified Chinese, German, French, and Brazilian Portuguese.** The interface now ships in
+  English, Traditional Chinese, Japanese, Korean, and Spanish. A saved or detected setting for
+  any other language falls back to English.
+
 ## [0.44.0] — 2026-11-02
 
 ### Removed
