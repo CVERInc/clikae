@@ -1,7 +1,7 @@
 #!/usr/bin/env bats
 # tests/bats/usage-agy.bats — #151: `clikae usage agy <tank>` reads agy's own
 # `v1internal:retrieveUserQuotaSummary` with the tank's saved access token, and
-# splits the buckets into window/weekly by their own reset distance. No usable
+# files each bucket under the window it names. No usable
 # token, or any refusal, falls back to today's no-signal row. The token never
 # reaches output, argv, the environment or the cache.
 # (`[[ … ]]` carry `|| false`; see tests/README.md.)
@@ -12,10 +12,16 @@ bats_require_minimum_version 1.5.0   # for `run --separate-stderr`
 # _iso <seconds from now> -> an RFC 3339 instant (jq, so no GNU/BSD date split).
 _iso() { jq -nr --argjson d "$1" '(now + $d) | floor | todate'; }
 
+_agy_hint_for() {
+  # shellcheck source=/dev/null
+  . "$CLIKAE_TEST_ROOT/lib/adapters/antigravity.sh"
+  _agy_usage_group_hint "$1"
+}
+
 agy_fixture() {
   local d="$CLIKAE_HOME/profiles/antigravity/pike"
   # agy on PATH is what makes antigravity a listed engine at all.
-  printf '#!/usr/bin/env bash\ntrue\n' > "$TEST_HOME/.testbin/agy"
+  printf '#!/usr/bin/env bash\n[ "$1" != --version ] || echo "${AGY_VERSION-1.4.12}"\n' > "$TEST_HOME/.testbin/agy"
   chmod +x "$TEST_HOME/.testbin/agy"
   mkdir -p "$d/antigravity-cli"
   printf 'antigravity\n' > "$d/.clikae-tank"
@@ -44,20 +50,27 @@ case "$url" in
       *'"ideType":"ANTIGRAVITY"'*) printf '{"cloudaicompanionProject":"stub-project-1","currentTier":{"id":"free-tier"}}' ;;
       *) printf '{"allowedTiers":[{"id":"standard-tier"}],"ineligibleTiers":[{"tierId":"free-tier","reasonCode":"UNSUPPORTED_CLIENT"}]}' ;;
     esac ;;
-  *:retrieveUserQuota)
-    case "$*" in *'"project":"stub-project-1"'*) ;; *) exit 22 ;; esac
-    printf '{"buckets":[
-      {"modelId":"chat_20706","remainingFraction":1,"tokenType":"WTUS"},
-      {"modelId":"claude-opus-4-6-thinking","remainingFraction":0.5,"resetTime":"%s"},
-      {"modelId":"gemini-3-flash","remainingFraction":0.75,"resetTime":"%s"},
-      {"modelId":"gemini-2.5-pro","remainingFraction":0.75,"resetTime":"%s"},
-      {"modelId":"gemini-3.1-flash-image","resetTime":"%s"}]}' \
-      "$AGY_3P_RESET" "$AGY_WK_RESET" "$AGY_WK_RESET" "$AGY_WK_RESET" ;;
   *:retrieveUserQuotaSummary)
     case "$*" in *'"project":"stub-project-1"'*) ;; *) exit 22 ;; esac
-    if [ "${AGY_NO_GEMINI_GROUP:-0}" = 1 ]; then
+    # Measured 2026-11-02: only a request naming the current version gets Gemini.
+    case "$config" in *'User-Agent: antigravity/cli/1.4.12'*) ;; *)
       printf '{"groups":[{"displayName":"Claude and GPT models","buckets":[
         {"bucketId":"3p-weekly","window":"weekly","remainingFraction":0.5,"resetTime":"%s"}]}]}' "$AGY_3P_RESET"
+      exit 0 ;;
+    esac
+    if [ "${AGY_ARGON:-0}" = 1 ]; then
+      printf '{"groups":[
+        {"displayName":"Gemini Models","buckets":[
+          {"bucketId":"gemini-weekly","window":"weekly","remainingFraction":1,"resetTime":"%s"},
+          {"bucketId":"gemini-5h","window":"5h","remainingFraction":1,"resetTime":"%s"}]},
+        {"displayName":"Gemini 4 Argon","buckets":[
+          {"bucketId":"gemini-argon-wtu-weekly","window":"weekly","remainingFraction":0.01,"resetTime":"%s"}]}]}' \
+        "$AGY_WK_RESET" "$AGY_WIN_RESET" "$AGY_WK_RESET"
+      exit 0
+    fi
+    if [ "${AGY_ODD_WINDOW:-0}" = 1 ]; then
+      printf '{"groups":[{"displayName":"Gemini Models","buckets":[
+        {"bucketId":"gemini-monthly","window":"monthly","remainingFraction":0.5,"resetTime":"%s"}]}]}' "$AGY_WK_RESET"
       exit 0
     fi
     # The real body's shape (2026-09-27), values made up: Gemini's weekly is
@@ -84,6 +97,7 @@ agy_refresher() {
   AGY_NEW_EXPIRY="$(_iso 3600)"
   cat > "$TEST_HOME/.testbin/agy" <<'STUB'
 #!/usr/bin/env bash
+[ "$1" != --version ] || { echo 1.4.12; exit 0; }
 printf '%s|%s\n' "$HOME" "$*" >> "$AGY_RUNS"
 readlink "$HOME/.gemini" >> "$AGY_RUNS"
 [ "$AGY_REFRESH_RC" = 0 ] || exit "$AGY_REFRESH_RC"
@@ -132,17 +146,41 @@ STUB
   [[ "$stderr" == *'gemini 0/99% · claude -/0%'* ]] || false
 }
 
-@test "agy usage: a summary without the Gemini group gets one from the per-model list" {
+@test "agy usage: without the installed version there is no Gemini reading, and none is built" {
   agy_fixture
-  export AGY_NO_GEMINI_GROUP=1
+  export AGY_VERSION=""
   run clikae usage agy pike --json
   [ "$status" -eq 0 ]
-  echo "$output" | jq -e '
-    .source == "quota-api" and .headline_group == "gemini"
-    and .weekly_pct == 25 and .window_pct == null
-    and ([.groups[] | {name, weekly_pct}] ==
-         [{name:"claude",weekly_pct:50},{name:"gemini",weekly_pct:25}])'
-  [ "$(tr '\n' ' ' < "$AGY_CALLS")" = "loadCodeAssist retrieveUserQuotaSummary retrieveUserQuota " ] || false
+  echo "$output" | jq -e '.source == "quota-api" and .headline_group == "claude"
+    and ([.groups[].name] == ["claude"])'
+  [ "$(tr '\n' ' ' < "$AGY_CALLS")" = "loadCodeAssist retrieveUserQuotaSummary " ] || false
+}
+
+@test "agy usage: Argon is its own quota, and spending it leaves Gemini untouched" {
+  agy_fixture
+  export AGY_ARGON=1
+  run clikae usage agy pike --json
+  [ "$status" -eq 0 ]
+  echo "$output" | jq -e '.headline_group == "gemini" and .weekly_pct == 0 and .window_pct == 0
+    and (.groups | map(select(.name == "argon")) | .[0].weekly_pct == 99)
+    and (.models | map(select(.name == "argon weekly")) | .[0].pct == 99)'
+  # A burn that asks for Argon reads Argon.
+  run _agy_hint_for gemini-4-argon-medium
+  [ "$output" = argon ]
+  run clikae tanks --available agy
+  [[ "$output" == *"gemini  pike"* ]] || { echo "$output"; false; }
+  [[ "$output" == *"argon  -"* ]] || { echo "$output"; false; }
+  run clikae tanks --available agy --group argon
+  [ -z "$output" ] || { echo "$output"; false; }
+}
+
+@test "agy usage: a window it does not know is shown, not filed as 5h or 7d" {
+  agy_fixture
+  export AGY_ODD_WINDOW=1
+  run clikae usage agy pike --json
+  [ "$status" -eq 0 ]
+  echo "$output" | jq -e '.window_pct == null and .weekly_pct == null
+    and (.models | map(.name) == ["gemini other"])'
 }
 
 @test "agy usage: a lapsed token is renewed through agy models, on the tank, with no prompt" {

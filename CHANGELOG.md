@@ -9,6 +9,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **agy shows every quota window its plan has.** clikae now asks as the installed agy version,
+  which is what makes the server answer with Gemini's 5h and weekly windows and Argon's weekly.
+  Argon is its own group, so `tanks --available agy --group argon` can tell a tank with Argon left
+  from one without. A window clikae does not recognize is listed but never counted as 5h or 7d, and
+  no window is inferred from its reset time any more.
 - **`clikae resume` and the board work on Ubuntu 26.04.** Its `stat` comes from uutils and does not
   call itself GNU, so clikae read files with the BSD flags and took file system details for session
   data. clikae now goes by whether `stat --version` answers at all.
