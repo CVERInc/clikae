@@ -884,7 +884,7 @@ _seed_archive_candidate() {
 @test "_clean_row_fit: a long localized label is NEVER truncated — it wraps to its own line" {
   _source_clean
   local long="Refactor the payment reconciliation pipeline for retried webhooks"
-  local fr=" · copie obsolète (celle de work est gardée)"   # the fr-FR stale-copy label
+  local fr=" · copie obsolète (celle de work est gardée)"   # a long stale-copy label
   _clean_row_fit 70 16 "$long" "il y a 0j" 21504 "$fr"
   [ "$_CR_WRAP" -eq 1 ]                              # label pushed to line 2
   [ "$(_dwidth "$_CR_TITLE")" -ge "$_CR_TITLE_MIN" ] # title still readable
@@ -920,7 +920,7 @@ _seed_archive_candidate() {
       > "$CLIKAE_HOME/profiles/claude/b/projects/-w/$sid.jsonl"
   done
   local loc
-  for loc in en-US ja-JP zh-TW zh-Hans ko-KR es-ES de-DE fr-FR pt-BR; do
+  for loc in en-US ja-JP zh-TW ko-KR es-ES; do
     # Not a tty here, so the render takes its documented 80-col fallback — the
     # floor these tests are specified against. (The 60-col + live-tty behaviour
     # is covered by the PTY audit, which drives a real pty at both widths.)
@@ -950,12 +950,12 @@ sys.exit(1 if bad else 0)
   mkdir -p "$CLIKAE_HOME/profiles/claude/b/projects/-w"
   head -n 100 "$CLIKAE_HOME/profiles/claude/a/projects/-w/$sid.jsonl" \
     > "$CLIKAE_HOME/profiles/claude/b/projects/-w/$sid.jsonl"
-  # fr-FR's label is the longest of the nine — it must appear IN FULL (it carries
+  # es-ES's label is the longest — it must appear IN FULL (it carries
   # the safety semantics: which copy is being kept). The title is what yields.
-  CLIKAE_LANG=fr-FR run clikae clean --dry-run --no-archive-check
+  CLIKAE_LANG=es-ES run clikae clean --dry-run --no-archive-check
   [ "$status" -eq 0 ]
-  [[ "$output" == *"copie obsolète (celle de a est gardée)"* ]] || false
-  [[ "$output" != *"copie obsolète (celle de a est gard…"* ]] || false   # not cut
+  [[ "$output" == *"copia obsoleta (se conserva la de a)"* ]] || false
+  [[ "$output" != *"copia obsoleta (se conserva la de…"* ]] || false   # not cut
 }
 
 @test "trash_usable says no when ~/.Trash isn't a usable directory" {

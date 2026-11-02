@@ -9,6 +9,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Removed
 
+- **Simplified Chinese, German, French, and Brazilian Portuguese.** The interface now ships in
+  English, Traditional Chinese, Japanese, Korean, and Spanish. A saved or detected setting for
+  any other language falls back to English.
 - **`clikae conduct`, `demo`, `info`, and `migrate`.** Usage records on the maintainer's
   machines showed no use of the first three and almost none of `migrate`. For one prompt on
   several tanks, run one `burn` per tank. For a health check, use `clikae doctor`.

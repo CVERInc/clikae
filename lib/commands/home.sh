@@ -2702,7 +2702,7 @@ $items
 EOF
   # Wordmark and summary share a line only when both fit. The joined form is
   # `clikae  ·  N tanks across M engines` — 34 columns in en-US with two tanks,
-  # and wider in de-DE/pt-BR — printed with no budget at all until 2026-08-16,
+  # and wider in other locales — printed with no budget at all until 2026-08-16,
   # so it was the first thing to run off a narrow terminal.
   local _sum _hw _w1 _w2
   _sum="$(i18n_summary "$n_tanks" "$n_clis")"
@@ -2867,7 +2867,7 @@ EOF
   fi
   # An expired sign-in's remedy, one line per tank, here instead of on the
   # row (there is no cursor on this board to hide it behind). Same shape as
-  # the over-quota line above; always wrapped — fr-FR is 61 columns before
+  # the over-quota line above; always wrapped — a long locale is 61 columns before
   # the tank name, so a 70-column terminal would cut it otherwise.
   if [ -n "$any_expired" ]; then
     local _rem _hint
@@ -3883,7 +3883,7 @@ _home_pick_draw_body() {
   else
     _home_wrap_prefixed "$_keybar" "$_kbpfx" "$_kbind" "$__C_DIM" "$__C_RESET" 2
   fi
-  # Wrapped, not printf'd raw: 38 columns in en-US and wider in de-DE/pt-BR, and
+  # Wrapped, not printf'd raw: 38 columns in en-US and wider in other locales, and
   # it was the one row of the INTERACTIVE frame that still ran off a narrow
   # terminal after the 2026-08-16 sweep.
   # Only when it is NOT the default. `ask` is the safe, expected state and saying
