@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.45.1] — 2026-11-03
+
 ### Fixed
 
 - **agy is judged on the model it will really run.** With no `--model`, the headline quota was always
