@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **A session that ends at once no longer warns about touch-scroll.** The server could go between
+  the check and the binding, which printed a false warning and could fail a `burn` test at random.
+
 ## [0.45.0] — 2026-11-03
 
 ### Removed
