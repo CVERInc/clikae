@@ -184,3 +184,18 @@ STUB
     [ "$hl" = "50000" ] || { echo "history-limit=$hl, want 50000"; false; }
   fi
 }
+
+@test "touch-scroll: a failed bind warns only while the server is still there" {
+  # shellcheck source=../../lib/core/log.sh
+  source "$CLIKAE_TEST_ROOT/lib/core/log.sh"
+  # shellcheck source=../../lib/core/tmux.sh
+  source "$CLIKAE_TEST_ROOT/lib/core/tmux.sh"
+  local bin="$BATS_TEST_TMPDIR/bin"; mkdir -p "$bin"
+  printf '#!/bin/sh\nexit "$STUB_RC"\n' > "$bin/tmux"; chmod +x "$bin/tmux"
+  PATH="$bin:$PATH"
+  STUB_RC=1 run _tmux_touch_bind_failed "no server running"
+  [ "$status" -eq 0 ]
+  [ -z "$output" ] || { echo "$output"; false; }
+  STUB_RC=0 run _tmux_touch_bind_failed "boom"
+  [[ "$output" == *"touch-scroll bindings not installed: boom"* ]] || { echo "$output"; false; }
+}
