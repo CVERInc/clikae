@@ -121,7 +121,9 @@ is the window or the weekly one by its own `window` name (`5h` / `weekly`; an
 `<N>h` of 24 or more is weekly). agy's two model groups, Gemini and Claude/GPT,
 are separate quotas, so each gets its own numbers under `groups`, and the
 top-level window/weekly are one group's, named by `headline_group`: the group
-the work will spend (a burn's `--model`), Gemini when nothing says otherwise.
+the work will spend. That is a burn's `--model`, else the model the tank's last
+session selected, read from its log, else Gemini. `headline_from` says which:
+`burn`, `last-session`, or `assumed`.
 The text form prints every group, e.g. `gemini 0/99% · claude -/0%`. Otherwise it
 reads `no-signal · last used 2h ago`, the one real trace being when that tank
 last wrote its own log (`<tank>/antigravity-cli/log/`). A 429's "Resets in"

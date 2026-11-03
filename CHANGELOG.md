@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **agy is judged on the model it will really run.** With no `--model`, the headline quota was always
+  Gemini, even on a tank that runs Argon. It now follows the model the tank's last session selected,
+  read from agy's log, and `headline_from` says where the choice came from.
+- **`tanks --available` no longer offers an agy tank stuck at its first-run screen.** It is listed
+  with reason `setup` until the terms are accepted.
+
 ## [0.45.0] — 2026-11-03
 
 ### Removed

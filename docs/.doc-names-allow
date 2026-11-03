@@ -73,6 +73,7 @@ window_reset_passed a JSON field name in `clikae usage --json` (#174/#179): that
 weekly_reset_passed ditto
 dry_marked_at      a JSON field name in `clikae usage --json` (#149)
 last_used_at       a JSON field name in `clikae usage --json` (#149)
+headline_from      a JSON field name in `clikae usage --json`: where headline_group came from (burn, last-session, assumed)
 headline_group     a JSON field name in `clikae usage --json` (#151): which agy quota group the top-level numbers are
 build_preview      an MCP build tool named in the agy harness classification table (#152) as neither observing nor mutating, not ours
 build_status       ditto

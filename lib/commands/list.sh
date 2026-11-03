@@ -62,12 +62,13 @@ a model's own weekly share counts when it is the higher one.
 Skips unreadable usage, a reading over 6h old, usage >=90% (>=98% with <24h until
 reset), a separate 5h window >=95%, and the cockpit unless --include-cockpit is
 given. JSON includes all tanks in scope: {engine, tank, available, score, reason}.
-Reasons are unreadable / stale / quota / window / cockpit, or null when eligible.
+Reasons are setup / unreadable / stale / quota / window / cockpit, or null when
+eligible. setup is an agy tank whose first-run screen is unfinished.
 
 agy's quota groups are separate (Gemini, Claude/GPT, and Argon on plans that have
 it), so `--available agy` prints one line per group, and JSON adds `groups` with each group's own verdict. --group
 prints names for that group alone; without it, a mixed list judges agy on the
-quota its work spends by default.
+quota its work spends by default: the model its last session selected.
 
 List all tanks across all engines. The ACCOUNT column shows which account each
 tank is logged in to (when the adapter can tell — e.g. the email for claude),
@@ -146,11 +147,17 @@ EOF
   fi
 }
 
+# _list_agy_setup_unfinished <tank_dir> -> 0 when agy itself says its first-run screen
+# (the terms) is not done. No file says nothing either way, so it does not count.
+_list_agy_setup_unfinished() {
+  jq -e '.onboardingComplete == false' "$1/antigravity-cli/cache/onboarding.json" >/dev/null 2>&1
+}
+
 # Compose the same inventory and readings as tanks/usage, without launching
 # another clikae process or waking an engine. Readers own freshness (#179).
 _list_available() {
   local engine="$1" include_cockpit="$2" as_json="$3" group="${4:-}"
-  local e t path reading row rows="" cockpit now result
+  local e t path reading row rows="" cockpit setup now result
   command -v jq >/dev/null 2>&1 || { log_err "--available requires jq"; return 1; }
   # shellcheck source=cockpit.sh
   source "$CLIKAE_LIB/commands/cockpit.sh"
@@ -164,8 +171,10 @@ _list_available() {
     cockpit=0
     if [ "$include_cockpit" = 0 ] && _cockpit_is_recorded "$e" "$t"; then cockpit=1; fi
     reading="$(usage_read "$e" "$t")" || reading='{}'
+    setup=0
+    [ "$e" != antigravity ] || ! _list_agy_setup_unfinished "$path" || setup=1
     row="$(jq -cn --arg reading "$reading" --arg engine "$(engine_label "$e")" \
-      --arg tank "$t" --arg group "$group" --argjson cockpit "$cockpit" --argjson now "$now" \
+      --arg tank "$t" --arg group "$group" --argjson cockpit "$cockpit" --argjson setup "$setup" --argjson now "$now" \
       "$_USAGE_NORM_STAMP_JQ"'
       def pct: type == "number" and . >= 0 and . <= 100;
       ($reading | try fromjson catch {}) as $r |
@@ -180,6 +189,7 @@ _list_available() {
          ($q.window_pct == null or ($q.window_pct|pct))) as $readable |
         (if $readable then ([($reset-$now)/3600, 0.5]|max) else null end) as $hours |
         (if $cockpit == 1 then "cockpit"
+         elif $setup == 1 then "setup"
          elif ($readable|not) then "unreadable"
          elif (($r.age_sec // 0) > 21600) then "stale"
          elif $used >= (if $hours < 24 then 98 else 90 end) then "quota"
