@@ -115,6 +115,22 @@ agy_reading() {
     > "$CLIKAE_HOME/state/usage/antigravity/$t.json"
 }
 
+@test "available agy: a tank whose first-run screen is unfinished is not available, in any group" {
+  agy_reading unset 10 10
+  agy_reading finished 10 10
+  agy_reading nofile 10 10
+  mkdir -p "$CLIKAE_HOME/profiles/antigravity/unset/antigravity-cli/cache" \
+    "$CLIKAE_HOME/profiles/antigravity/finished/antigravity-cli/cache"
+  printf '{"onboardingComplete":false}\n' > "$CLIKAE_HOME/profiles/antigravity/unset/antigravity-cli/cache/onboarding.json"
+  printf '{"onboardingComplete":true}\n' > "$CLIKAE_HOME/profiles/antigravity/finished/antigravity-cli/cache/onboarding.json"
+  run clikae tanks --available agy --group gemini
+  [ "$status" -eq 0 ]
+  [ "$output" = $'finished\nnofile' ] || { echo "$output"; false; }
+  run clikae tanks --available agy --json
+  echo "$output" | jq -e 'map(select(.tank == "unset")) | .[0] |
+    .available == false and .reason == "setup" and (.groups | all(.reason == "setup"))'
+}
+
 @test "available agy: each group has its own verdict and order, and one group never gates the other" {
   agy_reading gemfull 95 10
   agy_reading clafull 10 95

@@ -138,6 +138,41 @@ STUB
   echo "$output" | jq -e '.headline_group == "claude" and .weekly_pct == 0 and .window_pct == null'
 }
 
+# agy_session_log <label>: the line agy writes when a session starts on a model.
+agy_session_log() {
+  local d="$CLIKAE_HOME/profiles/antigravity/pike/antigravity-cli/log"
+  mkdir -p "$d"
+  printf 'I1102 01:35:47.287839 665 model_config_manager.go:363] Propagating selected model override to backend: label="%s"\n' \
+    "$1" > "$d/cli-20261102_013544.log"
+}
+
+@test "agy usage: with no --model, the headline is the group the tank's last session selected" {
+  agy_fixture
+  export AGY_ARGON=1
+  agy_session_log "Gemini 4 Argon (Medium)"
+  run clikae usage agy pike --json
+  [ "$status" -eq 0 ]
+  echo "$output" | jq -e '.headline_group == "argon" and .headline_from == "last-session" and .weekly_pct == 99'
+}
+
+@test "agy usage: a burn's --model outranks the last session" {
+  agy_fixture
+  agy_session_log "Gemini 3.8 Flash (High)"
+  CLIKAE_AGY_USAGE_MODEL=claude-sonnet-4-6 run clikae usage agy pike --json
+  [ "$status" -eq 0 ]
+  echo "$output" | jq -e '.headline_group == "claude" and .headline_from == "burn"'
+}
+
+@test "agy usage: a last session on a group this plan lacks, or no log, is called assumed" {
+  agy_fixture
+  run clikae usage agy pike --json
+  echo "$output" | jq -e '.headline_group == "gemini" and .headline_from == "assumed"'
+  agy_session_log "Gemini 4 Argon (Medium)"
+  run clikae usage agy pike --json --fresh
+  [ "$status" -eq 0 ]
+  echo "$output" | jq -e '.headline_group == "gemini" and .headline_from == "assumed"'
+}
+
 @test "agy usage: the text form names both groups, headline first" {
   agy_fixture
   run --separate-stderr clikae usage agy pike

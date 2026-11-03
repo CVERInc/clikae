@@ -619,8 +619,9 @@ adapter_recent_sids() {
 # The groups are SEPARATE quotas: Claude spent to 100% while Gemini has
 # room is a usable tank for Gemini work, and the reverse. So each group gets its
 # own numbers under `groups`, and the top-level window/weekly are ONE group's:
-# `headline_group`, the one the work will spend (CLIKAE_AGY_USAGE_MODEL, set by
-# burn from the model it passes agy; Gemini, agy's default, when there is none).
+# `headline_group`, the one the work will spend: the model burn passes agy
+# (CLIKAE_AGY_USAGE_MODEL), else the model this tank's last session selected, else
+# Gemini. `headline_from` says which: burn, last-session, or assumed.
 #
 # MEASURED 2026-11-02, agy 1.4.12, one Pro tank and one workspace tank, one change per
 # request: the server decides what to show from the version in the User-Agent.
@@ -723,9 +724,13 @@ adapter_usage() (
     "$(jq -cn --arg p "$project" 'if $p == "" then {} else {project:$p} end')")" ||
     { token=""; exit 1; }
   token=""
-  local hint=""
+  local hint="" hint_from=burn
   hint="$(_agy_usage_group_hint "${CLIKAE_AGY_USAGE_MODEL:-}")"
-  printf '%s' "$body" | jq -ce -s --arg hint "$hint" '
+  if [ -z "$hint" ]; then
+    hint="$(_agy_usage_group_hint "$(_agy_last_model_label "$dir")")"
+    hint_from=last-session
+  fi
+  printf '%s' "$body" | jq -ce -s --arg hint "$hint" --arg hint_from "$hint_from" '
     def secs: if type == "string" then (sub("\\.[0-9]+"; "") | try fromdateiso8601 catch null) else null end;
     # A bucket names its own window. "<N>h" is hours: 5h is the window, 168h/120h
     # (anything of 24 h or more) is weekly. Anything else has no class.
@@ -763,8 +768,8 @@ adapter_usage() (
       {name: $bs[0].key, window_pct: $w.pct, weekly_pct: $k.pct,
        window_resets_at: $w.resets_at, weekly_resets_at: $k.resets_at,
        disabled: all($bs[]; .disabled)} ] | .[0:8] as $groups |
-    # The headline is the group the work will actually spend: the hint (from
-    # the model a burn asked for), else gemini (agy default), else the first.
+    # The headline is the group the work will actually spend: the hint, else
+    # gemini, else the first.
     ([$groups[] | select(.disabled | not) | .name]) as $live |
     (if ($hint != "" and ($live | index($hint)) != null) then $hint
      elif ($live | index("gemini")) != null then "gemini"
@@ -772,11 +777,26 @@ adapter_usage() (
     ($groups | map(select(.name == $head)) | .[0]) as $h |
     {window_pct: $h.window_pct, weekly_pct: $h.weekly_pct,
      window_resets_at: $h.window_resets_at, weekly_resets_at: $h.weekly_resets_at,
-     source: "quota-api", headline_group: $head, groups: $groups,
+     source: "quota-api", headline_group: $head,
+     headline_from: (if $hint != "" and $head == $hint then $hint_from else "assumed" end),
+     groups: $groups,
      # One row per enabled BUCKET (not per group): the board reads these to
      # name a bucket more spent than the headline, e.g. "claude weekly".
      models: [ $buckets[] | select(.disabled | not) | {name: "\(.key) \(.class)", pct, resets_at} ] | .[0:8]}' 2>/dev/null
 )
+
+# _agy_last_model_label <tank_dir> -> the model label this tank's newest session log
+# selected ("Gemini 4 Argon (Medium)"), or nothing. agy keeps this choice nowhere a
+# settings file shows it; the log line is the one place it is written down.
+_agy_last_model_label() {
+  local log label
+  # shellcheck disable=SC2012  # names are agy's own cli-<stamp>.log.
+  ls -t "$1/antigravity-cli/log"/cli-*.log 2>/dev/null | sed -n 1,3p | while IFS= read -r log; do
+    label="$(LC_ALL=C sed -n 's/.*selected model override to backend: label="\([^"]*\)".*/\1/p' "$log" | tail -n 1)"
+    [ -z "$label" ] || { printf '%s' "$label"; break; }
+  done
+  return 0
+}
 
 # _agy_usage_group_hint <model> -> the quota group that model spends:
 # "argon", "gemini", "claude" (agy's Claude and GPT group), or nothing (no hint).

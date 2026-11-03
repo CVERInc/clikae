@@ -334,6 +334,7 @@ _usage_read_finish() {
           disabled: (.disabled == true)} | select(.name != null) ] | .[0:8]
      else [] end) as $groups |
     (.headline_group | gname) as $head |
+    (.headline_from | if . == "burn" or . == "last-session" or . == "assumed" then . else null end) as $head_from |
     # A window this plan does not have, as opposed to one that could not be read.
     (.window_absent == true) as $window_absent |
     (.weekly_absent == true) as $weekly_absent |
@@ -353,7 +354,8 @@ _usage_read_finish() {
     then . + {retry_after:$retry} else . end |
     if (.source == "vendor" or .source == "quota-api") and ($models|length) > 0 then . + {models:$models} else . end |
     if .source == "quota-api" and ($groups|length) > 0 then
-      . + {groups:$groups} + (if $head != null then {headline_group:$head} else {} end)
+      . + {groups:$groups} + (if $head != null then {headline_group:$head} else {} end) +
+      (if $head_from != null then {headline_from:$head_from} else {} end)
     else . end
     end')" || { reading="$(usage_unknown)"; event_epoch=""; }
   # #149: a reading with no numbers never overwrites the last one that had
