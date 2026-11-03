@@ -587,6 +587,14 @@ tmux_server_running() {
   tmux list-sessions >/dev/null 2>&1
 }
 
+# _tmux_touch_bind_failed <tmux error> -> warn, unless the server has gone since the
+# check before binding. A session that ends at once takes the server with it, and
+# there is then nothing left to bind.
+_tmux_touch_bind_failed() {
+  tmux_server_running || return 0
+  log_warn "touch-scroll bindings not installed: ${1:-unknown error}"
+}
+
 # _tmux_already_has <show-flags> <option> <needle> -> 0 when the option already
 # contains the needle.
 #
@@ -1188,7 +1196,7 @@ tmux_spawn_session() {
       \;       \; bind-key -T copy-mode MouseDragEnd1Pane "$bind_end_copy" \
       \;       \; bind-key -T copy-mode-vi MouseDrag1Pane "$bind_drag_copy" \
       \;       \; bind-key -T copy-mode-vi MouseDragEnd1Pane "$bind_end_copy" 2>&1 >/dev/null)"; then
-      log_warn "touch-scroll bindings not installed: ${_bind_err:-unknown error}"
+      _tmux_touch_bind_failed "$_bind_err"
     fi
   fi
   tmux set-option -s set-clipboard on 2>/dev/null || true

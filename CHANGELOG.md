@@ -14,6 +14,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   read from agy's log, and `headline_from` says where the choice came from.
 - **`tanks --available` no longer offers an agy tank stuck at its first-run screen.** It is listed
   with reason `setup` until the terms are accepted.
+- **A session that ends at once no longer warns about touch-scroll.** The server could go between
+  the check and the binding, which printed a false warning and could fail a `burn` test at random.
 
 ## [0.45.0] — 2026-11-03
 
