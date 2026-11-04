@@ -107,6 +107,14 @@ STUB
   chmod +x "$TEST_HOME/.testbin/agy"
 }
 
+# _path_without <cmd>: drop every PATH directory holding <cmd>, for a test about
+# a machine without it (this one may really have it installed).
+_path_without() {
+  local d out="" IFS=:
+  for d in $PATH; do [ -x "$d/$1" ] || out="${out:+$out:}$d"; done
+  PATH="$out"
+}
+
 @test "agy usage: each quota group keeps its own numbers; the headline is Gemini by default" {
   agy_fixture
   run clikae usage agy pike --json
@@ -243,6 +251,26 @@ agy_session_log() {
   echo "$output" | jq -e '.source == "unknown" and .reason == "needs-refresh" and .window_pct == null'
   [ -s "$AGY_RUNS" ] || false
   [ ! -e "$AGY_CALLS" ] || false
+}
+
+@test "agy usage: no agy on PATH says so, instead of only reading needs-refresh" {
+  agy_fixture "$(_iso -60)"
+  rm "$TEST_HOME/.testbin/agy"
+  _path_without agy
+  ! command -v agy >/dev/null || { echo "agy is still on PATH: $PATH"; false; }
+  run --separate-stderr clikae usage antigravity pike --json
+  [ "$status" -eq 0 ] || { echo "stderr: $stderr"; false; }
+  echo "$output" | jq -e '.source == "unknown" and .reason == "needs-refresh"' || { echo "got: $output"; false; }
+  [[ "$stderr" == *"pike"*"not on this PATH"* ]] || { echo "stderr: $stderr"; false; }
+}
+
+@test "agy usage: a refresh that ran and failed does not blame PATH" {
+  agy_fixture "$(_iso -60)"
+  agy_refresher 1
+  run --separate-stderr clikae usage agy pike --json
+  [ "$status" -eq 0 ]
+  [ -s "$AGY_RUNS" ] || false
+  [[ "$stderr" != *"not on this PATH"* ]] || { echo "stderr: $stderr"; false; }
 }
 
 @test "agy usage: a reader that may not refresh leaves the lapsed token alone" {

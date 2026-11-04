@@ -202,8 +202,15 @@ usage_read() (
       # (`--wake`), because this command can succeed without renewing anything.
       if [ "$adapter_reason" = needs-refresh ] && [ "$can_wake" = 1 ] &&
          declare -F adapter_usage_refresh >/dev/null; then
-        adapter_usage_refresh "$(profile_dir "$engine" "$tank")" || true
+        local refresh_rc=0
+        adapter_usage_refresh "$(profile_dir "$engine" "$tank")" || refresh_rc=$?
         _usage_adapter_call "$engine" "$tank"
+        # 127: the refresh never ran, because this PATH has no such command (cron,
+        # a non-login ssh). The word stays needs-refresh, but its remedy would
+        # send a person after a token when the PATH is what is wrong.
+        if [ "$refresh_rc" = 127 ] && [ "$adapter_reason" = needs-refresh ]; then
+          log_warn "$engine/$tank: could not refresh the lapsed token: the $engine CLI is not on this PATH. Use a login shell, or add it to PATH."
+        fi
       elif [ "$adapter_reason" = needs-refresh ] && [ "${_CLIKAE_USAGE_AFTER_WAKE:-0}" = 1 ]; then
         # `clikae usage --wake` re-reading after ITS burn completed: the
         # engine ran and the vendor still refuses — this is the failed case.

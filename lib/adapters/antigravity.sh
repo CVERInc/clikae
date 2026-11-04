@@ -684,7 +684,7 @@ _agy_usage_ua() {
 adapter_usage_refresh() {
   local dir="$1" h rc=0
   [ -f "$dir/antigravity-cli/antigravity-oauth-token" ] || return 1
-  command -v agy >/dev/null 2>&1 || return 1
+  command -v agy >/dev/null 2>&1 || return 127
   h="$(mktemp -d "${TMPDIR:-/tmp}/clikae-agy.XXXXXX" 2>/dev/null)" || return 1
   ln -s "$dir" "$h/.gemini" || { rm -rf "$h"; return 1; }
   HOME="$h" _bounded_run 30 agy --log-file "$h/agy.log" models >/dev/null 2>&1 </dev/null || rc=$?

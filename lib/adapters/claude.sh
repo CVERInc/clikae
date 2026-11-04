@@ -1120,7 +1120,7 @@ adapter_migrate_credentials() {
 # its business. Only the next measurement decides whether it worked.
 adapter_usage_refresh() {
   local dir="$1"
-  command -v claude >/dev/null 2>&1 || return 1
+  command -v claude >/dev/null 2>&1 || return 127
   CLAUDE_CONFIG_DIR="$dir" _bounded_run 30 claude auth status --json >/dev/null 2>&1 </dev/null
 }
 
