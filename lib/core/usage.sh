@@ -209,7 +209,7 @@ usage_read() (
         # a non-login ssh). The word stays needs-refresh, but its remedy would
         # send a person after a token when the PATH is what is wrong.
         if [ "$refresh_rc" = 127 ] && [ "$adapter_reason" = needs-refresh ]; then
-          log_warn "$engine/$tank: could not refresh the lapsed token: the $engine CLI is not on this PATH. Use a login shell, or add it to PATH."
+          log_warn "$engine/$tank: could not refresh the lapsed token: the $(adapter_meta_cli_binary) CLI is not on this PATH. Use a login shell, or add it to PATH."
         fi
       elif [ "$adapter_reason" = needs-refresh ] && [ "${_CLIKAE_USAGE_AFTER_WAKE:-0}" = 1 ]; then
         # `clikae usage --wake` re-reading after ITS burn completed: the
