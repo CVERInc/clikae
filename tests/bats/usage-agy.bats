@@ -261,7 +261,7 @@ agy_session_log() {
   run --separate-stderr clikae usage antigravity pike --json
   [ "$status" -eq 0 ] || { echo "stderr: $stderr"; false; }
   echo "$output" | jq -e '.source == "unknown" and .reason == "needs-refresh"' || { echo "got: $output"; false; }
-  [[ "$stderr" == *"pike"*"not on this PATH"* ]] || { echo "stderr: $stderr"; false; }
+  [[ "$stderr" == *"pike"*"the agy CLI is not on this PATH"* ]] || { echo "stderr: $stderr"; false; }
 }
 
 @test "agy usage: a refresh that ran and failed does not blame PATH" {

@@ -1984,7 +1984,7 @@ _usage179_reset_stamp() {
   run --separate-stderr clikae usage claude work --json
   [ "$status" -eq 0 ] || { echo "stderr: $stderr"; false; }
   echo "$output" | jq -e '.source == "unknown" and .reason == "needs-refresh"' || { echo "got: $output"; false; }
-  [[ "$stderr" == *"work"*"not on this PATH"* ]] || { echo "stderr: $stderr"; false; }
+  [[ "$stderr" == *"work"*"the claude CLI is not on this PATH"* ]] || { echo "stderr: $stderr"; false; }
 }
 
 @test "#177: with the refresh off (CLIKAE_USAGE_AUTO_WAKE=0), a lapsed token reads needs-refresh and keeps the last numbers with their age" {
