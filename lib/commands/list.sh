@@ -78,7 +78,7 @@ Options:
   -p, --paths   Also show the tank directory path.
   --json        Emit a JSON array instead of a table — one object per tank
                 {cli, profile, account, path} (account is null when unknown).
-                For the menu-bar GUI and scripts; --paths is implied (path is
+                For scripts; --paths is implied (path is
                 always included).
 EOF
         return 0

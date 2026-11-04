@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **A missing engine CLI no longer looks like a lapsed token.** Where the engine isn't on PATH (cron, a
+  non-login ssh), the refresh before a usage reading could not run, and every tank read `needs-refresh`
+  with nothing to say why. `clikae usage` and `tanks --available` now warn on stderr that the CLI is not on
+  this PATH. The reason and the JSON are unchanged.
+
+### Changed
+
+- Help text and docs no longer mention a GUI. There isn't one.
+
 ## [0.45.1] — 2026-11-03
 
 ### Fixed

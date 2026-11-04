@@ -4779,7 +4779,7 @@ ORDER (not grouped by engine; engine shown as an inline tag) — arrange it with
 can open without a tank (codex, agy).
 
 Interface language follows `clikae lang` (bare `clikae lang` lists the
-choices); the `l` key opens a language picker. When output isn't a terminal (a pipe, a script, the GUI), it
+choices); the `l` key opens a language picker. When output isn't a terminal (a pipe, a script), it
 prints the same board as plain text. With no tanks yet it welcomes you and
 points at the first step.
 

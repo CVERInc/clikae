@@ -161,6 +161,8 @@ A reading with no numbers may carry one more field, "reason" — present only
 when it is actually known, never on a vendor/transcript reading:
   needs-refresh   the token lapsed, the login is fine, and the refresh did not
                   renew it or was turned off. A session or --wake clears it.
+                  If the engine's CLI is not on PATH the refresh cannot run, and
+                  a warning on stderr says so.
                   Cached for at most 60s.
   relogin-required --wake ran a prompt and the vendor still refused the token:
                   `clikae <engine> <tank>`, then /login. Cached 60s.

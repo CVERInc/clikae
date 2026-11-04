@@ -635,6 +635,6 @@ same hover-detail shape a Live or Resume row uses for its age. Every detail
 line on the wide interactive board (tank, Live, Resume) now starts at the name
 column instead of two columns right of it: the detail belongs to the name, and
 the old offset read as a column of its own. The static board keeps its account
-column: it has no cursor to put the detail behind, and a pipe or the GUI reads
+column: it has no cursor to put the detail behind, and a pipe reads
 it as a table.
 

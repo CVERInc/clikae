@@ -8,7 +8,7 @@
 #
 # Two renderers off ONE canonical row:
 #   human table (default) — aligned columns for the terminal
-#   --json                — machine-readable, for the menu-bar GUI / scripts
+#   --json                — machine-readable, for scripts
 # The row producer emits tab-separated fields and never formats for a human, so
 # the two renderers can't drift.
 
@@ -171,7 +171,7 @@ Options:
           {cli, state, profile, account, envVar, envValue, fuelNote}, where state is one of
           active | default | external | flag | global | noadapter (profile/account/
           envValue are null when not applicable). "global" is agy's machine-wide
-          ~/.gemini symlink (envValue = its target). For the menu-bar GUI and scripts.
+          ~/.gemini symlink (envValue = its target). For scripts.
 
 Examples:
   clikae status

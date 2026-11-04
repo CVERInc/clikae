@@ -1970,6 +1970,23 @@ _usage179_reset_stamp() {
   [[ "$stderr" != *"token expired"* ]] || { echo "old hint: $stderr"; false; }
 }
 
+@test "a lapsed token with no claude on PATH warns about PATH and stays needs-refresh" {
+  usage_fixture
+  _usage107_creds rt-stub-value "$(( ($(date +%s) - 3600) * 1000 ))"
+  printf '#!/usr/bin/env bash\ncat >/dev/null\nprintf 401 >&2; exit 22\n' > "$TEST_HOME/.testbin/curl"
+  chmod +x "$TEST_HOME/.testbin/curl"
+  rm -f "$TEST_HOME/.testbin/claude"
+  local d out="" IFS=:
+  for d in $PATH; do [ -x "$d/claude" ] || out="${out:+$out:}$d"; done
+  unset IFS
+  PATH="$out"
+  ! command -v claude >/dev/null || { echo "claude is still on PATH: $PATH"; false; }
+  run --separate-stderr clikae usage claude work --json
+  [ "$status" -eq 0 ] || { echo "stderr: $stderr"; false; }
+  echo "$output" | jq -e '.source == "unknown" and .reason == "needs-refresh"' || { echo "got: $output"; false; }
+  [[ "$stderr" == *"work"*"not on this PATH"* ]] || { echo "stderr: $stderr"; false; }
+}
+
 @test "#177: with the refresh off (CLIKAE_USAGE_AUTO_WAKE=0), a lapsed token reads needs-refresh and keeps the last numbers with their age" {
   usage_fixture
   # A good reading first, then it ages 5h.
