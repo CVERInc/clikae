@@ -101,7 +101,7 @@ canonical: "https://clikae.cver.net/fleet-cost-doctrine"
 
 - `/usage` 的 `Prompt cache (main)`：命中率、miss 次數、最近一次 miss 的原因。
 - 狀態列 `current_usage.cache_read_input_tokens` vs `cache_creation_input_tokens`：write 連續偏高＝前綴在變。
-- 每週重跑 [`tools/tank-cost.py`](https://github.com/CVERInc/clikae/blob/517e749f39d1eeed05bc3d771b65c298823c6a4d/scripts/tank-cost.py)、[`tools/tank-agents.py`](https://github.com/CVERInc/clikae/blob/517e749f39d1eeed05bc3d771b65c298823c6a4d/scripts/tank-agents.py)（讀 `~/.clikae/profiles/claude/*/projects/**/*.jsonl`），看三個數：快取讀取佔比、subagent 中位步數、座艙自己幹活的呼叫數。目標：subagent 中位數從 96 往 40 走。
+- 每週重跑 [`tools/tank-cost.py`](https://github.com/CVERInc/clikae/blob/6ba83f9510fbaa925410597684bf07831238a12c/scripts/tank-cost.py)、[`tools/tank-agents.py`](https://github.com/CVERInc/clikae/blob/6ba83f9510fbaa925410597684bf07831238a12c/scripts/tank-agents.py)（讀 `~/.clikae/profiles/claude/*/projects/**/*.jsonl`），看三個數：快取讀取佔比、subagent 中位步數、座艙自己幹活的呼叫數。目標：subagent 中位數從 96 往 40 走。
 
 ## 未驗證
 

@@ -138,7 +138,7 @@ one line per drifted tank. Requires <code>jq</code>; a missing template or missi
 reported and skipped, not a hard failure — a tank always finishes creating.
 Skip the template on a single tank with <code>clikae init claude &lt;tank&gt; --no-template</code>
 or machine-wide with <code>CLIKAE_NO_PERMISSIONS_TEMPLATE=1</code>. See
-<a href="https://github.com/CVERInc/clikae/blob/517e749f39d1eeed05bc3d771b65c298823c6a4d/templates/permissions/README.md">the seed documentation</a>.</p>
+<a href="https://github.com/CVERInc/clikae/blob/6ba83f9510fbaa925410597684bf07831238a12c/templates/permissions/README.md">the seed documentation</a>.</p>
 <h3 id="31-switching--the-elided-verb">3.1 Switching — the elided verb</h3>
 <table>
 <thead>
@@ -262,7 +262,7 @@ fuel words forced on them.</p>
 </tr>
 <tr>
 <td><code>clikae tanks</code> (alias: <code>clikae list</code> / <code>ls</code>)</td>
-<td>List every tank, with the logged-in account. <code>tanks</code> is canonical — a <strong>noun query</strong>, like the existing <code>adapters</code> command, not a coined verb. <code>list</code>/<code>ls</code> stay for convention and for the GUI's <code>list --json</code>.</td>
+<td>List every tank, with the logged-in account. <code>tanks</code> is canonical — a <strong>noun query</strong>, like the existing <code>adapters</code> command, not a coined verb. <code>list</code>/<code>ls</code> stay for convention.</td>
 </tr>
 <tr>
 <td><code>clikae status [cli]</code></td>
@@ -643,8 +643,8 @@ incompatible formats. The fix mirrors <code>handoff</code>'s existing
 work, clikae just runs plumbing. Propose <strong><code>CLIKAE_MEMORY_TRANSLATOR='&lt;cmd&gt;'</code></strong>:
 model-agnostic, <strong>local-first</strong> (no quota burned, nothing leaves the machine —
 memory is sensitive). Apple Intelligence is one backend (its on-device model is
-reachable only via Swift <code>FoundationModels</code>, so a small <code>clikae-translate</code> shim —
-the GUI is already Swift); <code>llm</code>/<code>ollama</code> another.</p>
+reachable only via Swift <code>FoundationModels</code>, so it needs a small <code>clikae-translate</code>
+shim); <code>llm</code>/<code>ollama</code> another.</p>
 <p><strong>The objection MOVES from format to <em>loss</em>.</strong> A summarizer for a one-shot
 handoff brief is safe because the brief is <strong>disposable</strong>. Memory is the opposite
 — authoritative, accumulative, trusted across sessions. An LLM rewriting memory
