@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.45.2] — 2026-11-04
+
 ### Fixed
 
 - **A missing engine CLI no longer looks like a lapsed token.** Where the engine isn't on PATH (cron, a
