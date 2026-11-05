@@ -576,6 +576,11 @@ _lazy_parse() {
   fi
 
   [ -n "$stitle" ] || stitle="(no preview)"
+  # The list keeps it (checking every session up front would read thousands of
+  # files), and says this one is the older half of a conversation.
+  if declare -F adapter_session_continued >/dev/null 2>&1 && adapter_session_continued "$f"; then
+    stitle="[continued] $stitle"
+  fi
   cached_title[idx]="$stitle"
 
   cached_age[idx]="$(_human_age "$mt")"

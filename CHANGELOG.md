@@ -10,6 +10,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Fixed
 
 - The PATH warning from 0.45.2 now names the command to look for: `agy`, not `antigravity`.
+- **Warm `/compact` no longer judges the wrong conversation.** `/background` moves a Claude session to a new
+  id, and the watcher kept measuring the old transcript while typing into the new one. One session got 18
+  sends in a day, some of them just after a turn ended, and one compacted a summary that was already small.
+  The watcher, `wake`, the status row and the board now follow the continuation, and it holds until the new
+  transcript exists.
+- **A continued session is listed once.** The board drops the older transcript. `clikae resume` keeps it,
+  marked `[continued]`, and its file stays on disk.
 
 ## [0.45.2] — 2026-11-04
 
