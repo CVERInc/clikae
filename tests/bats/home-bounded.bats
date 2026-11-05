@@ -201,6 +201,7 @@ _board_shims() {
   # only the COST shape — the guess reads at most the ONE transcript it
   # settles on, never a scan of every other session on the tank.
   _board_fixture 10
+  source "$CLIKAE_LIB/core/live.sh"
   source "$CLIKAE_LIB/commands/home.sh"
   # Function fixtures only: no tmux client or server is invoked.
   tmux() { return 99; }
