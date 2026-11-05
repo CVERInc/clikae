@@ -234,7 +234,7 @@ _home_interactive_rows() {
     fi
     [ "$kept" -lt "$want" ] || break
     mode="$(adapter_session_mode "$dir" "$sid" 2>/dev/null || true)"
-    [ "$mode" = headless ] && continue
+    case "$mode" in headless|continued) continue ;; esac
     printf '%s\037%s\037%s\037%s\n' "$mt" "$sid" "$mark" "${mode:-unknown}"
     kept=$((kept + 1))
   done <<ROWS
@@ -786,7 +786,7 @@ $(live_split "$_n" 2>/dev/null)
 SPLIT
     [ -n "$_e" ] && [ -n "$_t" ] || continue
     _dupkeys="$_dupkeys$_e/$_t"$'\n'
-    _c0="$(live_session_id "$_n" 2>/dev/null || true)"
+    _c0="$(live_session_id_current "$_n" "$_e" "$_t" 2>/dev/null || true)"
     # \037, not \t: $_c0 (the stamp) is routinely EMPTY for a bare session,
     # and `IFS=$'\t' read` — tab being one of bash's "IFS whitespace"
     # characters — COLLAPSES adjacent tab delimiters instead of yielding an

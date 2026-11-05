@@ -675,7 +675,8 @@ adapter_session_title() {
 
 # Optional hook (#153): interactive / headless / unknown for the board's
 # Continue list — see antigravity.sh's twin for the contract (prints the word;
-# rc 0 / 1 / 2). The signal is the transcript's own "entrypoint" field, never
+# rc 0 / 1 / 2). `continued` also leaves the list: the same conversation is listed
+# under its new id. The signal is the transcript's own "entrypoint" field, never
 # its text: "cli" is the interactive TUI, "sdk-cli" is print/SDK mode (every
 # `claude -p`, which is what `clikae burn` runs). Measured on a real tank
 # (tuna, newest 80 transcripts, 2026-09-27): cli 6, sdk-cli 38, the rest carry
@@ -689,11 +690,27 @@ adapter_session_mode() {
   local dir="$1" sid="$2" f
   f="$dir/projects/$(_claude_project_slug "$PWD")/$sid.jsonl"
   if [ -z "$sid" ] || [ ! -f "$f" ]; then printf 'unknown'; return 2; fi
+  if adapter_session_continued "$f"; then printf 'continued'; return 1; fi
   if declare -F reading_cache_run >/dev/null; then
     reading_cache_run claude-mode "$f" _claude_mode_uncached "$f"
   else
     _claude_mode_uncached "$f"
   fi
+}
+
+# Optional hook: has this conversation moved on to another transcript that exists?
+# The marker is cached with the file, and the new file is looked up every time: it
+# appears later without touching this one, and until it does this is still the only
+# place to find the conversation.
+adapter_session_continued() {
+  local id
+  declare -F transcript_continued_in >/dev/null || return 1
+  if declare -F reading_cache_run >/dev/null; then
+    id="$(reading_cache_run claude-continued "$1" transcript_continued_in "$1")"
+  else
+    id="$(transcript_continued_in "$1")"
+  fi
+  [ -n "$id" ] && _transcript_sibling "$1" "$id" >/dev/null
 }
 
 _claude_mode_uncached() {

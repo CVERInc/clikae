@@ -259,6 +259,8 @@ _wake_scopev() {
     _WAKE_SCOPE_WHY="whole tank (launch stamp ${sid:0:8} has no transcript)"
     return 0
   fi
+  a="$(transcript_current "$a")" || true
+  sid="${a##*/}"; sid="${sid%.jsonl}"
   cands="$(find "${a%/*}" -mindepth 1 -maxdepth 1 -name '*.jsonl' -newer "$a" -mmin -300 2>/dev/null)"
   if [ -n "$cands" ]; then
     others="$(_wake_other_stamps "${session%%:*}")"

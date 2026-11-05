@@ -199,6 +199,62 @@ live_session_id() {
   printf '%s' "$v"
 }
 
+# transcript_continued_in <file> -> the session id this transcript was continued
+# in, or nothing. Claude Code writes {"type":"continued-in","continuedInSessionId":
+# "..."} when `/background` moves a conversation to a new id. The conversation
+# carries on in the other file, with the same title. Inside message text the
+# quotes are escaped, so a transcript that QUOTES the line does not match.
+transcript_continued_in() {
+  tail -c "${CLIKAE_TX_TAIL_BYTES:-524288}" "$1" 2>/dev/null |
+    LC_ALL=C grep -a '"type":"continued-in"' 2>/dev/null | tail -n 1 |
+    LC_ALL=C sed -n 's/.*"continuedInSessionId":"\([A-Za-z0-9_-]*\)".*/\1/p'
+}
+
+# _transcript_sibling <file> <session-id> -> that session's transcript, in this
+# project or a sibling one (the new id can start from another directory).
+_transcript_sibling() {
+  local c d="${1%/*}"
+  for c in "$d/$2.jsonl" "${d%/*}"/*/"$2.jsonl"; do
+    [ -f "$c" ] && { printf '%s\n' "$c"; return 0; }
+  done
+  return 1
+}
+
+# transcript_current <file> -> the transcript this conversation lives in now,
+# following any continuation. rc 2 when it moved somewhere not on disk yet: the
+# new file only appears with its first message, so the last known file is printed
+# and the caller must not take it for the live one.
+transcript_current() {
+  local f="$1" id next hops=0
+  while [ "$hops" -lt 8 ]; do
+    id="$(transcript_continued_in "$f")"
+    [ -n "$id" ] || { printf '%s\n' "$f"; return 0; }
+    next="$(_transcript_sibling "$f" "$id")" || { printf '%s\n' "$f"; return 2; }
+    f="$next"; hops=$((hops + 1))
+  done
+  printf '%s\n' "$f"
+  return 2
+}
+
+# live_session_id_current <session-name> <engine> <tank> -> live_session_id, after
+# following any continuation. The stamp is written at launch, and `/background`
+# moves the conversation to a new id under a running session. Falls back to the
+# stamp when the transcript can't be found or the new one isn't on disk yet.
+live_session_id_current() {
+  local sid f cur
+  sid="$(live_session_id "$1")" || return 1
+  if [ "$2" = claude ]; then
+    # The path by hand: the status row sources this file without profile_store.sh.
+    for f in "$CLIKAE_HOME/profiles/$2/$3"/projects/*/"$sid".jsonl; do
+      [ -f "$f" ] || continue
+      cur="$(transcript_current "$f")" || cur="$f"
+      cur="${cur##*/}"; sid="${cur%.jsonl}"
+      break
+    done
+  fi
+  printf '%s' "$sid"
+}
+
 # live_engine_alive <session-name> -> success unless THIS session's own engine
 # window has already closed.
 #

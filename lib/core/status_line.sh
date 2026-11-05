@@ -57,6 +57,6 @@ CK_CORE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # A tank relaunched without a resumable id (codex, antigravity) would otherwise
 # inherit the id of whatever claude session last used that name, and the row
 # would offer a command that reopens the wrong conversation.
-CK_SID="$(live_session_id "$CK_SESSION" 2>/dev/null || true)"
+CK_SID="$(live_session_id_current "$CK_SESSION" "$CK_ENGINE" "$CK_TANK" 2>/dev/null || true)"
 
 tmux_status_render "$CK_ENGINE" "$CK_TANK" "$CK_SID" "$CK_HOST" "$CK_WIDTH"

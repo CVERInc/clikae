@@ -76,6 +76,118 @@ teardown() {
   [ "$output" = $'250010\t0' ]
 }
 
+NEW_SID="77777777-1111-4222-8333-944455556666"
+
+# _continue_to <new-sid> -> the transcript gets Claude Code's continued-in marker.
+_continue_to() {
+  printf '{"type":"continued-in","timestamp":"t","sessionId":"%s","continuedInSessionId":"%s"}\n' "$SID" "$1" >> "$TX"
+  printf '{"type":"last-prompt","lastPrompt":"x","sessionId":"%s"}\n' "$SID" >> "$TX"
+}
+
+@test "continued: transcript_current follows the chain, and stops on a cycle or a gap" {
+  _src
+  local d="$BATS_TEST_TMPDIR/p/-a" a b c
+  mkdir -p "$d" "$BATS_TEST_TMPDIR/p/-b"
+  a="$d/a.jsonl"; b="$BATS_TEST_TMPDIR/p/-b/b.jsonl"; c="$d/c.jsonl"
+  printf '{"type":"continued-in","continuedInSessionId":"b"}\n{"type":"x"}\n' > "$a"
+  printf '{"type":"continued-in","continuedInSessionId":"c"}\n' > "$b"
+  printf '{"type":"user"}\n' > "$c"
+  run transcript_current "$a"
+  [ "$status" -eq 0 ] && [ "$output" = "$c" ] || { echo "chain: $status $output"; false; }
+  # Across projects, one hop: a sibling directory.
+  run transcript_current "$b"
+  [ "$status" -eq 0 ] && [ "$output" = "$c" ] || { echo "from b: $status $output"; false; }
+  # The new file only exists after its first message.
+  printf '{"type":"continued-in","continuedInSessionId":"gone"}\n' > "$c"
+  run transcript_current "$a"
+  [ "$status" -eq 2 ] && [ "$output" = "$c" ] || { echo "gap: $status $output"; false; }
+  # A cycle ends instead of spinning.
+  printf '{"type":"continued-in","continuedInSessionId":"a"}\n' > "$c"
+  run transcript_current "$a"
+  [ "$status" -eq 2 ] || { echo "cycle: $status $output"; false; }
+  # A transcript that QUOTES the marker has not moved anywhere.
+  printf '{"type":"user","message":{"content":"{\\"type\\":\\"continued-in\\",\\"continuedInSessionId\\":\\"b\\"}"}}\n' > "$c"
+  run transcript_continued_in "$c"
+  [ -z "$output" ] || { echo "quoted: $output"; false; }
+}
+
+@test "continued: a stale stamp is not measured. The old file's size does not trigger a send" {
+  command -v tmux >/dev/null 2>&1 || skip "tmux not installed"
+  command -v jq >/dev/null 2>&1 || skip "jq not installed"
+  _src
+  _transcript 308742; _continue_to "$NEW_SID"
+  # The conversation now lives here, and it is small.
+  local n="${TX%/*}/$NEW_SID.jsonl"
+  { printf '{"type":"user","message":{"content":"hi"}}\n'; _usage 10 0 60000; } > "$n"
+  _pane ""
+  local now; now="$(( $(_compact_mtime "$n") + COMPACT_IDLE_SECONDS + 5 ))"
+  touch -t 202001010000 "$TX"
+  run compact_tick claude t1 "$S" "$now"
+  [ "$status" -ne 0 ] || { echo "sent on the old file's context"; false; }
+  [[ "$output" == *"hold: small-context"* ]] || { echo "why: $output"; false; }
+  [ ! -s "$TYPED" ] || { echo "typed: $(cat "$TYPED")"; false; }
+}
+
+@test "continued: idleness is the new transcript's, and a real send logs its context" {
+  command -v tmux >/dev/null 2>&1 || skip "tmux not installed"
+  command -v jq >/dev/null 2>&1 || skip "jq not installed"
+  _src
+  _transcript 60000; _continue_to "$NEW_SID"
+  local n="${TX%/*}/$NEW_SID.jsonl"
+  { printf '{"type":"user","message":{"content":"hi"}}\n'; _usage 10 0 250000; } > "$n"
+  _pane ""
+  # Someone just used it: not idle, however old the stamped file is.
+  touch -t 202001010000 "$TX"
+  run compact_tick claude t1 "$S" "$(date +%s)"
+  [[ "$output" == *"hold: not-idle"* ]] || { echo "why: $output"; false; }
+  local now; now="$(( $(_compact_mtime "$n") + COMPACT_IDLE_SECONDS + 5 ))"
+  compact_tick claude t1 "$S" "$now" >/dev/null
+  run compact_trace_recent claude t1 5
+  [[ "$output" == *"compact-sent"*"context=250010"* ]] || { echo "trace: $output"; false; }
+}
+
+@test "continued: the new transcript isn't on disk yet, so nothing is sent" {
+  command -v tmux >/dev/null 2>&1 || skip "tmux not installed"
+  command -v jq >/dev/null 2>&1 || skip "jq not installed"
+  _src
+  _transcript 250000; _continue_to "$NEW_SID"
+  _pane ""
+  run compact_tick claude t1 "$S" "$(_idle_now)"
+  [ "$status" -ne 0 ] || { echo "sent with no transcript to measure"; false; }
+  [[ "$output" == *"hold: transcript"* ]] || { echo "why: $output"; false; }
+  [ ! -s "$TYPED" ] || { echo "typed: $(cat "$TYPED")"; false; }
+}
+
+@test "continued: live_session_id_current follows it for claude, and leaves other engines alone" {
+  command -v tmux >/dev/null 2>&1 || skip "tmux not installed"
+  _src
+  _transcript 1000; _continue_to "$NEW_SID"
+  _pane ""
+  run live_session_id_current "$S" claude t1
+  [ "$output" = "$SID" ] || { echo "no new file yet: $output"; false; }
+  : > "${TX%/*}/$NEW_SID.jsonl"
+  run live_session_id_current "$S" claude t1
+  [ "$output" = "$NEW_SID" ] || { echo "followed: $output"; false; }
+  run live_session_id_current "$S" codex t1
+  [ "$output" = "$SID" ] || { echo "codex: $output"; false; }
+}
+
+@test "continued: wake reads the new transcript, and the status row offers its id" {
+  command -v tmux >/dev/null 2>&1 || skip "tmux not installed"
+  _src
+  _transcript 1000; _continue_to "$NEW_SID"
+  local n="${TX%/*}/$NEW_SID.jsonl"
+  printf '{"type":"user","message":{"content":"hi"}}\n' > "$n"
+  _pane ""
+  local _LIMIT_PARKED_TANK _LIMIT_PARKED_DIR _LIMIT_PARKED_FILES _WAKE_SCOPE_WHY _WAKE_SCOPE_AMBIG_STAMP
+  _wake_scopev claude t1 "$S"
+  [[ "$_LIMIT_PARKED_FILES" == *"/$NEW_SID.jsonl" ]] || { echo "files: $_LIMIT_PARKED_FILES / $_WAKE_SCOPE_WHY"; false; }
+  [[ "$_WAKE_SCOPE_WHY" == "session 77777777"* ]] || { echo "why: $_WAKE_SCOPE_WHY"; false; }
+  run bash "$CLIKAE_TEST_ROOT/lib/core/status_line.sh" "$HOME" "$CLIKAE_HOME" claude t1 "$S" host 200
+  [[ "$output" == *"resume 77777777"* ]] || { echo "row: $output"; false; }
+  [[ "$output" != *"resume 0b4a1c55"* ]] || { echo "row: $output"; false; }
+}
+
 @test "compact: prompt-line reader — empty, drafted, boxed, and absent" {
   _src
   compact_prompt_line_empty $'out\n> \n'

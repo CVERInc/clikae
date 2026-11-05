@@ -236,8 +236,12 @@ _compact_session_transcript() {
   dir="$(profile_dir "$engine" "$tank" 2>/dev/null)" || return 1
   [ -d "$dir/projects" ] || return 1
   local f
+  # Follow a continuation: /compact is typed into whatever the pane runs now, so
+  # measuring the launch stamp's old file would judge one conversation and compact
+  # another (2026-11-04: 18 sends, all logged the old file's context=308752). No
+  # new file yet means nothing to measure, so hold.
   for f in "$dir"/projects/*/"$sid".jsonl; do
-    [ -f "$f" ] && { printf '%s\n' "$f"; return 0; }
+    [ -f "$f" ] && { transcript_current "$f"; return; }
   done
   return 1
 }

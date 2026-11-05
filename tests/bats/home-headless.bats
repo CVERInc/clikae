@@ -60,6 +60,7 @@ _items() {
   (
     source "$CLIKAE_LIB/core/log.sh"
     source "$CLIKAE_LIB/core/profile_store.sh"
+    source "$CLIKAE_LIB/core/live.sh"
     source "$CLIKAE_LIB/core/adapter_loader.sh"
     source "$CLIKAE_LIB/core/reading_cache.sh"
     source "$CLIKAE_LIB/core/limit.sh"
@@ -295,4 +296,43 @@ _claude_tx() {   # <dir> <sid> <entrypoint|-> <title> <stamp>
   [ "$status" -eq 0 ] || { echo "$output"; false; }
   [[ "$output" == *"list truncated"* ]] || { echo "$output"; false; }
   [[ "$output" != *"HEADLESS-"* ]] || { echo "$output"; false; }
+}
+
+# _continued_pair -> a tank with OLD continued in NEW, both titled alike.
+_continued_pair() {
+  clikae init claude cont >/dev/null
+  CP="$CLIKAE_HOME/profiles/claude/cont/projects/$(cd "$PWD" && pwd | sed 's#[^A-Za-z0-9]#-#g')"
+  mkdir -p "$CP"
+  printf '{"type":"user","entrypoint":"cli","message":{"content":"hi"}}\n{"type":"custom-title","customTitle":"SameTitle"}\n{"type":"continued-in","continuedInSessionId":"11111111-new"}\n{"type":"custom-title","customTitle":"SameTitle"}\n' > "$CP/00000000-old.jsonl"
+}
+_continued_new() {
+  printf '{"type":"user","entrypoint":"cli","message":{"content":"hi"}}\n{"type":"custom-title","customTitle":"SameTitle"}\n' > "$CP/11111111-new.jsonl"
+}
+
+@test "continued: the board lists the conversation once, under its new id" {
+  _continued_pair; _continued_new
+  run _items
+  [ "$(printf '%s\n' "$output" | grep -c 'SameTitle')" -eq 1 ] || { echo "$output"; false; }
+  [[ "$output" == *"11111111-new"* ]] || { echo "$output"; false; }
+  [[ "$output" != *"00000000-old"* ]] || { echo "$output"; false; }
+}
+
+@test "continued: with no new file yet the old one stays listed, including after a cached read" {
+  _continued_pair
+  run _items
+  [[ "$output" == *"00000000-old"* ]] || { echo "the only copy vanished: $output"; false; }
+  # The new file appears without touching the old one, so the cache must not hold
+  # the old answer.
+  _continued_new
+  run _items
+  [[ "$output" != *"00000000-old"* ]] || { echo "stale answer: $output"; false; }
+}
+
+@test "continued: clikae resume keeps the older half, marked, and finds it by id" {
+  _continued_pair; _continued_new
+  CLIKAE_NO_INTERACTIVE=1 run clikae resume
+  [ "$status" -eq 0 ] || { echo "$output"; false; }
+  [[ "$output" == *'"[continued] SameTitle"'* ]] || { echo "$output"; false; }
+  [[ "$output" == *'"SameTitle"'* ]] || { echo "$output"; false; }
+  [ -f "$CP/00000000-old.jsonl" ] || false
 }
