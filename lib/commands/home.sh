@@ -2219,6 +2219,50 @@ _home_lpadv() {
   printf -v _LPAD '%s%*s' "$s" "$pad" ''
 }
 
+# _home_name_colv <items> — sets $_HOME_NM_W, the board's tank-name column: the
+# widest name on it, at least 7 (so a board of short names draws as it always
+# did), at most 14, or 10 below _HOME_NARROW_BELOW. Past the cap the title pays
+# more than the name gains. On the narrowest boards the cap also leaves the
+# interactive row its chrome (9 once the engine is shed) and 12-column title
+# floor, which is 9 at 30 columns. Call after _home_narrowv, once per frame.
+_home_name_colv() {
+  local items="$1" w=7 max=14 k c p
+  if [ "${_HOME_NARROW:-0}" = 1 ]; then
+    max=$(( $(_home_cols) - 21 ))
+    if [ "$max" -gt 10 ]; then max=10; fi
+  fi
+  while IFS=$'\037' read -r k c p _; do
+    case "$k" in
+      live|resume|tank)
+        _dwv "$p"
+        if [ "$_DW_W" -gt "$w" ]; then w="$_DW_W"; fi
+        ;;
+    esac
+  done <<EOF
+$items
+EOF
+  if [ "$w" -gt "$max" ]; then w="$max"; fi
+  _HOME_NM_W="$w"
+}
+
+# _home_namev <name> — a tank name padded to the column, into $_LPAD. A name too
+# long for it loses its MIDDLE: `shishamo` cut at the end read as `shisha…`, a
+# different name, which is the same rule the status row follows (tmux_status_rowv).
+_home_namev() {
+  _home_name_fitv "$1"
+  _home_lpadv "$_TRUNC" "${_HOME_NM_W:-7}"
+}
+_home_name_fitv() {
+  local LC_ALL=C
+  local s="$1" n="${_HOME_NM_W:-7}" total head tail hcut
+  _dw_walk "$s" -1; total="$_DW_W"
+  if [ "$total" -le "$n" ]; then _TRUNC="$s"; return 0; fi
+  head=$(( (n - 1) / 2 )); tail=$(( n - 1 - head ))
+  _dw_walk "$s" "$head"; hcut="$_DW_CUT"
+  _dw_skip "$s" $(( total - tail ))
+  _TRUNC="${s:0:$hcut}…${s:$_DW_CUT}"
+}
+
 # _home_live_dup_keysv <items> — sets $_LIVE_KEYS to one "<cli>/<profile>" line
 # per LIVE row in <items>, in the order they'll be drawn. Precomputed ONCE per
 # render (not per row) so a per-row lookup is a cheap grep over a handful of
@@ -2392,12 +2436,12 @@ _home_tank_fields() {
 # nine tanks that is the bulk of a redraw. Same arithmetic, no forks.
 _home_tank_fieldsv() {
   local prof="$1" eng="$2" acct="$3" has_tail="$4" acw
-  acw=$(( $(_home_cols) - 8 - 7 - 8 ))    # 8 = 4 lead + dot + 3 single spaces
+  acw=$(( $(_home_cols) - 8 - ${_HOME_NM_W:-7} - 8 ))    # 8 = 4 lead + dot + 3 single spaces
   [ "$acw" -gt 22 ] && acw=22
   [ "$acw" -lt 3 ]  && acw=3
   _home_truncv "${acct:--}" "$acw"; _TF_AC="$_TRUNC"
   if [ -n "$has_tail" ]; then _home_lpadv "$_TF_AC" "$acw"; _TF_AC="$_LPAD"; fi
-  _home_truncv "$prof" 7; _home_lpadv "$_TRUNC" 7; _TF_NM="$_LPAD"
+  _home_namev "$prof"; _TF_NM="$_LPAD"
   _home_truncv "$eng" 8;  _home_lpadv "$_TRUNC" 8; _TF_EN="$_LPAD"
 }
 
@@ -2520,7 +2564,7 @@ _home_tank_narrow() {
   fi
   _home_status_narrowv "$note"
   _dwv "$_SNOTE"
-  if [ $(( ncol + 7 + 1 + 8 + 2 + _DW_W )) -lt "$cols" ]; then
+  if [ $(( ncol + ${_HOME_NM_W:-7} + 1 + 8 + 2 + _DW_W )) -lt "$cols" ]; then
     _home_lpadv "$en" 8
     printf '%s%s %b%s%b  %b%s%b\n' "$head" "$nmf" "$__C_DIM" "$_LPAD" "$__C_RESET" \
       "$nc" "$_SNOTE" "$__C_RESET"
@@ -2721,7 +2765,7 @@ EOF
   local kind cli profile label alias active note cur_sect="" also="" printed_resume=0 printed_live=0 rdot
   local launch_cli="" launch_profile="" _live_seen=""
   # Title budget, in DISPLAY COLUMNS: cols minus this row's own fixed chrome
-  # (4-space lead + dot + space + 7-col name + space + 8-col engine + space + 2
+  # (4-space lead + dot + space + name column, 7 here, + space + 8-col engine + space + 2
   # quotes = 25). No extra column for the "…" — _home_trunc keeps its ellipsis
   # INSIDE the budget it's given. Computed ONCE (the chrome is identical on
   # every resume row) rather than per row.
@@ -2730,7 +2774,8 @@ EOF
   local _sl="    " _alead="    " _ahang=19
   _home_narrowv
   if [ "$_HOME_NARROW" = 1 ]; then _sl="  "; _alead="  "; _ahang=17; fi
-  _home_row_geom $(( 21 + ${#_sl} )) 20; local _resume_title_budget="$_RG_TITLE"
+  _home_name_colv "$items"
+  _home_row_geom $(( 14 + _HOME_NM_W + ${#_sl} )) 20; local _resume_title_budget="$_RG_TITLE"
   _home_live_dup_keysv "$items"   # see _home_live_dup_suffixv — dup-name badging
   while IFS=$'\037' read -r kind cli profile label alias active note; do
     [ -n "$kind" ] || continue
@@ -2753,7 +2798,8 @@ EOF
         # below uses): a Live title can carry a trailing guess marker that
         # must survive truncation — see R1-P2-3.
         local _ttl; _home_live_ttlv "$label" "$_resume_title_budget"; _ttl="$_TRUNC"
-        printf '%s%b %s%s %b%b"%s"%b\n' "$_sl" "$rdot" "$(_home_lpad "$(_home_trunc "$profile" 7)" 7)" "$_LIVE_SUFFIX" \
+        _home_namev "$profile"
+        printf '%s%b %s%s %b%b"%s"%b\n' "$_sl" "$rdot" "$_LPAD" "$_LIVE_SUFFIX" \
           "$(_home_row_eng "$cli")" \
           "$__C_DIM" "$_ttl" "$__C_RESET"
         ;;
@@ -2764,7 +2810,7 @@ EOF
         _home_fuel_dotv "$dry" "$cli" "$profile"; rdot="$_FDOT"
         # Same columns as a Tank row — dot · name · engine — then the session title
         # where a tank's account would sit, so the two sections read as one grid.
-        local _rnm _ren; _home_truncv "$profile" 7; _home_lpadv "$_TRUNC" 7; _rnm="$_LPAD"
+        local _rnm _ren; _home_namev "$profile"; _rnm="$_LPAD"
         _home_row_engv "$cli"; _ren="$_RENG"
         local _ttl; _home_truncv "$label" "$_resume_title_budget"; _ttl="$_TRUNC"
         printf '%s%b %s %b%b"%s"%b\n' "$_sl" "$rdot" "$_rnm" "$_ren" "$__C_DIM" "$_ttl" "$__C_RESET"
@@ -3803,7 +3849,7 @@ _home_pick_draw_body() {
   # can't clip it. Row widths are stable frame-to-frame, so no per-line erase yet.
   local kind cli profile label alias active note idx=0 cur_cli="" printed_also=0 printed_resume=0 printed_live=0 ldot mark dot _reset tdot _line rdot rage _live_seen=""
   # Same fixed-chrome accounting as _home_render_static's resume row (25 cols:
-  # 2-space lead + mark + space + dot + space + 7-col name + space + 8-col
+  # 2-space lead + mark + space + dot + space + name column, 7 here, + space + 8-col
   # engine + space + 2 quotes). The "…" lives inside _home_trunc's budget, so
   # no extra column here. Computed ONCE, not per row.
   #
@@ -3820,7 +3866,8 @@ _home_pick_draw_body() {
   # wide: _home_wrap_prefixed budgets the first line by the hang, so the hang
   # must equal the prefix's own width (19 wide, 17 without the row lead).
   _home_narrowv; [ "$_HOME_NARROW" = 1 ] && { _ld=""; _ahang=17; }
-  _home_row_geom $(( 25 + ${#_ld} )) 20; local _resume_title_budget="$_RG_TITLE"
+  _home_name_colv "$items"
+  _home_row_geom $(( 18 + _HOME_NM_W + ${#_ld} )) 20; local _resume_title_budget="$_RG_TITLE"
   _home_live_dup_keysv "$items"   # see _home_live_dup_suffixv — dup-name badging
   [ -n "${_HOME_DRAW_MODE:-}" ] || printf '\033[H\033[K\n'   # home + one blank top-margin line
   # Repaint the whole frame, clearing each line to end-of-line (\033[K) so a row
@@ -3928,7 +3975,7 @@ LIVEACT
         # first); a tank with only one live session draws exactly as before.
         _home_live_dup_suffixv "$cli" "$profile" "$_live_seen"
         _live_seen="$_live_seen$cli/$profile"$'\n'
-        local _lnm _len; _home_truncv "$profile" 7; _home_lpadv "$_TRUNC" 7; _lnm="$_LPAD$_LIVE_SUFFIX"
+        local _lnm _len; _home_namev "$profile"; _lnm="$_LPAD$_LIVE_SUFFIX"
         _home_row_engv "$cli"; _len="$_RENG"
         # _home_live_ttlv, not the plain _home_truncv the "resume)" case
         # below uses: a Live title can carry a trailing guess marker that
@@ -3995,7 +4042,7 @@ LIVEACT
         _home_fuel_dotv "$dry" "$cli" "$profile"; rdot="$_FDOT"
         rage="${active#* }"
         # Same columns as a Tank row — dot · name · engine — then the session title.
-        local _rnm _ren; _home_truncv "$profile" 7; _home_lpadv "$_TRUNC" 7; _rnm="$_LPAD"
+        local _rnm _ren; _home_namev "$profile"; _rnm="$_LPAD"
         _home_row_engv "$cli"; _ren="$_RENG"
         local _ttl; _home_truncv "$label" "$_resume_title_budget"; _ttl="$_TRUNC"
         if [ "$idx" -eq "$sel" ]; then

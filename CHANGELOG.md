@@ -17,6 +17,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   transcript exists.
 - **A continued session is listed once.** The board drops the older transcript. `clikae resume` keeps it,
   marked `[continued]`, and its file stays on disk.
+- The board no longer cuts a tank name longer than seven columns at its end, where `shishamo` read as `shisha…`. The name column now fits the longest name on the board, and a name too long even for that loses its middle instead.
 
 ## [0.45.2] — 2026-11-04
 
