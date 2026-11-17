@@ -58,8 +58,11 @@ Three dispatch shapes — full field guide in
   its profile decides what your task runs with unless you say otherwise:
   `--model <m> --effort <e>` reach the engine in its own flags (and fail before
   starting if it cannot honour them), `model_source` / `effort_source` say
-  where each value came from (`flag`, `env`, `profile`, `undeclared`), and
-  `--require-declared` refuses a run whose model or effort is `undeclared`.
+  where each value came from (`flag`, `env`, `profile`, `undeclared`, or
+  `unknown` when raw argv sets it unreadably), and `--require-declared`
+  refuses a run whose model or effort is `undeclared` or `unknown`. A model
+  name belongs to one engine: with a `--to` on another engine, name that
+  engine's model with `--to-model <m>`, or the burn is refused up front.
   "Effort: high" written in the prompt changes nothing.
 
   `rc` distinguishes

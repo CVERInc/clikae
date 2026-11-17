@@ -118,17 +118,33 @@ source is one of:
 | `env` | a variable the engine ranks above its settings file (Claude's `ANTHROPIC_MODEL`, `CLAUDE_CODE_EFFORT_LEVEL`) — a burn hands the engine the caller's environment |
 | `profile` | the tank's own config, read the way the engine reads it |
 | `undeclared` | none of the above: the engine's default decides. The value reads `"undeclared"` too |
+| `unknown` | the argv after `--` sets it, in a form burn cannot read with certainty (an escape in the value, a number, a quoted key). The value reads `"unknown"` too — never a guess |
 
 **`--model <m>` and `--effort <e>` name them**, for a `--prompt` /
 `--prompt-file` task. Each adapter writes them in its engine's own words, so a
-cross-engine reroute regenerates them:
+cross-engine reroute regenerates the flags:
 
 | engine | `--model` becomes | `--effort` becomes | the profile is |
 |---|---|---|---|
 | claude | `--model <m>` | `--effort <e>` (low, medium, high, xhigh, max) | `settings.json`: `model`; effort from `modelSettings.<model>.effortLevel` |
-| codex | `-m <m>` | `-c model_reasoning_effort="<e>"` — codex has no effort flag; `-c` is its documented one-run override of a `config.toml` key | `config.toml`: top-level `model`, `model_reasoning_effort` |
+| codex | `-m <m>` | `-c model_reasoning_effort="<e>"` — codex has no effort flag; `-c` is its documented one-run override of a `config.toml` key | `config.toml`: the root table's `model`, `model_reasoning_effort`, read with a TOML parser (needs `python3` 3.11+; without one the file reads as `undeclared` and the burn says why) |
 | agy | `--model <m>` | `--effort <e>` (low, medium, high, xhigh, max) | nothing — agy documents no settings key for either, so without a flag both are `undeclared` |
 | grok, others | — | — | not read: always `undeclared` |
+
+**A model name belongs to one engine; `--to-model <m>` names the other one's.**
+`--model gpt-x` means nothing to claude, so burn's `--model` never crosses a
+`--to <engine>/<tank>` that names a different engine. With `--model` and such a
+`--to`, add `--to-model <m>` — the model the task runs on if it does take that
+hop — or the burn is refused before anything starts, naming both engines.
+`--to-model` alone is fine too (the first tank keeps its profile's model), and
+with neither, each tank's profile decides. `--effort` does cross the hop, but
+only if the other engine accepts that level; otherwise that is refused up
+front as well.
+
+```sh
+clikae burn codex work --to claude/spare --prompt-file t.md --artifact out.md \
+  --model gpt-x --to-model sonnet --effort high
+```
 
 **An engine that cannot honour one fails before anything starts** — no lock
 taken, no `--fresh` deletion, no launch; rc 1, `reason: "refused: …"`. That
@@ -137,11 +153,18 @@ list, a `CLAUDE_CODE_EFFORT_LEVEL` in the environment that differs from
 `--effort` (Claude Code ranks the variable above the flag), a knob named both
 to burn and again after `--`, and an explicit cross-engine `--to` whose engine
 could not honour it — asked up front, not after the first tank has run. With a
-raw `-- <cmd...>` task the two flags are refused: put the engine's own flag in
+raw `-- <cmd...>` task the flags are refused: put the engine's own flag in
 that command, and burn reports it as `flag`.
 
+For codex, the argv after `--` is read the way codex reads it: `-m <v>`,
+`-m<v>`, `--model=<v>`; `-c <key=value>` in every spelling codex accepts
+(`-c<key=value>`, `--config=…`, spaces round the key); nothing after a bare
+`--`, which is the prompt; an explicit model option above a `-c model=…`, and
+the last of several `-c` overrides of one key. The argv itself reaches the
+engine byte for byte.
+
 **`--require-declared`** refuses to start when the model or the effort is
-`undeclared`, and refuses a reroute hop onto a tank where it is
+`undeclared` or `unknown`, and refuses a reroute hop onto a tank where it is
 (`reason: "refused: undeclared effort"`). Passing both flags always satisfies it.
 
 What the report can and cannot know:

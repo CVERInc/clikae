@@ -308,25 +308,122 @@ model_reasoning_effort = "high"'
   [ "$(_json_field effort_source)" = flag ]
 }
 
-@test "a cross-engine reroute regenerates the flags in the new engine's dialect (#237)" {
+@test "a model-pinned cross-engine --to is refused before anything starts: a model name belongs to one engine (#237)" {
+  STUB_HOME_VAR=CODEX_HOME; export STUB_HOME_VAR
+  _stub_engine codex
+  _stub_engine claude
+  _codex_tank work 'model = "gpt-profile"
+model_reasoning_effort = "low"'
+  _claude_tank second '{"model":"opus"}'
+  : > "$CLIKAE_HOME/profiles/codex/work/.dry"
+  _burn_json codex work --artifact "$A" --prompt 'do it' --to claude/second --model gpt-5 --effort high
+  [ "$status" -eq 1 ]
+  # Both engines are named, and so is the way out.
+  [[ "$stderr" == *"--to claude/second: --model gpt-5 names a codex model"* ]] || false
+  [[ "$stderr" == *"claude"*"--to-model"* ]] || false
+  [[ "$stderr" == *"Nothing was started."* ]] || false
+  [ ! -e "$L" ]     # neither engine was started
+  [ ! -e "$A" ]
+  [[ "$(_json_field reason)" == "refused: --model gpt-5 names a codex model"* ]] || false
+  grep -q '"state":"fail"' "$CLIKAE_HOME"/logs/burn-*/status.json
+}
+
+@test "--to-model names the destination engine's model: the source's name never crosses the hop (#237)" {
   STUB_HOME_VAR=CODEX_HOME; export STUB_HOME_VAR
   _stub_engine codex
   _stub_engine claude
   _codex_tank first
-  _claude_tank second
+  _claude_tank second '{"model":"opus"}'
   : > "$CLIKAE_HOME/profiles/codex/first/.dry"
-  run --separate-stderr clikae burn codex first --to claude/second --artifact "$A" --prompt 'do it' \
-    --model shared-name --effort high --json
+  _burn_json codex first --artifact "$A" --prompt 'do it' --to claude/second \
+    --model gpt-5 --to-model sonnet --effort high
   [ "$status" -eq 0 ]
   [ "$(_json_field engine)" = claude ]
-  # First launch: codex's dialect. Second: claude's.
+  # First launch: codex's dialect and codex's model. Second: claude's.
   local first second
   first="$(sed '/^--END--$/q' "$L")"; second="$(sed '1,/^--END--$/d' "$L")"
-  [[ "$first" == *$'-m\nshared-name'* ]] || false
+  [[ "$first" == *$'-m\ngpt-5'* ]] || false
   [[ "$first" == *'model_reasoning_effort="high"'* ]] || false
-  [[ "$second" == *$'--model\nshared-name'* ]] || false
+  [[ "$second" == *$'--model\nsonnet'* ]] || false
   [[ "$second" == *$'--effort\nhigh'* ]] || false
+  [[ "$second" != *gpt-5* ]] || false
   ! grep -qx -- '-m' <<<"$second" || false
+  [ "$(_json_field model)" = sonnet ]
+  [ "$(_json_field model_source)" = flag ]
+  [[ "$stderr" == *"burn codex/first: model gpt-5 (flag), effort high (flag)"* ]] || false
+  [[ "$stderr" == *"burn claude/second: model sonnet (flag), effort high (flag)"* ]] || false
+}
+
+@test "--to-model alone pins only the destination; the first tank keeps its profile's model (#237)" {
+  STUB_HOME_VAR=CODEX_HOME; export STUB_HOME_VAR
+  _stub_engine codex
+  _stub_engine claude
+  _codex_tank first 'model = "gpt-profile"'
+  _claude_tank second '{"model":"opus"}'
+  : > "$CLIKAE_HOME/profiles/codex/first/.dry"
+  _burn_json codex first --artifact "$A" --prompt 'do it' --to claude/second --to-model sonnet
+  [ "$status" -eq 0 ]
+  local first second
+  first="$(sed '/^--END--$/q' "$L")"; second="$(sed '1,/^--END--$/d' "$L")"
+  ! grep -qx -- '-m' <<<"$first" || false
+  [[ "$second" == *$'--model\nsonnet'* ]] || false
+  [[ "$stderr" == *"burn codex/first: model gpt-profile (profile)"* ]] || false
+  [ "$(_json_field model)" = sonnet ]
+  [ "$(_json_field model_source)" = flag ]
+}
+
+@test "without --model a cross-engine reroute carries no model: the destination's profile decides (#237)" {
+  STUB_HOME_VAR=CODEX_HOME; export STUB_HOME_VAR
+  _stub_engine codex
+  _stub_engine claude
+  _codex_tank first 'model = "gpt-profile"'
+  _claude_tank second '{"model":"opus"}'
+  : > "$CLIKAE_HOME/profiles/codex/first/.dry"
+  _burn_json codex first --artifact "$A" --prompt 'do it' --to claude/second --effort high
+  [ "$status" -eq 0 ]
+  local second; second="$(sed '1,/^--END--$/d' "$L")"
+  ! grep -qx -- '--model' <<<"$second" || false
+  [[ "$second" == *$'--effort\nhigh'* ]] || false
+  [ "$(_json_field model)" = opus ]
+  [ "$(_json_field model_source)" = profile ]
+}
+
+@test "--to-model is refused where there is no cross-engine --to for it to apply to (#237)" {
+  _stub_engine codex
+  _codex_tank first
+  _codex_tank second
+  run clikae burn codex first --artifact "$A" --prompt 'do it' --to-model sonnet
+  [ "$status" -eq 1 ]
+  [[ "$output" == *"--to-model only applies with a --to that names a different engine"* ]] || false
+  run clikae burn codex first --artifact "$A" --prompt 'do it' --to second --to-model sonnet
+  [ "$status" -eq 1 ]
+  [[ "$output" == *"--to-model only applies with a --to that names a different engine"* ]] || false
+  run clikae burn codex first --artifact "$A" --prompt 'do it' --to codex/second --to-model sonnet
+  [ "$status" -eq 1 ]
+  [ ! -e "$L" ]
+}
+
+@test "an effort level the --to engine does not accept is refused up front, naming that engine (#237)" {
+  _stub_engine codex
+  _stub_engine claude
+  _codex_tank first
+  _claude_tank second
+  # codex takes any one word; claude's --help lists five levels.
+  run clikae burn codex first --to claude/second --artifact "$A" --prompt 'do it' --effort minimal
+  [ "$status" -eq 1 ]
+  [[ "$output" == *"--to claude/second: claude cannot honour --effort minimal"* ]] || false
+  [ ! -e "$L" ]
+}
+
+@test "a --to-model the destination engine has no flag for is refused up front (#237)" {
+  _stub_engine codex
+  _stub_engine grok
+  _codex_tank first
+  clikae init grok second
+  run clikae burn codex first --to grok/second --artifact "$A" --prompt 'do it' --to-model whatever
+  [ "$status" -eq 1 ]
+  [[ "$output" == *"grok cannot honour --model"* ]] || false
+  [ ! -e "$L" ]
 }
 
 @test "an engine with no model/effort mapping fails before starting, never ignoring the flag (#237)" {
@@ -355,9 +452,13 @@ model_reasoning_effort = "high"'
 @test "a --to naming an engine clikae does not know is left to the hop, not refused with an empty reason (#237)" {
   _stub_engine codex
   _codex_tank first
-  run clikae burn codex first --to nosuch/x --artifact "$A" --prompt 'do it' --model gpt-x
+  run clikae burn codex first --to nosuch/x --artifact "$A" --prompt 'do it' --effort high
   [ "$status" -eq 0 ]
   [ -e "$A" ]
+  # A pinned model is another matter: whatever `nosuch` is, it is not codex.
+  run clikae burn codex first --to nosuch/x --artifact "$A" --prompt 'do it' --fresh --model gpt-x
+  [ "$status" -eq 1 ]
+  [[ "$output" == *"--to nosuch/x: --model gpt-x names a codex model"* ]] || false
 }
 
 @test "claude refuses an effort level its --help does not list (#237)" {
@@ -387,7 +488,7 @@ model_reasoning_effort = "high"'
   _codex_tank work
   run clikae burn codex work --artifact "$A" --model gpt-x -- exec 'do it'
   [ "$status" -eq 1 ]
-  [[ "$output" == *"--model and --effort only apply to a task given with --prompt or --prompt-file"* ]] || false
+  [[ "$output" == *"--model, --to-model and --effort only apply to a task given with --prompt or --prompt-file"* ]] || false
   [ ! -e "$L" ]
 }
 
@@ -462,4 +563,220 @@ model_reasoning_effort = "low"'
   [[ "$output" == *"--model <m>"* ]] || false
   [[ "$output" == *"--effort <e>"* ]] || false
   [[ "$output" == *"--require-declared"* ]] || false
+}
+
+# ── 4. codex: the argv after `--`, read the way codex reads it ───────────────
+# Codex trims the key of a `-c key=value`, accepts the value glued to the
+# option, ranks -m/--model above a `-c model=…`, and stops reading options at
+# `--`. Each case below is one the first reader got wrong.
+
+_codex_profiled() {
+  _stub_engine codex
+  _codex_tank work 'model = "gpt-profile"
+model_reasoning_effort = "low"'
+}
+
+@test "codex: an effort override after -- with spaces round the key is still the same knob given twice (#237)" {
+  _codex_profiled
+  run --separate-stderr clikae burn codex work --artifact "$A" --json --prompt 'do it' \
+    --model gpt-test --effort high -- -c 'model_reasoning_effort = "low"'
+  [ "$status" -eq 1 ]
+  [[ "$stderr" == *"--effort is given twice"* ]] || false
+  [ ! -e "$L" ]
+  [ "$(_json_field reason)" = "refused: --effort given twice" ]
+}
+
+@test "codex: the compact -c<key=value> and -c=<key=value> spellings are the same knob given twice (#237)" {
+  _codex_profiled
+  run clikae burn codex work --artifact "$A" --prompt 'do it' --model gpt-test --effort high \
+    -- '-cmodel_reasoning_effort="low"'
+  [ "$status" -eq 1 ]
+  [[ "$output" == *"--effort is given twice"* ]] || false
+  run clikae burn codex work --artifact "$A" --prompt 'do it' --effort high \
+    -- '-c=model_reasoning_effort="low"'
+  [ "$status" -eq 1 ]
+  [[ "$output" == *"--effort is given twice"* ]] || false
+  run clikae burn codex work --artifact "$A" --prompt 'do it' --effort high \
+    -- '--config= model_reasoning_effort =low'
+  [ "$status" -eq 1 ]
+  [[ "$output" == *"--effort is given twice"* ]] || false
+  run clikae burn codex work --artifact "$A" --prompt 'do it' --model gpt-test -- -mgpt-other
+  [ "$status" -eq 1 ]
+  [[ "$output" == *"--model is given twice"* ]] || false
+  [ ! -e "$L" ]
+}
+
+@test "codex raw argv: -m glued to its value is the model that runs (#237)" {
+  _codex_profiled
+  run --separate-stderr clikae burn codex work --artifact "$A" --json \
+    -- exec -mgpt-actual -c 'model_reasoning_effort="high"' 'do it'
+  [ "$status" -eq 0 ]
+  [ "$(_json_field model)" = gpt-actual ]
+  [ "$(_json_field model_source)" = flag ]
+  [ "$(_json_field effort)" = high ]
+  [ "$(_json_field effort_source)" = flag ]
+  run --separate-stderr clikae burn codex work --artifact "$A" --json --fresh \
+    -- exec -m=gpt-eq 'do it'
+  [ "$(_json_field model)" = gpt-eq ]
+  [ "$(_json_field model_source)" = flag ]
+}
+
+@test "codex raw argv: -m outranks a -c model override, as it does in codex (#237)" {
+  _codex_profiled
+  run --separate-stderr clikae burn codex work --artifact "$A" --json \
+    -- exec -m gpt-actual -c 'model="gpt-config"' 'do it'
+  [ "$status" -eq 0 ]
+  [ "$(_json_field model)" = gpt-actual ]
+  [ "$(_json_field model_source)" = flag ]
+  [ "$(_json_field effort)" = low ]
+  [ "$(_json_field effort_source)" = profile ]
+}
+
+@test "codex raw argv: of two -c overrides of one key the later one runs (#237)" {
+  _codex_profiled
+  run --separate-stderr clikae burn codex work --artifact "$A" --json \
+    -- exec -c 'model="gpt-a"' -c ' model = gpt-b ' -c "model_reasoning_effort='medium'" 'do it'
+  [ "$status" -eq 0 ]
+  [ "$(_json_field model)" = gpt-b ]
+  [ "$(_json_field model_source)" = flag ]
+  [ "$(_json_field effort)" = medium ]
+  [ "$(_json_field effort_source)" = flag ]
+}
+
+@test "codex raw argv: what follows the option terminator is a prompt, not a flag (#237)" {
+  _codex_profiled
+  run --separate-stderr clikae burn codex work --artifact "$A" --json \
+    -- exec -- '--model=not-a-flag'
+  [ "$status" -eq 0 ]
+  [ "$(_json_field model)" = gpt-profile ]
+  [ "$(_json_field model_source)" = profile ]
+  [ "$(_json_field effort)" = low ]
+  [ "$(_json_field effort_source)" = profile ]
+}
+
+@test "codex raw argv: an override whose value cannot be read with certainty is reported as unknown, not guessed (#237)" {
+  _codex_profiled
+  run clikae burn codex work --artifact "$A" \
+    -- exec -c 'model="gpt-x" # pinned' -c 'model_reasoning_effort=5' 'do it'
+  [ "$status" -eq 0 ]
+  [ "$(_knobs_line)" = "burn codex/work: model unknown, effort unknown" ]
+  [[ "$output" == *"the argv after -- sets the model and effort in a form clikae cannot read with certainty"* ]] || false
+  run --separate-stderr clikae burn codex work --artifact "$A" --json --fresh \
+    -- exec -c '"model"="gpt-quoted-key"' 'do it'
+  [ "$status" -eq 0 ]
+  [ "$(_json_field model)" = unknown ]
+  [ "$(_json_field model_source)" = unknown ]
+  [ "$(_json_field effort)" = low ]
+  [ "$(_json_field effort_source)" = profile ]
+}
+
+@test "codex: an unreadable override after -- still counts as the knob given twice (#237)" {
+  _codex_profiled
+  run clikae burn codex work --artifact "$A" --prompt 'do it' --effort high \
+    -- -c 'model_reasoning_effort=5'
+  [ "$status" -eq 1 ]
+  [[ "$output" == *"--effort is given twice"* ]] || false
+  [ ! -e "$L" ]
+}
+
+@test "--require-declared refuses an unknown model: it is not a declared one (#237)" {
+  _codex_profiled
+  run --separate-stderr clikae burn codex work --artifact "$A" --json --require-declared \
+    -- exec -c 'model="gpt-x" # pinned' 'do it'
+  [ "$status" -eq 1 ]
+  [[ "$stderr" == *"--require-declared: the model of codex/work cannot be determined"* ]] || false
+  [ "$(_json_field reason)" = "refused: unknown model" ]
+  [ ! -e "$L" ]
+}
+
+@test "codex raw argv reaches the engine byte for byte, whatever was read from it (#237)" {
+  _codex_profiled
+  run --separate-stderr clikae burn codex work --artifact "$A" --json \
+    -- exec -mgpt-actual -c '  model_reasoning_effort  =  "high"' -- '--model=not-a-flag'
+  [ "$status" -eq 0 ]
+  [ "$(cat "$L")" = 'exec
+-mgpt-actual
+-c
+  model_reasoning_effort  =  "high"
+--
+--model=not-a-flag
+--END--' ]
+  [ "$(_json_field model)" = gpt-actual ]
+  [ "$(_json_field effort)" = high ]
+}
+
+# ── 5. codex: config.toml, read as TOML ──────────────────────────────────────
+
+@test "codex: text inside a multi-line string in config.toml declares nothing (#237)" {
+  _stub_engine codex
+  _codex_tank work "model = \"gpt-actual\"
+model_reasoning_effort = \"high\"
+developer_instructions = '''
+In examples, use this config:
+model = \"example-model\"
+model_reasoning_effort = \"low\"
+'''"
+  _burn_json codex work --artifact "$A" --prompt 'do it' --require-declared
+  [ "$status" -eq 0 ]
+  [ "$(_json_field model)" = gpt-actual ]
+  [ "$(_json_field model_source)" = profile ]
+  [ "$(_json_field effort)" = high ]
+  [ "$(_json_field effort_source)" = profile ]
+}
+
+@test "codex: quoted keys in config.toml are the same keys (#237)" {
+  _stub_engine codex
+  _codex_tank work "\"model\" = \"gpt-actual\" # comment
+'model_reasoning_effort' = 'high'"
+  _burn_json codex work --artifact "$A" --prompt 'do it' --require-declared
+  [ "$status" -eq 0 ]
+  [ "$(_json_field model)" = gpt-actual ]
+  [ "$(_json_field model_source)" = profile ]
+  [ "$(_json_field effort)" = high ]
+  [ "$(_json_field effort_source)" = profile ]
+}
+
+@test "codex: a root member that is not a string, or a multi-line one, is not a declaration (#237)" {
+  _stub_engine codex
+  _codex_tank work 'model = 5
+model_reasoning_effort = """
+high
+"""'
+  _burn_json codex work --artifact "$A" --prompt 'do it'
+  [ "$status" -eq 0 ]
+  [ "$(_json_field model_source)" = undeclared ]
+  [ "$(_json_field effort_source)" = undeclared ]
+}
+
+@test "codex: a config.toml that is not valid TOML declares nothing, and the burn says why (#237)" {
+  _stub_engine codex
+  _codex_tank work 'model = "gpt-actual"
+model_reasoning_effort = "high
+[broken'
+  run clikae burn codex work --artifact "$A" --prompt 'do it'
+  [ "$status" -eq 0 ]
+  [ "$(_knobs_line)" = "burn codex/work: model undeclared, effort undeclared" ]
+  [[ "$output" == *"config.toml is not valid TOML"* ]] || false
+}
+
+@test "codex: with no usable python3 the profile reads as undeclared with the reason, never a guess (#237)" {
+  _stub_engine codex
+  _codex_tank work 'model = "gpt-actual"
+model_reasoning_effort = "high"'
+  # Ahead of the real one on PATH: a python3 that cannot run anything.
+  printf '#!/bin/sh\nexit 1\n' > "$BATS_TEST_TMPDIR/bin/python3"
+  chmod +x "$BATS_TEST_TMPDIR/bin/python3"
+  run clikae burn codex work --artifact "$A" --prompt 'do it'
+  [ "$status" -eq 0 ]
+  [ "$(_knobs_line)" = "burn codex/work: model undeclared, effort undeclared" ]
+  [[ "$output" == *"config.toml was not read: that needs python3 3.11 or newer"* ]] || false
+  # A flag still names what the file could not; the note stays for the other.
+  run clikae burn codex work --artifact "$A" --prompt 'do it' --fresh --effort high
+  [ "$status" -eq 0 ]
+  [ "$(_knobs_line)" = "burn codex/work: model undeclared, effort high (flag)" ]
+  [[ "$output" == *"config.toml was not read"* ]] || false
+  _burn_json codex work --artifact "$A" --prompt 'do it' --fresh --require-declared
+  [ "$status" -eq 1 ]
+  [ "$(_json_field reason)" = "refused: undeclared model or effort" ]
+  [[ "$stderr" == *"config.toml was not read"* ]] || false
 }

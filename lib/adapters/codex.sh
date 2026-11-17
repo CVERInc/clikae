@@ -103,58 +103,124 @@ adapter_burn_knobs_check() {
   return 0
 }
 
+# _codex_override_string <value of a `-c key=value`> -> the string codex ends
+# up with, when that is certain; rc 1 when it is not. Codex trims the value,
+# parses it as TOML, and falls back to the raw text (outer quotes stripped)
+# when that fails (codex-rs/utils/cli/src/config_override.rs). Certain here
+# means: one quoted string with no escape and no inner quote, or a bare word
+# that is not a TOML literal. Anything else — an escape, a number, a boolean,
+# a trailing comment — is left as "cannot tell".
+_codex_override_string() {
+  local v="$1"
+  v="${v#"${v%%[![:space:]]*}"}"; v="${v%"${v##*[![:space:]]}"}"
+  case "$v" in
+    \"*\") v="${v#\"}"; v="${v%\"}"; case "$v" in ''|*[\"\\]*|*[[:cntrl:]]*) return 1 ;; esac ;;
+    \'*\') v="${v#\'}"; v="${v%\'}"; case "$v" in ''|*\'*|*[[:cntrl:]]*) return 1 ;; esac ;;
+    true|false|inf|nan) return 1 ;;
+    [A-Za-z]*) case "$v" in *[!A-Za-z0-9._-]*) return 1 ;; esac ;;
+    *) return 1 ;;
+  esac
+  printf '%s' "$v"
+}
+
+# What the argv names, read the way codex reads it — not a second parser of
+# codex's whole grammar, only the two options that carry these values:
+#   · `-m <v>`, `-m<v>`, `-m=<v>`, `--model <v>`, `--model=<v>`
+#   · `-c <k=v>`, `-c<k=v>`, `-c=<k=v>`, `--config <k=v>`, `--config=<k=v>`;
+#     the key is trimmed, the split is at the first `=`
+#   · `--` ends the options: what follows is the prompt
+#   · precedence: an explicit model option beats any `-c model=…`
+#     (`let model = model.or(cfg.model)`, codex-rs/core/src/config/mod.rs);
+#     among `-c` overrides of one key the last is applied last, so it wins.
+# A value this cannot read with certainty comes out as `model?` / `effort?`
+# rather than as a guess. The argv itself is never touched.
 adapter_burn_knobs_from_args() {
-  local kv v
+  local a kv key bare v has_kv m_opt="" m_cfg="" e_cfg=""
   while [ "$#" -gt 0 ]; do
-    kv=""
-    case "$1" in
-      --model=*)   printf 'model=%s\n' "${1#--model=}" ;;
-      -m|--model)  if [ "$#" -ge 2 ]; then printf 'model=%s\n' "$2"; shift; fi ;;
-      --config=*)  kv="${1#--config=}" ;;
-      -c|--config) if [ "$#" -ge 2 ]; then kv="$2"; shift; fi ;;
+    a="$1"; shift; kv=""; has_kv=0
+    case "$a" in
+      --) break ;;
+      -m|--model)  [ "$#" -ge 1 ] || break; v="$1"; shift
+                   case "$v" in ''|-*|*[[:cntrl:]]*) m_opt="?" ;; *) m_opt="=$v" ;; esac ;;
+      --model=*|-m=*|-m?*)
+                   case "$a" in --model=*) v="${a#--model=}" ;; -m=*) v="${a#-m=}" ;; *) v="${a#-m}" ;; esac
+                   case "$v" in ''|*[[:cntrl:]]*) m_opt="?" ;; *) m_opt="=$v" ;; esac ;;
+      -c|--config) [ "$#" -ge 1 ] || break; kv="$1"; has_kv=1; shift ;;
+      --config=*)  kv="${a#--config=}"; has_kv=1 ;;
+      -c=*)        kv="${a#-c=}"; has_kv=1 ;;
+      -c?*)        kv="${a#-c}"; has_kv=1 ;;
     esac
-    case "$kv" in
-      model=*|model_reasoning_effort=*)
-        v="${kv#*=}"; v="${v#[\"\']}"; v="${v%[\"\']}"
-        case "$kv" in
-          model=*) printf 'model=%s\n' "$v" ;;
-          *)       printf 'effort=%s\n' "$v" ;;
-        esac ;;
+    [ "$has_kv" -eq 1 ] || continue
+    case "$kv" in *=*) ;; *) continue ;; esac     # no `=`: codex rejects it
+    key="${kv%%=*}"
+    key="${key#"${key%%[![:space:]]*}"}"; key="${key%"${key##*[![:space:]]}"}"
+    # A quoted key may or may not be the same key to codex's dotted-path
+    # writer; that is not for this reader to decide.
+    bare="${key//[\"\'[:space:]]/}"
+    case "$bare" in
+      model|model_reasoning_effort) ;;
+      *) continue ;;
     esac
-    shift
+    if [ "$bare" = "$key" ] && v="$(_codex_override_string "${kv#*=}")"; then v="=$v"; else v="?"; fi
+    if [ "$bare" = model ]; then m_cfg="$v"; else e_cfg="$v"; fi
   done
+  [ -n "$m_opt" ] || m_opt="$m_cfg"
+  case "$m_opt" in '') ;; '?') printf 'model?\n' ;; *) printf 'model=%s\n' "${m_opt#=}" ;; esac
+  case "$e_cfg" in '') ;; '?') printf 'effort?\n' ;; *) printf 'effort=%s\n' "${e_cfg#=}" ;; esac
   return 0
 }
 
-# _codex_config_top <config.toml> <key> -> the quoted string value of a
-# TOP-LEVEL <key>: one written before the first `[table]` header. The same key
-# under a table (`[profiles.x]`, `[tui]`) is a different setting.
-_codex_config_top() {
-  [ -f "$1" ] || return 0
-  awk -v k="$2" '
-    /^[[:space:]]*\[/ { exit }
-    {
-      line = $0; sub(/^[[:space:]]*/, "", line)
-      if (index(line, k) != 1) next
-      rest = substr(line, length(k) + 1)
-      if (rest !~ /^[[:space:]]*=/) next
-      sub(/^[[:space:]]*=[[:space:]]*/, "", rest)
-      q = substr(rest, 1, 1)
-      if (q != "\"" && q != "\047") next
-      rest = substr(rest, 2); i = index(rest, q)
-      if (i > 0) v = substr(rest, 1, i - 1)
-    }
-    END { if (v != "") print v }' "$1" 2>/dev/null || true
+# _codex_config_root <config.toml> -> what the ROOT table of the file declares:
+# `model<TAB><v>` and `effort<TAB><v>` for root members `model` and
+# `model_reasoning_effort` that are one-line strings, or one `note<TAB><why>`
+# line when the file could not be read as TOML. The same key under a table
+# (`[profiles.x]`, `[tui]`) is a different setting; text inside a multi-line
+# string is text.
+#
+# TOML is read by a TOML parser — python3's tomllib (3.11+) — not by matching
+# lines: a line scan takes `model = "…"` inside a multi-line string for a
+# setting and misses a quoted key. clikae needs no python anywhere else, so
+# its absence must not break a burn: the profile then reads as undeclared and
+# the burn says why. Never a guess. (-I: no user site, no PYTHON* variables.)
+_codex_config_root() {
+  local f="$1" out="" rc=0
+  [ -f "$f" ] || return 0
+  if ! command -v python3 >/dev/null 2>&1; then rc=127
+  else
+    out="$(python3 -I -c '
+import sys
+try:
+    import tomllib
+except ImportError:
+    sys.exit(4)
+try:
+    with open(sys.argv[1], "rb") as fh:
+        root = tomllib.load(fh)
+except (OSError, ValueError):
+    sys.exit(3)
+for key, name in (("model", "model"), ("model_reasoning_effort", "effort")):
+    v = root.get(key)
+    if isinstance(v, str) and v and not any(ord(c) < 32 or ord(c) == 127 for c in v):
+        print(name + "\t" + v)
+' "$f" 2>/dev/null)" || rc=$?
+  fi
+  case "$rc" in
+    0) [ -z "$out" ] || printf '%s\n' "$out" ;;
+    3) printf 'note\t%s\n' "config.toml is not valid TOML (or could not be opened), so it declares nothing here; codex will say what is wrong with it." ;;
+    *) printf 'note\t%s\n' "config.toml was not read: that needs python3 3.11 or newer (for its TOML parser), and none is usable on PATH. Whatever the file declares is reported as undeclared, not guessed. Pass --model / --effort to name them." ;;
+  esac
+  return 0
 }
 
 adapter_burn_knobs_declared() {
-  local dir="$1" model="$2" v
-  if [ -z "$model" ]; then
-    v="$(_codex_config_top "$dir/config.toml" model)"
-    [ -z "$v" ] || printf 'model\tprofile\t%s\n' "$v"
-  fi
-  v="$(_codex_config_top "$dir/config.toml" model_reasoning_effort)"
-  [ -z "$v" ] || printf 'effort\tprofile\t%s\n' "$v"
+  local dir="$1" model="$2" kind val
+  while IFS=$'\t' read -r kind val; do
+    case "$kind" in
+      model)  [ -n "$model" ] || printf 'model\tprofile\t%s\n' "$val" ;;
+      effort) printf 'effort\tprofile\t%s\n' "$val" ;;
+      note)   printf 'note\t%s\tany\n' "$val" ;;
+    esac
+  done < <(_codex_config_root "$dir/config.toml")
   return 0
 }
 

@@ -13,13 +13,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   is dispatched to a tank chosen for its quota, so the tank's profile decided both, and nothing in the
   output said what they were; "Effort: high" in a prompt changed nothing. Every burn now opens with
   `burn <engine>/<tank>: model <m> (<source>), effort <e> (<source>)`, and `--json` and the status file carry
-  `model`, `model_source`, `effort` and `effort_source`. A source is `flag`, `env`, `profile` or
-  `undeclared`.
+  `model`, `model_source`, `effort` and `effort_source`. A source is `flag`, `env`, `profile`,
+  `undeclared`, or `unknown` when the argv after `--` sets it in a form burn cannot read with certainty.
 - **`burn --model <m>` and `--effort <e>`**, passed in each engine's own words: claude `--model` /
-  `--effort`, codex `-m` / `-c model_reasoning_effort="<e>"`, agy `--model` / `--effort`. A cross-engine
-  reroute regenerates them. An engine that cannot honour one fails before anything starts.
+  `--effort`, codex `-m` / `-c model_reasoning_effort="<e>"`, agy `--model` / `--effort`. An engine that
+  cannot honour one fails before anything starts.
+- **`burn --to-model <m>`** names the model for a `--to` on another engine. A model name belongs to one
+  engine, so `--model` never crosses that hop: `--model` with a cross-engine `--to` and no `--to-model`
+  is refused before anything starts. `--effort` crosses only if the other engine accepts that level.
 - **`burn --require-declared`** refuses to start, or to reroute onto a tank, when the model or the effort
-  is undeclared.
+  is undeclared or unknown.
+- A Codex tank's `config.toml` is read with a TOML parser (`python3` 3.11 or newer). Without one the
+  profile reads as `undeclared` and the burn says why; nothing else in clikae needs python.
 - For a Claude tank, a top-level `effortLevel` alone is reported as `undeclared`: Claude Code applies that
   key in a tank's own settings only to older models. The burn says so, and `--effort` pins it.
 

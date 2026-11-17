@@ -44,7 +44,7 @@ Usage: clikae burn <engine> <tank> --artifact <path>
                    [--no-reroute] [--allow-active] [--fresh] [--wait-for-reset <dur>]
                    [--resume-after-limit]
                    [--permission <mode>] [--force-cockpit]
-                   [--model <m>] [--effort <e>] [--require-declared]
+                   [--model <m>] [--to-model <m>] [--effort <e>] [--require-declared]
                    [--queue [--queue-timeout <dur>]]
 
 Run a headless engine task on <tank>, verify it by the ARTIFACT it should
@@ -106,16 +106,24 @@ Give the task in one of two ways:
                       fails BEFORE anything starts; it is never dropped. They
                       apply to a --prompt/--prompt-file task: with a raw
                       `-- <cmd...>` put the engine's own flag in that command.
+  --to-model <m>      (#237) the model for a --to that names ANOTHER engine. A
+                      model name belongs to one engine, so --model never
+                      crosses that hop: with --model and a cross-engine --to,
+                      give --to-model too or the burn is refused before
+                      anything starts. --effort does cross, if the other engine
+                      accepts that level.
                       Without them the tank's profile decides, and every burn
                       says what that was: its first line reads
                         burn <engine>/<tank>: model <m> (<source>), effort <e> (<source>)
                       and --json carries model, model_source, effort and
                       effort_source. A source is `flag`, `env` (a variable
-                      the engine ranks above its settings), `profile`, or
+                      the engine ranks above its settings), `profile`,
                       `undeclared` — the engine's default decides, and the
-                      value reads "undeclared" too.
+                      value reads "undeclared" too — or `unknown`: the argv
+                      after -- sets it in a form burn cannot read with
+                      certainty (value "unknown").
   --require-declared  (#237) refuse to start, and refuse a reroute hop, when
-                      the model or the effort is undeclared.
+                      the model or the effort is undeclared or unknown.
 
   --timeout <secs>    bound the run. Uses `timeout`/`gtimeout` (coreutils) if present,
                       else a `perl` alarm (SIGALRM, direct child only). With none of
@@ -4161,7 +4169,9 @@ cmd_burn() {
   # caller asked for (read by the adapters' adapter_burn_flags and by
   # _agy_burn); the other four are the effective values every result carries.
   # See lib/core/burn_knobs.sh, which reads and sets them by dynamic scope.
-  local burn_model_flag="" burn_effort_flag="" require_declared=0
+  # burn_to_model is --to-model: the model for a cross-engine --to, which
+  # replaces burn_model_flag at that hop — a model name belongs to one engine.
+  local burn_model_flag="" burn_effort_flag="" burn_to_model="" require_declared=0
   # shellcheck disable=SC2034  # read in lib/core/burn_knobs.sh
   local burn_model=undeclared burn_model_source=undeclared
   # shellcheck disable=SC2034  # read in lib/core/burn_knobs.sh
@@ -4204,6 +4214,7 @@ cmd_burn() {
       --wait-for-reset) shift; [ $# -gt 0 ] || log_fail "--wait-for-reset needs a duration (e.g. 30m)"; wait_for_reset_raw="$1"; shift ;;
       --codex-skip-git-check) codex_skip_git_check=1; shift ;;
       --model)      shift; [ $# -gt 0 ] && [ -n "$1" ] || log_fail "--model needs a model name"; burn_model_flag="$1"; shift ;;
+      --to-model)   shift; [ $# -gt 0 ] && [ -n "$1" ] || log_fail "--to-model needs a model name"; burn_to_model="$1"; shift ;;
       --effort)     shift; [ $# -gt 0 ] && [ -n "$1" ] || log_fail "--effort needs a level"; burn_effort_flag="$1"; shift ;;
       --require-declared) require_declared=1; shift ;;
       --json)       as_json=1; shift ;;
@@ -4253,6 +4264,9 @@ cmd_burn() {
   case "$burn_model_flag" in
     -*|*[[:cntrl:]]*) log_fail "--model must be a model name, not a flag or a multi-line value: $burn_model_flag" ;;
   esac
+  case "$burn_to_model" in
+    -*|*[[:cntrl:]]*) log_fail "--to-model must be a model name, not a flag or a multi-line value: $burn_to_model" ;;
+  esac
 
   [ -n "$cli" ]      || log_fail "Missing <engine>. Usage: clikae burn <engine> <tank> --artifact <path> (--prompt-file <f> | -- <cmd...>)"
   [ -n "$tank" ]     || log_fail "Missing <tank>."
@@ -4294,8 +4308,8 @@ cmd_burn() {
   fi
   # #237: unlike --permission above, never a warning — a model or an effort the
   # caller asked for and did not get is the exact failure this flag exists to end.
-  if [ "$prompt_set" -eq 0 ] && [ -n "$burn_model_flag$burn_effort_flag" ]; then
-    log_fail "--model and --effort only apply to a task given with --prompt or --prompt-file; with a raw '-- <cmd...>' put the engine's own flag in that command."
+  if [ "$prompt_set" -eq 0 ] && [ -n "$burn_model_flag$burn_effort_flag$burn_to_model" ]; then
+    log_fail "--model, --to-model and --effort only apply to a task given with --prompt or --prompt-file; with a raw '-- <cmd...>' put the engine's own flag in that command."
   fi
   # P3-6 (2026-09-12 round-1 review): the opposite gap — prompt mode composes
   # --permission-mode itself, and #24's escape hatch (extra argv after --,
@@ -4392,15 +4406,14 @@ cmd_burn() {
     _knobs_dir="$(profile_dir "$cli" "$tank")"
   fi
   if [ -n "$_knobs_dir" ] && [ -d "$_knobs_dir" ]; then
-    # An explicit cross-engine --to is the one reroute that changes dialect:
-    # ask that engine now, not after the first tank has already run.
-    case "$to" in
-      */*)
-        if [ "${to%%/*}" != "$cli" ] && ! _burn_knobs_check_other "${to%%/*}"; then
-          _burn_knobs_refuse "$status_engine" "$tank" 0 "refused: $_BURN_KNOBS_REFUSAL" \
-            "--to $to: $_BURN_KNOBS_REFUSAL Nothing was started."
-        fi ;;
-    esac
+    # An explicit cross-engine --to is the one reroute that changes engine, so
+    # it is the one place a model name could land on an engine it does not
+    # belong to, or an effort level on one that does not list it. Settle that
+    # now, not after the first tank has already run.
+    if ! _burn_knobs_check_hop "$cli" "$to"; then
+      _burn_knobs_refuse "$status_engine" "$tank" 0 "refused: $_BURN_KNOBS_REFUSAL_REASON" \
+        "$_BURN_KNOBS_REFUSAL Nothing was started."
+    fi
     _burn_knobs_gate "$status_engine" "$tank" "$_knobs_dir" 0 "$require_declared" ${cmd[@]+"${cmd[@]}"}
   fi
   log_info "task: $saved_prompt"
@@ -5501,6 +5514,9 @@ KV
       _burn_claude_headless_guards
     fi
     if [ "$nx_cli" != "$cli" ]; then
+      # #237: --model named the engine being left. From here on the model is
+      # the destination's own (--to-model), or none — never the old name.
+      burn_model_flag="$burn_to_model"
       cli="$nx_cli"; load_adapter "$cli"; binary="$(adapter_meta_cli_binary)"
       envvar="$(adapter_meta_env_var 2>/dev/null || true)"   # in-use guard tracks the new engine's var
       command -v "$binary" >/dev/null 2>&1 || log_fail "Reroute engine '$binary' is not on PATH."

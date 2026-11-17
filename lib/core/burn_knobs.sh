@@ -12,6 +12,14 @@
 #   env         a variable the engine documents as outranking its settings file
 #   profile     the tank's own config, read the way the engine reads it
 #   undeclared  none of the above: the engine's default decides
+#   unknown     the argv after `--` sets it, in a form that cannot be read with
+#               certainty — reported as that rather than as a confident guess
+#
+# A model name belongs to ONE engine, so burn's --model never crosses a
+# cross-engine reroute: the destination's model is --to-model, or a pinned
+# model with such a --to is refused before anything starts
+# (_burn_knobs_check_hop). An effort level crosses only if the destination
+# engine accepts that level too.
 #
 # What an engine can be told, and how its profile is read, lives with the
 # engine — three optional adapter hooks, plus the adapter's own
@@ -23,16 +31,22 @@
 #       asked); otherwise rc 1 and one line saying why. An adapter WITHOUT
 #       this hook honours neither.
 #   adapter_burn_knobs_from_args <argv...>
-#       `model=<v>` / `effort=<v>` lines for what the argv itself names.
+#       `model=<v>` / `effort=<v>` lines for what the argv itself names, read
+#       with the engine's own option syntax, terminator and precedence; a bare
+#       `model?` / `effort?` line when the argv sets one but the value that
+#       results cannot be read with certainty.
 #   adapter_burn_knobs_declared <tank-dir> <model-in-use>
 #       `model<TAB><source><TAB><value>`, `effort<TAB><source><TAB><value>` and
-#       `note<TAB><text>` lines for what the environment and the profile declare.
+#       `note<TAB><text>[<TAB><about>]` lines for what the environment and the
+#       profile declare. A note explains an undeclared value: <about> says
+#       which — `effort` (the default) or `any` (the model or the effort).
 #
 # agy has no adapter, so its three answers are spelled out here.
 #
 # State is cmd_burn's locals, read through bash's dynamic scope — the same
 # convention _burn_result and _burn_status_write already use:
 #   burn_model_flag / burn_effort_flag     what --model / --effort asked for
+#   burn_to_model                          what --to-model asked for
 #   burn_model, burn_model_source,
 #   burn_effort, burn_effort_source        the effective values
 #   burn_knobs_notes                       newline-separated remarks for the log
@@ -77,11 +91,14 @@ _burn_knobs_check() {
   return 0
 }
 
-# _burn_knobs_check_other <engine> — the same question about an engine that is
-# NOT the loaded one (an explicit cross-engine --to). Asked in a subshell so
-# the caller's adapter stays loaded. Same rc / _BURN_KNOBS_REFUSAL contract.
+# _burn_knobs_check_other <engine> <model> — the same question about an engine
+# that is NOT the loaded one (an explicit cross-engine --to), with <model> —
+# that engine's own, from --to-model — in place of --model. Asked in a
+# subshell so the caller's adapter stays loaded. Same rc / _BURN_KNOBS_REFUSAL
+# contract.
 _burn_knobs_check_other() {
   local eng="$1" why="" rc=0
+  local burn_model_flag="${2:-}"
   _BURN_KNOBS_REFUSAL=""
   [ -n "${burn_model_flag:-}${burn_effort_flag:-}" ] || return 0
   if _burn_knobs_is_agy "$eng"; then _burn_knobs_check "$eng"; return; fi
@@ -97,7 +114,38 @@ _burn_knobs_check_other() {
   return 1
 }
 
-# _burn_knobs_from_args <engine> <argv...> -> `model=<v>` / `effort=<v>` lines.
+# _burn_knobs_check_hop <engine> <to> — may this burn, started on <engine>,
+# take its explicit --to hop with the model and effort it was given? Only a
+# <to> that names another engine is in question. rc 0 yes; rc 1 with the
+# reason in _BURN_KNOBS_REFUSAL (two sentences, no trailing "Nothing was
+# started.") and a short form in _BURN_KNOBS_REFUSAL_REASON.
+_burn_knobs_check_hop() {
+  local eng="$1" to="$2" dest=""
+  _BURN_KNOBS_REFUSAL=""; _BURN_KNOBS_REFUSAL_REASON=""
+  case "$to" in */*) dest="${to%%/*}" ;; esac
+  if [ -z "$dest" ] || [ "$dest" = "$eng" ]; then
+    [ -z "${burn_to_model:-}" ] || {
+      _BURN_KNOBS_REFUSAL="--to-model only applies with a --to that names a different engine (--to <engine>/<tank>); on $eng itself, --model is the one that applies."
+      _BURN_KNOBS_REFUSAL_REASON="--to-model without a cross-engine --to"
+      return 1
+    }
+    return 0
+  fi
+  if [ -n "${burn_model_flag:-}" ] && [ -z "${burn_to_model:-}" ]; then
+    _BURN_KNOBS_REFUSAL_REASON="--model $burn_model_flag names a $eng model; --to $to needs --to-model"
+    _BURN_KNOBS_REFUSAL="--to $to: --model $burn_model_flag names a $eng model, and that reroute would run the task on $dest, where the name means nothing. Add --to-model <m> to name $dest's model, or drop --model so each tank's profile decides."
+    return 1
+  fi
+  if ! _burn_knobs_check_other "$dest" "${burn_to_model:-}"; then
+    _BURN_KNOBS_REFUSAL_REASON="$_BURN_KNOBS_REFUSAL"
+    _BURN_KNOBS_REFUSAL="--to $to: $_BURN_KNOBS_REFUSAL"
+    return 1
+  fi
+  return 0
+}
+
+# _burn_knobs_from_args <engine> <argv...> -> `model=<v>` / `effort=<v>` lines
+# (`model?` / `effort?` for one the argv sets unreadably).
 _burn_knobs_from_args() {
   local eng="$1"; shift
   if _burn_knobs_is_agy "$eng"; then
@@ -123,7 +171,7 @@ _burn_knobs_from_args() {
 # _burn_knobs_twice to refuse.
 _burn_knobs_resolve() {
   local eng="$1" kdir="$2"; shift 2
-  local line kind src val a_model="" a_effort=""
+  local line kind src val a_model="" a_effort="" unsure=""
   burn_model=undeclared; burn_model_source=undeclared
   burn_effort=undeclared; burn_effort_source=undeclared
   burn_knobs_notes=""; _BURN_KNOBS_TWICE=""
@@ -131,14 +179,20 @@ _burn_knobs_resolve() {
     case "$line" in
       model=?*)  a_model="${line#model=}" ;;
       effort=?*) a_effort="${line#effort=}" ;;
+      'model?')  a_model="?" ;;
+      'effort?') a_effort="?" ;;
     esac
   done < <(_burn_knobs_from_args "$eng" "$@")
+  # Readable or not, a knob the argv sets is a second naming of it.
   [ -z "${burn_model_flag:-}" ] || [ -z "$a_model" ] || _BURN_KNOBS_TWICE="--model"
   [ -z "${burn_effort_flag:-}" ] || [ -z "$a_effort" ] || _BURN_KNOBS_TWICE="${_BURN_KNOBS_TWICE:+$_BURN_KNOBS_TWICE and }--effort"
   if [ -n "${burn_model_flag:-}" ]; then burn_model="$burn_model_flag"; burn_model_source=flag
+  elif [ "$a_model" = "?" ]; then burn_model=unknown; burn_model_source=unknown; unsure="model"
   elif [ -n "$a_model" ]; then burn_model="$a_model"; burn_model_source=flag; fi
   if [ -n "${burn_effort_flag:-}" ]; then burn_effort="$burn_effort_flag"; burn_effort_source=flag
+  elif [ "$a_effort" = "?" ]; then burn_effort=unknown; burn_effort_source=unknown; unsure="${unsure:+$unsure and }effort"
   elif [ -n "$a_effort" ]; then burn_effort="$a_effort"; burn_effort_source=flag; fi
+  [ -z "$unsure" ] || burn_knobs_notes="the argv after -- sets the $unsure in a form clikae cannot read with certainty, so it is reported as unknown rather than guessed."
 
   if _burn_knobs_is_agy "$eng"; then
     # agy's --help documents --model and --effort for a session and names no
@@ -148,24 +202,31 @@ _burn_knobs_resolve() {
   declare -F adapter_burn_knobs_declared >/dev/null 2>&1 || return 0
   local known_model="" notes=""
   [ "$burn_model_source" = undeclared ] || known_model="$burn_model"
+  local any_notes=""
   while IFS=$'\t' read -r kind src val; do
     case "$kind" in
       model)  [ "$burn_model_source" != undeclared ] || [ -z "$val" ] || { burn_model="$val"; burn_model_source="$src"; } ;;
       effort) [ "$burn_effort_source" != undeclared ] || [ -z "$val" ] || { burn_effort="$val"; burn_effort_source="$src"; } ;;
-      note)   notes="${notes:+$notes$'\n'}$src" ;;
+      # A note's text is its second field; the optional third says what it is about.
+      note)   if [ "$val" = any ]; then any_notes="${any_notes:+$any_notes$'\n'}$src"
+              else notes="${notes:+$notes$'\n'}$src"; fi ;;
     esac
   done < <(adapter_burn_knobs_declared "$kdir" "$known_model" 2>/dev/null || true)
-  # A note explains why the EFFORT reads as undeclared; with one named by a
-  # flag there is nothing left to explain.
-  [ "$burn_effort_source" != undeclared ] || burn_knobs_notes="$notes"
+  # A note explains why something reads as undeclared; once a flag or the
+  # environment names it there is nothing left to explain.
+  [ "$burn_effort_source" = undeclared ] || notes=""
+  [ "$burn_model_source" = undeclared ] || [ "$burn_effort_source" = undeclared ] || any_notes=""
+  for line in "$any_notes" "$notes"; do
+    [ -z "$line" ] || burn_knobs_notes="${burn_knobs_notes:+$burn_knobs_notes$'\n'}$line"
+  done
   return 0
 }
 
 # _burn_knobs_line <engine> <tank> -> the line a burn opens with.
 _burn_knobs_line() {
   local m="${burn_model:-undeclared}" e="${burn_effort:-undeclared}"
-  [ "${burn_model_source:-undeclared}" = undeclared ] || m="$m ($burn_model_source)"
-  [ "${burn_effort_source:-undeclared}" = undeclared ] || e="$e ($burn_effort_source)"
+  case "${burn_model_source:-undeclared}" in undeclared|unknown) ;; *) m="$m ($burn_model_source)" ;; esac
+  case "${burn_effort_source:-undeclared}" in undeclared|unknown) ;; *) e="$e ($burn_effort_source)" ;; esac
   printf 'burn %s/%s: model %s, effort %s' "$1" "$2" "$m" "$e"
 }
 
@@ -180,11 +241,12 @@ _burn_knobs_announce() {
   done <<<"$burn_knobs_notes"
 }
 
-# _burn_knobs_missing -> `model`, `effort`, `model or effort`, or nothing.
+# _burn_knobs_missing [<source>] -> which of the two has that source
+# (default `undeclared`): `model`, `effort`, `model or effort`, or nothing.
 _burn_knobs_missing() {
-  local out=""
-  [ "${burn_model_source:-undeclared}" != undeclared ] || out="model"
-  [ "${burn_effort_source:-undeclared}" != undeclared ] || out="${out:+$out or }effort"
+  local want="${1:-undeclared}" out=""
+  [ "${burn_model_source:-undeclared}" != "$want" ] || out="model"
+  [ "${burn_effort_source:-undeclared}" != "$want" ] || out="${out:+$out or }effort"
   printf '%s' "$out"
 }
 
@@ -229,6 +291,10 @@ _burn_knobs_gate() {
   fi
   _burn_knobs_announce "$eng" "$tk"
   [ "$require_declared" -eq 1 ] || return 0
+  # Unknown is not declared: the whole point of the flag is knowing what runs.
+  missing="$(_burn_knobs_missing unknown)"
+  [ -z "$missing" ] || _burn_knobs_refuse "$eng" "$tk" "$hop" "refused: unknown $missing" \
+    "--require-declared: the $missing of $eng/$tk cannot be determined — the argv after -- sets it in a form clikae cannot read with certainty. Write it as a plain quoted value, or name it with --model / --effort. $tail"
   missing="$(_burn_knobs_missing)"
   [ -n "$missing" ] || return 0
   _burn_knobs_refuse "$eng" "$tk" "$hop" "refused: undeclared $missing" \
