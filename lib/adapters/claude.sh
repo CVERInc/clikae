@@ -253,7 +253,96 @@ adapter_burn_flags() {
   # scoping through _burn_compose; direct callers of this hook keep the
   # historical acceptEdits default.
   printf -- '-p\0%s\0--permission-mode\0%s\0' "$prompt" "${burn_permission:-acceptEdits}"
+  # #237: burn's --model / --effort, in claude's own words. Same dynamic-scope
+  # convention as burn_permission; a direct caller of this hook sets neither.
+  [ -z "${burn_model_flag:-}" ] || printf -- '--model\0%s\0' "$burn_model_flag"
+  [ -z "${burn_effort_flag:-}" ] || printf -- '--effort\0%s\0' "$burn_effort_flag"
   local d; for d in "$@"; do printf -- '--add-dir\0%s\0' "$d"; done
+}
+
+# --- #237: the model and effort a burn runs with ---------------------------
+# Contract: lib/core/burn_knobs.sh. Everything below is from `claude --help`
+# (claude 2.1.326: `--model <model>`, `--effort <level>` with the five levels
+# listed) and Claude Code's settings reference:
+#   · model:  --model, then ANTHROPIC_MODEL, then the settings file's `model`.
+#   · effort: CLAUDE_CODE_EFFORT_LEVEL, then --effort, then the settings file.
+#     In the settings file a model's own level under `modelSettings` beats the
+#     top-level `effortLevel`, and in the USER settings file — which is what a
+#     tank's settings.json is — the top-level key applies only to older models;
+#     newer ones ignore it and start at their own default.
+_CLAUDE_EFFORT_LEVELS="low medium high xhigh max"
+
+adapter_burn_knobs_check() {
+  local model="$1" effort="$2" env_effort="${CLAUDE_CODE_EFFORT_LEVEL:-}"
+  : "$model"   # any model name is the engine's to accept or reject
+  [ -n "$effort" ] || return 0
+  if [[ " $_CLAUDE_EFFORT_LEVELS " != *" $effort "* ]]; then
+    printf 'claude cannot honour --effort %s: its --effort accepts %s.\n' \
+      "$effort" "${_CLAUDE_EFFORT_LEVELS// /, }"
+    return 1
+  fi
+  # The variable outranks the flag, and a burn hands the engine the caller's
+  # environment — so a different value there would quietly win.
+  if [ -n "$env_effort" ] && [ "$env_effort" != "$effort" ]; then
+    printf 'claude cannot honour --effort %s: CLAUDE_CODE_EFFORT_LEVEL=%s is set in this environment and Claude Code ranks it above --effort. Unset it, or drop --effort.\n' \
+      "$effort" "$env_effort"
+    return 1
+  fi
+  return 0
+}
+
+adapter_burn_knobs_from_args() {
+  while [ "$#" -gt 0 ]; do
+    case "$1" in
+      --model=*)  printf 'model=%s\n' "${1#--model=}" ;;
+      --model)    if [ "$#" -ge 2 ]; then printf 'model=%s\n' "$2"; shift; fi ;;
+      # With the variable set, an --effort in the argv is not what runs.
+      --effort=*) [ -n "${CLAUDE_CODE_EFFORT_LEVEL:-}" ] || printf 'effort=%s\n' "${1#--effort=}" ;;
+      --effort)   if [ "$#" -ge 2 ]; then
+                    [ -n "${CLAUDE_CODE_EFFORT_LEVEL:-}" ] || printf 'effort=%s\n' "$2"
+                    shift
+                  fi ;;
+    esac
+    shift
+  done
+  return 0
+}
+
+# _claude_settings_leaf <leaves> <path> -> the value at <path> in
+# json_string_leaves output (the last one, as a JSON parser would keep).
+_claude_settings_leaf() {
+  printf '%s\n' "$1" | awk -F'\t' -v k="$2" '$1 == k { v = $2; hit = 1 } END { if (hit) print v }'
+}
+
+adapter_burn_knobs_declared() {
+  local dir="$1" model="$2" leaves="" v="" top="" us=$'\037'
+  leaves="$(json_string_leaves "$dir/settings.json")"
+  if [ -z "$model" ]; then
+    if [ -n "${ANTHROPIC_MODEL:-}" ]; then
+      model="$ANTHROPIC_MODEL"
+      printf 'model\tenv\t%s\n' "$model"
+    else
+      model="$(_claude_settings_leaf "$leaves" model)"
+      [ -z "$model" ] || printf 'model\tprofile\t%s\n' "$model"
+    fi
+  fi
+  case "${CLAUDE_CODE_EFFORT_LEVEL:-}" in
+    '') ;;
+    auto|unset)
+      printf 'note\t%s\n' "CLAUDE_CODE_EFFORT_LEVEL=$CLAUDE_CODE_EFFORT_LEVEL tells Claude Code to send no effort level; the model's default decides."
+      return 0 ;;
+    *) printf 'effort\tenv\t%s\n' "$CLAUDE_CODE_EFFORT_LEVEL"; return 0 ;;
+  esac
+  if [ -n "$model" ]; then
+    # Entries are keyed by the model's full name; `[1m]` selects a context
+    # window, not another model. An alias (`opus`) is the engine's to resolve,
+    # so it never matches here — which reads as undeclared, on purpose.
+    v="$(_claude_settings_leaf "$leaves" "modelSettings${us}${model%\[1m\]}${us}effortLevel")"
+    if [ -n "$v" ]; then printf 'effort\tprofile\t%s\n' "$v"; return 0; fi
+  fi
+  top="$(_claude_settings_leaf "$leaves" effortLevel)"
+  [ -z "$top" ] || printf 'note\t%s\n' "settings.json's top-level effortLevel is set to '$top', but in a tank's own settings Claude Code applies that key only to older models, and clikae cannot tell which model '${model:-the default}' resolves to. A per-model level is read from modelSettings under the model's full name. To pin the effort, pass --effort."
+  return 0
 }
 
 # Optional hook: the per-run flags that make `--ephemeral` actually incognito.

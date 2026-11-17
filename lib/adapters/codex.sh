@@ -63,6 +63,11 @@ adapter_run() {
 adapter_burn_flags() {
   local prompt="$1"; shift
   printf 'exec\0'
+  # #237: burn's --model / --effort, in codex's own words (contract and
+  # sources below, at adapter_burn_knobs_check). Ahead of the prompt, which
+  # stays the last argument.
+  [ -z "${burn_model_flag:-}" ] || printf -- '-m\0%s\0' "$burn_model_flag"
+  [ -z "${burn_effort_flag:-}" ] || printf -- '-c\0model_reasoning_effort="%s"\0' "$burn_effort_flag"
   [ $# -gt 0 ] && printf -- '-C\0%s\0' "$1"
   # Like Claude's burn_permission, permission_set and dir are cmd_burn locals
   # inherited through Bash dynamic scope. dir names the current tank, including
@@ -81,6 +86,76 @@ adapter_burn_flags() {
   fi
   [ -z "$sandbox" ] || printf -- '-s\0%s\0' "$sandbox"
   printf '%s\0' "$prompt"
+}
+
+# --- #237: the model and effort a burn runs with ---------------------------
+# Contract: lib/core/burn_knobs.sh. From `codex exec --help` (codex-cli
+# 0.167.1): `-m, --model <MODEL>` names the model, and there is NO effort
+# flag — effort is the config.toml key `model_reasoning_effort`, reached for
+# one run through `-c, --config <key=value>`, which that help documents as
+# overriding any value config.toml would load (the value is parsed as TOML,
+# hence the quotes burn puts round it).
+#
+# The help lists no set of effort levels, so none is checked here: burn only
+# requires one plain word, and an unknown one is codex's to reject.
+adapter_burn_knobs_check() {
+  : "$1" "$2"
+  return 0
+}
+
+adapter_burn_knobs_from_args() {
+  local kv v
+  while [ "$#" -gt 0 ]; do
+    kv=""
+    case "$1" in
+      --model=*)   printf 'model=%s\n' "${1#--model=}" ;;
+      -m|--model)  if [ "$#" -ge 2 ]; then printf 'model=%s\n' "$2"; shift; fi ;;
+      --config=*)  kv="${1#--config=}" ;;
+      -c|--config) if [ "$#" -ge 2 ]; then kv="$2"; shift; fi ;;
+    esac
+    case "$kv" in
+      model=*|model_reasoning_effort=*)
+        v="${kv#*=}"; v="${v#[\"\']}"; v="${v%[\"\']}"
+        case "$kv" in
+          model=*) printf 'model=%s\n' "$v" ;;
+          *)       printf 'effort=%s\n' "$v" ;;
+        esac ;;
+    esac
+    shift
+  done
+  return 0
+}
+
+# _codex_config_top <config.toml> <key> -> the quoted string value of a
+# TOP-LEVEL <key>: one written before the first `[table]` header. The same key
+# under a table (`[profiles.x]`, `[tui]`) is a different setting.
+_codex_config_top() {
+  [ -f "$1" ] || return 0
+  awk -v k="$2" '
+    /^[[:space:]]*\[/ { exit }
+    {
+      line = $0; sub(/^[[:space:]]*/, "", line)
+      if (index(line, k) != 1) next
+      rest = substr(line, length(k) + 1)
+      if (rest !~ /^[[:space:]]*=/) next
+      sub(/^[[:space:]]*=[[:space:]]*/, "", rest)
+      q = substr(rest, 1, 1)
+      if (q != "\"" && q != "\047") next
+      rest = substr(rest, 2); i = index(rest, q)
+      if (i > 0) v = substr(rest, 1, i - 1)
+    }
+    END { if (v != "") print v }' "$1" 2>/dev/null || true
+}
+
+adapter_burn_knobs_declared() {
+  local dir="$1" model="$2" v
+  if [ -z "$model" ]; then
+    v="$(_codex_config_top "$dir/config.toml" model)"
+    [ -z "$v" ] || printf 'model\tprofile\t%s\n' "$v"
+  fi
+  v="$(_codex_config_top "$dir/config.toml" model_reasoning_effort)"
+  [ -z "$v" ] || printf 'effort\tprofile\t%s\n' "$v"
+  return 0
 }
 
 # Optional hook: start a session seeded with an initial prompt (for

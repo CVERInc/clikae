@@ -21,6 +21,8 @@ source "$CLIKAE_LIB/commands/antigravity.sh"
 source "$CLIKAE_LIB/core/duration.sh"
 # shellcheck source=./cockpit.sh
 source "$CLIKAE_LIB/commands/cockpit.sh"
+# shellcheck source=../core/burn_knobs.sh
+source "$CLIKAE_LIB/core/burn_knobs.sh"
 
 # Exit-code contract (also documented in _burn_help's "Outcomes:" below — ONE
 # place, this constant is what both the code and the prose actually use).
@@ -42,6 +44,7 @@ Usage: clikae burn <engine> <tank> --artifact <path>
                    [--no-reroute] [--allow-active] [--fresh] [--wait-for-reset <dur>]
                    [--resume-after-limit]
                    [--permission <mode>] [--force-cockpit]
+                   [--model <m>] [--effort <e>] [--require-declared]
                    [--queue [--queue-timeout <dur>]]
 
 Run a headless engine task on <tank>, verify it by the ARTIFACT it should
@@ -92,6 +95,28 @@ Give the task in one of two ways:
   use --permission bypassPermissions or a profile sandbox_mode = "danger-full-access"
   with no explicit --permission.
 
+  --model <m>         (#237) run the task on this model.
+  --effort <e>        (#237) run the task at this reasoning effort.
+                      Both are passed in each engine's own words — claude
+                      `--model` / `--effort`, codex `-m` / `-c
+                      model_reasoning_effort="<e>"`, agy `--model` / `--effort`
+                      — and regenerated on a cross-engine reroute. An engine
+                      that cannot honour one (no such flag, a level it does not
+                      list, a CLAUDE_CODE_EFFORT_LEVEL that would outrank it)
+                      fails BEFORE anything starts; it is never dropped. They
+                      apply to a --prompt/--prompt-file task: with a raw
+                      `-- <cmd...>` put the engine's own flag in that command.
+                      Without them the tank's profile decides, and every burn
+                      says what that was: its first line reads
+                        burn <engine>/<tank>: model <m> (<source>), effort <e> (<source>)
+                      and --json carries model, model_source, effort and
+                      effort_source. A source is `flag`, `env` (a variable
+                      the engine ranks above its settings), `profile`, or
+                      `undeclared` — the engine's default decides, and the
+                      value reads "undeclared" too.
+  --require-declared  (#237) refuse to start, and refuse a reroute hop, when
+                      the model or the effort is undeclared.
+
   --timeout <secs>    bound the run. Uses `timeout`/`gtimeout` (coreutils) if present,
                       else a `perl` alarm (SIGALRM, direct child only). With none of
                       the three on PATH the run is NOT bounded and a warning is printed.
@@ -102,6 +127,7 @@ Give the task in one of two ways:
                       the work is often not the one you named:
                         {ok, engine, tank, artifact, artifact_bytes, reason,
                          reset, rerouted_from[], elapsed_s, run_id, resumed,
+                         model, model_source, effort, effort_source,
                          left_behind[],
                          left_behind_truncated, left_behind_truncation{},
                          left_behind_kill_mode, left_behind_unavailable}
@@ -1148,6 +1174,11 @@ _agy_burn() {
     # Only passed when the user actually asked for a budget — clikae has no
     # business inventing one.
     [ -n "$timeout_s" ] && gen+=(--print-timeout "${timeout_s}s")
+    # #237: burn's --model / --effort, which agy's --help lists under the same
+    # two names. cmd_burn's locals, by the dynamic scope this function already
+    # leans on; a knob also named in the extras was refused before any launch.
+    [ -z "${burn_model_flag:-}" ] || gen+=(--model "$burn_model_flag")
+    [ -z "${burn_effort_flag:-}" ] || gen+=(--effort "$burn_effort_flag")
     # Yours last, so an explicit flag beats clikae's default for the same option.
     [ "${#extra[@]}" -gt 0 ] && gen+=("${extra[@]}")
     local -a runner=()
@@ -1265,7 +1296,7 @@ _agy_burn() {
     # headline (agy's Gemini and Claude/GPT groups are separate quotas).
     # Best-effort; a tank with no live token makes no call at all.
     if declare -F usage_read >/dev/null; then
-      CLIKAE_USAGE_AUTO_WAKE=0 CLIKAE_AGY_USAGE_MODEL="$(_agy_burn_model_of ${extra[@]+"${extra[@]}"})" \
+      CLIKAE_USAGE_AUTO_WAKE=0 CLIKAE_AGY_USAGE_MODEL="${burn_model_flag:-$(_agy_burn_model_of ${extra[@]+"${extra[@]}"})}" \
         usage_read antigravity "$cur" 1 >/dev/null 2>&1 || true
     fi
     if [ "$dry" -eq 0 ]; then
@@ -2617,11 +2648,11 @@ _burn_result() {
   fi
   # A number or null, never the summary line's "?" (a directory, a vanished file).
   case "$bytes" in ''|*[!0-9]*) bytes=null ;; esac
-  printf '{"ok":%s,"engine":%s,"tank":%s,"artifact":%s,"artifact_bytes":%s,"reason":%s,"reset":%s,"rerouted_from":[%s],"elapsed_s":%s,"queued_for_s":%s,"run_id":%s,"resumed":%s,"left_behind":%s,%s}\n' \
+  printf '{"ok":%s,"engine":%s,"tank":%s,"artifact":%s,"artifact_bytes":%s,"reason":%s,"reset":%s,"rerouted_from":[%s],"elapsed_s":%s,"queued_for_s":%s,"run_id":%s,"resumed":%s,%s,"left_behind":%s,%s}\n' \
     "$ok" "$(json_or_null "$eng")" "$(json_or_null "$tk")" "$(json_or_null "$art")" \
     "${bytes:-null}" "$(json_str "$reason")" "$(json_or_null "$reset")" \
     "$(_burn_tried_json "${tried:-}")" "$burn_elapsed_s" "${queued_for_s:-0}" \
-    "$(json_or_null "${run_id:-}")" "${resumed:-0}" "$left_behind" "$left_behind_meta" >&4
+    "$(json_or_null "${run_id:-}")" "${resumed:-0}" "$(_burn_knobs_json)" "$left_behind" "$left_behind_meta" >&4
 }
 
 # `tried` accumulates "engine/tank" words as the reroute walks the reserve.
@@ -2701,12 +2732,12 @@ _burn_status_write() {
   local f="$run_dir/status.json"
   mkdir -p "$run_dir" 2>/dev/null || true
   {
-    printf '{"ok":%s,"engine":%s,"tank":%s,"artifact":%s,"artifact_bytes":%s,"reason":%s,"reset":%s,"rerouted_from":[%s],"elapsed_s":%s,"run_id":%s,"state":%s,"started_at":%s,"updated_at":%s,"pid":%s,"log":%s,"reset_at":%s}\n' \
+    printf '{"ok":%s,"engine":%s,"tank":%s,"artifact":%s,"artifact_bytes":%s,"reason":%s,"reset":%s,"rerouted_from":[%s],"elapsed_s":%s,"run_id":%s,"state":%s,"started_at":%s,"updated_at":%s,"pid":%s,"log":%s,"reset_at":%s,%s}\n' \
       "${ok:-null}" "$(json_or_null "$eng")" "$(json_or_null "$tk")" "$(json_or_null "$art")" \
       "${bytes:-null}" "$(json_or_null "$reason")" "$(json_or_null "$reset")" \
       "$(_burn_tried_json "${tried:-}")" "$elapsed" "$(json_or_null "${burn_id:-}")" \
       "$(json_str "$state")" "${started_at:-null}" "$now" "$$" "$(json_or_null "${log_file:-}")" \
-      "${reset_at}"
+      "${reset_at}" "$(_burn_knobs_json)"
   } > "$f.tmp" 2>/dev/null && mv -f "$f.tmp" "$f" 2>/dev/null || true
   # P1-1 (2026-09-09 round-1 review): `ok` is null for every state that is
   # still IN PROGRESS and true/false only once a real terminal outcome is
@@ -4126,6 +4157,15 @@ cmd_burn() {
   # #36: --resume-after-limit — see _burn_resume_after_limit. `resumed` is read
   # by _burn_result (dynamic scope) for the --json `resumed` count.
   local resume_after_limit=0 resumed=0 base_prompt="" resume_dry_at=""
+  # #237: --model / --effort / --require-declared. The *_flag pair is what the
+  # caller asked for (read by the adapters' adapter_burn_flags and by
+  # _agy_burn); the other four are the effective values every result carries.
+  # See lib/core/burn_knobs.sh, which reads and sets them by dynamic scope.
+  local burn_model_flag="" burn_effort_flag="" require_declared=0
+  # shellcheck disable=SC2034  # read in lib/core/burn_knobs.sh
+  local burn_model=undeclared burn_model_source=undeclared
+  # shellcheck disable=SC2034  # read in lib/core/burn_knobs.sh
+  local burn_effort=undeclared burn_effort_source=undeclared burn_knobs_notes=""
   local -a burn_argv=("$@")
   # #74 round-2 P1-1 (round-3 P1-1: raw mode): the cwd the engine actually
   # runs in, not the cwd of THIS shell. Defaults to $PWD here (agy — the only
@@ -4163,6 +4203,9 @@ cmd_burn() {
       --infra-delay) shift; [ $# -gt 0 ] || log_fail "--infra-delay needs seconds"; infra_delay="$1"; shift ;;
       --wait-for-reset) shift; [ $# -gt 0 ] || log_fail "--wait-for-reset needs a duration (e.g. 30m)"; wait_for_reset_raw="$1"; shift ;;
       --codex-skip-git-check) codex_skip_git_check=1; shift ;;
+      --model)      shift; [ $# -gt 0 ] && [ -n "$1" ] || log_fail "--model needs a model name"; burn_model_flag="$1"; shift ;;
+      --effort)     shift; [ $# -gt 0 ] && [ -n "$1" ] || log_fail "--effort needs a level"; burn_effort_flag="$1"; shift ;;
+      --require-declared) require_declared=1; shift ;;
       --json)       as_json=1; shift ;;
       --no-reroute) reroute=0; shift ;;
       --resume-after-limit) resume_after_limit=1; shift ;;
@@ -4202,6 +4245,15 @@ cmd_burn() {
   infra_retries=$((10#$infra_retries)); infra_delay=$((10#$infra_delay))
   retry_delay="$infra_delay"
 
+  # #237: both values end up as ONE engine argument (codex's effort inside a
+  # quoted TOML value), so neither may carry anything that could end it.
+  case "$burn_effort_flag" in
+    *[!A-Za-z0-9._-]*) log_fail "--effort must be one word of letters, digits, '.', '_' or '-': $burn_effort_flag" ;;
+  esac
+  case "$burn_model_flag" in
+    -*|*[[:cntrl:]]*) log_fail "--model must be a model name, not a flag or a multi-line value: $burn_model_flag" ;;
+  esac
+
   [ -n "$cli" ]      || log_fail "Missing <engine>. Usage: clikae burn <engine> <tank> --artifact <path> (--prompt-file <f> | -- <cmd...>)"
   [ -n "$tank" ]     || log_fail "Missing <tank>."
   [ -n "$artifact" ] || log_fail "Missing --artifact <path> — burn verifies completion by the artifact, never the exit code."
@@ -4239,6 +4291,11 @@ cmd_burn() {
   # warning that's already true doesn't need to wait for state to exist.
   if [ "$prompt_set" -eq 0 ] && [ "$permission_set" -eq 1 ]; then
     log_warn "--permission does not modify raw engine argv; set the engine permission flag after --."
+  fi
+  # #237: unlike --permission above, never a warning — a model or an effort the
+  # caller asked for and did not get is the exact failure this flag exists to end.
+  if [ "$prompt_set" -eq 0 ] && [ -n "$burn_model_flag$burn_effort_flag" ]; then
+    log_fail "--model and --effort only apply to a task given with --prompt or --prompt-file; with a raw '-- <cmd...>' put the engine's own flag in that command."
   fi
   # P3-6 (2026-09-12 round-1 review): the opposite gap — prompt mode composes
   # --permission-mode itself, and #24's escape hatch (extra argv after --,
@@ -4296,8 +4353,6 @@ cmd_burn() {
     task_preview="${cmd[*]}"; task_preview="${task_preview:0:120}"
   fi
   task_preview="${task_preview//$'\n'/ }"; task_preview="${task_preview//$'\r'/ }"
-  log_info "task: $saved_prompt"
-  log_info "preview: $task_preview"
 
   # #41: one status file per top-level `clikae burn` invocation, keyed on this
   # process's own pid — stable across the whole reroute walk below, unlike the
@@ -4322,6 +4377,34 @@ cmd_burn() {
   # with an agy row that used a different spelling of the same engine.
   local status_engine="$cli"
   [ "$status_engine" = antigravity ] && status_engine=agy
+
+  # #237: say which model and effort this runs with — the burn's first line —
+  # and refuse here, before any lock, --fresh deletion or launch, what the
+  # engine cannot honour or --require-declared forbids. It sits below the
+  # status-file setup above only so that a refusal is a terminal row a
+  # `clikae wait` can read. A tank or engine that does not exist is left to
+  # the checks further down, which already say so in their own words.
+  local _knobs_dir=""
+  if _burn_knobs_is_agy "$cli"; then
+    _knobs_dir="$(_agy_slots)/$tank"
+  elif [ -f "$CLIKAE_LIB/adapters/$cli.sh" ]; then
+    load_adapter "$cli"
+    _knobs_dir="$(profile_dir "$cli" "$tank")"
+  fi
+  if [ -n "$_knobs_dir" ] && [ -d "$_knobs_dir" ]; then
+    # An explicit cross-engine --to is the one reroute that changes dialect:
+    # ask that engine now, not after the first tank has already run.
+    case "$to" in
+      */*)
+        if [ "${to%%/*}" != "$cli" ] && ! _burn_knobs_check_other "${to%%/*}"; then
+          _burn_knobs_refuse "$status_engine" "$tank" 0 "refused: $_BURN_KNOBS_REFUSAL" \
+            "--to $to: $_BURN_KNOBS_REFUSAL Nothing was started."
+        fi ;;
+    esac
+    _burn_knobs_gate "$status_engine" "$tank" "$_knobs_dir" 0 "$require_declared" ${cmd[@]+"${cmd[@]}"}
+  fi
+  log_info "task: $saved_prompt"
+  log_info "preview: $task_preview"
 
   # #63 round-5 P2-1: the named target, before any lock, --fresh deletion or
   # engine launch. The status file is written first so `clikae wait burn-<pid>`
@@ -5462,5 +5545,12 @@ KV
     cur="$nx_tank"
     infra_attempt=0; retry_delay="$infra_delay"
     log_info "Rerouting (dry) → $cli/$cur"
+    # #237: the tank that runs is the one that is reported, and the one
+    # --require-declared holds to its word. `dir` is this hop's tank.
+    if [ "$prompt_set" -eq 1 ]; then
+      _burn_knobs_gate "$cli" "$cur" "$dir" 1 "$require_declared" ${post_cmd[@]+"${post_cmd[@]}"}
+    else
+      _burn_knobs_gate "$cli" "$cur" "$dir" 1 "$require_declared" ${cmd[@]+"${cmd[@]}"}
+    fi
   done
 }

@@ -7,6 +7,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **`clikae burn` says which model and reasoning effort a task ran with, and lets you name them.** A burn
+  is dispatched to a tank chosen for its quota, so the tank's profile decided both, and nothing in the
+  output said what they were; "Effort: high" in a prompt changed nothing. Every burn now opens with
+  `burn <engine>/<tank>: model <m> (<source>), effort <e> (<source>)`, and `--json` and the status file carry
+  `model`, `model_source`, `effort` and `effort_source`. A source is `flag`, `env`, `profile` or
+  `undeclared`.
+- **`burn --model <m>` and `--effort <e>`**, passed in each engine's own words: claude `--model` /
+  `--effort`, codex `-m` / `-c model_reasoning_effort="<e>"`, agy `--model` / `--effort`. A cross-engine
+  reroute regenerates them. An engine that cannot honour one fails before anything starts.
+- **`burn --require-declared`** refuses to start, or to reroute onto a tank, when the model or the effort
+  is undeclared.
+- For a Claude tank, a top-level `effortLevel` alone is reported as `undeclared`: Claude Code applies that
+  key in a tank's own settings only to older models. The burn says so, and `--effort` pins it.
+
 ## [0.45.3] — 2026-11-05
 
 ### Fixed
