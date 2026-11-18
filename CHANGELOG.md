@@ -40,6 +40,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   file) sets it to something else. Otherwise the value is `unknown`, the burn says why, and
   `--require-declared` refuses. A selected profile that exists nowhere is `unknown` too. `--model` and
   `--effort` still win and are reported as `flag`. A tank that selects no profile reads as before.
+- **The Claude and agy arguments after `--` are read with each engine's own option syntax.** Text after
+  the option terminator was read as a flag: `burn claude w -- -p -- '--model=not-a-flag'` reported
+  `model not-a-flag (flag)`. So was the value of another option (`--system-prompt --model x`; for agy,
+  `-p --model=x`). Both readers now stop at `--`, know which options take the next argument, and read
+  the spellings the engine's `--help` lists: claude `--model` / `--effort` with a separate value or `=`,
+  clustered short options letter by letter; agy the same two with one dash or two. A model or effort
+  that cannot be read with certainty is `unknown`: one given twice with different values, an effort
+  that is not a listed level, or one whose reading depends on an option the reader does not have. Such
+  an option may be a flag or take a value: the arguments are read each way, and a model or effort is
+  reported only when every reading gives the same one — never the profile's value in its place. The
+  claude reader has every option the installed claude declares, the ones its `--help` omits
+  (`--max-turns`, …) included, and applies claude's own rules: a value option takes the next argument
+  even when that is `--`, an optional value is never an argument that starts with `-` (so
+  `--debug -- --model` is a prompt), and a subcommand name that is an option's value
+  (`--add-dir lib mcp`, `-r mcp`) is not a subcommand. agy's `-m`, which agy does not define, now reads
+  as `unknown` instead of as the model. A plain `--model <m>` / `--effort <e>` after `--` reads as
+  before.
+- **An effort in the arguments after `--` is refused with a cross-engine `--to`**, before anything
+  starts, as a model already was. Those arguments reach both engines unchanged; `--effort` is the form
+  that crosses.
+- For agy, a model or effort written `-model` / `-effort` after `--` together with burn's own `--model` /
+  `--effort` is now refused as given twice. It ran before, with both in the argv.
 
 ## [0.45.3] — 2026-11-05
 
