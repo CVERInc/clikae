@@ -291,20 +291,153 @@ adapter_burn_knobs_check() {
   return 0
 }
 
+# The options of `claude --help` (claude 2.1.326), by what each does with the
+# argument after it — which is what decides whether a later `--model` is an
+# option at all. Lists, each name between spaces:
+#   flag      takes no value
+#   value     `<x>` or `<x...>`: the next argument is its value whatever it
+#             looks like, `--` and `--model` included
+#   optional  `[x]`: the next argument is its value unless that one starts
+#             with `-` (--tmux is here for its documented `--tmux=classic`)
+#   variadic  `<x...>`: a value option that also takes the plain arguments
+#             after its first
+# The model and the effort have a long form only: `--model <model>` and
+# `--effort <level>`, each also written with `=`. There is no `-m`, and an
+# abbreviation is refused (`claude --vers`: "unknown option"). Short options
+# cluster (`claude -vh` prints the version), a value glued to the last.
+_CLAUDE_OPTS_FLAG=" --allow-dangerously-skip-permissions --ax-screen-reader --bg --background --bare --brief --chrome --continue --dangerously-skip-permissions --desktop --disable-slash-commands --exclude-dynamic-system-prompt-sections --fork-session --forward-subagent-text --help --ide --include-hook-events --include-partial-messages --no-chrome --no-session-persistence --print --replay-user-messages --restricted --safe-mode --strict-mcp-config --verbose --version "
+_CLAUDE_OPTS_VALUE=" --add-dir --agent --agents --allowedTools --allowed-tools --append-system-prompt --autocompact --betas --debug-file --disallowedTools --disallowed-tools --environment --fallback-model --file --input-format --json-schema --max-budget-usd --mcp-config --name --output-format --permission-mode --permission-prompts --plugin-dir --plugin-url --remote-control-session-name-prefix --session-id --setting-sources --settings --system-prompt --system-prompt-snapshot --tools "
+_CLAUDE_OPTS_OPTIONAL=" --cloud --debug --from-pr --prompt-suggestions --remote-control --resume --teleport --tmux --worktree "
+_CLAUDE_OPTS_VARIADIC=" --add-dir --allowedTools --allowed-tools --betas --disallowedTools --disallowed-tools --file --mcp-config --tools "
+# The first plain argument, when it is one of these, is a subcommand with
+# options of its own.
+_CLAUDE_COMMANDS=" agents attach auth auto-mode doctor gateway import install logs mcp plugin plugins purge respawn rm setup-token stop kill ultrareview update upgrade "
+# ASCII control characters, by list: a named class is the C library's and the
+# locale's to define (see lib/adapters/codex.sh).
+_CLAUDE_CNTRL=$'[\001\002\003\004\005\006\007\010\011\012\013\014\015\016\017\020\021\022\023\024\025\026\027\030\031\032\033\034\035\036\037\177]'
+
+# _claude_opt_in <list> <word>: is <word> one of the names in <list>?
+_claude_opt_in() {
+  case "$2" in ''|*' '*) return 1 ;; esac
+  [[ "$1" == *" $2 "* ]]
+}
+
+# _claude_knob_value <model|effort> <value> <separate:0|1> -> `=<value>` when
+# that is certainly what claude gets, else `?`. A separate value that starts
+# with `-` is taken by claude as the value; it is reported as "cannot tell"
+# because it is far more likely a slip than a name. An effort is one of the
+# levels the help lists, or it is not known what runs.
+_claude_knob_value() {
+  local LC_ALL=C v="$2"
+  case "$v" in ''|*$_CLAUDE_CNTRL*) printf '?'; return 0 ;; esac
+  if [ "$3" -eq 1 ]; then case "$v" in -*) printf '?'; return 0 ;; esac; fi
+  if [ "$1" = effort ]; then
+    case "$v" in low|medium|high|xhigh|max) ;; *) printf '?'; return 0 ;; esac
+  fi
+  printf '=%s' "$v"
+}
+
+# What the argv names, read with the option syntax above (#240) — not a second
+# parser of everything claude does, only enough to know whether a `--model` /
+# `--effort` in it is an option, and which value it carries:
+#   · `--` ends the options — unless it stands where an option takes its value
+#   · an option that takes a value takes the next argument, so
+#     `--system-prompt --model x` names no model
+#   · a cluster of short options is read letter by letter
+#   · a knob given twice with two different values is "cannot tell": the help
+#     does not say which wins
+#   · after anything this cannot place — an option or a short letter the help
+#     does not list, a subcommand, an optional-value option right before `--`
+#     — a later `--model` / `--effort` is "cannot tell", up to a `--` that is
+#     certainly the terminator
+# Out comes `model=<v>` / `effort=<v>`, or `model?` / `effort?` for one that
+# is set but cannot be read with certainty. `effort-outranked` stands for an
+# effort the argv sets while CLAUDE_CODE_EFFORT_LEVEL is set: the variable is
+# what runs here, but the argument is still in the argv. Not read: a model or
+# effort inside `--settings <file-or-json>`. The argv itself is never touched.
 adapter_burn_knobs_from_args() {
+  local LC_ALL=C a v knob rest ch m="" e=""
+  # unsure: the argv can no longer be placed with certainty. fresh: the
+  # argument that made it so was the previous one, so a `--` here may be its
+  # value. operand: a plain argument that is certainly not an option's value
+  # was seen. soft: how many following plain arguments may be option values
+  # (1 after an optional-value option, -1 = all of them after a variadic one).
+  local unsure=0 fresh=0 operand=0 soft=0
   while [ "$#" -gt 0 ]; do
-    case "$1" in
-      --model=*)  printf 'model=%s\n' "${1#--model=}" ;;
-      --model)    if [ "$#" -ge 2 ]; then printf 'model=%s\n' "$2"; shift; fi ;;
-      # With the variable set, an --effort in the argv is not what runs.
-      --effort=*) [ -n "${CLAUDE_CODE_EFFORT_LEVEL:-}" ] || printf 'effort=%s\n' "${1#--effort=}" ;;
-      --effort)   if [ "$#" -ge 2 ]; then
-                    [ -n "${CLAUDE_CODE_EFFORT_LEVEL:-}" ] || printf 'effort=%s\n' "$2"
-                    shift
-                  fi ;;
+    a="$1"; shift
+    if [ "$unsure" -eq 1 ]; then
+      case "$a" in
+        --) [ "$fresh" -eq 1 ] || break ;;
+        --model|--model=*)   m="?" ;;
+        --effort|--effort=*) e="?" ;;
+      esac
+      fresh=0
+      continue
+    fi
+    knob=""
+    case "$a" in
+      --) break ;;
+      --model|--effort)
+        knob="${a#--}"
+        if [ "$#" -ge 1 ]; then v="$(_claude_knob_value "$knob" "$1" 1)"; shift; else v="?"; fi
+        soft=0 ;;
+      --model=*|--effort=*)
+        knob="${a%%=*}"; knob="${knob#--}"
+        v="$(_claude_knob_value "$knob" "${a#*=}" 0)"
+        soft=0 ;;
+      --*=*) soft=0 ;;          # one argument, whichever option it is
+      --*)
+        soft=0
+        if _claude_opt_in "$_CLAUDE_OPTS_VALUE" "$a"; then
+          [ "$#" -lt 1 ] || shift
+          ! _claude_opt_in "$_CLAUDE_OPTS_VARIADIC" "$a" || soft=-1
+        elif _claude_opt_in "$_CLAUDE_OPTS_OPTIONAL" "$a"; then
+          soft=1
+          if [ "${1:-}" = "--" ]; then unsure=1; fresh=1; fi
+        elif ! _claude_opt_in "$_CLAUDE_OPTS_FLAG" "$a"; then
+          unsure=1; fresh=1
+        fi ;;
+      -?*)
+        soft=0
+        rest="${a#-}"
+        while [ -n "$rest" ]; do
+          ch="${rest:0:1}"; rest="${rest:1}"
+          case "$ch" in
+            c|h|p|v) ;;                                   # no value
+            n) [ -n "$rest" ] || [ "$#" -lt 1 ] || shift  # -n <name>
+               rest="" ;;
+            d|r|w)                                        # optional value
+               if [ -z "$rest" ]; then
+                 soft=1
+                 if [ "${1:-}" = "--" ]; then unsure=1; fresh=1; fi
+               fi
+               rest="" ;;
+            *) unsure=1; fresh=1; rest="" ;;
+          esac
+        done ;;
+      *)
+        # A plain argument (a lone `-` included): the prompt, a subcommand, or
+        # the value of the optional/variadic option before it.
+        if [ "$operand" -eq 0 ] && _claude_opt_in "$_CLAUDE_COMMANDS" "$a"; then
+          unsure=1; fresh=0
+        elif [ "$soft" -eq 0 ]; then
+          operand=1
+        fi
+        [ "$soft" -le 0 ] || soft=0 ;;
     esac
-    shift
+    case "$knob" in
+      model)  case "$m" in ''|"$v") m="$v" ;; *) m="?" ;; esac ;;
+      effort) case "$e" in ''|"$v") e="$v" ;; *) e="?" ;; esac ;;
+    esac
   done
+  case "$m" in '') ;; '?') printf 'model?\n' ;; *) printf 'model=%s\n' "${m#=}" ;; esac
+  case "$e" in
+    '') ;;
+    # With the variable set, an --effort in the argv is not what runs.
+    *) if [ -n "${CLAUDE_CODE_EFFORT_LEVEL:-}" ]; then printf 'effort-outranked\n'
+       elif [ "$e" = '?' ]; then printf 'effort?\n'
+       else printf 'effort=%s\n' "${e#=}"; fi ;;
+  esac
   return 0
 }
 

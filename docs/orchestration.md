@@ -193,10 +193,41 @@ a `/`), a layer file that is not valid TOML or carries profile settings of
 its own, and a value that is not a one-line string. The burn says which of
 these it was. `--model` / `--effort` are still reported as `flag`.
 
-Not covered by this reading, so not reflected in the report: clustered short
-options, `--ignore-user-config`, config layers outside the tank (system,
-project), and anything beyond the plain option forms in the claude and agy
-argv.
+The claude and agy argv are read with each engine's own option syntax too,
+taken from its `--help` (claude 2.1.326, agy 1.5.9):
+
+- **claude**: `--model <m>` / `--model=<m>` and `--effort <e>` / `--effort=<e>`.
+  There is no short form and no abbreviation. Reading stops at a bare `--`.
+  An option that takes a value takes the next argument whatever it looks
+  like, so `--system-prompt --model x` names no model. Short options cluster
+  (`-pc`), with a value glued to the last (`-nNAME`); a cluster is read
+  letter by letter.
+- **agy**: `--model` / `-model` and `--effort` / `-effort`, the value as the
+  next argument or after `=`. There is no short form and no clustering.
+  Reading stops at a bare `--` and at the first argument that is not a flag.
+  A flag that takes a value takes the next argument, so `-p --model=x` is a
+  prompt.
+
+For both, a model or effort is `unknown` rather than guessed when: it is
+given twice with different values; its value is empty, holds a control
+character, or is a separate argument starting with `-`; an effort is not one
+of the levels the help lists; or it comes after something the reader cannot
+place — an option the help does not list (for agy that includes `-m`, and
+`--remote-agent` / `--remote-control`, whose kind the help does not show), a
+letter in a cluster that is not a claude short option, a claude subcommand,
+or a claude option with an optional value directly before `--`. An option the
+installed engine has but that help does not list has the same effect: write
+the model with `--model` / `--effort` to burn instead.
+
+An effort in the arguments after `--`, like a model there, is refused with a
+`--to` that names another engine
+(`reason: "refused: the arguments after -- name an effort; …"`): those
+arguments reach both engines unchanged. `--effort` is the form that crosses.
+
+Not covered by this reading, so not reflected in the report: a model or
+effort inside claude's `--settings <file-or-json>` or agy's `--settings`,
+codex's `--ignore-user-config`, config layers outside the tank (system,
+project), and codex's clustered short options.
 
 **`--require-declared`** refuses to start when the model or the effort is
 `undeclared` or `unknown`, and refuses a reroute hop onto a tank where it is

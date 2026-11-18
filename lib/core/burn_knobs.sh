@@ -35,7 +35,11 @@
 #       `model=<v>` / `effort=<v>` lines for what the argv itself names, read
 #       with the engine's own option syntax, terminator and precedence; a bare
 #       `model?` / `effort?` line when the argv sets one but the value that
-#       results cannot be read with certainty. A `profile=<name>` / `profile?`
+#       results cannot be read with certainty. A bare `effort-outranked` line
+#       is an effort the argv sets while something the engine ranks higher
+#       (a variable) decides what runs: not this engine's effort, but still
+#       in the argv, which matters to a cross-engine --to (#240).
+#       A `profile=<name>` / `profile?`
 #       line is a profile the argv selects (codex, #239): it is handed back
 #       to adapter_burn_knobs_declared as a <selection>, `=<name>` or `?`.
 #   adapter_burn_knobs_declared <tank-dir> <model-in-use> [<selection>...]
@@ -47,7 +51,8 @@
 #       `any` (the model or the effort) — or, with <about> `unknown`, says
 #       why a value reported as unknown is.
 #
-# agy has no adapter, so its three answers are spelled out here.
+# agy has no adapter, so its three answers are spelled out here; its reader
+# of the argv is _burn_knobs_agy_from_args.
 #
 # State is cmd_burn's locals, read through bash's dynamic scope — the same
 # convention _burn_result and _burn_status_write already use:
@@ -60,8 +65,97 @@
 # The levels agy's own --help lists for --effort (agy 1.5.9).
 _BURN_KNOBS_AGY_EFFORTS="low medium high xhigh max"
 
+# The flags `agy --help` lists (agy 1.5.9), by whether one takes the argument
+# after it. The help does not say; each was asked — `agy --<flag>` as the last
+# argument answers "flag needs an argument" for the first list and not for the
+# second. --remote-agent and --remote-control are in neither: asking would
+# have opened a connection, so their kind is not known here.
+_BURN_KNOBS_AGY_VALUE=" add-dir agent conversation i input-format json-schema log-file mode output-format p print print-timeout project prompt prompt-interactive settings "
+_BURN_KNOBS_AGY_BOOL=" c continue dangerously-skip-permissions disable-slash-commands new-project sandbox "
+# ASCII control characters, by list: a named class is the C library's and the
+# locale's to define (see lib/adapters/codex.sh).
+_BURN_KNOBS_CNTRL=$'[\001\002\003\004\005\006\007\010\011\012\013\014\015\016\017\020\021\022\023\024\025\026\027\030\031\032\033\034\035\036\037\177]'
+
 # _burn_knobs_is_agy <engine>
 _burn_knobs_is_agy() { case "$1" in agy|antigravity) return 0 ;; esac; return 1; }
+
+# _burn_knobs_agy_value <model|effort> <value> <separate:0|1> -> `=<value>`
+# when that is certainly what agy gets, else `?`. A separate value that starts
+# with `-` IS taken as the value (`agy --model --bogus` raises no flag error);
+# it is reported as "cannot tell" because it is far more likely a slip than a
+# name. An effort is one of the levels the help lists, or it is not known
+# what runs.
+_burn_knobs_agy_value() {
+  local LC_ALL=C v="$2"
+  case "$v" in ''|*$_BURN_KNOBS_CNTRL*) printf '?'; return 0 ;; esac
+  if [ "$3" -eq 1 ]; then case "$v" in -*) printf '?'; return 0 ;; esac; fi
+  if [ "$1" = effort ]; then
+    case "$v" in low|medium|high|xhigh|max) ;; *) printf '?'; return 0 ;; esac
+  fi
+  printf '=%s' "$v"
+}
+
+# _burn_knobs_agy_from_args <argv...> — agy's reader (#240), with the syntax
+# agy 1.5.9 shows when asked:
+#   · a flag is `-name` or `--name`, its value the next argument or after `=`
+#     (`agy -version` answers as `--version` does)
+#   · the model is `model` and the effort `effort` in those spellings; there
+#     is no short form (`-m`: "flags provided but not defined") and no cluster
+#     (`-pc`: the same)
+#   · a flag that takes a value takes the next argument whatever it looks
+#     like, `--` included (`agy --model -- --bogus` complains about --bogus)
+#   · `--`, or the first argument that is not a flag, ends the flags
+#   · a knob given twice with two different values is "cannot tell"
+#   · after a flag this cannot place — one the help does not list, or one of
+#     the two whose kind is not known — a later model or effort is "cannot
+#     tell". `-m` is read as that: clikae took it for agy's model flag before,
+#     and whoever writes it means one.
+# Same output as an adapter's adapter_burn_knobs_from_args.
+_burn_knobs_agy_from_args() {
+  local LC_ALL=C a name key v knob has_eq m="" e=""
+  # unsure / fresh: as in claude's reader — the argv can no longer be placed
+  # with certainty / the argument that made it so was the previous one.
+  local unsure=0 fresh=0
+  while [ "$#" -gt 0 ]; do
+    a="$1"; shift
+    case "$a" in
+      --) [ "$unsure" -eq 1 ] && [ "$fresh" -eq 1 ] || break; fresh=0; continue ;;
+      -?*) ;;
+      *)  [ "$unsure" -eq 1 ] && [ "$fresh" -eq 1 ] || break; fresh=0; continue ;;
+    esac
+    name="${a#-}"; name="${name#-}"
+    case "$name" in ''|-*|=*) break ;; esac      # not a flag agy can parse
+    key="${name%%=*}"; has_eq=0
+    case "$name" in *=*) has_eq=1 ;; esac
+    if [ "$unsure" -eq 1 ]; then
+      case "$key" in model|m) m="?" ;; effort) e="?" ;; esac
+      fresh=0
+      continue
+    fi
+    knob=""
+    case "$key" in
+      model|effort)
+        knob="$key"
+        if [ "$has_eq" -eq 1 ]; then v="$(_burn_knobs_agy_value "$knob" "${name#*=}" 0)"
+        elif [ "$#" -ge 1 ]; then v="$(_burn_knobs_agy_value "$knob" "$1" 1)"; shift
+        else v="?"; fi ;;
+      m) m="?"
+         if [ "$has_eq" -eq 0 ]; then unsure=1; fresh=1; fi ;;
+      *) if [[ "$key" != *' '* ]] && [[ "$_BURN_KNOBS_AGY_VALUE" == *" $key "* ]]; then
+           [ "$has_eq" -eq 1 ] || [ "$#" -lt 1 ] || shift
+         elif [[ "$key" == *' '* ]] || [[ "$_BURN_KNOBS_AGY_BOOL" != *" $key "* ]]; then
+           if [ "$has_eq" -eq 0 ]; then unsure=1; fresh=1; fi
+         fi ;;
+    esac
+    case "$knob" in
+      model)  case "$m" in ''|"$v") m="$v" ;; *) m="?" ;; esac ;;
+      effort) case "$e" in ''|"$v") e="$v" ;; *) e="?" ;; esac ;;
+    esac
+  done
+  case "$m" in '') ;; '?') printf 'model?\n' ;; *) printf 'model=%s\n' "${m#=}" ;; esac
+  case "$e" in '') ;; '?') printf 'effort?\n' ;; *) printf 'effort=%s\n' "${e#=}" ;; esac
+  return 0
+}
 
 # _burn_knobs_asked -> the flags the caller gave, as text for a message:
 # `--model`, `--effort` or `--model/--effort`; empty when neither was given.
@@ -142,15 +236,26 @@ _burn_knobs_check_hop() {
   fi
   # What follows `--` goes to every engine this burn launches, byte for byte:
   # a model in it — readable or not — would reach <dest> too, and no flag of
-  # burn's can make it one engine's alone. With or without --to-model.
+  # burn's can make it one engine's alone. With or without --to-model. The
+  # same holds for an effort (#240): each engine has its own way of writing
+  # one, and burn's --effort is the flag that is re-said in each engine's.
+  local argv_model=0 argv_effort=0
   while IFS= read -r line; do
     case "$line" in
-      model=*|'model?')
-        _BURN_KNOBS_REFUSAL_REASON="the arguments after -- name a model; --to $to would pass it to $dest unchanged"
-        _BURN_KNOBS_REFUSAL="--to $to: the arguments after -- name a model, and they are passed unchanged to both $eng and $dest, so that model cannot be $eng's alone. Take it out of the arguments after -- and name the models with --model (for $eng) and --to-model (for $dest) on a --prompt task, or name none so each tank's profile decides."
-        return 1 ;;
+      model=*|'model?') argv_model=1 ;;
+      effort=*|'effort?'|effort-outranked) argv_effort=1 ;;
     esac
   done < <(_burn_knobs_from_args "$eng" "$@")
+  if [ "$argv_model" -eq 1 ]; then
+    _BURN_KNOBS_REFUSAL_REASON="the arguments after -- name a model; --to $to would pass it to $dest unchanged"
+    _BURN_KNOBS_REFUSAL="--to $to: the arguments after -- name a model, and they are passed unchanged to both $eng and $dest, so that model cannot be $eng's alone. Take it out of the arguments after -- and name the models with --model (for $eng) and --to-model (for $dest) on a --prompt task, or name none so each tank's profile decides."
+    return 1
+  fi
+  if [ "$argv_effort" -eq 1 ]; then
+    _BURN_KNOBS_REFUSAL_REASON="the arguments after -- name an effort; --to $to would pass it to $dest unchanged"
+    _BURN_KNOBS_REFUSAL="--to $to: the arguments after -- name an effort, and they are passed unchanged to both $eng and $dest, so that effort cannot be $eng's alone. Take it out of the arguments after -- and name it with --effort on a --prompt task, which is passed to each engine in that engine's own words, or name none so each tank's profile decides."
+    return 1
+  fi
   if [ -n "${burn_model_flag:-}" ] && [ -z "${burn_to_model:-}" ]; then
     _BURN_KNOBS_REFUSAL_REASON="--model $burn_model_flag names a $eng model; --to $to needs --to-model"
     _BURN_KNOBS_REFUSAL="--to $to: --model $burn_model_flag names a $eng model, and that reroute would run the task on $dest, where the name means nothing. Add --to-model <m> to name $dest's model, or drop --model so each tank's profile decides."
@@ -168,18 +273,7 @@ _burn_knobs_check_hop() {
 # (`model?` / `effort?` for one the argv sets unreadably).
 _burn_knobs_from_args() {
   local eng="$1"; shift
-  if _burn_knobs_is_agy "$eng"; then
-    while [ "$#" -gt 0 ]; do
-      case "$1" in
-        --model=*)  printf 'model=%s\n' "${1#--model=}" ;;
-        --effort=*) printf 'effort=%s\n' "${1#--effort=}" ;;
-        --model|-m) if [ "$#" -ge 2 ]; then printf 'model=%s\n' "$2"; shift; fi ;;
-        --effort)   if [ "$#" -ge 2 ]; then printf 'effort=%s\n' "$2"; shift; fi ;;
-      esac
-      shift
-    done
-    return 0
-  fi
+  if _burn_knobs_is_agy "$eng"; then _burn_knobs_agy_from_args "$@"; return 0; fi
   declare -F adapter_burn_knobs_from_args >/dev/null 2>&1 || return 0
   adapter_burn_knobs_from_args "$@" 2>/dev/null || true
 }

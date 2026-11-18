@@ -40,6 +40,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   file) sets it to something else. Otherwise the value is `unknown`, the burn says why, and
   `--require-declared` refuses. A selected profile that exists nowhere is `unknown` too. `--model` and
   `--effort` still win and are reported as `flag`. A tank that selects no profile reads as before.
+- **The Claude and agy arguments after `--` are read with each engine's own option syntax.** Text after
+  the option terminator was read as a flag: `burn claude w -- -p -- '--model=not-a-flag'` reported
+  `model not-a-flag (flag)`. So was the value of another option (`--system-prompt --model x`; for agy,
+  `-p --model=x`). Both readers now stop at `--`, know which options take the next argument, and read
+  the spellings the engine's `--help` lists: claude `--model` / `--effort` with a separate value or `=`,
+  clustered short options letter by letter; agy the same two with one dash or two. A model or effort
+  that cannot be read with certainty is `unknown`: one given twice with different values, an effort
+  that is not a listed level, or one that follows an option the help does not list. agy's `-m`, which
+  agy does not define, now reads as `unknown` instead of as the model. A plain
+  `--model <m>` / `--effort <e>` after `--` reads as before.
+- **An effort in the arguments after `--` is refused with a cross-engine `--to`**, before anything
+  starts, as a model already was. Those arguments reach both engines unchanged; `--effort` is the form
+  that crosses.
+- For agy, a model or effort written `-model` / `-effort` after `--` together with burn's own `--model` /
+  `--effort` is now refused as given twice. It ran before, with both in the argv.
 
 ## [0.45.3] — 2026-11-05
 

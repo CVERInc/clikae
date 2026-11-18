@@ -111,9 +111,9 @@ Give the task in one of two ways:
                       crosses that hop: with --model and a cross-engine --to,
                       give --to-model too or the burn is refused before
                       anything starts. --effort does cross, if the other engine
-                      accepts that level. A model in the arguments after `--`
-                      is refused with such a --to: they reach both engines
-                      unchanged.
+                      accepts that level. A model or an effort in the arguments
+                      after `--` is refused with such a --to: they reach both
+                      engines unchanged.
                       Without them the tank's profile decides, and every burn
                       says what that was: its first line reads
                         burn <engine>/<tank>: model <m> (<source>), effort <e> (<source>)
