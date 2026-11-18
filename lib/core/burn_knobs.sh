@@ -12,8 +12,9 @@
 #   env         a variable the engine documents as outranking its settings file
 #   profile     the tank's own config, read the way the engine reads it
 #   undeclared  none of the above: the engine's default decides
-#   unknown     the argv after `--` sets it, in a form that cannot be read with
-#               certainty — reported as that rather than as a confident guess
+#   unknown     something sets it — the argv after `--`, or a layer of the
+#               tank's config — but which value results cannot be read with
+#               certainty: reported as that rather than as a confident guess
 #
 # A model name belongs to ONE engine, so burn's --model never crosses a
 # cross-engine reroute: the destination's model is --to-model, or a pinned
@@ -34,12 +35,17 @@
 #       `model=<v>` / `effort=<v>` lines for what the argv itself names, read
 #       with the engine's own option syntax, terminator and precedence; a bare
 #       `model?` / `effort?` line when the argv sets one but the value that
-#       results cannot be read with certainty.
-#   adapter_burn_knobs_declared <tank-dir> <model-in-use>
+#       results cannot be read with certainty. A `profile=<name>` / `profile?`
+#       line is a profile the argv selects (codex, #239): it is handed back
+#       to adapter_burn_knobs_declared as a <selection>, `=<name>` or `?`.
+#   adapter_burn_knobs_declared <tank-dir> <model-in-use> [<selection>...]
 #       `model<TAB><source><TAB><value>`, `effort<TAB><source><TAB><value>` and
 #       `note<TAB><text>[<TAB><about>]` lines for what the environment and the
-#       profile declare. A note explains an undeclared value: <about> says
-#       which — `effort` (the default) or `any` (the model or the effort).
+#       profile declare. A value the profile sets without it being certain
+#       which one applies is `<knob><TAB>unknown<TAB>unknown`. A note explains
+#       an undeclared value — <about> says which: `effort` (the default) or
+#       `any` (the model or the effort) — or, with <about> `unknown`, says
+#       why a value reported as unknown is.
 #
 # agy has no adapter, so its three answers are spelled out here.
 #
@@ -186,15 +192,21 @@ _burn_knobs_from_args() {
 _burn_knobs_resolve() {
   local eng="$1" kdir="$2"; shift 2
   local line kind src val a_model="" a_effort="" unsure=""
+  local -a selections=()
   burn_model=undeclared; burn_model_source=undeclared
   burn_effort=undeclared; burn_effort_source=undeclared
   burn_knobs_notes=""; _BURN_KNOBS_TWICE=""
+  # Which knobs the ARGV left unknown, and the adapter's sentence for one the
+  # PROFILE left unknown — _burn_knobs_gate words its refusal from these.
+  _BURN_KNOBS_UNSURE_ARGV=""; _BURN_KNOBS_UNSURE_WHY=""
   while IFS= read -r line; do
     case "$line" in
       model=?*)  a_model="${line#model=}" ;;
       effort=?*) a_effort="${line#effort=}" ;;
       'model?')  a_model="?" ;;
       'effort?') a_effort="?" ;;
+      profile=?*) selections+=("=${line#profile=}") ;;
+      'profile?') selections+=("?") ;;
     esac
   done < <(_burn_knobs_from_args "$eng" "$@")
   # Readable or not, a knob the argv sets is a second naming of it.
@@ -206,6 +218,7 @@ _burn_knobs_resolve() {
   if [ -n "${burn_effort_flag:-}" ]; then burn_effort="$burn_effort_flag"; burn_effort_source=flag
   elif [ "$a_effort" = "?" ]; then burn_effort=unknown; burn_effort_source=unknown; unsure="${unsure:+$unsure and }effort"
   elif [ -n "$a_effort" ]; then burn_effort="$a_effort"; burn_effort_source=flag; fi
+  _BURN_KNOBS_UNSURE_ARGV="$unsure"
   [ -z "$unsure" ] || burn_knobs_notes="the argv after -- sets the $unsure in a form clikae cannot read with certainty, so it is reported as unknown rather than guessed."
 
   if _burn_knobs_is_agy "$eng"; then
@@ -216,16 +229,29 @@ _burn_knobs_resolve() {
   declare -F adapter_burn_knobs_declared >/dev/null 2>&1 || return 0
   local known_model="" notes=""
   [ "$burn_model_source" = undeclared ] || known_model="$burn_model"
-  local any_notes=""
+  local any_notes="" why="" declared_unknown=0
   while IFS=$'\t' read -r kind src val; do
     case "$kind" in
-      model)  [ "$burn_model_source" != undeclared ] || [ -z "$val" ] || { burn_model="$val"; burn_model_source="$src"; } ;;
-      effort) [ "$burn_effort_source" != undeclared ] || [ -z "$val" ] || { burn_effort="$val"; burn_effort_source="$src"; } ;;
+      model)  [ "$burn_model_source" != undeclared ] || [ -z "$val" ] || {
+                burn_model="$val"; burn_model_source="$src"
+                [ "$src" != unknown ] || declared_unknown=1; } ;;
+      effort) [ "$burn_effort_source" != undeclared ] || [ -z "$val" ] || {
+                burn_effort="$val"; burn_effort_source="$src"
+                [ "$src" != unknown ] || declared_unknown=1; } ;;
       # A note's text is its second field; the optional third says what it is about.
-      note)   if [ "$val" = any ]; then any_notes="${any_notes:+$any_notes$'\n'}$src"
-              else notes="${notes:+$notes$'\n'}$src"; fi ;;
+      note)   case "$val" in
+                any)     any_notes="${any_notes:+$any_notes$'\n'}$src" ;;
+                unknown) why="${why:+$why }$src" ;;
+                *)       notes="${notes:+$notes$'\n'}$src" ;;
+              esac ;;
     esac
-  done < <(adapter_burn_knobs_declared "$kdir" "$known_model" 2>/dev/null || true)
+  done < <(adapter_burn_knobs_declared "$kdir" "$known_model" ${selections[@]+"${selections[@]}"} 2>/dev/null || true)
+  # Why the profile left a value unknown — said only if it did: a flag or the
+  # argv may have named that value first, and then there is nothing to say.
+  if [ "$declared_unknown" -eq 1 ] && [ -n "$why" ]; then
+    _BURN_KNOBS_UNSURE_WHY="$why"
+    burn_knobs_notes="${burn_knobs_notes:+$burn_knobs_notes$'\n'}$why"
+  fi
   # A note explains why something reads as undeclared; once a flag or the
   # environment names it there is nothing left to explain.
   [ "$burn_effort_source" = undeclared ] || notes=""
@@ -307,6 +333,11 @@ _burn_knobs_gate() {
   [ "$require_declared" -eq 1 ] || return 0
   # Unknown is not declared: the whole point of the flag is knowing what runs.
   missing="$(_burn_knobs_missing unknown)"
+  if [ -n "$missing" ] && [ -z "$_BURN_KNOBS_UNSURE_ARGV" ] && [ -n "$_BURN_KNOBS_UNSURE_WHY" ]; then
+    # The tank's own config left it unknown; the adapter's sentence says how.
+    _burn_knobs_refuse "$eng" "$tk" "$hop" "refused: unknown $missing" \
+      "--require-declared: the $missing of $eng/$tk cannot be determined — $_BURN_KNOBS_UNSURE_WHY Name it with --model / --effort. $tail"
+  fi
   [ -z "$missing" ] || _burn_knobs_refuse "$eng" "$tk" "$hop" "refused: unknown $missing" \
     "--require-declared: the $missing of $eng/$tk cannot be determined — the argv after -- sets it in a form clikae cannot read with certainty. Write it as a plain quoted value, or name it with --model / --effort. $tail"
   missing="$(_burn_knobs_missing)"

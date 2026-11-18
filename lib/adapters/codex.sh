@@ -177,14 +177,26 @@ _codex_override_key() {
 #   · precedence: an explicit model option beats any `-c model=…`
 #     (`let model = model.or(cfg.model)`, codex-rs/core/src/config/mod.rs);
 #     among `-c` overrides of one key the last is applied last, so it wins.
+#   · `-p <n>`, `-p<n>`, `-p=<n>`, `--profile <n>`, `--profile=<n>` select a
+#     profile (#239; the spellings codex-cli 0.167.1 parses — it takes no
+#     abbreviated `--prof`, and refuses the option given twice). Each comes
+#     out as `profile=<n>`, or `profile?` for a name that cannot be read with
+#     certainty; so does a `-c` override of the `profile` key or of anything
+#     under `profiles`, which changes the layering itself. What a selection
+#     does to the two values is adapter_burn_knobs_declared's to work out.
 # A value this cannot read with certainty comes out as `model?` / `effort?`
 # rather than as a guess. The argv itself is never touched.
 adapter_burn_knobs_from_args() {
-  local LC_ALL=C a kv key bare v has_kv m_opt="" m_cfg="" e_cfg=""
+  local LC_ALL=C a kv key bare v has_kv has_p m_opt="" m_cfg="" e_cfg=""
   while [ "$#" -gt 0 ]; do
-    a="$1"; shift; kv=""; has_kv=0
+    a="$1"; shift; kv=""; has_kv=0; has_p=0
     case "$a" in
       --) break ;;
+      -p|--profile) [ "$#" -ge 1 ] || break; v="$1"; has_p=1; shift
+                   case "$v" in -*) v="" ;; esac ;;
+      --profile=*) v="${a#--profile=}"; has_p=1 ;;
+      -p=*)        v="${a#-p=}"; has_p=1 ;;
+      -p?*)        v="${a#-p}"; has_p=1 ;;
       -m|--model)  [ "$#" -ge 1 ] || break; v="$1"; shift
                    case "$v" in ''|-*|*$_CODEX_CNTRL*) m_opt="?" ;; *) m_opt="=$v" ;; esac ;;
       --model=*|-m=*|-m?*)
@@ -195,12 +207,18 @@ adapter_burn_knobs_from_args() {
       -c=*)        kv="${a#-c=}"; has_kv=1 ;;
       -c?*)        kv="${a#-c}"; has_kv=1 ;;
     esac
+    if [ "$has_p" -eq 1 ]; then
+      # The name is a file name (<name>.config.toml) and a table key.
+      case "$v" in ''|*/*|*$_CODEX_CNTRL*) printf 'profile?\n' ;; *) printf 'profile=%s\n' "$v" ;; esac
+      continue
+    fi
     [ "$has_kv" -eq 1 ] || continue
     case "$kv" in *=*) ;; *) continue ;; esac     # no `=`: codex rejects it
     key="${kv%%=*}"
     bare="$(_codex_override_key "$key")"
     case "$bare" in
       model|model_reasoning_effort) ;;
+      profile|profiles|profiles.*) printf 'profile?\n'; continue ;;
       *) continue ;;
     esac
     # It IS an override of that setting. Its value is reported only when the
@@ -220,12 +238,37 @@ adapter_burn_knobs_from_args() {
   return 0
 }
 
-# _codex_config_root <config.toml> -> what the ROOT table of the file declares:
-# `model<TAB><v>` and `effort<TAB><v>` for root members `model` and
-# `model_reasoning_effort` that are one-line strings, or one `note<TAB><why>`
-# line when the file could not be read as TOML. The same key under a table
-# (`[profiles.x]`, `[tui]`) is a different setting; text inside a multi-line
-# string is text.
+# _codex_config_root <config.toml> [<selection>...] -> what the ROOT table of
+# the file declares: `model<TAB><v>` and `effort<TAB><v>` for root members
+# `model` and `model_reasoning_effort` that are one-line strings, or one
+# `note<TAB><why>` line when the file could not be read as TOML. The same key
+# under a table (`[profiles.x]`, `[tui]`) is a different setting; text inside
+# a multi-line string is text.
+#
+# With a profile selected (#239) the root table is no longer the whole answer.
+# A selection is a <selection> argument — `=<name>` for each profile option
+# adapter_burn_knobs_from_args read in the argv, `?` for one it could not
+# read — or a root `profile` key in the file. Two more lines can then come
+# out: `unknown<TAB>model|effort` for a value that is set somewhere but not
+# certain, and one `why<TAB><sentence>` saying why. What is established, and
+# from where:
+#   · `codex exec --help` (codex-cli 0.167.1): `-p, --profile` "Layer
+#     $CODEX_HOME/<name>.config.toml on top of the base user config". A layer
+#     on top wins where it sets a key and lets the base show through where it
+#     does not.
+#   · That help says nothing about a root `profile` key or `[profiles.<name>]`
+#     tables — the layering earlier releases documented, where the option and
+#     the key both selected such a table — nor about which wins when an
+#     option and the key name different profiles.
+# So a value is reported (source `profile`) only when every layer codex could
+# be applying leads to it: the documented one — the argv profile's
+# <name>.config.toml over the root table — with no other selected layer
+# (`[profiles.<name>]` for either name, the root key's <name>.config.toml)
+# setting that key to anything else. Otherwise `unknown`. Also `unknown`: a
+# name that cannot be read, a profile option given twice, a selected name
+# that exists as neither a table nor a file, a layer that is not valid TOML
+# or carries profile settings of its own, and a value that is not a one-line
+# string.
 #
 # TOML is read by a TOML parser — python3's tomllib (3.11+) — not by matching
 # lines: a line scan takes `model = "…"` inside a multi-line string for a
@@ -234,25 +277,125 @@ adapter_burn_knobs_from_args() {
 # the burn says why. Never a guess. (-I: no user site, no PYTHON* variables.)
 _codex_config_root() {
   local f="$1" out="" rc=0
-  [ -f "$f" ] || return 0
+  shift
+  # No file and nothing selected: nothing is declared. A profile option alone
+  # still names a layer file to read.
+  [ -f "$f" ] || [ "$#" -gt 0 ] || return 0
   if ! command -v python3 >/dev/null 2>&1; then rc=127
   else
     out="$(python3 -I -c '
+import os
 import sys
 try:
     import tomllib
 except ImportError:
     sys.exit(4)
+
+KEYS = (("model", "model"), ("model_reasoning_effort", "effort"))
+
+
+def plain(v):
+    return isinstance(v, str) and bool(v) and not any(ord(c) < 32 or ord(c) == 127 for c in v)
+
+
+def load(path):
+    with open(path, "rb") as fh:
+        return tomllib.load(fh)
+
+
+path, sels = sys.argv[1], sys.argv[2:]
 try:
-    with open(sys.argv[1], "rb") as fh:
-        root = tomllib.load(fh)
+    root = load(path) if os.path.isfile(path) else {}
 except (OSError, ValueError):
     sys.exit(3)
-for key, name in (("model", "model"), ("model_reasoning_effort", "effort")):
-    v = root.get(key)
-    if isinstance(v, str) and v and not any(ord(c) < 32 or ord(c) == 127 for c in v):
-        print(name + "\t" + v)
-' "$f" 2>/dev/null)" || rc=$?
+
+has_key = "profile" in root
+if not sels and not has_key:
+    # No profile selected: the root table is the answer.
+    for key, name in KEYS:
+        v = root.get(key)
+        if plain(v):
+            print(name + "\t" + v)
+    sys.exit(0)
+
+how = []
+if sels:
+    how.append("a profile option in the arguments after --")
+if has_key:
+    how.append("the profile key in config.toml")
+how = " and ".join(how)
+
+
+def say(reason):
+    print("why\tcodex profile layering is selected by " + how + ", and " + reason
+          + ", so clikae reports it as unknown rather than guessing.")
+
+
+def give_up(reason):
+    for _, name in KEYS:
+        print("unknown\t" + name)
+    say(reason)
+    sys.exit(0)
+
+
+def name_ok(n):
+    return plain(n) and "/" not in n
+
+
+argv_names = [s[1:] for s in sels if s.startswith("=")]
+if len(argv_names) != len(sels) or len(argv_names) > 1:
+    give_up("the profile it names cannot be read with certainty")
+if not all(name_ok(n) for n in argv_names) or (has_key and not name_ok(root["profile"])):
+    give_up("the profile it names cannot be read with certainty")
+
+argv_name = argv_names[0] if argv_names else None
+names = [argv_name] if argv_name is not None else []
+if has_key and root["profile"] != argv_name:
+    names.append(root["profile"])
+
+tables = root.get("profiles", {})
+if not isinstance(tables, dict):
+    give_up("the profiles setting in config.toml is not a table")
+
+# top: the one layer the help documents, <argv name>.config.toml.
+# others: every other layer a selected name could bring in.
+top, others = None, []
+for n in names:
+    found = False
+    if n in tables:
+        if not isinstance(tables[n], dict):
+            give_up("profiles." + n + " in config.toml is not a table")
+        others.append(tables[n])
+        found = True
+    layer_file = os.path.join(os.path.dirname(path), n + ".config.toml")
+    if os.path.isfile(layer_file):
+        try:
+            layer = load(layer_file)
+        except (OSError, ValueError):
+            give_up(n + ".config.toml is not valid TOML (or could not be opened)")
+        if "profile" in layer or "profiles" in layer:
+            give_up(n + ".config.toml carries profile settings of its own")
+        found = True
+        if n == argv_name:
+            top = layer
+        else:
+            others.append(layer)
+    if not found:
+        give_up("profile \"" + n + "\" is neither a [profiles." + n + "] table in config.toml nor a "
+                + n + ".config.toml file")
+
+unsure = []
+for key, name in KEYS:
+    v = top[key] if top is not None and key in top else root.get(key)
+    if (v is None or plain(v)) and all(layer[key] == v for layer in others if key in layer):
+        if v is not None:
+            print(name + "\t" + v)
+    else:
+        print("unknown\t" + name)
+        unsure.append(name)
+if unsure:
+    say("the layers codex could apply do not lead to one plain value")
+' "$f" "$@" 2>/dev/null)" || rc=$?
   fi
   case "$rc" in
     0) [ -z "$out" ] || printf '%s\n' "$out" ;;
@@ -262,15 +405,20 @@ for key, name in (("model", "model"), ("model_reasoning_effort", "effort")):
   return 0
 }
 
+# adapter_burn_knobs_declared <tank-dir> <model-in-use> [<selection>...] — the
+# selections are the profile options the argv carries: `=<name>`, or `?`.
 adapter_burn_knobs_declared() {
   local dir="$1" model="$2" kind val
+  shift 2
   while IFS=$'\t' read -r kind val; do
     case "$kind" in
-      model)  [ -n "$model" ] || printf 'model\tprofile\t%s\n' "$val" ;;
-      effort) printf 'effort\tprofile\t%s\n' "$val" ;;
-      note)   printf 'note\t%s\tany\n' "$val" ;;
+      model)   [ -n "$model" ] || printf 'model\tprofile\t%s\n' "$val" ;;
+      effort)  printf 'effort\tprofile\t%s\n' "$val" ;;
+      unknown) if [ "$val" != model ] || [ -z "$model" ]; then printf '%s\tunknown\tunknown\n' "$val"; fi ;;
+      why)     printf 'note\t%s\tunknown\n' "$val" ;;
+      note)    printf 'note\t%s\tany\n' "$val" ;;
     esac
-  done < <(_codex_config_root "$dir/config.toml")
+  done < <(_codex_config_root "$dir/config.toml" "$@")
   return 0
 }
 
