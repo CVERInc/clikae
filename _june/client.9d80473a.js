@@ -7716,7 +7716,7 @@ var require_react_dom_client_production = /* @__PURE__ */ __commonJSMin(((export
 	var workInProgressRootDidIncludeRecursiveRenderUpdate = !1;
 	var globalMostRecentFallbackTime = 0;
 	var globalMostRecentTransitionTime = 0;
-	var workInProgressRootRenderTargetTime = Infinity;
+	var workInProgressRootRenderTargetTime = 1e400;
 	var workInProgressTransitions = null;
 	var legacyErrorBoundariesThatAlreadyFailed = null;
 	var pendingEffectsStatus = 0;
@@ -11797,7 +11797,7 @@ function startJuneClient(options) {
 	const routerRoot = document.querySelector("[data-june-root]");
 	if (!routerRoot) return;
 	if (routerRoot.getAttribute("data-june-router") === "flight") {
-		import("./client-router-flight-5fa3708c.js").then(({ startFlightRouter }) => startFlightRouter());
+		import("./client-router-flight-929a41e1.js").then(({ startFlightRouter }) => startFlightRouter());
 		return;
 	}
 	startClientRouter(rehydrate);
@@ -12556,7 +12556,7 @@ function setup(opts) {
 	const locale = trigger?.dataset.locale || void 0;
 	let loadingHandle = null;
 	const getHandle = () => loadingHandle ??= (async () => {
-		const [{ createSearch }, res] = await Promise.all([import("./search-bfd2558d.js"), fetch(endpoint, { headers: { accept: "application/json" } })]);
+		const [{ createSearch }, res] = await Promise.all([import("./search-d04d2109.js"), fetch(endpoint, { headers: { accept: "application/json" } })]);
 		if (!res.ok) throw new Error(`search index ${res.status}`);
 		const data = await res.json();
 		return createSearch({

@@ -183,7 +183,7 @@ var Kb = class Kb {
 	}
 	rerankTopK(q, topK, order, limit) {
 		const ids = new Int32Array(topK).fill(-1);
-		const sc = new Float64Array(topK).fill(-Infinity);
+		const sc = new Float64Array(topK).fill(-1e400);
 		let filled = 0;
 		for (let j = 0; j < limit; j++) {
 			const i = order ? order[j] : j;
