@@ -780,3 +780,124 @@ model_reasoning_effort = "high"'
   [ "$(_json_field reason)" = "refused: undeclared model or effort" ]
   [[ "$stderr" == *"config.toml was not read"* ]] || false
 }
+
+# ── 5. the argv after `--`, before anything starts ───────────────────────────
+# What follows `--` reaches every engine a burn launches byte for byte, so a
+# model in it cannot be one engine's alone; and a config override key is the
+# same key however it is dressed (spaces of any kind, quotes).
+
+# A dry codex tank, and a claude tank for an explicit --to to land on.
+_codex_dry_to_claude() {
+  STUB_HOME_VAR=CODEX_HOME; export STUB_HOME_VAR
+  _stub_engine codex
+  _stub_engine claude
+  _codex_tank work 'model = "gpt-profile"
+model_reasoning_effort = "low"'
+  _claude_tank second '{"model":"opus"}'
+  : > "$CLIKAE_HOME/profiles/codex/work/.dry"
+}
+
+# _burn_json appends --json, which after a `--` would land in the engine's
+# argv; these burns all carry one, so --json goes ahead of it.
+_work_json() {
+  run --separate-stderr clikae burn codex work --artifact "$A" --json "$@"
+}
+
+_NBSP=$'\xc2\xa0'            # U+00A0 no-break space
+_FIGURE_SPACE=$'\xe2\x80\x87' # U+2007 figure space
+
+@test "a model after -- with a cross-engine --to and --to-model is refused before the first tank runs (#237)" {
+  _codex_dry_to_claude
+  _work_json --prompt 'do it' --to claude/second --to-model sonnet -- --model gpt-5
+  [ "$status" -eq 1 ]
+  [[ "$stderr" == *"--to claude/second: the arguments after -- name a model"* ]] || false
+  [[ "$stderr" == *"unchanged to both codex and claude"* ]] || false
+  [[ "$stderr" == *"--model"*"--to-model"* ]] || false
+  [[ "$stderr" == *"Nothing was started."* ]] || false
+  [ ! -e "$L" ]     # the source tank was not spent on a burn that could not finish
+  [ ! -e "$A" ]
+  [ "$(_json_field reason)" = "refused: the arguments after -- name a model; --to claude/second would pass it to claude unchanged" ]
+  grep -q '"state":"fail"' "$CLIKAE_HOME"/logs/burn-*/status.json
+}
+
+@test "a model after -- never reaches the other engine of a cross-engine --to: refused up front (#237)" {
+  _codex_dry_to_claude
+  _work_json --prompt 'do it' --to claude/second -- --model gpt-5
+  [ "$status" -eq 1 ]
+  [[ "$stderr" == *"--to claude/second: the arguments after -- name a model"* ]] || false
+  [[ "$stderr" == *"Nothing was started."* ]] || false
+  [ ! -e "$L" ]     # neither engine was started: claude never saw `--model gpt-5`
+  [ ! -e "$A" ]
+  # The same argv with a --to on the SAME engine is a plain burn.
+  _codex_tank spare
+  _work_json --prompt 'do it' --to codex/spare -- --model gpt-5
+  [ "$status" -eq 0 ]
+  [ "$(_json_field tank)" = spare ]
+  [ "$(_json_field model)" = gpt-5 ]
+  [ "$(_json_field model_source)" = flag ]
+}
+
+@test "a raw command that names a model is refused with a cross-engine --to: the same command would run on both (#237)" {
+  _codex_dry_to_claude
+  _work_json --to claude/second -- exec -m gpt-5 'do it'
+  [ "$status" -eq 1 ]
+  [[ "$stderr" == *"--to claude/second: the arguments after -- name a model"* ]] || false
+  [ ! -e "$L" ]
+}
+
+@test "codex: a quoted override key after -- is still the model: refused with a cross-engine --to, and a duplicate of --model (#237)" {
+  _codex_dry_to_claude
+  _work_json --prompt 'do it' --to claude/second -- -c '"model"="gpt-5"'
+  [ "$status" -eq 1 ]
+  [[ "$stderr" == *"--to claude/second: the arguments after -- name a model"* ]] || false
+  [ ! -e "$L" ]
+  _work_json --prompt 'do it' --model gpt-test -- -c "'model' = \"gpt-5\""
+  [ "$status" -eq 1 ]
+  [ "$(_json_field reason)" = "refused: --model given twice" ]
+  [ ! -e "$L" ]
+}
+
+@test "codex: a no-break space round an override key after -- is still the same knob given twice (#237)" {
+  _codex_profiled
+  _work_json --prompt 'do it' --model gpt-test --effort high \
+    -- -c "model_reasoning_effort${_NBSP}= \"low\""
+  [ "$status" -eq 1 ]
+  [[ "$stderr" == *"--effort is given twice"* ]] || false
+  [ "$(_json_field reason)" = "refused: --effort given twice" ]
+  [ ! -e "$L" ]
+}
+
+@test "codex: a figure space round an override key after -- is still the same knob given twice (#237)" {
+  _codex_profiled
+  _work_json --prompt 'do it' --effort high \
+    -- -c "${_FIGURE_SPACE}model_reasoning_effort${_FIGURE_SPACE}=\"low\""
+  [ "$status" -eq 1 ]
+  [ "$(_json_field reason)" = "refused: --effort given twice" ]
+  _work_json --prompt 'do it' --model gpt-test \
+    -- "--config=model${_FIGURE_SPACE}=\"gpt-other\""
+  [ "$status" -eq 1 ]
+  [ "$(_json_field reason)" = "refused: --model given twice" ]
+  [ ! -e "$L" ]
+}
+
+@test "codex raw argv: an override whose key had to be cleaned is unknown, never the profile's value (#237)" {
+  _codex_profiled
+  # The profile says low; the argv says high behind a no-break space. Neither
+  # is reported as fact, and --require-declared does not take it as declared.
+  _work_json --require-declared \
+    -- exec -c "model_reasoning_effort${_NBSP}= \"high\"" 'do it'
+  [ "$status" -eq 1 ]
+  [ "$(_json_field reason)" = "refused: unknown effort" ]
+  [ "$(_json_field effort)" = unknown ]
+  [ "$(_json_field effort_source)" = unknown ]
+  [ ! -e "$L" ]
+  _work_json \
+    -- exec -c "model_reasoning_effort${_NBSP}= \"high\"" -c "${_FIGURE_SPACE}model=\"gpt-x\"" 'do it'
+  [ "$status" -eq 0 ]
+  [ "$(_json_field model)" = unknown ]
+  [ "$(_json_field model_source)" = unknown ]
+  [ "$(_json_field effort)" = unknown ]
+  [ "$(_json_field effort_source)" = unknown ]
+  # The argv itself is passed on untouched.
+  grep -qx -- "model_reasoning_effort${_NBSP}= \"high\"" "$L"
+}

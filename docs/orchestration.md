@@ -118,7 +118,7 @@ source is one of:
 | `env` | a variable the engine ranks above its settings file (Claude's `ANTHROPIC_MODEL`, `CLAUDE_CODE_EFFORT_LEVEL`) — a burn hands the engine the caller's environment |
 | `profile` | the tank's own config, read the way the engine reads it |
 | `undeclared` | none of the above: the engine's default decides. The value reads `"undeclared"` too |
-| `unknown` | the argv after `--` sets it, in a form burn cannot read with certainty (an escape in the value, a number, a quoted key). The value reads `"unknown"` too — never a guess |
+| `unknown` | the argv after `--` sets it, in a form burn cannot read with certainty (an escape in the value, a number, a key that is quoted or sits behind a no-break space). The value reads `"unknown"` too — never a guess |
 
 **`--model <m>` and `--effort <e>` name them**, for a `--prompt` /
 `--prompt-file` task. Each adapter writes them in its engine's own words, so a
@@ -139,7 +139,11 @@ hop — or the burn is refused before anything starts, naming both engines.
 `--to-model` alone is fine too (the first tank keeps its profile's model), and
 with neither, each tank's profile decides. `--effort` does cross the hop, but
 only if the other engine accepts that level; otherwise that is refused up
-front as well.
+front as well. So is a model in the arguments after `--` (`-- --model gpt-x`,
+or a raw command that carries one) together with such a `--to`, with or
+without `--to-model`: those arguments reach both engines byte for byte, so a
+model there cannot be one engine's alone. Take it out and use `--model` /
+`--to-model` on a `--prompt` task, or name none.
 
 ```sh
 clikae burn codex work --to claude/spare --prompt-file t.md --artifact out.md \
@@ -160,8 +164,17 @@ For codex, the argv after `--` is read the way codex reads it: `-m <v>`,
 `-m<v>`, `--model=<v>`; `-c <key=value>` in every spelling codex accepts
 (`-c<key=value>`, `--config=…`, spaces round the key); nothing after a bare
 `--`, which is the prompt; an explicit model option above a `-c model=…`, and
-the last of several `-c` overrides of one key. The argv itself reaches the
-engine byte for byte.
+the last of several `-c` overrides of one key. A `-c` key is compared with
+everything dropped that cannot be part of a bare key (anything but ASCII
+letters, digits, `_`, `.`, `-`), so `model_reasoning_effort` behind a
+no-break space or inside quotes is still that setting: a duplicate of
+`--effort`, and never silently the profile's value. Its value is reported
+only when the key needed no more than plain trimming; otherwise it is
+`unknown`. The argv itself reaches the engine byte for byte.
+
+Not covered by this reading, so not reflected in the report: codex profile
+layering (`-p <profile>` and the `profile` key), clustered short options,
+and anything beyond the plain option forms in the claude and agy argv.
 
 **`--require-declared`** refuses to start when the model or the effort is
 `undeclared` or `unknown`, and refuses a reroute hop onto a tank where it is

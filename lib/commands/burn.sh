@@ -111,7 +111,9 @@ Give the task in one of two ways:
                       crosses that hop: with --model and a cross-engine --to,
                       give --to-model too or the burn is refused before
                       anything starts. --effort does cross, if the other engine
-                      accepts that level.
+                      accepts that level. A model in the arguments after `--`
+                      is refused with such a --to: they reach both engines
+                      unchanged.
                       Without them the tank's profile decides, and every burn
                       says what that was: its first line reads
                         burn <engine>/<tank>: model <m> (<source>), effort <e> (<source>)
@@ -4409,8 +4411,9 @@ cmd_burn() {
     # An explicit cross-engine --to is the one reroute that changes engine, so
     # it is the one place a model name could land on an engine it does not
     # belong to, or an effort level on one that does not list it. Settle that
-    # now, not after the first tank has already run.
-    if ! _burn_knobs_check_hop "$cli" "$to"; then
+    # now, not after the first tank has already run. The argv after `--` is
+    # part of the question: it reaches both engines unchanged.
+    if ! _burn_knobs_check_hop "$cli" "$to" ${cmd[@]+"${cmd[@]}"}; then
       _burn_knobs_refuse "$status_engine" "$tank" 0 "refused: $_BURN_KNOBS_REFUSAL_REASON" \
         "$_BURN_KNOBS_REFUSAL Nothing was started."
     fi

@@ -123,11 +123,27 @@ _codex_override_string() {
   printf '%s' "$v"
 }
 
+# _codex_override_key <key of a `-c key=value`> -> the key, reduced to the
+# characters a bare key can be made of: ASCII letters, digits, `_`, `.`, `-`.
+# Everything else is dropped — ASCII and Unicode whitespace, quotes, anything
+# — so there is one rule and no list of code points to keep in step with
+# codex's own trimming (it trims the key with Rust's `trim()`, which knows
+# U+00A0, U+2007, U+202F and the rest). Compared byte-wise (LC_ALL=C), so a
+# multi-byte character goes whole, whatever the caller's locale. A key that
+# comes out as `model` or `model_reasoning_effort` IS an override of that
+# setting: erring that way refuses or reports `unknown`; erring the other way
+# lets a second value through unseen.
+_codex_override_key() {
+  local LC_ALL=C k="$1"
+  printf '%s' "${k//[!A-Za-z0-9_.-]/}"
+}
+
 # What the argv names, read the way codex reads it — not a second parser of
 # codex's whole grammar, only the two options that carry these values:
 #   · `-m <v>`, `-m<v>`, `-m=<v>`, `--model <v>`, `--model=<v>`
 #   · `-c <k=v>`, `-c<k=v>`, `-c=<k=v>`, `--config <k=v>`, `--config=<k=v>`;
-#     the key is trimmed, the split is at the first `=`
+#     the split is at the first `=`, and the key is compared through
+#     _codex_override_key — however it is dressed, it is that setting
 #   · `--` ends the options: what follows is the prompt
 #   · precedence: an explicit model option beats any `-c model=…`
 #     (`let model = model.or(cfg.model)`, codex-rs/core/src/config/mod.rs);
@@ -153,14 +169,16 @@ adapter_burn_knobs_from_args() {
     [ "$has_kv" -eq 1 ] || continue
     case "$kv" in *=*) ;; *) continue ;; esac     # no `=`: codex rejects it
     key="${kv%%=*}"
-    key="${key#"${key%%[![:space:]]*}"}"; key="${key%"${key##*[![:space:]]}"}"
-    # A quoted key may or may not be the same key to codex's dotted-path
-    # writer; that is not for this reader to decide.
-    bare="${key//[\"\'[:space:]]/}"
+    bare="$(_codex_override_key "$key")"
     case "$bare" in
       model|model_reasoning_effort) ;;
       *) continue ;;
     esac
+    # It IS an override of that setting. Its value is reported only when the
+    # key needed nothing but plain trimming: what codex makes of a key that
+    # had to be cleaned further (a quoted one, one behind a no-break space)
+    # is not for this reader to decide, so that one reads as "cannot tell".
+    key="${key#"${key%%[![:space:]]*}"}"; key="${key%"${key##*[![:space:]]}"}"
     if [ "$bare" = "$key" ] && v="$(_codex_override_string "${kv#*=}")"; then v="=$v"; else v="?"; fi
     if [ "$bare" = model ]; then m_cfg="$v"; else e_cfg="$v"; fi
   done

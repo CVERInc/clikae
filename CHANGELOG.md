@@ -20,7 +20,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   cannot honour one fails before anything starts.
 - **`burn --to-model <m>`** names the model for a `--to` on another engine. A model name belongs to one
   engine, so `--model` never crosses that hop: `--model` with a cross-engine `--to` and no `--to-model`
-  is refused before anything starts. `--effort` crosses only if the other engine accepts that level.
+  is refused before anything starts. `--effort` crosses only if the other engine accepts that level. A
+  model in the arguments after `--` is refused with a cross-engine `--to` as well: those arguments reach
+  both engines unchanged.
 - **`burn --require-declared`** refuses to start, or to reroute onto a tank, when the model or the effort
   is undeclared or unknown.
 - A Codex tank's `config.toml` is read with a TOML parser (`python3` 3.11 or newer). Without one the

@@ -114,13 +114,16 @@ _burn_knobs_check_other() {
   return 1
 }
 
-# _burn_knobs_check_hop <engine> <to> — may this burn, started on <engine>,
-# take its explicit --to hop with the model and effort it was given? Only a
-# <to> that names another engine is in question. rc 0 yes; rc 1 with the
-# reason in _BURN_KNOBS_REFUSAL (two sentences, no trailing "Nothing was
-# started.") and a short form in _BURN_KNOBS_REFUSAL_REASON.
+# _burn_knobs_check_hop <engine> <to> <argv...> — may this burn, started on
+# <engine>, take its explicit --to hop with the model and effort it was given?
+# Only a <to> that names another engine is in question. <argv> is what the
+# caller put after `--`, read with <engine>'s own option syntax (its adapter
+# is the loaded one). rc 0 yes; rc 1 with the reason in _BURN_KNOBS_REFUSAL
+# (two sentences, no trailing "Nothing was started.") and a short form in
+# _BURN_KNOBS_REFUSAL_REASON.
 _burn_knobs_check_hop() {
-  local eng="$1" to="$2" dest=""
+  local eng="$1" to="$2" dest="" line
+  shift 2
   _BURN_KNOBS_REFUSAL=""; _BURN_KNOBS_REFUSAL_REASON=""
   case "$to" in */*) dest="${to%%/*}" ;; esac
   if [ -z "$dest" ] || [ "$dest" = "$eng" ]; then
@@ -131,6 +134,17 @@ _burn_knobs_check_hop() {
     }
     return 0
   fi
+  # What follows `--` goes to every engine this burn launches, byte for byte:
+  # a model in it — readable or not — would reach <dest> too, and no flag of
+  # burn's can make it one engine's alone. With or without --to-model.
+  while IFS= read -r line; do
+    case "$line" in
+      model=*|'model?')
+        _BURN_KNOBS_REFUSAL_REASON="the arguments after -- name a model; --to $to would pass it to $dest unchanged"
+        _BURN_KNOBS_REFUSAL="--to $to: the arguments after -- name a model, and they are passed unchanged to both $eng and $dest, so that model cannot be $eng's alone. Take it out of the arguments after -- and name the models with --model (for $eng) and --to-model (for $dest) on a --prompt task, or name none so each tank's profile decides."
+        return 1 ;;
+    esac
+  done < <(_burn_knobs_from_args "$eng" "$@")
   if [ -n "${burn_model_flag:-}" ] && [ -z "${burn_to_model:-}" ]; then
     _BURN_KNOBS_REFUSAL_REASON="--model $burn_model_flag names a $eng model; --to $to needs --to-model"
     _BURN_KNOBS_REFUSAL="--to $to: --model $burn_model_flag names a $eng model, and that reroute would run the task on $dest, where the name means nothing. Add --to-model <m> to name $dest's model, or drop --model so each tank's profile decides."
