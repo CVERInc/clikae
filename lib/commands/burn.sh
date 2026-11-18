@@ -46,6 +46,7 @@ Usage: clikae burn <engine> <tank> --artifact <path>
                    [--permission <mode>] [--force-cockpit]
                    [--model <m>] [--to-model <m>] [--effort <e>] [--require-declared]
                    [--queue [--queue-timeout <dur>]]
+                   [--memory-max <size> [--memory-high <size>]]
 
 Run a headless engine task on <tank>, verify it by the ARTIFACT it should
 produce (never the exit code — codex exec exits 0 even when it hit its limit and
@@ -195,6 +196,22 @@ Give the task in one of two ways:
                       lines in the burn log. Never reroutes while waiting (an
                       explicit --to still wins). Unparseable reset or cap
                       reached -> today's reroute-or-stop. Off by default.
+  --memory-max <size> (#236) run the ENGINE, and everything it starts, in its
+                      own memory-capped systemd user scope:
+                        systemd-run --user --scope -p MemoryMax=<size> -- <engine>
+                      one unit per launch, named clikae-burn-<run id>.scope, so
+                      `systemctl --user status 'clikae-burn-*'` shows which lane
+                      it is. Every reroute hop and retry gets its own capped
+                      scope. <size> is bytes, or a number with K, M, G or T
+                      (1024-based, as systemd reads it). A cap put AROUND
+                      `clikae burn` does not reach the engine: tmux starts it.
+                      Needs Linux with a systemd user manager whose cgroup
+                      carries the memory controller; anywhere else the burn is
+                      refused before anything starts (drop the flag to run
+                      uncapped). Env: CLIKAE_BURN_MEMORY_MAX.
+  --memory-high <size> (#236) also set MemoryHigh (the throttle point below the
+                      hard cap). Needs --memory-max; must not exceed it.
+                      Env: CLIKAE_BURN_MEMORY_HIGH.
 
 Outcomes: artifact present -> done (exit 0); every reachable tank dry/skipped
 (in interactive use, or sharing an already-dry account) -> reason:
@@ -1201,6 +1218,7 @@ _agy_burn() {
       esac
     fi
     local run_id="agy-${cur}-burn-$$"
+    _burn_memcap_runner "$run_id" "agy/$cur"   # #236
     local evidence_file; evidence_file="$(mktemp "${TMPDIR:-/tmp}/clikae-agy-artifact.XXXXXX")"
     local artifact_fresh=0 artifact_bytes_snapshot=null
     art_pre="$(_clikae_mtime "$artifact")"
@@ -3996,6 +4014,119 @@ _burn_capture_stderr() {
   return "$capture_rc"
 } 3>&1
 
+# --- #236: the engine's own memory cap ----------------------------------------
+# A cap put AROUND `clikae burn` (systemd-run --scope … clikae burn …) caps only
+# burn's own bash and its poll: the engine is started by the tmux SERVER, which
+# lives in whatever cgroup it was born in (a tmux-spawn scope, or the login
+# session's scope — the cockpit's). --memory-max puts the engine itself in a
+# transient user scope at the one place it is exec'd: the runner prefix below.
+# Opt-in, Linux + systemd user manager only, and REFUSED elsewhere: a cap that
+# was asked for and silently does not apply is the bug this exists to fix.
+
+# _burn_memcap_bytes <size> — print the size in bytes, or return 1. The grammar
+# is the subset of systemd's that needs no guessing: digits with an optional
+# K, M, G or T (1024-based, as systemd reads them). No percentages, no
+# "infinity" — that would be no cap at all.
+_burn_memcap_bytes() {
+  local raw="$1" num mult=1
+  case "$raw" in
+    ''|*[!0-9KMGT]*) return 1 ;;
+  esac
+  num="${raw%[KMGT]}"
+  case "$num" in ''|*[!0-9]*) return 1 ;; esac
+  [ "${#num}" -le 12 ] || return 1
+  case "$raw" in
+    *K) mult=1024 ;;
+    *M) mult=$((1024 * 1024)) ;;
+    *G) mult=$((1024 * 1024 * 1024)) ;;
+    *T) mult=$((1024 * 1024 * 1024 * 1024)) ;;
+  esac
+  num=$((10#$num))
+  [ "$num" -gt 0 ] || return 1
+  # 12 digits x 2^40 overflows 64 bits; a cap beyond 1 EiB is no cap anyway.
+  [ "$num" -le $(( (1 << 60) / mult )) ] || return 1
+  printf '%s\n' "$((num * mult))"
+}
+
+# _burn_memcap_validate — the values alone, at parse time (cmd_burn's locals
+# burn_memory_max / burn_memory_high, by dynamic scope).
+_burn_memcap_validate() {
+  [ -n "$burn_memory_max$burn_memory_high" ] || return 0
+  if [ -z "$burn_memory_max" ]; then
+    log_fail "--memory-high (or CLIKAE_BURN_MEMORY_HIGH) needs --memory-max (or CLIKAE_BURN_MEMORY_MAX): a throttle without a hard cap does not contain a runaway engine. Nothing was started."
+  fi
+  local max_b high_b
+  max_b="$(_burn_memcap_bytes "$burn_memory_max")" \
+    || log_fail "--memory-max (or CLIKAE_BURN_MEMORY_MAX): not a size: '$burn_memory_max' (use bytes, or a number with K, M, G or T, e.g. 10G). Nothing was started."
+  [ -n "$burn_memory_high" ] || return 0
+  high_b="$(_burn_memcap_bytes "$burn_memory_high")" \
+    || log_fail "--memory-high (or CLIKAE_BURN_MEMORY_HIGH): not a size: '$burn_memory_high' (use bytes, or a number with K, M, G or T, e.g. 8G). Nothing was started."
+  [ "$high_b" -le "$max_b" ] \
+    || log_fail "--memory-high $burn_memory_high is above --memory-max $burn_memory_max: it would never throttle before the hard cap. Nothing was started."
+}
+
+# _burn_memcap_preflight <engine> <tank> — prove, before anything starts, that
+# a user scope can be created here AND that its cgroup really carries the
+# requested memory.max. systemd accepts MemoryMax= even where the kernel will
+# not enforce it (cgroup v1, memory controller not delegated to the user
+# manager), so creating the scope is not proof; reading the probe's own
+# memory.max is. Refuses through _burn_knobs_refuse (status file + --json).
+_burn_memcap_preflight() {
+  [ -n "$burn_memory_max" ] || return 0
+  local eng="$1" tk="$2" tail="Nothing was started; drop --memory-max to run uncapped."
+  if ! command -v systemd-run >/dev/null 2>&1; then
+    _burn_knobs_refuse "$eng" "$tk" 0 "refused: --memory-max needs systemd-run" \
+      "--memory-max needs systemd-run (Linux with a systemd user manager); there is none on this $(uname -s 2>/dev/null || echo unknown) system. $tail"
+  fi
+  local max_b high_b="" out rc=0
+  max_b="$(_burn_memcap_bytes "$burn_memory_max")"
+  [ -z "$burn_memory_high" ] || high_b="$(_burn_memcap_bytes "$burn_memory_high")"
+  local -a probe=(systemd-run --user --scope --quiet --collect -p "MemoryMax=$burn_memory_max")
+  [ -z "$burn_memory_high" ] || probe+=(-p "MemoryHigh=$burn_memory_high")
+  # $0 of the probe is a fixed marker, so a test double can recognise it.
+  # shellcheck disable=SC2016  # expanded by the probe's own sh, not here
+  out="$("${probe[@]}" -- sh -c '
+    p="$(sed -n "s/^0:://p" /proc/self/cgroup)"
+    for f in memory.max memory.high; do
+      if [ -r "/sys/fs/cgroup$p/$f" ]; then cat "/sys/fs/cgroup$p/$f"; else echo none; fi
+    done' clikae-memcap-probe 2>&1 </dev/null)" || rc=$?
+  if [ "$rc" -ne 0 ]; then
+    local why; why="$(printf '%s\n' "$out" | sed -n '/./{p;q;}')"
+    _burn_knobs_refuse "$eng" "$tk" 0 "refused: --memory-max could not start a systemd user scope" \
+      "--memory-max could not start a systemd user scope (rc $rc: ${why:-no message}). Is the user manager running and reachable (systemctl --user status)? $tail"
+  fi
+  local got_max got_high
+  got_max="$(printf '%s\n' "$out" | sed -n 1p)"
+  got_high="$(printf '%s\n' "$out" | sed -n 2p)"
+  # The kernel rounds a limit down to whole pages; allow that, nothing more.
+  if ! _burn_memcap_matches "$got_max" "$max_b" \
+     || { [ -n "$high_b" ] && ! _burn_memcap_matches "$got_high" "$high_b"; }; then
+    _burn_knobs_refuse "$eng" "$tk" 0 "refused: --memory-max does not apply in a systemd user scope here" \
+      "--memory-max: a systemd user scope started, but its cgroup does not carry the cap (memory.max: ${got_max:-none}, wanted $max_b bytes${high_b:+; memory.high: ${got_high:-none}, wanted $high_b bytes}). The memory controller is not available to the user manager (cgroup v2 with memory delegated is needed). $tail"
+  fi
+}
+
+_burn_memcap_matches() {   # <cgroup value> <wanted bytes>
+  case "$1" in ''|*[!0-9]*) return 1 ;; esac
+  [ "$1" -le "$2" ] && [ $(($2 - $1)) -lt 65536 ]
+}
+
+# _burn_memcap_runner <run-id> <engine/tank> — append the scope prefix to the
+# caller's `runner` array (dynamic scope), so the engine — and every child it
+# forks — starts inside its own capped unit. `systemd-run --scope` execs the
+# command in place: same pid, stdio, exit code, and the `timeout` in front of
+# it still bounds the same process. --collect so a scope that ended failed
+# (an OOM kill) does not linger and block a later unit of the same name.
+_burn_memcap_runner() {
+  [ -n "${burn_memory_max:-}" ] || return 0
+  local unit="clikae-burn-$1"
+  runner+=(systemd-run --user --scope --quiet --collect "--unit=$unit"
+           "--description=clikae burn $2" -p "MemoryMax=$burn_memory_max")
+  [ -z "${burn_memory_high:-}" ] || runner+=(-p "MemoryHigh=$burn_memory_high")
+  runner+=(--)
+  log_info "memory cap: $2 runs in $unit.scope (MemoryMax=$burn_memory_max${burn_memory_high:+, MemoryHigh=$burn_memory_high})"
+}
+
 # _burn_check_codex_git_cwd — refuse to compose a codex argv whose cwd isn't a
 # git work tree. Reads $cli/$prompt_set/$codex_skip_git_check/$add_dirs from
 # the caller (cmd_burn's locals — same pattern _burn_result etc. already use).
@@ -4180,6 +4311,8 @@ cmd_burn() {
   # shellcheck disable=SC2034  # read in lib/core/burn_knobs.sh
   local burn_effort=undeclared burn_effort_source=undeclared burn_knobs_notes=""
   local -a burn_argv=("$@")
+  # #236: the engine's own memory cap. Flags win over the environment.
+  local burn_memory_max="${CLIKAE_BURN_MEMORY_MAX:-}" burn_memory_high="${CLIKAE_BURN_MEMORY_HIGH:-}"
   # #74 round-2 P1-1 (round-3 P1-1: raw mode): the cwd the engine actually
   # runs in, not the cwd of THIS shell. Defaults to $PWD here (agy — the only
   # caller that ever reads this default value directly, before any reset
@@ -4228,6 +4361,8 @@ cmd_burn() {
       --queue-timeout) shift; [ $# -gt 0 ] || log_fail "--queue-timeout needs a duration (e.g. 2h)"; queue_timeout_raw="$1"; shift ;;
       --force-cockpit) force_cockpit=1; shift ;;
       --fresh)      fresh=1; shift ;;
+      --memory-max)  shift; [ $# -gt 0 ] && [ -n "$1" ] || log_fail "--memory-max needs a size (e.g. 10G)"; burn_memory_max="$1"; shift ;;
+      --memory-high) shift; [ $# -gt 0 ] && [ -n "$1" ] || log_fail "--memory-high needs a size (e.g. 8G)"; burn_memory_high="$1"; shift ;;
       --)           shift; cmd=("$@"); break ;;
       -*)           log_fail "Unknown flag: $1  (try: clikae burn --help)" ;;
       *)            if [ -z "$cli" ]; then cli="$1"
@@ -4270,6 +4405,8 @@ cmd_burn() {
   case "$burn_to_model" in
     -*|*[[:cntrl:]]*) log_fail "--to-model must be a model name, not a flag or a multi-line value: $burn_to_model" ;;
   esac
+
+  _burn_memcap_validate
 
   [ -n "$cli" ]      || log_fail "Missing <engine>. Usage: clikae burn <engine> <tank> --artifact <path> (--prompt-file <f> | -- <cmd...>)"
   [ -n "$tank" ]     || log_fail "Missing <tank>."
@@ -4420,6 +4557,9 @@ cmd_burn() {
     fi
     _burn_knobs_gate "$status_engine" "$tank" "$_knobs_dir" 0 "$require_declared" ${cmd[@]+"${cmd[@]}"}
   fi
+  # #236: before any lock, --fresh deletion or launch — a cap that was asked
+  # for and cannot apply refuses the burn instead of running it uncapped.
+  _burn_memcap_preflight "$status_engine" "$tank"
   log_info "task: $saved_prompt"
   log_info "preview: $task_preview"
 
@@ -4774,6 +4914,9 @@ cmd_burn() {
     # #36: each resumed launch gets its own log, so the dry attempt's log (and
     # the `[ RESUME ]` lines appended to it) is not truncated by the relaunch.
     [ "${resumed:-0}" -eq 0 ] || run_id="${run_id}-resume${resumed}"
+    # #236: the scope goes INSIDE the runner, right before the engine, so the
+    # same argv reaches the tmux wrapper and both direct fallbacks.
+    _burn_memcap_runner "$run_id" "$cli/$cur"
     local log_file="$HOME/.clikae/logs/${run_id}.log"
     local stderr_file="$run_dir/${run_id}.stderr" attempt_started=$SECONDS
     local state_file="$HOME/.clikae/state/${run_id}_exit"

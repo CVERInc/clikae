@@ -9,6 +9,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **`clikae burn --memory-max <size>` [`--memory-high <size>`] puts the engine under a memory cap.** A cap
+  put around `clikae burn` never reached the engine: burn hands it to tmux, so it ran in the tmux server's
+  cgroup. With the option (or `CLIKAE_BURN_MEMORY_MAX` / `CLIKAE_BURN_MEMORY_HIGH`) each launch runs as
+  `systemd-run --user --scope -p MemoryMax=…` in its own `clikae-burn-<run id>.scope`, every reroute hop
+  included. Where that cannot apply — no `systemd-run`, no reachable user manager, no memory controller in
+  its scopes, an invalid size — the burn is refused before anything starts. Without the option nothing
+  changes.
 - **`clikae burn` says which model and reasoning effort a task ran with, and lets you name them.** A burn
   is dispatched to a tank chosen for its quota, so the tank's profile decided both, and nothing in the
   output said what they were; "Effort: high" in a prompt changed nothing. Every burn now opens with

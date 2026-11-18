@@ -263,6 +263,31 @@ What the report can and cannot know:
 - **codex effort levels are not checked.** Its help lists none, so burn only
   requires one plain word; an unknown level is codex's to reject.
 
+### A memory cap on the engine (#236)
+
+A cap put *around* the burn — `systemd-run --user --scope -p MemoryMax=10G
+clikae burn …` — caps nothing that matters: burn hands the engine to tmux, so
+the engine and everything it starts run in the tmux server's cgroup (a
+`tmux-spawn-*.scope`, or the login session's scope), not in the burn's.
+
+`--memory-max <size>` (env `CLIKAE_BURN_MEMORY_MAX`), optionally with
+`--memory-high <size>` (env `CLIKAE_BURN_MEMORY_HIGH`), starts the engine
+itself as
+
+    systemd-run --user --scope --quiet --collect --unit=clikae-burn-<run id> \
+      -p MemoryMax=<size> [-p MemoryHigh=<size>] -- <engine argv>
+
+once per launch, so every reroute hop and retry has its own unit and
+`systemctl --user status 'clikae-burn-*'` names the lane. A size is bytes or
+a number with `K`, `M`, `G` or `T`.
+
+It is refused before anything starts — never run uncapped with a warning —
+when the size is invalid, when there is no `systemd-run` (macOS, Windows,
+Linux without systemd), when the user manager cannot start a scope, or when
+a probe scope's own cgroup does not carry the requested `memory.max` (cgroup
+v1, or the memory controller not delegated to the user manager). Drop the
+flag to run uncapped.
+
 ### agy (Antigravity) is the exception — read this before dispatching to it
 
 agy's login is one **global** Keychain entry, so there's no per-shell env to
