@@ -123,7 +123,8 @@ Give the task in one of two ways:
                       `undeclared` — the engine's default decides, and the
                       value reads "undeclared" too — or `unknown`: the argv
                       after -- sets it in a form burn cannot read with
-                      certainty (value "unknown").
+                      certainty, or a codex tank selects a profile whose
+                      layers do not lead to one value (value "unknown").
   --require-declared  (#237) refuse to start, and refuse a reroute hop, when
                       the model or the effort is undeclared or unknown.
 

@@ -30,6 +30,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - For a Claude tank, a top-level `effortLevel` alone is reported as `undeclared`: Claude Code applies that
   key in a tank's own settings only to older models. The burn says so, and `--effort` pins it.
 
+### Fixed
+
+- **A Codex tank that selects a profile is no longer reported with the root table's model and effort.**
+  With a root `profile = "<name>"` key in `config.toml`, or `-p` / `--profile` in the arguments after `--`,
+  burn read the root table as if nothing were selected, called the result `profile`, and
+  `--require-declared` passed. It now reads the layer the option documents — `<name>.config.toml` on top of
+  `config.toml` — and reports a value only when no other selected layer (`[profiles.<name>]`, the key's own
+  file) sets it to something else. Otherwise the value is `unknown`, the burn says why, and
+  `--require-declared` refuses. A selected profile that exists nowhere is `unknown` too. `--model` and
+  `--effort` still win and are reported as `flag`. A tank that selects no profile reads as before.
+
 ## [0.45.3] — 2026-11-05
 
 ### Fixed

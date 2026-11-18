@@ -118,7 +118,7 @@ source is one of:
 | `env` | a variable the engine ranks above its settings file (Claude's `ANTHROPIC_MODEL`, `CLAUDE_CODE_EFFORT_LEVEL`) — a burn hands the engine the caller's environment |
 | `profile` | the tank's own config, read the way the engine reads it |
 | `undeclared` | none of the above: the engine's default decides. The value reads `"undeclared"` too |
-| `unknown` | the argv after `--` sets it, in a form burn cannot read with certainty (an escape in the value, a number, a key that is quoted or sits behind a no-break space). The value reads `"unknown"` too — never a guess |
+| `unknown` | the argv after `--` sets it, in a form burn cannot read with certainty (an escape in the value, a number, a key that is quoted or sits behind a no-break space), or a codex tank selects a profile whose layers do not lead to one value (below). The value reads `"unknown"` too — never a guess |
 
 **`--model <m>` and `--effort <e>` name them**, for a `--prompt` /
 `--prompt-file` task. Each adapter writes them in its engine's own words, so a
@@ -172,9 +172,31 @@ no-break space or inside quotes is still that setting: a duplicate of
 only when the key needed no more than plain trimming; otherwise it is
 `unknown`. The argv itself reaches the engine byte for byte.
 
-Not covered by this reading, so not reflected in the report: codex profile
-layering (`-p <profile>` and the `profile` key), clustered short options,
-and anything beyond the plain option forms in the claude and agy argv.
+A codex tank that selects a profile is reported with a value only when it is
+certain which one applies. A profile is selected by a root `profile = "<name>"`
+key in `config.toml`, or by `-p <name>`, `-p<name>`, `-p=<name>`,
+`--profile <name>` or `--profile=<name>` in the argv before a bare `--`. What
+`codex exec --help` documents is the option: it layers
+`<name>.config.toml`, next to `config.toml`, on top of it — so a model or
+effort that file sets is the one reported (still as `profile`), and one it
+leaves out comes from the root table. That help says nothing about the
+`profile` key, `[profiles.<name>]` tables, or which wins when the option and
+the key name different profiles, so no order is assumed between them: if any
+other selected layer — `[profiles.<name>]` for either name, or the key's
+`<name>.config.toml` — sets the value to something else, it is `unknown`. So
+the issue's case (root table one model, `profile = "x"`, `[profiles.x]`
+another) is `unknown`, and a selected profile that repeats the root table's
+value, or does not set it, is that value. Also `unknown`: a selected name
+that exists as neither a table nor a file, a name that cannot be read (the
+option given twice, a `-c profile=…` or `-c profiles.…` override, a name with
+a `/`), a layer file that is not valid TOML or carries profile settings of
+its own, and a value that is not a one-line string. The burn says which of
+these it was. `--model` / `--effort` are still reported as `flag`.
+
+Not covered by this reading, so not reflected in the report: clustered short
+options, `--ignore-user-config`, config layers outside the tank (system,
+project), and anything beyond the plain option forms in the claude and agy
+argv.
 
 **`--require-declared`** refuses to start when the model or the effort is
 `undeclared` or `unknown`, and refuses a reroute hop onto a tank where it is

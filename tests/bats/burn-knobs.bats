@@ -999,3 +999,335 @@ _in_locale() {
   run grep -nE '^[^#]*\[\[:[a-z]+:\]\]' <<<"$body"
   [ "$status" -eq 1 ] || { echo "$output"; false; }
 }
+
+# ── 7. codex: profile layering (#239) ────────────────────────────────────────
+# A root `profile` key, or a profile option in the argv, puts another layer
+# over the root table. One value is reported only when every layer codex could
+# be applying leads to it; otherwise `unknown` — never the root table's value
+# as if nothing had been selected.
+
+_codex_layer() {   # <tank> <name> <body> -> <tank>/<name>.config.toml
+  printf '%s\n' "$3" > "$CLIKAE_HOME/profiles/codex/$1/$2.config.toml"
+}
+
+# The issue's reproduction: the root table says one thing, the profile the
+# root key selects says another.
+_codex_root_key_tank() {
+  _stub_engine codex
+  _codex_tank work 'model = "root-model"
+model_reasoning_effort = "low"
+profile = "x"
+[profiles.x]
+model = "layer-model"
+model_reasoning_effort = "high"'
+}
+
+@test "codex: a root profile key whose table says otherwise is unknown, not the root table's value (#239)" {
+  _codex_root_key_tank
+  run clikae burn codex work --artifact "$A" --prompt 'do it'
+  [ "$status" -eq 0 ]
+  [ "$(_knobs_line)" = "burn codex/work: model unknown, effort unknown" ]
+  [[ "$output" == *"codex profile layering is selected by the profile key in config.toml, and the layers codex could apply do not lead to one plain value, so clikae reports it as unknown rather than guessing."* ]] || false
+  _burn_json codex work --artifact "$A" --prompt 'do it' --fresh
+  [ "$status" -eq 0 ]
+  [ "$(_json_field model)" = unknown ]
+  [ "$(_json_field model_source)" = unknown ]
+  [ "$(_json_field effort)" = unknown ]
+  [ "$(_json_field effort_source)" = unknown ]
+}
+
+@test "--require-declared refuses a codex tank whose profile layering leaves both unknown (#239)" {
+  _codex_root_key_tank
+  _burn_json codex work --artifact "$A" --prompt 'do it' --require-declared
+  [ "$status" -eq 1 ]
+  [ "$(_json_field reason)" = "refused: unknown model or effort" ]
+  [[ "$stderr" == *"--require-declared: the model or effort of codex/work cannot be determined — codex profile layering is selected by the profile key in config.toml"* ]] || false
+  [[ "$stderr" == *"Name it with --model / --effort. Nothing was started."* ]] || false
+  [ ! -e "$L" ]
+}
+
+@test "codex: burn's --model and --effort still win over a selected profile, as flag (#239)" {
+  _codex_root_key_tank
+  _burn_json codex work --artifact "$A" --prompt 'do it' --require-declared --model gpt-x --effort medium
+  [ "$status" -eq 0 ]
+  [ "$(_json_field model)" = gpt-x ]
+  [ "$(_json_field model_source)" = flag ]
+  [ "$(_json_field effort)" = medium ]
+  [ "$(_json_field effort_source)" = flag ]
+  [[ "$stderr" != *"profile layering"* ]] || false
+  # One flag: the other is still unknown, and still said to be.
+  run clikae burn codex work --artifact "$A" --prompt 'do it' --fresh --model gpt-x
+  [ "$status" -eq 0 ]
+  [ "$(_knobs_line)" = "burn codex/work: model gpt-x (flag), effort unknown" ]
+  [[ "$output" == *"so clikae reports it as unknown rather than guessing."* ]] || false
+}
+
+@test "codex: a knob named to burn and again after -- is still refused with a profile selected (#239)" {
+  _codex_root_key_tank
+  run clikae burn codex work --artifact "$A" --prompt 'do it' --effort high \
+    -- -p x -c 'model_reasoning_effort="low"'
+  [ "$status" -eq 1 ]
+  [[ "$output" == *"--effort is given twice"* ]] || false
+  [ ! -e "$L" ]
+}
+
+@test "codex: a profile table nothing selects changes nothing (#239)" {
+  _stub_engine codex
+  _codex_tank work 'model = "root-model"
+model_reasoning_effort = "low"
+[profiles.x]
+model = "layer-model"
+model_reasoning_effort = "high"'
+  _codex_layer work x 'model = "file-model"'
+  _burn_json codex work --artifact "$A" --prompt 'do it' --require-declared
+  [ "$status" -eq 0 ]
+  [ "$(_json_field model)" = root-model ]
+  [ "$(_json_field model_source)" = profile ]
+  [ "$(_json_field effort)" = low ]
+  [ "$(_json_field effort_source)" = profile ]
+  [[ "$stderr" != *"profile layering"* ]] || false
+}
+
+@test "codex: a profile option in the argv layers <name>.config.toml over the root table, in every spelling (#239)" {
+  _codex_profiled
+  _codex_layer work fast 'model = "layer-model"
+model_reasoning_effort = "high"'
+  local form
+  for form in '-p fast' '-pfast' '-p=fast' '--profile fast' '--profile=fast'; do
+    rm -f "$L" "$A"
+    # shellcheck disable=SC2086  # one or two words, on purpose
+    _work_json --require-declared -- exec $form 'do it'
+    [ "$status" -eq 0 ] || { echo "form [$form]: $stderr"; false; }
+    [ "$(_json_field model)" = layer-model ] || { echo "form [$form]: $output"; false; }
+    [ "$(_json_field model_source)" = profile ]
+    [ "$(_json_field effort)" = high ]
+    [ "$(_json_field effort_source)" = profile ]
+  done
+  # The extras of a --prompt burn are read the same way.
+  rm -f "$L" "$A"
+  run clikae burn codex work --artifact "$A" --prompt 'do it' -- -p fast
+  [ "$status" -eq 0 ]
+  [ "$(_knobs_line)" = "burn codex/work: model layer-model (profile), effort high (profile)" ]
+}
+
+@test "codex: a profile option after the option terminator is the prompt (#239)" {
+  _codex_profiled
+  _codex_layer work fast 'model = "layer-model"'
+  _work_json -- exec -- -p fast
+  [ "$status" -eq 0 ]
+  [ "$(_json_field model)" = gpt-profile ]
+  [ "$(_json_field model_source)" = profile ]
+  [ "$(_json_field effort)" = low ]
+}
+
+@test "codex: a selected layer that sets one of the two leaves the other to the root table (#239)" {
+  _codex_profiled
+  _codex_layer work fast 'model = "layer-model"'
+  _work_json --require-declared -- exec -p fast 'do it'
+  [ "$status" -eq 0 ]
+  [ "$(_json_field model)" = layer-model ]
+  [ "$(_json_field model_source)" = profile ]
+  [ "$(_json_field effort)" = low ]
+  [ "$(_json_field effort_source)" = profile ]
+}
+
+@test "codex: a root-key profile that sets one of the two makes only that one unknown (#239)" {
+  _stub_engine codex
+  _codex_tank work 'model = "root-model"
+model_reasoning_effort = "low"
+profile = "x"
+[profiles.x]
+model_reasoning_effort = "high"'
+  _work_json --prompt 'do it'
+  [ "$status" -eq 0 ]
+  [ "$(_json_field model)" = root-model ]
+  [ "$(_json_field model_source)" = profile ]
+  [ "$(_json_field effort)" = unknown ]
+  [ "$(_json_field effort_source)" = unknown ]
+  [[ "$stderr" == *"so clikae reports it as unknown rather than guessing."* ]] || false
+  rm -f "$L" "$A"
+  _work_json --prompt 'do it' --require-declared
+  [ "$status" -eq 1 ]
+  [ "$(_json_field reason)" = "refused: unknown effort" ]
+  [ ! -e "$L" ]
+}
+
+@test "codex: a root-key profile that repeats the root table's values is those values (#239)" {
+  _stub_engine codex
+  _codex_tank work 'model = "same-model"
+model_reasoning_effort = "low"
+profile = "x"
+[profiles.x]
+model = "same-model"'
+  _work_json --prompt 'do it' --require-declared
+  [ "$status" -eq 0 ]
+  [ "$(_json_field model)" = same-model ]
+  [ "$(_json_field model_source)" = profile ]
+  [ "$(_json_field effort)" = low ]
+  [ "$(_json_field effort_source)" = profile ]
+}
+
+@test "codex: an argv profile that exists only as a table is unknown where the table differs from the root (#239)" {
+  _stub_engine codex
+  _codex_tank work 'model = "root-model"
+model_reasoning_effort = "low"
+[profiles.x]
+model = "layer-model"'
+  _work_json -- exec -p x 'do it'
+  [ "$status" -eq 0 ]
+  [ "$(_json_field model)" = unknown ]
+  [ "$(_json_field model_source)" = unknown ]
+  [ "$(_json_field effort)" = low ]
+  [ "$(_json_field effort_source)" = profile ]
+  [[ "$stderr" == *"codex profile layering is selected by a profile option in the arguments after --, and the layers codex could apply do not lead to one plain value, so clikae reports it as unknown rather than guessing."* ]] || false
+}
+
+@test "codex: an argv profile and a root profile key that disagree are unknown; the argv's layer is not assumed to win (#239)" {
+  _stub_engine codex
+  _codex_tank work 'model_reasoning_effort = "low"
+profile = "b"
+[profiles.b]
+model = "b-model"'
+  _codex_layer work a 'model = "a-model"
+model_reasoning_effort = "high"'
+  _work_json -- exec -p a 'do it'
+  [ "$status" -eq 0 ]
+  [ "$(_json_field model)" = unknown ]
+  [ "$(_json_field model_source)" = unknown ]
+  # Nothing but the argv's layer and the root table name an effort, and the
+  # layer is documented as going on top.
+  [ "$(_json_field effort)" = high ]
+  [ "$(_json_field effort_source)" = profile ]
+  [[ "$stderr" == *"selected by a profile option in the arguments after -- and the profile key in config.toml"* ]] || false
+  rm -f "$L" "$A"
+  _work_json --require-declared -- exec -p a 'do it'
+  [ "$status" -eq 1 ]
+  [ "$(_json_field reason)" = "refused: unknown model" ]
+  [ ! -e "$L" ]
+}
+
+@test "codex: an argv profile and a root profile key that agree are that value (#239)" {
+  _stub_engine codex
+  _codex_tank work 'model_reasoning_effort = "low"
+profile = "b"
+[profiles.b]
+model = "one-model"'
+  _codex_layer work a 'model = "one-model"'
+  _work_json --require-declared -- exec --profile=a 'do it'
+  [ "$status" -eq 0 ]
+  [ "$(_json_field model)" = one-model ]
+  [ "$(_json_field model_source)" = profile ]
+  [ "$(_json_field effort)" = low ]
+  [ "$(_json_field effort_source)" = profile ]
+}
+
+@test "codex: a selected profile that exists nowhere is unknown (#239)" {
+  _stub_engine codex
+  _codex_tank work 'model = "root-model"
+model_reasoning_effort = "low"
+profile = "gone"
+[profiles.x]
+model = "layer-model"'
+  _work_json --prompt 'do it'
+  [ "$status" -eq 0 ]
+  [ "$(_json_field model)" = unknown ]
+  [ "$(_json_field effort)" = unknown ]
+  [[ "$stderr" == *'profile "gone" is neither a [profiles.gone] table in config.toml nor a gone.config.toml file'* ]] || false
+  # Named in the argv instead: the same.
+  printf '%s\n' 'model = "root-model"' 'model_reasoning_effort = "low"' \
+    > "$CLIKAE_HOME/profiles/codex/work/config.toml"
+  rm -f "$L" "$A"
+  _work_json --require-declared -- exec -p gone 'do it'
+  [ "$status" -eq 1 ]
+  [ "$(_json_field reason)" = "refused: unknown model or effort" ]
+  [[ "$stderr" == *'profile "gone" is neither a [profiles.gone] table in config.toml nor a gone.config.toml file'* ]] || false
+  [ ! -e "$L" ]
+}
+
+@test "codex: an argv profile on a tank with no config.toml at all still reads its layer (#239)" {
+  _stub_engine codex
+  _codex_tank work
+  rm -f "$CLIKAE_HOME/profiles/codex/work/config.toml"
+  _codex_layer work fast 'model = "layer-model"'
+  _work_json -- exec -p fast 'do it'
+  [ "$status" -eq 0 ]
+  [ "$(_json_field model)" = layer-model ]
+  [ "$(_json_field model_source)" = profile ]
+  [ "$(_json_field effort)" = undeclared ]
+  [ "$(_json_field effort_source)" = undeclared ]
+}
+
+@test "codex: a selected layer's value that is not a one-line string is unknown (#239)" {
+  _codex_profiled
+  _codex_layer work fast 'model = 5
+model_reasoning_effort = "high"'
+  _work_json -- exec -p fast 'do it'
+  [ "$status" -eq 0 ]
+  [ "$(_json_field model)" = unknown ]
+  [ "$(_json_field model_source)" = unknown ]
+  [ "$(_json_field effort)" = high ]
+  [ "$(_json_field effort_source)" = profile ]
+  # The same under the root key's table, and for a profile key that is no name.
+  printf '%s\n' 'model = "root-model"' 'profile = "x"' '[profiles.x]' 'model = ["a", "b"]' \
+    > "$CLIKAE_HOME/profiles/codex/work/config.toml"
+  rm -f "$L" "$A"
+  _work_json --prompt 'do it'
+  [ "$(_json_field model)" = unknown ]
+  printf '%s\n' 'model = "root-model"' 'model_reasoning_effort = "low"' 'profile = 3' \
+    > "$CLIKAE_HOME/profiles/codex/work/config.toml"
+  rm -f "$L" "$A"
+  _work_json --prompt 'do it'
+  [ "$(_json_field model)" = unknown ]
+  [ "$(_json_field effort)" = unknown ]
+  [[ "$stderr" == *"the profile it names cannot be read with certainty"* ]] || false
+}
+
+@test "codex: a profile selection the argv makes unreadably is unknown (#239)" {
+  _codex_profiled
+  _codex_layer work a 'model = "a-model"'
+  _codex_layer work b 'model = "b-model"'
+  local -a argv
+  local i=0
+  for i in 1 2 3 4 5; do
+    case "$i" in
+      1) argv=(-p a -p b) ;;                       # codex refuses it given twice
+      2) argv=(-c 'profile="a"') ;;                # the root key, overridden
+      3) argv=(-c 'profiles.a.model="other"') ;;   # a layer, overridden
+      4) argv=(-p 'a/b') ;;                        # not a file name
+      5) argv=(--profile=) ;;
+    esac
+    rm -f "$L" "$A"
+    _work_json --require-declared -- exec "${argv[@]}" 'do it'
+    [ "$status" -eq 1 ] || { echo "case $i ran: $output"; false; }
+    [ "$(_json_field reason)" = "refused: unknown model or effort" ] || { echo "case $i: $output"; false; }
+    [[ "$stderr" == *"the profile it names cannot be read with certainty"* ]] || false
+    [ ! -e "$L" ]
+  done
+}
+
+@test "codex: a selected layer file that is broken, or selects again, is unknown (#239)" {
+  _codex_profiled
+  _codex_layer work fast 'model = "unterminated'
+  _work_json -- exec -p fast 'do it'
+  [ "$status" -eq 0 ]
+  [ "$(_json_field model)" = unknown ]
+  [ "$(_json_field effort)" = unknown ]
+  [[ "$stderr" == *"fast.config.toml is not valid TOML (or could not be opened)"* ]] || false
+  _codex_layer work fast 'model = "layer-model"
+profile = "deeper"'
+  rm -f "$L" "$A"
+  _work_json -- exec -p fast 'do it'
+  [ "$(_json_field model)" = unknown ]
+  [ "$(_json_field effort)" = unknown ]
+  [[ "$stderr" == *"fast.config.toml carries profile settings of its own"* ]] || false
+}
+
+@test "codex: an explicit model option in the argv is still that model with a profile selected (#239)" {
+  _codex_root_key_tank
+  _work_json -- exec -m gpt-actual 'do it'
+  [ "$status" -eq 0 ]
+  [ "$(_json_field model)" = gpt-actual ]
+  [ "$(_json_field model_source)" = flag ]
+  [ "$(_json_field effort)" = unknown ]
+  [ "$(_json_field effort_source)" = unknown ]
+}
