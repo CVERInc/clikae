@@ -1,0 +1,755 @@
+1..137
+ok 1 235 point 1: off removes all four unmarked guards across runtime and checkout paths
+ok 2 235 point 2: burn warns when the calling session has moved away from the recorded cockpit
+ok 3 235 off handles unquoted and double-quoted paths without a record or tank marker, and backs up settings
+ok 4 235 off matches decoded JSON paths but preserves other events and similar command names
+ok 5 235 off reports a broken legacy guard, continues the sweep, and never claims off
+ok 6 235 off refuses a symlinked legacy guard without altering its target
+ok 7 235 moving and repairing the role remove legacy duplicates without accumulating guards
+ok 8 235 burn warns on stderr even when allowed onto the caller tank and keeps JSON stdout valid
+ok 9 235 burn leaves matching, ambiguous and unidentified callers quiet
+ok 10 235 off refuses to claim success when legacy settings cannot be read
+ok 11 246 argument_only: a guard path argument does not make the audit executable ours
+ok 12 246 different_matcher: a deliberate Read matcher is preserved
+ok 13 246 mixed_group: only the legacy command is removed, retaining its sibling and matcher
+ok 14 246 nested_quotes: bash -c is preserved and reported with tank and command
+ok 15 246 split_quotes: quoted fragments of the plain executable are removed
+ok 16 246 trailing_space: a quoted plain executable with trailing whitespace is removed
+ok 17 246 malformed and malformed_escaped: neither spelling establishes absence in broken JSON
+ok 18 246 install and repair preserve argument-only, different-matcher and mixed-group user hooks
+ok 19 246 command ownership requires type and no arguments, even in marked groups
+ok 20 246 literal shell words cover quote concatenation, escaped spaces, quotes and backslashes
+ok 21 246 uncertain syntax is never executed or deleted and does not prevent removing known guards
+ok 22 246 a quoted newline after the guard filename is a different executable
+ok 23 246 malformed settings without a recognizable guard still report uncertainty and stay untouched
+ok 24 246 unreadable settings leave bytes intact in off and install
+ok 25 allows a non-Agent tool without looking at model/prompt at all
+ok 26 allows a haiku Explore spawn
+ok 27 refuses a sonnet build brief mentioning worktree
+ok 28 refuses a missing-model spawn regardless of the prompt
+ok 29 allows an opus spawn whose prompt has no lane heuristic
+ok 30 each documented heuristic phrase refuses a sonnet/opus spawn
+ok 31 allows the real captured PreToolUse payload (#63 P1-1, compact JSON)
+ok 32 the whitespace fix reaches end to end: a pretty-printed payload refuses like its compact twin (#63 P1-1)
+ok 33 no tool_name field at all REFUSES, fail-closed (#63 P1-2, r5 P2-5)
+ok 34 an ordinary non-Agent tool call stays silent (no stderr note, unlike a truly malformed payload)
+ok 35 tool_input entirely absent REFUSES with its own reason, fail-closed (#63 P1-2, r5 P2-5)
+ok 36 truncated tool_input JSON REFUSES as malformed, not as a model-less spawn (#63 P1-2, r5 P2-5)
+ok 37 honours the env escape hatch
+ok 38 honours a live timed allowance and names its expiry
+ok 39 an expired timed allowance refuses again
+ok 40 names the current reserve, excluding the cockpit tank itself
+ok 41 with no state/cockpit record, a refusal still lists every idle tank in the reserve (#61 round-6 P3-4)
+ok 42 #61 round-6 P3-4: an empty store with no state/cockpit still SAYS the reserve is empty
+ok 43 #114: the reserve still hides a tank with a LIVE burn, and a store full of finished burns cannot push a refusal past the hook timeout
+ok 44 #61 round-6 P3-1: an unreadable marker does not truncate the reserve, and says nothing to the model
+ok 45 fails CLOSED on an empty payload (#63 r5 P2-5)
+ok 46 fails CLOSED on malformed JSON (#63 r5 P2-5)
+ok 47 the escape hatches still lift a fail-closed refusal: they are read before the payload (#63 r5 P2-5)
+ok 48 a missing dependency (no jq on PATH) refuses instead of allowing (#63 r5 P2-5/P2-6)
+ok 49 six serialization variants of a refused call all refuse with the plain form's exact stderr (#63 r5 P2-6)
+ok 50 a surrogate pair decodes to ONE character: 1,000 emoji + an innocuous word stays under the length tripwire (#63 r5 P2-6)
+ok 51 a model field elsewhere in the payload cannot stand in for tool_input.model (#63 r5 P2-6)
+ok 52 two concatenated JSON objects are malformed input, refused (#63 r5 P2-6)
+ok 53 large payloads refuse in BOTH compact and pretty-printed form: 65,536 / 131,073 / 1,048,576 (#63 r5 P2-5)
+ok 54 runs comfortably inside the 50ms budget
+# elapsed: 29ms
+ok 55 the 14-item corpus: heuristic hit rate matches its documented, measured behavior
+# corpus: 11/14 match the ideal outcome (target >= 12; misses are documented in docs/usage.md, not silently accepted): |Explain what the phrase "git push --force-with-lease" does, do not run anything|Read docs/usage.md and tell me whether the worktree section is accurate|What does our CONTRIBUTING.md say about running npm test locally?
+ok 56 the 10-item false-refusal corpus: outcome matches docs/usage.md's table (#63 P3-5)
+ok 57 a multi-byte character straddling the old 8192-byte cut still refuses (#63 P1-1 fix2)
+ok 58 a JS-escaped \n straddling the old 8192-byte cut still refuses (#63 P1-1 fix2)
+ok 59 100 synthetic zh+en briefs over 8 KiB all refuse on sonnet (#63 P1-1 fix2)
+# refused: 100/100
+ok 60 a prompt over 8,192 characters with NO heuristic keyword still refuses on length alone (#63 P1-1 fix2)
+ok 61 `model` before a large prompt is found either way (#63 P2-1 fix2)
+ok 62 family-prefixed model ids refuse like their short aliases (#63 P3-1)
+ok 63 provider-spelled ids are placed in their family; unknown ids are checked, never silently allowed (#63 r5 P3-2)
+ok 64 #103: the five reported shapes are classified as opus/sonnet tiers, not left unknown
+ok 65 #103: gateway prefixes are stripped only where they name anthropic; a slash cannot smuggle haiku
+ok 66 #103: an unknown shape is refused on a benign prompt, naming the literal id and the allow line
+ok 67 #103: the printed allow line, once added, admits the id as checked (tripwire still applies)
+ok 68 #103: every refusal branch writes to stderr only, nothing to stdout
+ok 69 a 200kB prompt stays inside a generous timing budget (median of 5)
+# elapsed (5 runs): 52 53 59 59 55ms
+# median: 55ms
+ok 70 the hook decides nothing on disk: no marker, no adoption flag, even on a never-swept store (#61 round-5 merge)
+ok 71 #109 P3-5: a fable build brief refuses, in every family spelling
+ok 72 #109 P3-5: a short non-lane fable prompt is still allowed, silently
+ok 73 #109 P3-5: a long fable prompt refuses on the length tripwire alone
+ok 74 #109 P3-7: a \u0000 escape in model or tool_name fails closed instead of being cleaned up
+ok 75 #109 P3-7: a prompt that merely TALKS about a NUL escape is not refused for it
+ok 76 #109 P3-7: haiku LOOKALIKES are checked, not exempted
+ok 77 #109 P3-9: an oversized integer in the allow file refuses WITHOUT shell noise
+ok 78 #109 P3-9: a non-numeric allow file refuses without noise, and a live one still allows
+ok 79 #109 P3-9: the guard sets its shell options exactly once
+ok 80 a read-only store leaves no adopt-warn sentinel and no WARN behind (#61 round-5 merge, r5 P3-1)
+ok 81 bare 'clikae cockpit' with nothing set says so
+ok 82 marking a tank installs the guard and records state
+# [ DONE ] Created tank: claude/L  (/tmp/clikae-test.edEdZf/.clikae/profiles/claude/L)
+# claude/L: +88 allow / +4 deny
+#          Broad shell/file permissions applied for headless use; deny rules are advisory, not a sandbox. Use --no-template to skip.
+#          No alias added. Run `clikae alias claude L` to add one.
+#
+# Next steps:
+#   clikae claude L           # switch to it and run
+#   clikae alias claude L     # add a shell alias
+ok 83 an install under a path with a space (and a quote) stores a command the shell runs as one word, and it refuses (#63 r5 P3-1)
+# [ DONE ] Created tank: claude/L  (/tmp/bats-run-3GhyKY/test/83/install with space/it's here/home/profiles/claude/L)
+# claude/L: +88 allow / +4 deny
+#          Broad shell/file permissions applied for headless use; deny rules are advisory, not a sandbox. Use --no-template to skip.
+#          No alias added. Run `clikae alias claude L` to add one.
+#
+# Next steps:
+#   clikae claude L           # switch to it and run
+#   clikae alias claude L     # add a shell alias
+ok 84 an older UNQUOTED guard entry is repaired to the quoted form on the next mark (#63 r5 P3-1)
+# [ DONE ] Created tank: claude/L  (/tmp/clikae-test.rngYQ2/.clikae/profiles/claude/L)
+# claude/L: +88 allow / +4 deny
+#          Broad shell/file permissions applied for headless use; deny rules are advisory, not a sandbox. Use --no-template to skip.
+#          No alias added. Run `clikae alias claude L` to add one.
+#
+# Next steps:
+#   clikae claude L           # switch to it and run
+#   clikae alias claude L     # add a shell alias
+# claude/L: cockpit guard installed
+ok 85 marking the SAME tank twice is idempotent and says unchanged
+# [ DONE ] Created tank: claude/L  (/tmp/clikae-test.pXVWxr/.clikae/profiles/claude/L)
+# claude/L: +88 allow / +4 deny
+#          Broad shell/file permissions applied for headless use; deny rules are advisory, not a sandbox. Use --no-template to skip.
+#          No alias added. Run `clikae alias claude L` to add one.
+#
+# Next steps:
+#   clikae claude L           # switch to it and run
+#   clikae alias claude L     # add a shell alias
+# claude/L: cockpit guard installed
+ok 86 a bare unique tank name resolves across engines, like 'clikae <name>'
+# [ DONE ] Created tank: claude/solo-name  (/tmp/clikae-test.9Dm7FV/.clikae/profiles/claude/solo-name)
+# claude/solo-name: +88 allow / +4 deny
+#          Broad shell/file permissions applied for headless use; deny rules are advisory, not a sandbox. Use --no-template to skip.
+#          No alias added. Run `clikae alias claude solo-name` to add one.
+#
+# Next steps:
+#   clikae claude solo-name           # switch to it and run
+#   clikae alias claude solo-name     # add a shell alias
+ok 87 an ambiguous bare tank name across engines is refused, not guessed
+# [ DONE ] Created tank: claude/dup  (/tmp/clikae-test.CZ2MsM/.clikae/profiles/claude/dup)
+# claude/dup: +88 allow / +4 deny
+#          Broad shell/file permissions applied for headless use; deny rules are advisory, not a sandbox. Use --no-template to skip.
+#          No alias added. Run `clikae alias claude dup` to add one.
+#
+# Next steps:
+#   clikae claude dup           # switch to it and run
+#   clikae alias claude dup     # add a shell alias
+# [ DONE ] Created tank: codex/dup  (/tmp/clikae-test.CZ2MsM/.clikae/profiles/codex/dup)
+#          No alias added. Run `clikae alias codex dup` to add one.
+#
+# Next steps:
+#   clikae codex dup           # switch to it and run
+#   clikae alias codex dup     # add a shell alias
+ok 88 an unknown tank name is refused with exactly one error, no stray validate_name line (#63 r6 P3-4)
+ok 89 an ambiguous bare tank name is refused with exactly its own message, no stray validate_name line (#63 r6 P3-4)
+# [ DONE ] Created tank: claude/dup2  (/tmp/clikae-test.Hv9n40/.clikae/profiles/claude/dup2)
+# claude/dup2: +88 allow / +4 deny
+#          Broad shell/file permissions applied for headless use; deny rules are advisory, not a sandbox. Use --no-template to skip.
+#          No alias added. Run `clikae alias claude dup2` to add one.
+#
+# Next steps:
+#   clikae claude dup2           # switch to it and run
+#   clikae alias claude dup2     # add a shell alias
+# [ DONE ] Created tank: codex/dup2  (/tmp/clikae-test.Hv9n40/.clikae/profiles/codex/dup2)
+#          No alias added. Run `clikae alias codex dup2` to add one.
+#
+# Next steps:
+#   clikae codex dup2           # switch to it and run
+#   clikae alias codex dup2     # add a shell alias
+ok 90 moving from A to B removes the guard from A and installs it on B
+# [ DONE ] Created tank: claude/A  (/tmp/clikae-test.d5tNZq/.clikae/profiles/claude/A)
+# claude/A: +88 allow / +4 deny
+#          Broad shell/file permissions applied for headless use; deny rules are advisory, not a sandbox. Use --no-template to skip.
+#          No alias added. Run `clikae alias claude A` to add one.
+#
+# Next steps:
+#   clikae claude A           # switch to it and run
+#   clikae alias claude A     # add a shell alias
+# [ DONE ] Created tank: claude/B  (/tmp/clikae-test.d5tNZq/.clikae/profiles/claude/B)
+# claude/B: +88 allow / +4 deny
+#          Broad shell/file permissions applied for headless use; deny rules are advisory, not a sandbox. Use --no-template to skip.
+#          No alias added. Run `clikae alias claude B` to add one.
+#
+# Next steps:
+#   clikae claude B           # switch to it and run
+#   clikae alias claude B     # add a shell alias
+# claude/A: cockpit guard installed
+ok 91 a human's own PreToolUse hook on A survives the guard's install and later removal, byte for byte
+# [ DONE ] Created tank: claude/A  (/tmp/clikae-test.pJgLx0/.clikae/profiles/claude/A)
+# claude/A: +88 allow / +4 deny
+#          Broad shell/file permissions applied for headless use; deny rules are advisory, not a sandbox. Use --no-template to skip.
+#          No alias added. Run `clikae alias claude A` to add one.
+#
+# Next steps:
+#   clikae claude A           # switch to it and run
+#   clikae alias claude A     # add a shell alias
+# [ DONE ] Created tank: claude/B  (/tmp/clikae-test.pJgLx0/.clikae/profiles/claude/B)
+# claude/B: +88 allow / +4 deny
+#          Broad shell/file permissions applied for headless use; deny rules are advisory, not a sandbox. Use --no-template to skip.
+#          No alias added. Run `clikae alias claude B` to add one.
+#
+# Next steps:
+#   clikae claude B           # switch to it and run
+#   clikae alias claude B     # add a shell alias
+# claude/A: cockpit guard installed
+# claude/B: cockpit guard installed
+# claude/A: cockpit guard removed (1 entry)
+ok 92 a HAND-WRITTEN settings.json survives content-intact but gets reformatted, not byte-for-byte (#63 P2-6)
+# [ DONE ] Created tank: claude/A  (/tmp/clikae-test.m7ADLF/.clikae/profiles/claude/A)
+# claude/A: +88 allow / +4 deny
+#          Broad shell/file permissions applied for headless use; deny rules are advisory, not a sandbox. Use --no-template to skip.
+#          No alias added. Run `clikae alias claude A` to add one.
+#
+# Next steps:
+#   clikae claude A           # switch to it and run
+#   clikae alias claude A     # add a shell alias
+ok 93 --off removes the guard from wherever it is and clears the state
+# [ DONE ] Created tank: claude/A  (/tmp/clikae-test.2a5ut5/.clikae/profiles/claude/A)
+# claude/A: +88 allow / +4 deny
+#          Broad shell/file permissions applied for headless use; deny rules are advisory, not a sandbox. Use --no-template to skip.
+#          No alias added. Run `clikae alias claude A` to add one.
+#
+# Next steps:
+#   clikae claude A           # switch to it and run
+#   clikae alias claude A     # add a shell alias
+# claude/A: cockpit guard installed
+ok 94 moving to a new tank sweeps past a broken OLD tank instead of aborting the move (#63 P2-2)
+# [ DONE ] Created tank: claude/aaa  (/tmp/clikae-test.G4VCUr/.clikae/profiles/claude/aaa)
+# claude/aaa: +88 allow / +4 deny
+#          Broad shell/file permissions applied for headless use; deny rules are advisory, not a sandbox. Use --no-template to skip.
+#          No alias added. Run `clikae alias claude aaa` to add one.
+#
+# Next steps:
+#   clikae claude aaa           # switch to it and run
+#   clikae alias claude aaa     # add a shell alias
+# [ DONE ] Created tank: claude/mmm  (/tmp/clikae-test.G4VCUr/.clikae/profiles/claude/mmm)
+# claude/mmm: +88 allow / +4 deny
+#          Broad shell/file permissions applied for headless use; deny rules are advisory, not a sandbox. Use --no-template to skip.
+#          No alias added. Run `clikae alias claude mmm` to add one.
+#
+# Next steps:
+#   clikae claude mmm           # switch to it and run
+#   clikae alias claude mmm     # add a shell alias
+# claude/aaa: cockpit guard installed
+ok 95 moving to a NEW tank that can't be armed leaves the OLD cockpit untouched, rc 1 (#63 P2-1)
+# [ DONE ] Created tank: claude/mmm  (/tmp/clikae-test.vHyISm/.clikae/profiles/claude/mmm)
+# claude/mmm: +88 allow / +4 deny
+#          Broad shell/file permissions applied for headless use; deny rules are advisory, not a sandbox. Use --no-template to skip.
+#          No alias added. Run `clikae alias claude mmm` to add one.
+#
+# Next steps:
+#   clikae claude mmm           # switch to it and run
+#   clikae alias claude mmm     # add a shell alias
+# [ DONE ] Created tank: claude/aaa  (/tmp/clikae-test.vHyISm/.clikae/profiles/claude/aaa)
+# claude/aaa: +88 allow / +4 deny
+#          Broad shell/file permissions applied for headless use; deny rules are advisory, not a sandbox. Use --no-template to skip.
+#          No alias added. Run `clikae alias claude aaa` to add one.
+#
+# Next steps:
+#   clikae claude aaa           # switch to it and run
+#   clikae alias claude aaa     # add a shell alias
+# claude/mmm: cockpit guard installed
+ok 96 a state file mode 444 no longer blocks a move: the record is replaced atomically, not rewritten in place (#63 r5 P2-3)
+# [ DONE ] Created tank: claude/aaa  (/tmp/clikae-test.k0f7Uj/.clikae/profiles/claude/aaa)
+# claude/aaa: +88 allow / +4 deny
+#          Broad shell/file permissions applied for headless use; deny rules are advisory, not a sandbox. Use --no-template to skip.
+#          No alias added. Run `clikae alias claude aaa` to add one.
+#
+# Next steps:
+#   clikae claude aaa           # switch to it and run
+#   clikae alias claude aaa     # add a shell alias
+# [ DONE ] Created tank: claude/bbb  (/tmp/clikae-test.k0f7Uj/.clikae/profiles/claude/bbb)
+# claude/bbb: +88 allow / +4 deny
+#          Broad shell/file permissions applied for headless use; deny rules are advisory, not a sandbox. Use --no-template to skip.
+#          No alias added. Run `clikae alias claude bbb` to add one.
+#
+# Next steps:
+#   clikae claude bbb           # switch to it and run
+#   clikae alias claude bbb     # add a shell alias
+# claude/aaa: cockpit guard installed
+ok 97 a state file symlinked elsewhere is refused before any guard is written (#63 r4 P2-1, r5 P2-3)
+# [ DONE ] Created tank: claude/aaa  (/tmp/clikae-test.QzUmqp/.clikae/profiles/claude/aaa)
+# claude/aaa: +88 allow / +4 deny
+#          Broad shell/file permissions applied for headless use; deny rules are advisory, not a sandbox. Use --no-template to skip.
+#          No alias added. Run `clikae alias claude aaa` to add one.
+#
+# Next steps:
+#   clikae claude aaa           # switch to it and run
+#   clikae alias claude aaa     # add a shell alias
+# [ DONE ] Created tank: claude/bbb  (/tmp/clikae-test.QzUmqp/.clikae/profiles/claude/bbb)
+# claude/bbb: +88 allow / +4 deny
+#          Broad shell/file permissions applied for headless use; deny rules are advisory, not a sandbox. Use --no-template to skip.
+#          No alias added. Run `clikae alias claude bbb` to add one.
+#
+# Next steps:
+#   clikae claude bbb           # switch to it and run
+#   clikae alias claude bbb     # add a shell alias
+# claude/aaa: cockpit guard installed
+ok 98 probe: a real kernel short write of the record keeps the old state and rolls the new guard back (#63 r5 P2-3)
+# [ DONE ] Created tank: claude/A  (/tmp/clikae-test.kL8KWC/.clikae/profiles/claude/A)
+# claude/A: +88 allow / +4 deny
+#          Broad shell/file permissions applied for headless use; deny rules are advisory, not a sandbox. Use --no-template to skip.
+#          No alias added. Run `clikae alias claude A` to add one.
+#
+# Next steps:
+#   clikae claude A           # switch to it and run
+#   clikae alias claude A     # add a shell alias
+# [ DONE ] Created tank: claude/B  (/tmp/clikae-test.kL8KWC/.clikae/profiles/claude/B)
+# claude/B: +88 allow / +4 deny
+#          Broad shell/file permissions applied for headless use; deny rules are advisory, not a sandbox. Use --no-template to skip.
+#          No alias added. Run `clikae alias claude B` to add one.
+#
+# Next steps:
+#   clikae claude B           # switch to it and run
+#   clikae alias claude B     # add a shell alias
+# claude/A: cockpit guard installed
+ok 99 probe: a short write with no prior cockpit leaves nothing recorded and nothing armed (#63 r5 P2-3)
+# [ DONE ] Created tank: claude/B  (/tmp/clikae-test.kbbzbr/.clikae/profiles/claude/B)
+# claude/B: +88 allow / +4 deny
+#          Broad shell/file permissions applied for headless use; deny rules are advisory, not a sandbox. Use --no-template to skip.
+#          No alias added. Run `clikae alias claude B` to add one.
+#
+# Next steps:
+#   clikae claude B           # switch to it and run
+#   clikae alias claude B     # add a shell alias
+ok 100 probe: SIGKILL at the state write never empties the record, and doctor names the extra guard (#63 r5 P2-3)
+# [ DONE ] Created tank: claude/A  (/tmp/clikae-test.ADMeK0/.clikae/profiles/claude/A)
+# claude/A: +88 allow / +4 deny
+#          Broad shell/file permissions applied for headless use; deny rules are advisory, not a sandbox. Use --no-template to skip.
+#          No alias added. Run `clikae alias claude A` to add one.
+#
+# Next steps:
+#   clikae claude A           # switch to it and run
+#   clikae alias claude A     # add a shell alias
+# [ DONE ] Created tank: claude/B  (/tmp/clikae-test.ADMeK0/.clikae/profiles/claude/B)
+# claude/B: +88 allow / +4 deny
+#          Broad shell/file permissions applied for headless use; deny rules are advisory, not a sandbox. Use --no-template to skip.
+#          No alias added. Run `clikae alias claude B` to add one.
+#
+# Next steps:
+#   clikae claude B           # switch to it and run
+#   clikae alias claude B     # add a shell alias
+# claude/A: cockpit guard installed
+ok 101 probe: a state path symlinked at the new tank's settings.json is refused; that settings.json is untouched (#63 r5 P2-3)
+# [ DONE ] Created tank: claude/A  (/tmp/clikae-test.7dLcsL/.clikae/profiles/claude/A)
+# claude/A: +88 allow / +4 deny
+#          Broad shell/file permissions applied for headless use; deny rules are advisory, not a sandbox. Use --no-template to skip.
+#          No alias added. Run `clikae alias claude A` to add one.
+#
+# Next steps:
+#   clikae claude A           # switch to it and run
+#   clikae alias claude A     # add a shell alias
+# [ DONE ] Created tank: claude/B  (/tmp/clikae-test.7dLcsL/.clikae/profiles/claude/B)
+# claude/B: +88 allow / +4 deny
+#          Broad shell/file permissions applied for headless use; deny rules are advisory, not a sandbox. Use --no-template to skip.
+#          No alias added. Run `clikae alias claude B` to add one.
+#
+# Next steps:
+#   clikae claude B           # switch to it and run
+#   clikae alias claude B     # add a shell alias
+# claude/A: cockpit guard installed
+ok 102 two concurrent moves: exactly one transition wins, the other refuses, the recorded cockpit stays guarded (#63 r5 P2-4)
+# [ DONE ] Created tank: claude/A  (/tmp/clikae-test.aeAeva/.clikae/profiles/claude/A)
+# claude/A: +88 allow / +4 deny
+#          Broad shell/file permissions applied for headless use; deny rules are advisory, not a sandbox. Use --no-template to skip.
+#          No alias added. Run `clikae alias claude A` to add one.
+#
+# Next steps:
+#   clikae claude A           # switch to it and run
+#   clikae alias claude A     # add a shell alias
+# [ DONE ] Created tank: claude/B  (/tmp/clikae-test.aeAeva/.clikae/profiles/claude/B)
+# claude/B: +88 allow / +4 deny
+#          Broad shell/file permissions applied for headless use; deny rules are advisory, not a sandbox. Use --no-template to skip.
+#          No alias added. Run `clikae alias claude B` to add one.
+#
+# Next steps:
+#   clikae claude B           # switch to it and run
+#   clikae alias claude B     # add a shell alias
+# claude/A: cockpit guard installed
+# claude/B: cockpit guard installed
+# claude/A: cockpit guard removed (1 entry)
+# [ FAIL ] Another clikae cockpit/settings change is in progress (pid 3019926; lock /tmp/clikae-test.aeAeva/.clikae/state/settings.lock). Nothing was changed — try again when it finishes.
+ok 103 a waiting move proceeds once the running one finishes (#63 r5 P2-4)
+# [ DONE ] Created tank: claude/A  (/tmp/clikae-test.SKzz0w/.clikae/profiles/claude/A)
+# claude/A: +88 allow / +4 deny
+#          Broad shell/file permissions applied for headless use; deny rules are advisory, not a sandbox. Use --no-template to skip.
+#          No alias added. Run `clikae alias claude A` to add one.
+#
+# Next steps:
+#   clikae claude A           # switch to it and run
+#   clikae alias claude A     # add a shell alias
+# [ DONE ] Created tank: claude/B  (/tmp/clikae-test.SKzz0w/.clikae/profiles/claude/B)
+# claude/B: +88 allow / +4 deny
+#          Broad shell/file permissions applied for headless use; deny rules are advisory, not a sandbox. Use --no-template to skip.
+#          No alias added. Run `clikae alias claude B` to add one.
+#
+# Next steps:
+#   clikae claude B           # switch to it and run
+#   clikae alias claude B     # add a shell alias
+# [ DONE ] Created tank: claude/C  (/tmp/clikae-test.SKzz0w/.clikae/profiles/claude/C)
+# claude/C: +88 allow / +4 deny
+#          Broad shell/file permissions applied for headless use; deny rules are advisory, not a sandbox. Use --no-template to skip.
+#          No alias added. Run `clikae alias claude C` to add one.
+#
+# Next steps:
+#   clikae claude C           # switch to it and run
+#   clikae alias claude C     # add a shell alias
+# claude/A: cockpit guard installed
+ok 104 --off and settings apply take the same lock: both refuse while a transition holds it (#63 r5 P2-4)
+# [ DONE ] Created tank: claude/A  (/tmp/clikae-test.Ov8cwk/.clikae/profiles/claude/A)
+# claude/A: +88 allow / +4 deny
+#          Broad shell/file permissions applied for headless use; deny rules are advisory, not a sandbox. Use --no-template to skip.
+#          No alias added. Run `clikae alias claude A` to add one.
+#
+# Next steps:
+#   clikae claude A           # switch to it and run
+#   clikae alias claude A     # add a shell alias
+# claude/A: cockpit guard installed
+ok 105 a lock left by a dead holder is named, not broken; doctor reports it (#63 r5 P2-4)
+# [ DONE ] Created tank: claude/A  (/tmp/clikae-test.vz74MC/.clikae/profiles/claude/A)
+# claude/A: +88 allow / +4 deny
+#          Broad shell/file permissions applied for headless use; deny rules are advisory, not a sandbox. Use --no-template to skip.
+#          No alias added. Run `clikae alias claude A` to add one.
+#
+# Next steps:
+#   clikae claude A           # switch to it and run
+#   clikae alias claude A     # add a shell alias
+# [ DONE ] Created tank: claude/B  (/tmp/clikae-test.vz74MC/.clikae/profiles/claude/B)
+# claude/B: +88 allow / +4 deny
+#          Broad shell/file permissions applied for headless use; deny rules are advisory, not a sandbox. Use --no-template to skip.
+#          No alias added. Run `clikae alias claude B` to add one.
+#
+# Next steps:
+#   clikae claude B           # switch to it and run
+#   clikae alias claude B     # add a shell alias
+# claude/A: cockpit guard installed
+ok 106 --off breaks a stale (dead-pid) lock instead of staying blocked by it (#63 r6 P3-3)
+# [ DONE ] Created tank: claude/A  (/tmp/clikae-test.4vlGqM/.clikae/profiles/claude/A)
+# claude/A: +88 allow / +4 deny
+#          Broad shell/file permissions applied for headless use; deny rules are advisory, not a sandbox. Use --no-template to skip.
+#          No alias added. Run `clikae alias claude A` to add one.
+#
+# Next steps:
+#   clikae claude A           # switch to it and run
+#   clikae alias claude A     # add a shell alias
+# claude/A: cockpit guard installed
+ok 107 --off still refuses while a LIVE holder has the lock (unaffected by the stale-lock break, #63 r6 P3-3)
+# [ DONE ] Created tank: claude/A  (/tmp/clikae-test.vgL2DE/.clikae/profiles/claude/A)
+# claude/A: +88 allow / +4 deny
+#          Broad shell/file permissions applied for headless use; deny rules are advisory, not a sandbox. Use --no-template to skip.
+#          No alias added. Run `clikae alias claude A` to add one.
+#
+# Next steps:
+#   clikae claude A           # switch to it and run
+#   clikae alias claude A     # add a shell alias
+# claude/A: cockpit guard installed
+ok 108 a stray .cockpit.XXXXXX temp file from an earlier crash is swept on the next successful state write (#63 r6 P3-3)
+# [ DONE ] Created tank: claude/A  (/tmp/clikae-test.JzKTT2/.clikae/profiles/claude/A)
+# claude/A: +88 allow / +4 deny
+#          Broad shell/file permissions applied for headless use; deny rules are advisory, not a sandbox. Use --no-template to skip.
+#          No alias added. Run `clikae alias claude A` to add one.
+#
+# Next steps:
+#   clikae claude A           # switch to it and run
+#   clikae alias claude A     # add a shell alias
+# [ DONE ] Created tank: claude/B  (/tmp/clikae-test.JzKTT2/.clikae/profiles/claude/B)
+# claude/B: +88 allow / +4 deny
+#          Broad shell/file permissions applied for headless use; deny rules are advisory, not a sandbox. Use --no-template to skip.
+#          No alias added. Run `clikae alias claude B` to add one.
+#
+# Next steps:
+#   clikae claude B           # switch to it and run
+#   clikae alias claude B     # add a shell alias
+# claude/A: cockpit guard installed
+ok 109 moving to a symlink alias of the current cockpit is refused as the same tank; the guard stays (#63 r5 P2-2)
+# [ DONE ] Created tank: claude/A  (/tmp/clikae-test.CERitJ/.clikae/profiles/claude/A)
+# claude/A: +88 allow / +4 deny
+#          Broad shell/file permissions applied for headless use; deny rules are advisory, not a sandbox. Use --no-template to skip.
+#          No alias added. Run `clikae alias claude A` to add one.
+#
+# Next steps:
+#   clikae claude A           # switch to it and run
+#   clikae alias claude A     # add a shell alias
+# [ DONE ] Created tank: claude/B  (/tmp/clikae-test.CERitJ/.clikae/profiles/claude/B)
+# claude/B: +88 allow / +4 deny
+#          Broad shell/file permissions applied for headless use; deny rules are advisory, not a sandbox. Use --no-template to skip.
+#          No alias added. Run `clikae alias claude B` to add one.
+#
+# Next steps:
+#   clikae claude B           # switch to it and run
+#   clikae alias claude B     # add a shell alias
+# claude/A: cockpit guard installed
+ok 110 moving to a tank whose settings.json is a hard link of the cockpit's is refused the same way (#63 r5 P2-2)
+# [ DONE ] Created tank: claude/A  (/tmp/clikae-test.Bd1eiM/.clikae/profiles/claude/A)
+# claude/A: +88 allow / +4 deny
+#          Broad shell/file permissions applied for headless use; deny rules are advisory, not a sandbox. Use --no-template to skip.
+#          No alias added. Run `clikae alias claude A` to add one.
+#
+# Next steps:
+#   clikae claude A           # switch to it and run
+#   clikae alias claude A     # add a shell alias
+# [ DONE ] Created tank: claude/B  (/tmp/clikae-test.Bd1eiM/.clikae/profiles/claude/B)
+# claude/B: +88 allow / +4 deny
+#          Broad shell/file permissions applied for headless use; deny rules are advisory, not a sandbox. Use --no-template to skip.
+#          No alias added. Run `clikae alias claude B` to add one.
+#
+# Next steps:
+#   clikae claude B           # switch to it and run
+#   clikae alias claude B     # add a shell alias
+# claude/A: cockpit guard installed
+ok 111 probe: settings.json swapped for a symlink right after it is read never lands the link's target in a backup (#63 r5 P3-3)
+# [ DONE ] Created tank: claude/L  (/tmp/clikae-test.zvM6uP/.clikae/profiles/claude/L)
+# claude/L: +88 allow / +4 deny
+#          Broad shell/file permissions applied for headless use; deny rules are advisory, not a sandbox. Use --no-template to skip.
+#          No alias added. Run `clikae alias claude L` to add one.
+#
+# Next steps:
+#   clikae claude L           # switch to it and run
+#   clikae alias claude L     # add a shell alias
+ok 112 probe: a swap AFTER the snapshot changes nothing that is read — backup and content come from the snapshot (#63 r5 P3-3)
+# [ DONE ] Created tank: claude/L  (/tmp/clikae-test.RKB6CB/.clikae/profiles/claude/L)
+# claude/L: +88 allow / +4 deny
+#          Broad shell/file permissions applied for headless use; deny rules are advisory, not a sandbox. Use --no-template to skip.
+#          No alias added. Run `clikae alias claude L` to add one.
+#
+# Next steps:
+#   clikae claude L           # switch to it and run
+#   clikae alias claude L     # add a shell alias
+ok 113 a tank directory that is a symlink to a real directory is written through its physical path (#63 r5 P3-3)
+# [ DONE ] Created tank: claude/L  (/tmp/clikae-test.2c3bkI/.clikae/profiles/claude/L)
+# claude/L: +88 allow / +4 deny
+#          Broad shell/file permissions applied for headless use; deny rules are advisory, not a sandbox. Use --no-template to skip.
+#          No alias added. Run `clikae alias claude L` to add one.
+#
+# Next steps:
+#   clikae claude L           # switch to it and run
+#   clikae alias claude L     # add a shell alias
+ok 114 --off with nothing set is an idempotent no-op
+ok 115 --off is idempotent when run twice in a row
+# [ DONE ] Created tank: claude/A  (/tmp/clikae-test.3gG77t/.clikae/profiles/claude/A)
+# claude/A: +88 allow / +4 deny
+#          Broad shell/file permissions applied for headless use; deny rules are advisory, not a sandbox. Use --no-template to skip.
+#          No alias added. Run `clikae alias claude A` to add one.
+#
+# Next steps:
+#   clikae claude A           # switch to it and run
+#   clikae alias claude A     # add a shell alias
+# claude/A: cockpit guard installed
+# claude/A: cockpit guard removed (1 entry)
+# cockpit: off
+ok 116 --off sweeps a stray guard even when the state file disagrees (crash-recovery)
+# [ DONE ] Created tank: claude/A  (/tmp/clikae-test.1tsSuZ/.clikae/profiles/claude/A)
+# claude/A: +88 allow / +4 deny
+#          Broad shell/file permissions applied for headless use; deny rules are advisory, not a sandbox. Use --no-template to skip.
+#          No alias added. Run `clikae alias claude A` to add one.
+#
+# Next steps:
+#   clikae claude A           # switch to it and run
+#   clikae alias claude A     # add a shell alias
+# [ DONE ] Created tank: claude/B  (/tmp/clikae-test.1tsSuZ/.clikae/profiles/claude/B)
+# claude/B: +88 allow / +4 deny
+#          Broad shell/file permissions applied for headless use; deny rules are advisory, not a sandbox. Use --no-template to skip.
+#          No alias added. Run `clikae alias claude B` to add one.
+#
+# Next steps:
+#   clikae claude B           # switch to it and run
+#   clikae alias claude B     # add a shell alias
+# claude/A: cockpit guard installed
+ok 117 --off sweeps past a broken tank instead of aborting the whole sweep (#63 P1-3)
+# [ DONE ] Created tank: claude/aaa  (/tmp/clikae-test.dpXOKG/.clikae/profiles/claude/aaa)
+# claude/aaa: +88 allow / +4 deny
+#          Broad shell/file permissions applied for headless use; deny rules are advisory, not a sandbox. Use --no-template to skip.
+#          No alias added. Run `clikae alias claude aaa` to add one.
+#
+# Next steps:
+#   clikae claude aaa           # switch to it and run
+#   clikae alias claude aaa     # add a shell alias
+# [ DONE ] Created tank: claude/mmm  (/tmp/clikae-test.dpXOKG/.clikae/profiles/claude/mmm)
+# claude/mmm: +88 allow / +4 deny
+#          Broad shell/file permissions applied for headless use; deny rules are advisory, not a sandbox. Use --no-template to skip.
+#          No alias added. Run `clikae alias claude mmm` to add one.
+#
+# Next steps:
+#   clikae claude mmm           # switch to it and run
+#   clikae alias claude mmm     # add a shell alias
+# [ DONE ] Created tank: claude/zzz  (/tmp/clikae-test.dpXOKG/.clikae/profiles/claude/zzz)
+# claude/zzz: +88 allow / +4 deny
+#          Broad shell/file permissions applied for headless use; deny rules are advisory, not a sandbox. Use --no-template to skip.
+#          No alias added. Run `clikae alias claude zzz` to add one.
+#
+# Next steps:
+#   clikae claude zzz           # switch to it and run
+#   clikae alias claude zzz     # add a shell alias
+# claude/zzz: cockpit guard installed
+ok 118 #61 round-6 P2-2: --off removes the guard from a cockpit tank whose marker is GONE
+# [ DONE ] Created tank: claude/pilot  (/tmp/clikae-test.TSA65W/.clikae/profiles/claude/pilot)
+# claude/pilot: +88 allow / +4 deny
+#          Broad shell/file permissions applied for headless use; deny rules are advisory, not a sandbox. Use --no-template to skip.
+#          No alias added. Run `clikae alias claude pilot` to add one.
+#
+# Next steps:
+#   clikae claude pilot           # switch to it and run
+#   clikae alias claude pilot     # add a shell alias
+# [ DONE ] Created tank: claude/other  (/tmp/clikae-test.TSA65W/.clikae/profiles/claude/other)
+# claude/other: +88 allow / +4 deny
+#          Broad shell/file permissions applied for headless use; deny rules are advisory, not a sandbox. Use --no-template to skip.
+#          No alias added. Run `clikae alias claude other` to add one.
+#
+# Next steps:
+#   clikae claude other           # switch to it and run
+#   clikae alias claude other     # add a shell alias
+# claude/pilot: cockpit guard installed
+ok 119 #61 round-6 P2-2: --off removes the guard when the marker is UNREADABLE (mode 000)
+# [ DONE ] Created tank: claude/pilot  (/tmp/clikae-test.fA7H9L/.clikae/profiles/claude/pilot)
+# claude/pilot: +88 allow / +4 deny
+#          Broad shell/file permissions applied for headless use; deny rules are advisory, not a sandbox. Use --no-template to skip.
+#          No alias added. Run `clikae alias claude pilot` to add one.
+#
+# Next steps:
+#   clikae claude pilot           # switch to it and run
+#   clikae alias claude pilot     # add a shell alias
+# claude/pilot: cockpit guard installed
+ok 120 #61 round-6 P2-2: --off SAYS the recorded cockpit directory is gone, and still clears the record
+# [ DONE ] Created tank: claude/pilot  (/tmp/clikae-test.fUulgm/.clikae/profiles/claude/pilot)
+# claude/pilot: +88 allow / +4 deny
+#          Broad shell/file permissions applied for headless use; deny rules are advisory, not a sandbox. Use --no-template to skip.
+#          No alias added. Run `clikae alias claude pilot` to add one.
+#
+# Next steps:
+#   clikae claude pilot           # switch to it and run
+#   clikae alias claude pilot     # add a shell alias
+# claude/pilot: cockpit guard installed
+ok 121 #61 round-6 P2-2: a marker-less guarded tank the state does NOT name is still swept
+# [ DONE ] Created tank: claude/A  (/tmp/clikae-test.LYauug/.clikae/profiles/claude/A)
+# claude/A: +88 allow / +4 deny
+#          Broad shell/file permissions applied for headless use; deny rules are advisory, not a sandbox. Use --no-template to skip.
+#          No alias added. Run `clikae alias claude A` to add one.
+#
+# Next steps:
+#   clikae claude A           # switch to it and run
+#   clikae alias claude A     # add a shell alias
+# [ DONE ] Created tank: claude/B  (/tmp/clikae-test.LYauug/.clikae/profiles/claude/B)
+# claude/B: +88 allow / +4 deny
+#          Broad shell/file permissions applied for headless use; deny rules are advisory, not a sandbox. Use --no-template to skip.
+#          No alias added. Run `clikae alias claude B` to add one.
+#
+# Next steps:
+#   clikae claude B           # switch to it and run
+#   clikae alias claude B     # add a shell alias
+# claude/A: cockpit guard installed
+ok 122 #61 round-6 P2-2: --off reports the guard removed exactly once for a symlink-aliased cockpit
+# [ DONE ] Created tank: claude/real  (/tmp/clikae-test.6xugxB/.clikae/profiles/claude/real)
+# claude/real: +88 allow / +4 deny
+#          Broad shell/file permissions applied for headless use; deny rules are advisory, not a sandbox. Use --no-template to skip.
+#          No alias added. Run `clikae alias claude real` to add one.
+#
+# Next steps:
+#   clikae claude real           # switch to it and run
+#   clikae alias claude real     # add a shell alias
+# claude/real: cockpit guard installed
+ok 123 #114: --off on codex and antigravity too — a move interrupted mid-way, both markers lost, a live allowance
+# claude/old: cockpit guard installed
+# cockpit: agent spawns allowed until 17:48
+# codex/old: cockpit guard installed
+# cockpit: agent spawns allowed until 17:48
+# antigravity/old: cockpit guard installed
+# cockpit: agent spawns allowed until 17:48
+ok 124 --off clears a live timed allowance too, not just the guard and state (#63 P1-3)
+# [ DONE ] Created tank: claude/A  (/tmp/clikae-test.m1NQPX/.clikae/profiles/claude/A)
+# claude/A: +88 allow / +4 deny
+#          Broad shell/file permissions applied for headless use; deny rules are advisory, not a sandbox. Use --no-template to skip.
+#          No alias added. Run `clikae alias claude A` to add one.
+#
+# Next steps:
+#   clikae claude A           # switch to it and run
+#   clikae alias claude A     # add a shell alias
+# claude/A: cockpit guard installed
+# cockpit: agent spawns allowed until 17:48
+ok 125 settings apply --check on a cockpit tank reports the guard as expected, not as drift
+# [ DONE ] Created tank: claude/L  (/tmp/clikae-test.EOoSED/.clikae/profiles/claude/L)
+# claude/L: +88 allow / +4 deny
+#          Broad shell/file permissions applied for headless use; deny rules are advisory, not a sandbox. Use --no-template to skip.
+#          No alias added. Run `clikae alias claude L` to add one.
+#
+# Next steps:
+#   clikae claude L           # switch to it and run
+#   clikae alias claude L     # add a shell alias
+# claude/L: cockpit guard installed
+ok 126 cockpit requires jq and does not write without it
+# [ DONE ] Created tank: claude/L  (/tmp/clikae-test.JYYsZs/.clikae/profiles/claude/L)
+# claude/L: +88 allow / +4 deny
+#          Broad shell/file permissions applied for headless use; deny rules are advisory, not a sandbox. Use --no-template to skip.
+#          No alias added. Run `clikae alias claude L` to add one.
+#
+# Next steps:
+#   clikae claude L           # switch to it and run
+#   clikae alias claude L     # add a shell alias
+ok 127 cockpit refuses a tank that does not exist
+ok 128 --allow-agents writes a timed allowance and reports when it expires
+# [ DONE ] Created tank: claude/L  (/tmp/clikae-test.vm54il/.clikae/profiles/claude/L)
+# claude/L: +88 allow / +4 deny
+#          Broad shell/file permissions applied for headless use; deny rules are advisory, not a sandbox. Use --no-template to skip.
+#          No alias added. Run `clikae alias claude L` to add one.
+#
+# Next steps:
+#   clikae claude L           # switch to it and run
+#   clikae alias claude L     # add a shell alias
+# claude/L: cockpit guard installed
+ok 129 --allow-agents rejects a bad duration and writes nothing
+ok 130 bare 'clikae cockpit' warns when the recorded tank no longer exists (#63 P3-8)
+# [ DONE ] Created tank: claude/A  (/tmp/clikae-test.5FoKq1/.clikae/profiles/claude/A)
+# claude/A: +88 allow / +4 deny
+#          Broad shell/file permissions applied for headless use; deny rules are advisory, not a sandbox. Use --no-template to skip.
+#          No alias added. Run `clikae alias claude A` to add one.
+#
+# Next steps:
+#   clikae claude A           # switch to it and run
+#   clikae alias claude A     # add a shell alias
+# claude/A: cockpit guard installed
+ok 131 #109 P3-8: 'clikae cockpit agy <tank>' marks the tank, recorded under its on-disk name
+ok 132 #109 P3-8: 'agy' and 'antigravity' name the same cockpit — the second is an idempotent no-op
+# antigravity/work: cockpit guard installed
+ok 133 #109 P3-8: an unknown agy tank still fails, naming the on-disk engine
+ok 134 installing from a git checkout no longer warns: the hook names the runtime copy, which outlives the checkout (#63 P3-12, #146)
+# [ DONE ] Created tank: claude/L  (/tmp/clikae-test.0FDkNG/.clikae/profiles/claude/L)
+# claude/L: +88 allow / +4 deny
+#          Broad shell/file permissions applied for headless use; deny rules are advisory, not a sandbox. Use --no-template to skip.
+#          No alias added. Run `clikae alias claude L` to add one.
+#
+# Next steps:
+#   clikae claude L           # switch to it and run
+#   clikae alias claude L     # add a shell alias
+ok 135 with the stable runtime off, installing from a git checkout still warns (#63 P3-12)
+# [ DONE ] Created tank: claude/L  (/tmp/clikae-test.EosmPJ/.clikae/profiles/claude/L)
+# claude/L: +88 allow / +4 deny
+#          Broad shell/file permissions applied for headless use; deny rules are advisory, not a sandbox. Use --no-template to skip.
+#          No alias added. Run `clikae alias claude L` to add one.
+#
+# Next steps:
+#   clikae claude L           # switch to it and run
+#   clikae alias claude L     # add a shell alias
+ok 136 #103: installing the guard keeps settings.json's prior file mode
+# [ DONE ] Created tank: claude/A  (/tmp/clikae-test.CgPGJt/.clikae/profiles/claude/A)
+# claude/A: +88 allow / +4 deny
+#          Broad shell/file permissions applied for headless use; deny rules are advisory, not a sandbox. Use --no-template to skip.
+#          No alias added. Run `clikae alias claude A` to add one.
+#
+# Next steps:
+#   clikae claude A           # switch to it and run
+#   clikae alias claude A     # add a shell alias
+ok 137 #103: a skipped install reports on stderr only, in the same 'skipped —' form
+# [ DONE ] Created tank: claude/A  (/tmp/clikae-test.ydFFI4/.clikae/profiles/claude/A)
+# claude/A: +88 allow / +4 deny
+#          Broad shell/file permissions applied for headless use; deny rules are advisory, not a sandbox. Use --no-template to skip.
+#          No alias added. Run `clikae alias claude A` to add one.
+#
+# Next steps:
+#   clikae claude A           # switch to it and run
+#   clikae alias claude A     # add a shell alias

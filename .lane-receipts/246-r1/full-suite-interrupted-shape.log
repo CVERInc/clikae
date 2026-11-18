@@ -1,0 +1,710 @@
+→ shellcheck (severity=warning)
+→ doc names (every function a doc names must exist)
+  docs name nothing the code lacks (functions, call sites, tmux options)
+→ bats
+1..2707
+ok 1 antigravity recent_sids lists a session whose recorded cwd is the current dir
+ok 2 antigravity recent_sids keeps THIS directory's sessions when it has any
+ok 3 antigravity recent_sids falls back to the whole tank when this directory has none (#34)
+ok 4 antigravity recent_sids: newest-first, capped at limit, within this directory
+ok 5 antigravity recent_sids: the fallback is ranked and capped the same way
+ok 6 antigravity recent_sids: a cache entry pointing at a deleted brain dir is skipped, not an error (#34)
+ok 7 antigravity recent_sids: a present cache does not truncate a multi-row request (#34)
+ok 8 antigravity recent_sids: no brain dir at all -> empty, not an error
+ok 9 antigravity session_title extracts the opening USER_REQUEST
+ok 10 antigravity title_for_file falls back to (no preview) when nothing is extractable
+ok 11 antigravity session_title falls back to (no preview) too (not just title_for_file)
+ok 12 antigravity title_for_file on a missing file returns nothing (not an error, not the fallback)
+ok 13 antigravity summary title wins and both hooks collapse whitespace
+ok 14 antigravity empty summary title falls back to opening prompt
+ok 15 antigravity missing summary row falls back to opening prompt
+ok 16 antigravity no database falls back without creating a database
+ok 17 antigravity falls back cleanly when sqlite3 is entirely unavailable
+ok 18 antigravity summary lookup escapes quoted conversation IDs
+ok 19 antigravity unreadable summary database falls back without an error
+ok 20 antigravity whitespace-only summary title falls back to opening prompt
+ok 21 antigravity summary title with backslashes and quotes round-trips byte-identical
+ok 22 antigravity summary lookup with duplicate conversation_id picks the newest row
+ok 23 antigravity summary lookup always passes -readonly to sqlite3 (mutation guard)
+ok 24 antigravity adapter_sid_canonical is the brain/<sid>/ directory name
+ok 25 antigravity adapter_all_transcripts lists every session's transcript under a profile dir
+ok 26 antigravity cache lookup returns THIS cwd's sid, not a later key's, from a compact multi-entry cache
+ok 27 antigravity cache lookup: order reversed still returns THIS cwd's sid
+ok 28 antigravity recent_sids with limit>1 returns the cached hit PLUS the rest from disk, not just the cached one
+ok 29 antigravity recent_sids with limit=1 keeps the original single-stat cache fast path
+ok 30 antigravity recent_sids with limit>1 still caps at limit across cache+disk
+ok 31 antigravity recent_sids at limit=5: a stale cache pointer does not beat disk mtime order (#34 P2-2)
+ok 32 antigravity recent_sids at limit=4: the stale cache pointer is the row that gets squeezed out (#34 P2-2)
+ok 33 antigravity recent_sids n=1 answers THIS DIRECTORY's pointer, and n>1 keeps it in a scoped ranking (#34 P3-1)
+ok 34 stable path is a hard link to the installed version (not a symlink)
+ok 35 stable path is refreshed when the installed binary moves
+ok 36 copy fallback when the hard link fails
+ok 37 opt-out leaves the launch on the bare PATH name and creates nothing
+ok 38 clikae claude <tank> launches through the stable path
+ok 39 doctor: not created yet, up to date, then STALE after an update — read-only
+ok 40 doctor: opt-out is reported
+ok 41 adapters lists claude and the v0.2 adapters
+ok 42 claude adapter reports the env-dir strategy and its env var
+ok 43 claude alias exports CLAUDE_CONFIG_DIR at the profile path
+ok 44 claude title_for_file: aiTitle with escaped quotes survives intact
+ok 45 claude title_for_file: falls back to the first user message when no aiTitle
+ok 46 claude title_for_file: a USER-set custom-title outranks a later aiTitle
+ok 47 claude title_for_file: a transcript with only aiTitle is unchanged
+ok 48 claude title_for_file: a rename past line 100 wins over an early name
+ok 49 claude title_for_file: a runaway title is capped before it is cleaned
+ok 50 claude title_for_file: both title keys on ONE line still resolve by rank
+ok 51 claude title_for_file: the LAST customTitle wins when a line has two
+ok 52 claude adapter_sid_canonical is the transcript basename minus .jsonl
+ok 53 claude project slug: a directory reached through a symlink slugs by its real path (#194)
+ok 54 claude project slug: a path that does not exist is slugged as written
+ok 55 claude adapter_transcript_is_resumable: the basename is the whole rule
+ok 56 claude adapter_all_transcripts does not descend into a sid dir's own subagents/ files
+ok 57 claude adapter_recent_sids leaves subagent transcripts out of the board's list
+ok 58 claude adapter_find_session still finds a subagent transcript by its full id
+ok 59 codex recent_sids lists a session whose recorded cwd is the current dir
+ok 60 codex recent_sids EXCLUDES sessions recorded in a different cwd
+ok 61 codex session_title extracts the user_message prompt
+ok 62 codex session_title keeps a CJK prompt intact
+ok 63 codex resume_args emits 'resume <sid>'
+ok 64 codex transcript_path returns the current dir's newest rollout
+ok 65 codex cwd match is trailing-slash insensitive (recorded cwd has the slash)
+ok 66 codex cwd match still EXCLUDES a genuinely different dir after the fix
+ok 67 codex title_for_file keeps a prompt with escaped quotes intact (no truncation at \")
+ok 68 codex recent_sids survives a CLIKAE_HOME path containing a space
+ok 69 codex adapter_sid_canonical recovers the FULL uuid from a rollout path, not just its last hyphen segment
+ok 70 codex adapter_sid_canonical matches adapter_recent_sids's own sid, byte for byte
+ok 71 codex adapter_cwd_from_args recognises -C <dir> (spaced)
+ok 72 codex adapter_cwd_from_args recognises -C<dir> (attached)
+ok 73 codex adapter_cwd_from_args recognises --cd <dir> (spaced long alias)
+ok 74 codex adapter_cwd_from_args recognises --cd=<dir> (clap long = form)
+ok 75 codex adapter_cwd_from_args recognises -C=<dir> (clap short = form) without leaking the '='
+ok 76 codex adapter_cwd_from_args returns empty (rc 1) with no -C/--cd at all
+ok 77 codex adapter_cwd_from_args treats -C followed by another flag as no value given
+ok 78 codex adapter_cwd_from_args returns rc 1 on an explicit empty -C value
+ok 79 codex adapter_cwd_from_args returns rc 1 on --cd= with nothing after the =
+ok 80 codex adapter_cwd_from_args returns rc 1 on -C= with nothing after the =
+ok 81 codex recent_sids (#113): a rollout whose name carries NO uuid falls back to the body id
+ok 82 codex recent_sids (#113): uuid-SHAPED but not hex in the name is not a uuid — the body id wins
+ok 83 codex recent_sids (#113): a uuid-named rollout keeps the FAST path — the name is used, the body id is not read
+ok 84 codex adapter_session_mode: a subagent thread is headless though its originator says codex-tui
+ok 85 codex adapter_session_mode: either signal alone is enough — thread_source, or the source object
+ok 86 codex adapter_session_mode: a human session that only mentions the words is interactive
+ok 87 codex adapter_session_mode: codex exec stays headless, no originator stays unknown
+ok 88 adapters lists all 13 built-in CLIs
+ok 89 codex adapter reports env-dir + CODEX_HOME
+ok 90 codex alias exports CODEX_HOME at the profile dir
+ok 91 vercel adapter reports the flag strategy
+ok 92 vercel alias injects --global-config after the binary (flag strategy)
+ok 93 vercel fish alias injects the flag with no env wrapper (flag strategy)
+ok 94 codex shows the logged-in account (email) from its auth.json id_token
+ok 95 codex account label is empty (not an error) when there's no id_token
+ok 96 az adapter reports env-dir + AZURE_CONFIG_DIR
+ok 97 pulumi adapter reports env-dir + PULUMI_HOME
+ok 98 npm adapter reports env-file + NPM_CONFIG_USERCONFIG
+ok 99 terraform adapter reports env-file + TF_CLI_CONFIG_FILE
+ok 100 az alias exports AZURE_CONFIG_DIR at the profile dir
+ok 101 pulumi alias exports PULUMI_HOME at the profile dir
+ok 102 init seeds npm's per-profile npmrc file
+ok 103 npm alias points at the npmrc FILE (env-file)
+ok 104 init seeds terraform's per-profile terraformrc file
+ok 105 terraform alias points at the terraformrc FILE (env-file)
+ok 106 every adapter hook is in adapter_loader's unset list
+ok 107 an optional hook one adapter defines is not inherited by the next (leak-guard, generalised)
+ok 108 grok recent_sids lists a session whose recorded cwd is the current dir
+ok 109 grok recent_sids EXCLUDES sessions recorded in a different cwd
+ok 110 grok matches the recorded cwd, not the encoded group directory name
+ok 111 grok session_title prefers the generated_title
+ok 112 grok title_for_file shows the RENAME, not the machine title, when the two differ
+ok 113 grok title_for_file falls back to session_summary when generated_title is absent
+ok 114 grok session_title keeps a CJK title intact
+ok 115 grok title_for_file keeps a title with escaped quotes intact (no truncation at \")
+ok 116 grok sid extraction is not confused by request_id / current_model_id
+ok 117 grok resume_args emits '--resume <sid>'
+ok 118 grok transcript_path returns the current dir's newest chat_history.jsonl
+ok 119 grok find_session + session_cwd round-trip an id back to its directory
+ok 120 grok cwd match is trailing-slash insensitive (recorded cwd has the slash)
+ok 121 grok cwd match still EXCLUDES a genuinely different dir after the fix
+ok 122 grok recent_sids survives a CLIKAE_HOME path containing a space
+ok 123 grok account_label reads the email straight out of auth.json
+ok 124 grok account_label stays silent (status 0) when there is no auth.json
+ok 125 grok export_env / run point GROK_HOME at the profile dir
+ok 126 grok memory pointer lands on GROK_HOME/AGENTS.md (grok's global rules file)
+ok 127 grok burn_flags carry --cwd, bypassPermissions, the workspace sandbox and -p
+ok 128 grok burn_flags keep a MULTI-LINE prompt as one argv item
+ok 129 grok recent_sids (#113): a session dir that is NOT a uuid falls back to the id in summary.json
+ok 130 grok recent_sids (#113): uuid-SHAPED but not hex is not a uuid — the id in summary.json wins
+ok 131 grok recent_sids (#113): a uuid-named session dir keeps the FAST path — the dir name is used, summary.json's id is not read
+ok 132 session_meta finds the newest transcript and extracts the opening title
+ok 133 session_meta keeps a CJK title intact (no mid-character slicing)
+ok 134 session_meta prefers Claude's ai-title over the opening prompt
+ok 135 session_meta uses the LAST ai-title when a session was re-titled
+ok 136 session_meta keeps an ai-title's CJK intact
+ok 137 session_meta prefers a USER-set custom-title over a later ai-title
+ok 138 session_meta with only an ai-title (no rename) is unchanged
+ok 139 session_meta can target a specific session id
+ok 140 session_meta returns nonzero when there is no transcript
+ok 141 session_meta returns nonzero for a missing specific session id
+ok 142 session_meta falls back to a placeholder when there is no user text
+ok 143 list_sessions returns rows newest-first
+ok 144 list_sessions honours a limit
+ok 145 list_sessions applies the limit inside the loop (no SIGPIPE with agent-* interleaved)
+ok 146 list_sessions keeps CJK titles intact
+ok 147 list_sessions returns nonzero when there are no sessions
+ok 148 claude: the board's title and the picker's title are the same string
+ok 149 codex: the board's title and the picker's title are the same string
+ok 150 grok: the board's title and the picker's title are the same string
+ok 151 antigravity: the board's title and the picker's title are the same string
+ok 152 agy_email: the account from the NEWEST log wins
+ok 153 agy_email: newest-first holds when the names sort the other way
+ok 154 agy_email: a newer log with no account falls through to an older one
+ok 155 agy_email: a NUL byte in the log does not hide the account
+ok 156 agy_email: the last account in a single log wins (re-auth mid-session)
+ok 157 agy_email: a login well past the head bound is still found
+ok 158 agy_email: no log directory at all is silent and empty
+ok 159 agy_email: an empty log directory is silent and empty
+ok 160 agy_email: a plain FILE named log works, not just a directory
+ok 161 harness: a verified claim with ZERO commands run is not accepted
+ok 162 harness: the same claim WITH a command run is accepted
+ok 163 harness: an ordinary reply that claims nothing is left alone
+ok 164 harness: claiming tests were added without touching a test file is caught
+ok 165 harness: claiming tests were added AND touching one is accepted
+ok 166 harness: interactively it interrupts ONCE, then gets out of your way
+ok 167 harness: dispatched it holds on longer, but still stops
+ok 168 harness: the project's own gate is run, and its output is what comes back
+ok 169 harness: no project gate means no project check, not a silent pass claim
+ok 170 harness: a dispatched agent may not edit the ruler
+ok 171 harness: interactively YOU may edit your own tests
+ok 172 harness: an unparseable tool call is allowed, not blocked
+ok 173 harness: a missing transcript does not block anything
+ok 174 install: a new tank gets the harness, wired to its own copy
+ok 175 install: an existing file is never overwritten
+ok 176 install: someone else's hooks.json is left alone
+ok 177 seed: a tank made before the harness existed gets it on first switch
+ok 178 seed: deleting the harness means deleting it — clikae never puts it back
+ok 179 seed: the mark survives the tank being wiped
+ok 180 seed: an unseeded tank whose config holds someone else's hooks is not clobbered
+ok 181 harness: stale counters from abandoned conversations are swept
+ok 182 rule1: edit then stop is blocked with the fixed sentence
+ok 183 rule1: edit then read then stop is allowed
+ok 184 rule1: a read-only turn is allowed
+ok 185 rule1: two edits then one measurement is allowed
+ok 186 rule1: measurement then edit is blocked — order is what counts
+ok 187 rule1: the counter caps the block
+ok 188 rule1: a non-English final message changes nothing — the rule never reads text
+ok 189 rule1: it records interactively too, not only under dispatch
+ok 190 rule1: MCP writes count as changes and MCP probes as measurements
+ok 191 rule1: a build is neither — save_page then build_preview is still unmeasured
+ok 192 rule1: shell commands — a redirect or write verb mutates, a test run or read observes
+ok 193 rule1: a tool the table does not know is neither, and does not block
+ok 194 rule1: the ledger is per conversation
+ok 195 alias writes a sentinel-wrapped block to the rc file
+ok 196 alias embeds the adapter's env var (env-dir)
+ok 197 alias uses the profile NAME for an env-var adapter (aws)
+ok 198 alias points at the config FILE for an env-file adapter (kubectl)
+ok 199 re-running alias replaces rather than duplicates
+ok 200 alias --name overrides the default alias name
+ok 201 alias fails when the profile does not exist
+ok 202 alias backs up an existing rc file before editing
+ok 203 alias under fish writes fish syntax + env wrapper, creating config.fish
+ok 204 alias under fish wraps an env-var adapter (aws) through env too
+ok 205 remove cleans up a fish alias block
+ok 206 agy: no tanks by default, points at init
+ok 207 init agy: first time takes ~/.gemini over into a 'default' tank + makes the tank
+ok 208 rename agy: moves the tank dir, and repoints ~/.gemini for the active one
+ok 209 rename agy: rewrites hooks.json's harness path to the new tank, no trace of the old one left
+ok 210 rename agy: a hooks.json with no path in it is left byte-identical (control)
+ok 211 init agy: declined (answer N) changes nothing
+ok 212 init agy: second tank is a plain mkdir, no ceremony
+ok 213 agy <tank> repoints the active symlink
+ok 214 agy <tank> rejects an unknown tank
+ok 215 agy --release restores a real ~/.gemini from the active tank, keeps tanks, clears consent
+ok 216 remove agy: removing the LAST tank restores ~/.gemini and ends multi-account
+ok 217 remove agy refuses the active tank while others remain
+ok 218 rename/remove agy carry and drop the burn sidecar under the engine-id key, 'antigravity' (#113)
+ok 219 clikae tanks lists agy tanks without crashing (no adapter regression)
+ok 220 agy switch to a different tank stashes outgoing, restores incoming # skip agy keychain carry is macOS-only
+ok 221 agy switch to a tank with a prior stash restores its own token # skip agy keychain carry is macOS-only
+ok 222 agy switch to the already-active tank does NOT touch the Keychain # skip agy keychain carry is macOS-only
+ok 223 agy switch to the already-active tank is a no-op even with a live agy process (headless-on-active) # skip agy keychain carry is macOS-only
+ok 224 agy switch to a DIFFERENT tank still refuses while an agy process is live # skip agy keychain carry is macOS-only
+ok 225 agy switch refuses to proceed if the restore doesn't verify # skip agy keychain carry is macOS-only
+ok 226 rename agy carries the tank's Keychain slot across # skip agy keychain carry is macOS-only
+ok 227 live: an agy tank's preview shows its opening request, not a bare empty string
+ok 228 live: an agy tank with no extractable title falls back to (no preview), not empty
+ok 229 real Keychain: stash then restore round-trips the secret byte-for-byte # skip agy Keychain carry is macOS-only
+ok 230 real Keychain: restoring a tank with no stash clears canonical (clean logout) # skip agy Keychain carry is macOS-only
+ok 231 real Keychain: verify_restore catches a mismatched/corrupted restore # skip agy Keychain carry is macOS-only
+ok 232 real Keychain: rename carries the tank's slot and drops the old name # skip agy Keychain carry is macOS-only
+ok 233 linux agy: takeover keeps the login file in the adopted tank, 0600
+ok 234 linux agy: switch saves the outgoing login and restores the incoming one (round trip)
+ok 235 linux agy: a switch tightens a loosened token back to 0600
+ok 236 linux agy: switching to a tank with no login is reported, not a crash
+ok 237 linux agy: rename carries the login file
+ok 238 linux agy: remove drops only that tank's login
+ok 239 linux agy: doctor names the file backend and which tanks carry a login
+ok 240 autonomy read: the three real values round-trip
+ok 241 autonomy read: anything unrecognised normalises to ask, never upward
+ok 242 autonomy read: surrounding whitespace is stripped, as tr did
+ok 243 autonomy read: whitespace INSIDE the word is stripped too, as tr did
+ok 244 autonomy read: autonomy_getv and autonomy_get cannot disagree
+ok 245 autonomy read: autonomy_set then read gives back what was set
+ok 246 available JSON explains each skip reason and keeps eligible scores
+ok 247 available orders remaining quota per hour and relaxes only under 24 hours
+ok 248 available single window uses its own reset and has no separate 95 percent gate
+ok 249 available includes cockpit on request and compares full engine identity
+ok 250 available reads inventory anew and handles an empty inventory
+ok 251 available rejects missing resets and malformed readings without guessing
+ok 252 available normalizes reset offsets and floors elapsed reset hours
+ok 253 available agy: a tank whose first-run screen is unfinished is not available, in any group
+ok 254 available agy: each group has its own verdict and order, and one group never gates the other
+ok 255 available agy: --group needs agy and one of the two names
+ok 256 available: a model share over the weekly number gates the tank, for claude
+ok 257 available: a reading over six hours old is stale, not a number to act on
+ok 258 bats-dbracket-lint: a bare [[ ]] assertion line is caught (rc 1, file:line printed)
+ok 259 bats-dbracket-lint: a backslash-continued [[ ]] with no OR on the next line is caught
+ok 260 bats-dbracket-lint: a negated bare ! [[ ]] is caught
+ok 261 bats-dbracket-lint: legal forms pass (|| false, || {…}, &&, backslash + ||, if [[, heredoc body)
+ok 262 bats-dbracket-lint: every tracked .bats file in this repo is clean
+ok 263 board: no row overflows the terminal, at any width a real terminal has
+ok 264 board-width: both renderers print the truncation line from the in-process count, and it fits (#113)
+ok 265 board-width: the measurement itself can see an over-wide row
+ok 266 burn-collision: refuses to start on a tank that already has a running burn
+ok 267 burn-collision: --allow-active overrides the running-burn refusal
+ok 268 burn-collision: a STALE running marker (dead pid) does not block a new burn
+ok 269 burn-collision: reroute SKIPS a busy tank instead of colliding with it
+ok 270 #114: burn_tank_busy forks nothing for a FINISHED run, and still sees a live one
+ok 271 burn-collision: reroute still lands on a THIRD tank when only one is busy
+ok 272 burn-collision: a RECYCLED pid (real, live, but started long after the marker) does not block a new burn
+ok 273 burn-collision: a marker whose pid is alive AND started at-or-before started_at still blocks (no false negative introduced)
+ok 274 _burn_tank_lock_acquire: mutual exclusion — a second acquire blocks until the first releases
+ok 275 _burn_tank_lock_acquire: a lock left by a DEAD holder is reclaimed, not stuck forever
+ok 276 _burn_tank_lock_acquire (R3-P2-2): 4 independent processes racing a DEAD-holder lock — 0 violations, 0 leaks, 20 trials
+ok 277 _burn_tank_lock_acquire (R3-P2-2 control): same harness with NO stale lock pre-seeded — 0 violations, 0 leaks, 8 trials
+ok 278 _burn_tank_lock_acquire: a non-symlink leftover at the lock path (pre-round-3 directory-style lock) is reclaimed, not stuck forever
+ok 279 _burn_tank_lock_acquire: a lock whose pid is alive but RECYCLED (marker predates the pid's own start) is still reclaimed
+ok 280 _burn_tank_lock_acquire: a LIVE holder's lock is never stolen, even by several simultaneous contenders
+ok 281 _burn_tank_lock_acquire (R3-P2-1 arm): a holder that stalls 3s after acquiring is never displaced
+ok 282 _burn_tank_lock_acquire/_burn_tank_lock_release: the lock is gone on every exit path — success, a losing timeout, and a trapped signal
+ok 283 _burn_reclaim_mutex_try: a successful claim is a symlink carrying pid:started_at from the instant it exists (R4-P1-1)
+ok 284 _burn_tank_lock_acquire (R4-P1-1b): a pid-less/malformed reclaim SYMLINK does not wedge the tank forever
+ok 285 _burn_reclaim_mutex_try (R4-P2-3a): a pid-less/malformed link is reaped on the first try and claimable on the second
+ok 286 _burn_reclaim_mutex_try (R4-P2-3b): a DEAD-pid mutex younger than 30s is left alone
+ok 287 _burn_reclaim_mutex_try (R4-P2-3c/R5-P2-1): a mutex whose pid is ALIVE and matches its recorded started_at is never reaped, regardless of age
+ok 288 _burn_reclaim_mutex_try (R5-P2-1): a mutex whose pid is alive but does NOT match its recorded started_at is reaped like a recycled pid
+ok 289 _burn_reclaim_mutex_try (R4-P1-3): staleness is judged from started_at IN the symlink, never the symlink's own mtime
+ok 290 _burn_tank_lock_acquire (R4-P2-1): a symlink whose target resolves to an existing directory is reclaimed, not nested into
+ok 291 _burn_tank_lock_acquire (R4-P2-2): a durable empty-target symlink is reclaimed promptly, not spun on forever # skip this kernel's symlink(2) refuses an empty target (ENOENT) -- a durable empty-target symlink cannot be constructed here
+ok 292 _burn_tank_lock_acquire (R4-P1-2): 4 independent processes racing a DEAD-holder lock through the reclaim mutex — 0 violations, 0 leaks, 50 trials
+ok 293 burn-collision: SIGTERM while blocked acquiring the busy-tank lock (before 'running' is ever written) still writes a terminal 'fail' status file (R3-P3-1)
+ok 294 burn-collision: a busy-tank refusal writes a terminal 'fail' status file with a busy reason (P3-1)
+ok 295 burn-collision (KITT/R9-P1-2/R9-P2-3): a foreign reclaim mutex makes a real 'clikae burn' fail FAST with a foreign-mutex reason, never the generic busy-timeout message
+ok 296 _burn_tank_lock_release (R5-P2-3): does not deadlock against itself when this process already holds the reclaim mutex
+ok 297 _burn_tank_lock_acquire/_burn_tank_lock_release (R5-P2-3): a real signal landing while this process holds the reclaim mutex exits promptly, no leak
+ok 298 _burn_tank_lock_acquire (R5-P2-4): a busy reclaim mutex backs off instead of spinning at full CPU
+ok 299 _burn_reclaim_mutex_try (KITT/R8-P1-2): a foreign symlink-to-directory at the mutex path is refused, not reaped -- nothing removed, nothing nested into it
+ok 300 _burn_reclaim_mutex_try (KITT/R8-P1-2): a pre-round-3 mkdir left at the mutex path is refused, not reaped -- the directory and its pid file survive untouched
+ok 301 _burn_reclaim_mutex_available (KITT): mirrors try's foreign-mutex refusal for both shapes -- never previews either as removable
+ok 302 _burn_reclaim_mutex_try/_available (KITT/R9-P2-1): a symlink resolving to an EXISTING REGULAR FILE is refused as foreign, not reaped -- the shape all three surfaces named and the old three-condition predicate let through
+ok 303 _burn_reclaim_mutex_try (KITT/R9-P2-1): a symlink CHAIN to an existing regular file, and a symlink to /dev/null, are both refused as foreign
+ok 304 _burn_reclaim_mutex_try/_burn_tank_lock_acquire (KITT/R9-P2-2): the CLAIM verifies by readlink, exactly like the restore -- structural
+ok 305 _burn_reclaim_mutex_try (KITT/R10-P3-3): the CLAIM's readlink-verify is exercised BEHAVIORALLY, through the real race, not just read as source text
+ok 306 _burn_tank_lock_acquire (KITT/R9-P1-2): a dead-holder lock whose reclaim mutex is a foreign object refuses TERMINALLY -- rc=2, immediately, never claims the tank, never backs off like an ordinary busy mutex
+ok 307 _burn_tank_lock_acquire (KITT/R9-P2-3): a foreign-mutex refusal records the offending path for the caller to report
+ok 308 _burn_reclaim_mutex_try (KITT/R8-P1-1): the restore never branches on ln -s's own exit code
+ok 309 _burn_reclaim_mutex_try (KITT/R8-P1-1): the restore is verified by readlink right after the attempt, and a failed restore never discards the graveyard
+ok 310 burn-collision #90: without --queue a live holder is still refused
+ok 311 burn-collision #90: --queue waits for the holder to finish, then runs
+ok 312 burn-collision #90: a holder that dies mid-wait lets the queued burn start
+ok 313 burn-collision #90: --queue-timeout fails with its own reason and never steals the tank
+ok 314 burn-collision #90: --queue and --allow-active are refused together
+ok 315 burn --no-reroute: dry with no waitable reset ends in state dry-paused, rc 2, with a pause note at the artifact path
+ok 316 burn --no-reroute: the pause note never clobbers an artifact that is already there
+ok 317 wait: a dry-paused status is terminal — returns at once with rc 2 and prints it
+ok 318 _burn_dry_pause_window: 6h by default, CLIKAE_BURN_DRY_PAUSE_WAIT overrides, garbage falls back
+ok 319 burn --no-reroute: a parseable reset inside the window is waited out (stubbed sleep) and the SAME tank re-fires
+ok 320 burn --no-reroute --wait-for-reset 0: an explicit zero window stops at dry-paused with reset_at set, instead of waiting
+ok 321 burn --no-reroute (P1): a burn sleeping to its reset KEEPS the tank — busy readers see it, a second burn is refused, --queue waits behind it
+ok 322 burn --no-reroute (P2): --wait-for-reset 0 never retries, even when the reset is already in the past
+ok 323 burn --no-reroute (P2): a reset already in the past gets ONE re-fire under the default window, never a spin
+ok 324 _burn_dry_pause (P2): window 0 is refused before the reset is looked at; a past reset is bounded per run
+ok 325 _burn_dry_pause (P2): text appended under the pause note while sleeping is never deleted
+ok 326 _burn_dry_pause (P2): a note this invocation did not write is never removed
+ok 327 _burn_dry_pause (P2): its own unchanged note IS taken away before the re-fire
+ok 328 _burn_pause_note (P2): created exclusively — never written through a path that appeared after the check
+ok 329 wait (P2): a burn sleeping to its reset is NOT terminal — wait keeps waiting; a second wait returns rc 0 on the eventual done
+ok 330 wait (P2): a killed sleeper is seen as stale, not waited on forever
+ok 331 burn --no-reroute (#183 r3 P1): codex — no reader ever sees a terminal row between the dry and the re-fire
+ok 332 burn --no-reroute (#183 r3 P1): agy — the stop is decided before any row; dry-paused is the first terminal one
+ok 333 burn --no-reroute (#183 r3 P1): a pinned burn killed in its reset sleep still gets its exit-guard fail row
+ok 334 _burn_status_write (#183 r3 P1): the terminal flag follows the LAST row — an in-progress row after a terminal one re-arms the exit guard
+ok 335 claude: a prompt after the option terminator is not a model flag — the reported reproduction (#240)
+ok 336 claude: the same reproduction under LC_ALL=C (#240)
+ok 337 claude reader: nothing after -- is read, in any spelling (#240)
+ok 338 agy reader: nothing after -- is read, and flag parsing ends at the first plain argument (#240)
+ok 339 claude reader: an option that takes a value takes the next argument, whatever it looks like (#240)
+ok 340 agy reader: a flag that takes a value takes the next argument, whatever it looks like (#240)
+ok 341 claude reader: --model/--effort as a separate argument or with =, and no short form (#240)
+ok 342 claude reader: clustered short options are read letter by letter (#240)
+ok 343 claude reader: after an option it does not know, a model or effort is unknown, never a guess (#240)
+ok 344 claude reader: a subcommand has its own options — a model after it is unknown (#240)
+ok 345 claude reader: a value that cannot be the one that runs is unknown (#240)
+ok 346 agy reader: one dash or two, a separate argument or =; no short form and no cluster (#240)
+ok 347 agy reader: a value that cannot be the one that runs is unknown (#240)
+ok 348 claude: an unknown model after -- is reported as unknown, and --require-declared refuses it (#240)
+ok 349 agy: a model after -- in the one-dash spelling is reported as a flag (#240)
+ok 350 claude: burn's --model/--effort and the same one after -- are refused before launch (#240)
+ok 351 claude: text after the option terminator is not a second naming (#240)
+ok 352 agy: burn's --model/--effort and the same one after -- are refused before launch, in every spelling (#240)
+ok 353 codex source: an effort after -- with a cross-engine --to is refused before the first tank runs (#240)
+ok 354 claude source: an effort after -- with a cross-engine --to is refused before the first tank runs (#240)
+ok 355 an effort after -- is refused with a cross-engine --to from each of the three engines, readable or not (#240)
+ok 356 claude: an effort after -- that CLAUDE_CODE_EFFORT_LEVEL outranks still cannot cross to another engine (#240)
+ok 357 the claude and agy readers match no named character class or \s (#240)
+ok 358 a space that is not plain ASCII is part of the value in every locale (#240)
+ok 359 claude reader: an option claude has but its help does not list is read by its kind (#242)
+ok 360 claude reader: an optional value is never an argument that starts with a dash (#242)
+ok 361 claude reader: a list option takes the plain arguments after it; none of them is a subcommand (#242)
+ok 362 claude reader: only the first plain argument that no option took can be a subcommand (#242)
+ok 363 claude reader: a flag letter leaves the rest of its cluster to be read as an argument (#242)
+ok 364 claude reader: an option it does not have is read each way it could be taken (#242)
+ok 365 agy reader: a flag it does not have is read each way it could be taken (#242)
+ok 366 claude: a model after an unlisted option and a value option's `--` is the one reported (#242)
+ok 367 claude: a prompt that looks like a flag, after --debug and the terminator, runs (#242)
+ok 368 claude: a directory or a session named like a subcommand does not hide the model and effort (#242)
+ok 369 claude reader: has every option the installed claude --help lists, as the same kind (#242)
+ok 370 claude reader: has every option the installed claude declares, listed in --help or not (#242)
+ok 371 agy reader: has every flag the installed agy --help lists (#242)
+ok 372 burn reports a codex tank's profile model and effort: first log line and --json (#237)
+ok 373 burn reports undeclared when neither a flag nor the profile names them (#237)
+ok 374 a codex key under a [table] is not the tank's model (#237)
+ok 375 the status file carries the same four fields (#237)
+ok 376 claude: the model comes from settings.json, top level only (#237)
+ok 377 claude: a per-model effort in modelSettings is the profile's effort for that model (#237)
+ok 378 claude: a top-level effortLevel alone is NOT reported as the effort, and the log says why (#237)
+ok 379 claude: ANTHROPIC_MODEL and CLAUDE_CODE_EFFORT_LEVEL in the environment are reported as env (#237)
+ok 380 raw argv: the engine's own model flag after -- is reported as a flag, not the profile (#237)
+ok 381 raw argv: claude's own --model/--effort after -- are reported as flags (#237)
+ok 382 json_string_leaves reports string members by key path, and nothing inside an array (#237)
+ok 383 agy has no profile key for either: undeclared without a flag (#237)
+ok 384 a reroute reports the tank that ran, not the one that was named (#237)
+ok 385 burn --model/--effort reach claude as its own --model and --effort (#237)
+ok 386 burn --model/--effort reach codex as -m and a -c override, ahead of the prompt (#237)
+ok 387 burn --model/--effort reach agy as its own --model and --effort (#237)
+ok 388 only --effort: the model is still read from the profile, and no model flag is sent (#237)
+ok 389 a model-pinned cross-engine --to is refused before anything starts: a model name belongs to one engine (#237)
+ok 390 --to-model names the destination engine's model: the source's name never crosses the hop (#237)
+ok 391 --to-model alone pins only the destination; the first tank keeps its profile's model (#237)
+ok 392 without --model a cross-engine reroute carries no model: the destination's profile decides (#237)
+ok 393 --to-model is refused where there is no cross-engine --to for it to apply to (#237)
+ok 394 an effort level the --to engine does not accept is refused up front, naming that engine (#237)
+ok 395 a --to-model the destination engine has no flag for is refused up front (#237)
+ok 396 an engine with no model/effort mapping fails before starting, never ignoring the flag (#237)
+ok 397 a --to engine that cannot honour the flag is refused up front, before the first tank runs (#237)
+ok 398 a --to naming an engine clikae does not know is left to the hop, not refused with an empty reason (#237)
+ok 399 claude refuses an effort level its --help does not list (#237)
+ok 400 claude: --effort against a different CLAUDE_CODE_EFFORT_LEVEL is refused — the variable would win (#237)
+ok 401 --model/--effort with a raw '-- <cmd>' task are refused, not dropped (#237)
+ok 402 the same knob from burn and again after -- is refused as ambiguous (#237)
+ok 403 --effort rejects a value that is not one plain word (#237)
+ok 404 --require-declared refuses an undeclared effort before starting, and names what is missing (#237)
+ok 405 --require-declared passes when the profile declares both (#237)
+ok 406 --require-declared passes when flags fill what the profile leaves out (#237)
+ok 407 --require-declared refuses a reroute onto a tank that declares nothing (#237)
+ok 408 burn --help documents the three flags (#237)
+ok 409 codex: an effort override after -- with spaces round the key is still the same knob given twice (#237)
+ok 410 codex: the compact -c<key=value> and -c=<key=value> spellings are the same knob given twice (#237)
+ok 411 codex raw argv: -m glued to its value is the model that runs (#237)
+ok 412 codex raw argv: -m outranks a -c model override, as it does in codex (#237)
+ok 413 codex raw argv: of two -c overrides of one key the later one runs (#237)
+ok 414 codex raw argv: what follows the option terminator is a prompt, not a flag (#237)
+ok 415 codex raw argv: an override whose value cannot be read with certainty is reported as unknown, not guessed (#237)
+ok 416 codex: an unreadable override after -- still counts as the knob given twice (#237)
+ok 417 --require-declared refuses an unknown model: it is not a declared one (#237)
+ok 418 codex raw argv reaches the engine byte for byte, whatever was read from it (#237)
+ok 419 codex: text inside a multi-line string in config.toml declares nothing (#237)
+ok 420 codex: quoted keys in config.toml are the same keys (#237)
+ok 421 codex: a root member that is not a string, or a multi-line one, is not a declaration (#237)
+ok 422 codex: a config.toml that is not valid TOML declares nothing, and the burn says why (#237)
+ok 423 codex: with no usable python3 the profile reads as undeclared with the reason, never a guess (#237)
+ok 424 a model after -- with a cross-engine --to and --to-model is refused before the first tank runs (#237)
+ok 425 a model after -- never reaches the other engine of a cross-engine --to: refused up front (#237)
+ok 426 a raw command that names a model is refused with a cross-engine --to: the same command would run on both (#237)
+ok 427 codex: a quoted override key after -- is still the model: refused with a cross-engine --to, and a duplicate of --model (#237)
+ok 428 codex: a no-break space round an override key after -- is still the same knob given twice (#237)
+ok 429 codex: a figure space round an override key after -- is still the same knob given twice (#237)
+ok 430 codex raw argv: an override whose key had to be cleaned is unknown, never the profile's value (#237)
+ok 431 codex: the override key normaliser under LC_ALL=C drops every non-key byte, as in any other locale (#237)
+ok 432 codex: plain trimming is ASCII whitespace in every locale, and no other space is trimmed (#237)
+ok 433 codex raw argv: a key behind a space that is not plain is unknown in every locale, never a declared value (#237)
+ok 434 codex: the argv reader matches no named character class, which is the C library's to define (#237)
+ok 435 codex: a root profile key whose table says otherwise is unknown, not the root table's value (#239)
+ok 436 --require-declared refuses a codex tank whose profile layering leaves both unknown (#239)
+ok 437 codex: burn's --model and --effort still win over a selected profile, as flag (#239)
+ok 438 codex: a knob named to burn and again after -- is still refused with a profile selected (#239)
+ok 439 codex: a profile table nothing selects changes nothing (#239)
+ok 440 codex: a profile option in the argv layers <name>.config.toml over the root table, in every spelling (#239)
+ok 441 codex: a profile option after the option terminator is the prompt (#239)
+ok 442 codex: a selected layer that sets one of the two leaves the other to the root table (#239)
+ok 443 codex: a root-key profile that sets one of the two makes only that one unknown (#239)
+ok 444 codex: a root-key profile that repeats the root table's values is those values (#239)
+ok 445 codex: an argv profile that exists only as a table is unknown where the table differs from the root (#239)
+ok 446 codex: an argv profile and a root profile key that disagree are unknown; the argv's layer is not assumed to win (#239)
+ok 447 codex: an argv profile and a root profile key that agree are that value (#239)
+ok 448 codex: a selected profile that exists nowhere is unknown (#239)
+ok 449 codex: an argv profile on a tank with no config.toml at all still reads its layer (#239)
+ok 450 codex: a selected layer's value that is not a one-line string is unknown (#239)
+ok 451 codex: a profile selection the argv makes unreadably is unknown (#239)
+ok 452 codex: a selected layer file that is broken, or selects again, is unknown (#239)
+ok 453 codex: an explicit model option in the argv is still that model with a profile selected (#239)
+ok 454 resume: dry once -> waits, relaunches the same tank from the same cwd with a resume note
+ok 455 resume: the state file carries tank, engine, cwd, argv, artifact, prompt file, reset, attempt
+ok 456 resume: attempts are capped at 3, then today's dry path; --json carries resumed
+ok 457 resume: --json reports resumed:1 on a dry-once success
+ok 458 resume: a waiting burn is listed with its reset instant for the board
+ok 459 home: _home_burn_waiting_notes renders 'resumes at HH:MM'
+ok 460 resume: an explicit --to still wins over waiting
+ok 461 control: without --resume-after-limit, a dry tank reroutes exactly as before
+ok 462 burn-status: a completed burn's status file ends in state done with every contract field
+ok 463 burn-status: the run directory is private (0700) like the task-text copy it lives beside
+ok 464 burn-status: a real task failure ends in state fail, not dry
+ok 465 burn-status: rerouting from a dry tank records rerouted_from and lands on state done
+ok 466 burn-status: a failed lane's reason is capped at 200 bytes in status.json, whatever stderr held
+ok 467 burn-status: burn_status_fieldv reads every field at the real reason cap and at 10x it
+ok 468 burn-status: burn_status_fieldv returns a string field exactly as json_str wrote it
+ok 469 burn-status: every burn writes a status file even without --json
+ok 470 burn: an early log_fail (unknown tank) ends the status file in state fail, not stuck running
+ok 471 burn: a normal successful run is NOT clobbered by the safety-net trap
+ok 472 wait: a running status with a DEAD pid is treated as terminal (stale), not hung forever
+ok 473 burn: SIGTERM mid-run leaves the status file in state fail, not running
+ok 474 _burn_parse_duration: bare seconds, and m/h/d suffixes
+ok 475 _burn_parse_duration: refuses garbage rather than guessing
+ok 476 --wait-for-reset: dry within the window waits (stubbed) and retries the SAME tank
+ok 477 --wait-for-reset: a reset OUTSIDE the window still reroutes normally
+ok 478 --wait-for-reset: omitted, behaviour is unchanged (still reroutes on dry)
+ok 479 --wait-for-reset: a bad duration is refused up front
+ok 480 _burn_wait_for_reset: sleeps the COMPUTED remaining seconds and shows a NON-terminal status meanwhile
+ok 481 _burn_wait_for_reset: re-checks on wake and waits once more if still short of the window
+ok 482 _burn_wait_for_reset: gives up once a moved reset would exceed the ORIGINAL window
+ok 483 burn_tank_busy: a waiting-reset marker with a live pid counts as busy
+ok 484 burn completes on a live tank and verifies by the artifact
+ok 485 burn reroutes from a dry tank to the next same-engine tank
+ok 486 burn honours an explicit --to next hop on a dry tank
+ok 487 burn fails when every reachable tank is dry
+ok 488 burn does NOT reroute a real task failure (no artifact, no limit)
+ok 489 burn --no-reroute runs once and stops on a dry tank
+ok 490 burn #61 P2-5: --no-reroute's dry stop and a real task failure use DIFFERENT rc (2 vs 1)
+ok 491 burn #61 P2-5: reroute exhaustion (no-tank-available) is the SAME rc as --no-reroute's dry stop
+ok 492 burn #61 P1-2: a directory dropped in AFTER the first command is never rerouted onto
+ok 493 burn rejects agy with no raw '-- <cmd...>' form (no adapter to fill flags)
+ok 494 burn: an --artifact path that is a directory still gets its refusal on screen
+ok 495 burn agy completes on the active tank and verifies by the artifact
+ok 496 burn agy hops to the next tank (Keychain carry) when the first runs dry
+ok 497 burn #61 P2-5: agy --no-reroute's dry stop is also rc 2, same as codex's
+ok 498 burn agy fails when every tank is dry
+ok 499 burn agy: the reroute walk SKIPS a busy tank instead of colliding with it
+ok 500 burn agy: --allow-active overrides the reroute-walk busy skip
+ok 501 burn agy: an automatic dry-walk hop still SKIPS the cockpit even with --force-cockpit (#63 r6 P3-1, G5b)
+ok 502 burn requires --artifact
+ok 503 _burn_timeout_bin: picks `timeout` when it's on PATH
+ok 504 _burn_timeout_bin: no timeout tool → empty bin + a WARNING (runs unbounded, doesn't silently lie)
+ok 505 _burn_next_same_engine: P0 — skips a tank an interactive session is live on
+ok 506 _burn_next_same_engine: P0 — --allow-active (=1) uses the in-use tank anyway
+ok 507 _burn_next_same_engine: P1 — skips a tank sharing a dried account (same quota)
+ok 508 _burn_next_same_engine: P1 — a DIFFERENT account is still eligible
+ok 509 _burn_next_same_engine: refuses when the cockpit is the ONLY idle same-engine tank left (#63 r4 P3-5)
+ok 510 _burn_next_same_engine: --allow-active does NOT rescue the cockpit tank (#63 r4 P3-5)
+ok 511 _burn_next_same_engine: a tank that is NOT the cockpit is still picked normally (#63 r4 P3-5)
+ok 512 burn refuses an EXPLICIT target that is the recorded cockpit: rc≠0, engine never entered, no artifact (#63 r5 P2-1)
+ok 513 burn --force-cockpit runs on the cockpit and says so on stderr (#63 r5 P2-1)
+ok 514 burn refuses a --to hop onto the cockpit after a dry tank, engine entered only for the first tank (#63 r5 P2-1)
+ok 515 burn refuses a tank that is a symlink alias of the cockpit (physical identity, #63 r5 P2-1)
+ok 516 burn refuses ALL burns when the state file exists but is unreadable (mode 000, #63 r6 P3-2)
+ok 517 burn refuses ALL burns when the state file is a symlink (#63 r6 P3-2)
+ok 518 burn refuses ALL burns when the state file's content has a stray CR (#63 r6 P3-2)
+ok 519 burn is unaffected when the state file simply does not exist (#63 r6 P3-2, no regression)
+ok 520 _burn_next_same_engine: with no cockpit recorded, nothing is excluded on that account (#63 r4 P3-5)
+ok 521 burn does NOT count a STALE artifact as success (judges by mtime change)
+ok 522 burn --fresh clears a stale artifact before running
+ok 523 burn counts an OVERWRITTEN pre-existing artifact as success (mtime advanced)
+ok 524 _burn_timeout_bin: falls back to perl when no timeout/gtimeout
+ok 525 burn executes headless tasks inside tmux when available
+ok 526 burn's engine process gets the tmux guard first on PATH despite the compgen -e restore (P2-3)
+ok 527 burn --prompt-file builds the engine command via the hook and completes
+ok 528 burn --prompt inline is equivalent to --prompt-file
+ok 529 burn --add-dir defaults to the artifact's parent (codex gets -C dirname)
+ok 530 burn rejects --prompt and --prompt-file together
+ok 531 burn with no prompt and no -- errors and mentions the prompt options
+ok 532 burn --prompt on an engine with no adapter_burn_flags errors clearly
+ok 533 burn --prompt cross-engine reroute regenerates flags for the new engine
+ok 534 adapter_burn_flags (claude): exact NUL-per-argv recipe
+ok 535 adapter_burn_flags (codex): exact NUL-per-argv recipe, first add-dir = cwd
+ok 536 adapter_burn_flags does NOT leak across adapters (leak-guard)
+ok 537 adapter_meta_permission_modes does NOT leak across adapters (leak-guard)
+ok 538 burn: --prompt with a trailing -- appends the extra argv after the generated flags
+ok 539 adapter_burn_flags (claude): a multi-line prompt stays ONE argv item
+ok 540 burn --prompt-file delivers a MULTI-LINE prompt to codex as one arg
+ok 541 burn agy: clikae captures agy's stdout into the artifact it can't write itself
+ok 542 burn agy: a REFUSAL is a failure, not an artifact full of the refusal
+ok 543 burn agy: a lapsed login fails loudly and names the tank, with no artifact (#192)
+ok 544 burn agy: any other non-zero exit is a failure too, never a captured answer (#192)
+ok 545 burn agy: success says CAPTURED, not verified
+ok 546 burn agy: a silent run is still a failure, and says where to look
+ok 547 burn agy passes extra flags after -- through to agy, not dropping them
+ok 548 burn agy: --timeout is handed to agy as --print-timeout
+ok 549 burn --json: success is one object on stdout, prose on stderr
+ok 550 burn --json: a HEALTHY codex run carries its own proactive reset, not null
+ok 551 burn --json: a reroute names the tank that ACTUALLY ran it
+ok 552 burn claude a: worse headroom than b does not stop a from launching (no pre-launch substitution, P1-2)
+ok 553 burn --to codex/c wins outright over headroom ordering on a dry tank (P1-3)
+ok 554 burn --json: a reroute driven by headroom ordering is recorded in rerouted_from (P1-4)
+ok 555 burn --json: every tank dry is a distinct, readable outcome
+ok 556 burn --json: reroute never names a lock file, dangling symlink, or dotdir; exhaustion is no-tank-available (#61)
+ok 557 burn #61 P2-7: earliest parseable reset wins across three dry tanks, visited out of order
+ok 558 burn #61 P2-7: an unparseable reset mid-walk is skipped — earliest of the PARSEABLE ones wins
+ok 559 burn #61 P2-7: every dry tank's reset is unparseable -> reset is null, not a stale/wrong phrase
+ok 560 burn without --json prints no JSON at all
+ok 561 burn's soul/MCP prelaunch waits out a held lock instead of racing it # skip lockf needed to hold the lock
+ok 562 burn #42: cockpit consumption after engine exit preserves success and bytes
+ok 563 burn #42: snapshot preserves nonempty size after consumption
+ok 564 burn #42: stale and absent snapshots cannot claim success
+ok 565 burn #42: direct fallback keeps artifact evidence with a nonzero engine exit
+ok 566 burn #45: Claude weekly limit preserves dated reset in JSON
+ok 567 burn #45: all Claude limit spellings relay reset text and ordinary prose stays clear
+ok 568 burn #45: prose merely discussing a weekly limit does not fire dry (P2-2)
+ok 569 burn #45: prose that reads 'reached your … limit' without a direct vendor report does not fire dry (P2-1 r2)
+ok 570 burn #45: a genuine 'reached your … limit' vendor report still fires dry (P2-1 r2)
+ok 571 burn #45: a curly apostrophe before the verb still fires dry (P1-1 r3)
+ok 572 burn #45: an adverb between the direct report and the verb still fires dry (P1-1 r3)
+ok 573 burn #45: main's own corpus sentence still fires dry for claude (P1-1 closing)
+ok 574 burn #45: a real sample of the fixture's reset-phrase corpus fires dry under every real vendor-sentence shape (P1-1 closing)
+ok 575 burn #45: a real dry reply with a curly apostrophe reroutes instead of a hard failure (P1-1 r3)
+ok 576 burn #45: leading transport noise (indent/tab/warning glyph) does not hide a real vendor sentence (P1-1 r4 must-match)
+ok 577 burn #45: the r2/r3 prose false-positive corpus still does not fire dry under the widened anchor (P1-1 r4 must-not-match)
+ok 578 burn #45: a markdown blockquote/list marker in front of quoted prose does not fire dry (P2-1 r5 must-not-match)
+ok 579 burn #45: a real task failure whose reply quotes a runbook blockquote does not burn the whole reserve (P2-1 r5, PROBE B)
+ok 580 burn #45: leading transport noise still fires dry under the narrowed noise class (P2-1 r5 must-match, no regression)
+ok 581 burn #45: a dry signal more than 64KiB from the end of the capture still reroutes (P2-1 r4 must-match)
+ok 582 burn #45: a large CLEAN capture with no limit signal does not falsely reroute (P2-1 r4 must-not-match)
+ok 583 burn #45: codex prose that merely talks about the limit during a real task failure does not reroute (P2-2 r4 must-not-match, PROBE B3)
+ok 584 burn #45: a genuine anchored codex limit sentence still fires dry and yields a reset (P2-2 r4 must-match)
+ok 585 burn #45: codex bare mention with no direct report and no reset phrase does not fire dry (P2-2 r4 must-not-match)
+ok 586 burn #45: a third-person sentence that merely QUOTES 'you have reached … limit' mid-line does not fire dry (P2-3 r3)
+ok 587 burn #45: that same sentence does not burn through the whole reserve (P2-3 r3)
+ok 588 burn #45: 'reset at' phrasing is extracted, not dropped to null (P2-3)
+ok 589 burn #45: 'reached your weekly limit' ordering is detected as dry, not a hard task failure (P2-3)
+ok 590 burn #45: all five review PROBE-G declaration shapes are honoured
+ok 591 burn #45: a weekly dry tank reroutes to a reserve
+ok 592 burn #44: tool-host outage retries same tank then reports infra
+ok 593 burn #44: default backoff is 5 then 10 seconds and recovery stays on the same tank
+ok 594 burn #44: zero retries reports infra without sleeping or marking dry
+ok 595 burn #44: ordinary task errors are not infrastructure failures
+ok 596 burn #44: real-shaped tool-host failure phrasings from the review corpus are recognized (P2-5)
+ok 597 burn #44: prose that merely mentions the tool host near an unrelated failure verb is not infra (P1-2 r2)
+ok 598 burn #44: a genuine task failure whose reply names the tool host in passing is not rerouted as infra (P1-2 r2)
+ok 599 burn #44: invalid retry policy fails before launching
+ok 600 burn #43: long multiline prompt is stored with only 120 characters previewed
+ok 601 burn #43: diagnostic tail does not repeat the engine's multiline prompt echo
+ok 602 burn #42: a finished task is not discarded because its OWN reply mentions a limit phrase
+ok 603 burn #42: --no-reroute also honours a fresh artifact over a limit phrase in the reply
+ok 604 burn #42/#45: a fresh artifact does not drop the reset phrase when the SAME reply also shows a limit (P2-2 r2)
+ok 605 burn #42/#45: a fresh artifact with a concurrent limit event leaves the tank marked dry, not cleared (P2-2 r2)
+ok 606 burn #45: a fresh artifact with a concurrent GENUINE limit phrased as "resets …" leaves an EXISTING marker untouched (P1-1 r5)
+ok 607 burn #42: a fresh artifact with NO limit in the reply still clears the dry marker (P2-2 r2 control)
+ok 608 burn #45: a successful codex burn that merely TALKS ABOUT the limit does not mark the tank dry (P2-2 r3, PROBE B)
+ok 609 burn #45: a fresh artifact with a concurrent GENUINE limit event leaves an EXISTING marker untouched, but writes none of its own (P2-2 r3)
+ok 610 burn #44: a tool-host phrase inside the engine's PROMPT ECHO does not trigger infra retries
+ok 611 burn #44: a tool-host phrase inside the engine's argv echo (raw -- form) does not trigger infra retries (P1-1 r2)
+ok 612 burn #44: raw -- form diagnostic tail does not repeat the engine's own argv echo (P1-1 r2)
+ok 613 _burn_redact_full: a needle at or above the minimum length redacts across a blank-line capture (P1-2 r5)
+ok 614 _burn_redact_full: a blank-line capture no longer fabricates a false infra match by fusing sentences (P1-2 r5, PROBE G3)
+ok 615 _burn_redact_full: perl failing to run is reported via a non-zero return, not a silent empty success (P3-1 r3)
+ok 616 burn #99 (P3-1 r3): when redaction itself fails, the fast-failure reason says so distinctly, not 'output redacted'
+ok 617 burn #44: an 8MB capture still classifies fast (P1-2 timing guard)
+ok 618 burn #44: an 8MB HEALTHY capture (no limit line at all) still classifies fast (P1-1 r3 timing guard)
+ok 619 burn #44: a capture with the redacted needle repeated thousands of times still classifies fast (P1-3 timing guard, round-5)
+ok 620 burn #44: a day-to-day '-C .' no longer merges sentences into a false infra match (P2-1 r3, PROBE G)
+ok 621 burn #44: a short raw-argv task string cannot shred a genuine limit line (P2-1 r3, PROBE F)
+ok 622 burn #42: a write landing just after engine exit still counts as success (P2-1 grace window)
+ok 623 burn #43: a stale prompt-log run directory is swept past the retention window (P2-4)
+ok 624 burn #43: a recent prompt-log run directory survives the sweep (P2-4)
+ok 625 burn #43/P3-3: a stale watch-github-* run directory is ALSO swept (same sweep, same policy)
+ok 626 burn #43: CLIKAE_BURN_LOG_RETENTION_DAYS=0 disables the sweep
+ok 627 burn #43: ~/.clikae/logs is created 0700 even when burn fails before the engine loop (P2-3 r2)
+ok 628 burn #60: default composed argv is byte-identical to explicit acceptEdits
+ok 629 burn #60: claude auto composes the selected permission mode
+ok 630 burn #60: codex auto degrades once on stderr with unchanged argv
+ok 631 burn #60: invalid or missing permission is refused with one usage line
+ok 632 burn #60 (production path): default composes acceptEdits exactly once
+ok 633 burn #60 (production path): --permission auto composes auto exactly once
+ok 634 burn #60: codex acceptEdits (explicit) maps without a warning and keeps default argv
+ok 635 burn #60: grok — both acceptEdits and auto degrade truthfully, argv unchanged
+ok 636 burn #60: agy — both acceptEdits and auto degrade once, argv unchanged apart from --log-file
+ok 637 burn #60: raw-argv --permission advisory fires before validate_name / any state work
+ok 638 burn #60: a duplicate engine permission flag after -- warns once, argv untouched
+ok 639 burn #60 P1-1 (round-2 review): cross-engine --to reroute does not leak claude's permission-mode capability onto codex
+ok 640 burn #66: non-git cwd refuses before creating any clikae state
+ok 641 burn #66: git cwd keeps generated argv byte-identical
+ok 642 burn #66: explicit opt-in adds skip-git-repo-check exactly once
+ok 643 burn #66: fast failure JSON reason uses trimmed stderr first line
+ok 644 burn #66: default artifact parent is checked before --fresh can delete it
+ok 645 burn #66: stderr reason is capped at 200 bytes even with engine rc zero
+ok 646 burn #66: stderr reason keeps legitimate consecutive spaces (P3-3)
+ok 647 burn #81: a prompt fragment echoed to stderr never reaches --json's reason (P3-2)
+ok 648 burn #66 round-1 P1-1: a cross-engine reroute INTO codex re-checks the git cwd
+ok 649 burn #66 round-1 P1-1 control: reroute into codex still proceeds when the cwd IS a git work tree
+ok 650 burn #66 round-1 P2-1: ANSI/control chars in stderr sanitize into valid JSON
+ok 651 burn #66 round-1 P2-2: 200-byte cap does not split a multibyte char under C locale
+ok 652 burn #66 round-1 P3-1: --codex-skip-git-check on a non-codex engine warns, does not fail
+ok 653 burn #66 round-1 P3-1 control: raw argv form also warns the flag has no effect
+ok 654 burn #66 round-1 P3-2: a nonexistent --add-dir says so, not 'not a git work tree'
+ok 655 burn (claude, --prompt): appends --disallowedTools Agent,Task and exports the bg-wait ceiling
+ok 656 burn (claude, raw -- -p): the guards apply to the power-user form too
+ok 657 burn (claude): an operator-supplied tools flag switches the argv guard off; a set ceiling is kept
+ok 658 burn (codex): the claude guards do not leak into another engine's argv
+ok 659 burn #81: stderr-only codex limit exits zero but reports dry and stores reset
+ok 660 burn #81: ordinary codex stderr preserves the no-artifact failure
+ok 661 burn #81: the vendor sentence QUOTED mid-transcript, run finishes with an artifact, is not dry (P2-2)
+ok 662 burn #81: the vendor sentence as the LAST line, no artifact, is still dry (P2-2 control)
+ok 663 burn #81 fix2: a limit line followed by a >20-line stack trace, no artifact, is dry — not a task failure (P1-1)
+ok 664 burn #81 fix2: a pre-existing dry marker survives an artifact-producing run whose SAME reply still shows a limit far from the tail (P1-1b)
+ok 665 burn #81 fix2: a fresh artifact with a non-zero engine exit does not clear a pre-existing marker (P1-1 rc-gate)
+ok 666 burn #81 fix2: a fresh artifact with rc==0 and no limit line still clears a pre-existing marker (P1-1 rc-gate control)
+ok 667 burn #99/P2-2 fix2: a stderr first line that IS the prompt does not empty reason — the real diagnostic on the next line survives
+ok 668 burn #99/P2-2 fix2: when every stderr line is placeholder or blank, reason falls back to a plain message — never empty or null
+ok 669 burn #84: committed work without artifact is reported and deduplicated in JSON
+ok 670 burn #84: clean unchanged repository leaves no block and an empty array
+ok 671 burn #84: non-git add-dir is skipped silently
+ok 672 burn #84: dry failure reports dirty work with no upstream and caps recent files
+ok 673 burn #84: timeout without artifact reports cwd work
+ok 674 burn #84: successful artifact leaves JSON array empty despite existing work
+ok 675 burn #84 P1: a corrupted .git/index never changes burn's exit code or --json shape
+ok 676 burn #84 P2-1: recent files are the newest ten by mtime, not directory order
+ok 677 burn #84 P2-2/P2-5: repos are capped at 25, newest-activity first, with a remainder line
+ok 678 burn #84 P2-2 (round-2 review): ahead>0 outranks file mtime in the 25-repo cap, and its push hint survives it
+ok 679 burn #84 P2-3: elapsed_s agrees across --json, the summary line, and status.json
+ok 680 burn #84 P2-4: an --add-dir that is a symlink to a directory of repos is still scanned
+ok 681 burn #84 P2-1 (round-2 review): a .git/HEAD FIFO cannot hang burn past its budget
+ok 682 burn #84 P2-3 (round-2 review): nested repos at any depth get their own row and hint; files attribute to the innermost repo
+ok 683 burn #84 P3-3: ahead>0 alone (known upstream, nothing else changed) qualifies
+ok 684 burn #84 P3-3: ahead with no known upstream, clean, no new files does not qualify
+ok 685 burn #84 P2-6: the left-behind scan is provably read-only — .git untouched, no hook fires
+ok 686 burn #84 P2-6 ruler sanity: without GIT_OPTIONAL_LOCKS, git status DOES touch .git/index
+ok 687 burn #84 P3-2: every ahead repo gets its own push hint, not just the first
+ok 688 burn #84 P3-5: a submodule's own dirty state and files are not double-counted into the superproject's
+ok 689 burn: the process-group probe's child never runs a direct caller's EXIT trap
+ok 690 burn: the process-group probe's child cannot swallow its stop signal
+ok 691 burn #84 P2-1 (round-5 review): the bound kills a forking child's whole process group
+ok 692 burn #84 P3-3 (round-5 review): a bounded call that finished in time never reports 124
+ok 693 burn #84 P3-3 (round-5 review): a bounded call that really overran still reports 124
+ok 694 burn #84 P2-1 (round-5 review): a never-returning file-list stat cannot hang burn
+ok 695 burn #84 P3-1 (round-5 review): a discovery find that hangs says discovery timed out, not budget exhausted
+ok 696 burn #84 P3-4 (round-5 review): a root repo already discovered survives the budget boundary
+ok 697 burn #84 P3-1 (round-6 review): _burn_lb_kill refuses every value that is not a signalable pid
+ok 698 burn #84 P3-1 (round-6 review): a real `_burn_lb_kill TERM 0` leaves its caller and its children alive
+ok 699 burn #84 P3-6 (round-6 review): the watchdog's mark is an unguessable mktemp path, and nothing is left behind
+ok 700 burn #84 P3-3 (round-6 review): the group KILL still fires when the direct child dies of TERM first
+ok 701 burn #84 P3-5 (round-6 review): a child killed from outside near the deadline reports its signal, not a timeout
+ok 702 burn #84 P3-2 (round-6 review): an interrupt during a bounded call stops the scan's own process group
+ok 703 burn #84 P3-4 (round-6 review): a write that outlives one repo's scan cannot land in the next repo's file list
+ok 704 burn #112 item 1: a wedged `git status` is reported as unanswered, not `dirty 0`
+ok 705 burn #112 item 1 control: a repo git could answer for reports git_timeout false and a dirty count

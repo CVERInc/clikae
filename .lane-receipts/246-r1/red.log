@@ -1,0 +1,60 @@
+1..9
+not ok 1 246 argument_only: a guard path argument does not make the audit executable ours
+# (from function `_review_unchanged' in file /tmp/clikae-r1-baseline.pcEWfD/tests/bats/cockpit-246.bats, line 14,
+#  in test file /tmp/clikae-r1-baseline.pcEWfD/tests/bats/cockpit-246.bats, line 23)
+#   `_review_unchanged' failed
+# /tmp/bats-run-TIIY6H/test/1/before.json /tmp/clikae-test.ikHKVy/.clikae/profiles/claude/A/settings.json differ: byte 2, line 1
+# Last output:
+# claude/A: cockpit guard removed (1 entry)
+# cockpit: off
+not ok 2 246 different_matcher: a deliberate Read matcher is preserved
+# (from function `_review_unchanged' in file /tmp/clikae-r1-baseline.pcEWfD/tests/bats/cockpit-246.bats, line 14,
+#  in test file /tmp/clikae-r1-baseline.pcEWfD/tests/bats/cockpit-246.bats, line 33)
+#   `_review_unchanged' failed
+# /tmp/bats-run-TIIY6H/test/2/before.json /tmp/clikae-test.hpPA0e/.clikae/profiles/claude/A/settings.json differ: byte 2, line 1
+# Last output:
+# claude/A: cockpit guard removed (1 entry)
+# cockpit: off
+not ok 3 246 mixed_group: only the legacy command is removed, retaining its sibling and matcher
+# (in test file /tmp/clikae-r1-baseline.pcEWfD/tests/bats/cockpit-246.bats, line 44)
+#   `cmp "$BATS_TEST_TMPDIR/expected.json" "$REVIEW_FILE"' failed
+# /tmp/bats-run-TIIY6H/test/3/expected.json /tmp/clikae-test.w3tun9/.clikae/profiles/claude/A/settings.json differ: byte 2, line 1
+# Last output:
+# claude/A: cockpit guard removed (1 entry)
+# cockpit: off
+not ok 4 246 nested_quotes: bash -c is preserved and reported with tank and command
+# (in test file /tmp/clikae-r1-baseline.pcEWfD/tests/bats/cockpit-246.bats, line 54)
+#   `[ "$status" -eq 1 ]' failed
+# Last output:
+# cockpit: off
+not ok 5 246 split_quotes: quoted fragments of the plain executable are removed
+# (in test file /tmp/clikae-r1-baseline.pcEWfD/tests/bats/cockpit-246.bats, line 71)
+#   `cmp "$BATS_TEST_TMPDIR/expected.json" "$REVIEW_FILE"' failed
+# /tmp/bats-run-TIIY6H/test/5/expected.json /tmp/clikae-test.JqF3EK/.clikae/profiles/claude/A/settings.json differ: byte 2, line 1
+# Last output:
+# cockpit: off
+not ok 6 246 trailing_space: a quoted plain executable with trailing whitespace is removed
+# (in test file /tmp/clikae-r1-baseline.pcEWfD/tests/bats/cockpit-246.bats, line 82)
+#   `cmp "$BATS_TEST_TMPDIR/expected.json" "$REVIEW_FILE"' failed
+# /tmp/bats-run-TIIY6H/test/6/expected.json /tmp/clikae-test.tgo2x3/.clikae/profiles/claude/A/settings.json differ: byte 2, line 1
+# Last output:
+# cockpit: off
+not ok 7 246 malformed and malformed_escaped: neither spelling establishes absence in broken JSON
+# (in test file /tmp/clikae-r1-baseline.pcEWfD/tests/bats/cockpit-246.bats, line 93)
+#   `[ "$status" -eq 1 ]' failed
+# Last output:
+# cockpit: off
+not ok 8 246 install and repair preserve argument-only, different-matcher and mixed-group user hooks
+# (in test file /tmp/clikae-r1-baseline.pcEWfD/tests/bats/cockpit-246.bats, line 112)
+#   `cmp "$BATS_TEST_TMPDIR/expected.json" "$BATS_TEST_TMPDIR/actual.json"' failed
+# /tmp/bats-run-TIIY6H/test/8/expected.json /tmp/bats-run-TIIY6H/test/8/actual.json differ: byte 69, line 6
+# Last output:
+# claude/A: cockpit guard installed
+not ok 9 246 entry shape: a user map of hooks is not the installer's hook array
+# (from function `_review_unchanged' in file /tmp/clikae-r1-baseline.pcEWfD/tests/bats/cockpit-246.bats, line 14,
+#  in test file /tmp/clikae-r1-baseline.pcEWfD/tests/bats/cockpit-246.bats, line 225)
+#   `_review_unchanged' failed
+# /tmp/bats-run-TIIY6H/test/9/before.json /tmp/clikae-test.K9fSI4/.clikae/profiles/claude/A/settings.json differ: byte 2, line 1
+# Last output:
+# claude/A: cockpit guard removed (1 entry)
+# cockpit: off

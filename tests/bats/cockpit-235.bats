@@ -74,7 +74,7 @@ _legacy_guard() {
   local f="$CLIKAE_HOME/profiles/claude/A/settings.json"
   cat > "$f" <<'JSON'
 {"hooks":{"PreToolUse":[
-  {"matcher":"Agent","hooks":[{"command":"\/example\/hooks\/cockpit-guard\u002esh"}]},
+  {"matcher":"Agent","hooks":[{"type":"command","command":"\/example\/hooks\/cockpit-guard\u002esh"}]},
   {"matcher":"Agent","hooks":[{"command":"/example/hooks/cockpit-guard.sh.backup"}]},
   {"matcher":"Agent","hooks":[{"command":"/example/not-hooks/cockpit-guard.sh"}]},
   {"matcher":"Agent","hooks":[{"command":"/example/hooks/other.sh"}]}],
