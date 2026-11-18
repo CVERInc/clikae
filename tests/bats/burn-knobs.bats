@@ -901,3 +901,101 @@ _FIGURE_SPACE=$'\xe2\x80\x87' # U+2007 figure space
   # The argv itself is passed on untouched.
   grep -qx -- "model_reasoning_effort${_NBSP}= \"high\"" "$L"
 }
+
+# ── 6. the same answer in every locale, on every C library ───────────────────
+# The test above was red on macOS only: the reader told "plain trimming" from
+# "had to be cleaned" with `[[:space:]]`, and whether a no-break space is in
+# that class is the C library's and the locale's call (macOS: yes; glibc: no,
+# but an em space is, in a UTF-8 locale). The reader now matches spelled-out
+# ASCII lists, so these run it under LC_ALL=C and under the UTF-8 locales and
+# expect one answer. A locale a host does not have falls back to C.
+
+_NNBSP=$'\xe2\x80\xaf'       # U+202F narrow no-break space
+_EM_SPACE=$'\xe2\x80\x83'    # U+2003 em space: [[:space:]] in glibc's UTF-8 locales
+_IDEO_SPACE=$'\xe3\x80\x80'  # U+3000 ideographic space: likewise
+_NEL=$'\xc2\x85'             # U+0085 next line: [[:cntrl:]] in a UTF-8 locale
+_KNOB_LOCALES="C POSIX C.UTF-8 en_US.UTF-8"
+
+# _in_locale <locale> <function of lib/adapters/codex.sh> <args...>, in a
+# child shell that starts in that locale.
+_in_locale() {
+  local loc="$1"; shift
+  LC_ALL="$loc" bash -c 'source "$CLIKAE_LIB/adapters/codex.sh" && "$@"' _ "$@" 2>/dev/null
+}
+
+@test "codex: the override key normaliser under LC_ALL=C drops every non-key byte, as in any other locale (#237)" {
+  local loc sp
+  for loc in $_KNOB_LOCALES; do
+    for sp in ' ' $'\t' "$_NBSP" "$_FIGURE_SPACE" "$_NNBSP" "$_EM_SPACE" "$_IDEO_SPACE" "$_NEL" '"' "'"; do
+      run _in_locale "$loc" _codex_override_key "${sp}model_reasoning_effort${sp}"
+      [ "$status" -eq 0 ]
+      [ "$output" = model_reasoning_effort ] || { echo "LC_ALL=$loc sp=[$sp] -> [$output]"; false; }
+      run _in_locale "$loc" _codex_override_key "${sp}${sp}model"
+      [ "$output" = model ] || { echo "LC_ALL=$loc sp=[$sp] -> [$output]"; false; }
+    done
+    # Only non-key characters go: another key stays another key.
+    run _in_locale "$loc" _codex_override_key "model_provider${_NBSP}"
+    [ "$output" = model_provider ]
+    run _in_locale "$loc" _codex_override_key "Model.x-9"
+    [ "$output" = Model.x-9 ]
+    # A letter outside ASCII is not a key character either, in any locale.
+    run _in_locale "$loc" _codex_override_key $'mod\xc3\xa9el'
+    [ "$output" = model ]
+  done
+}
+
+@test "codex: plain trimming is ASCII whitespace in every locale, and no other space is trimmed (#237)" {
+  local loc sp
+  for loc in $_KNOB_LOCALES; do
+    # Plain: space, tab, CR, LF round the key and the value. Readable.
+    run _in_locale "$loc" adapter_burn_knobs_from_args exec \
+      -c $' \tmodel_reasoning_effort\r = \t"high" \n' -c $'\tmodel = gpt-x ' 'do it'
+    [ "$output" = $'model=gpt-x\neffort=high' ] || { echo "LC_ALL=$loc -> [$output]"; false; }
+    # Not plain, whatever the C library classes it as: the key is still that
+    # setting, and its value is "cannot tell".
+    for sp in "$_NBSP" "$_FIGURE_SPACE" "$_NNBSP" "$_EM_SPACE" "$_IDEO_SPACE" "$_NEL"; do
+      run _in_locale "$loc" adapter_burn_knobs_from_args exec \
+        -c "model_reasoning_effort${sp}= \"high\"" -c "${sp}model=\"gpt-x\"" 'do it'
+      [ "$output" = $'model?\neffort?' ] || { echo "LC_ALL=$loc key sp=[$sp] -> [$output]"; false; }
+      # The same for the value: a string followed by such a space is not one
+      # this reader can vouch for.
+      run _in_locale "$loc" adapter_burn_knobs_from_args exec \
+        -c "model_reasoning_effort=\"high\"${sp}" -c "model=${sp}gpt-x" 'do it'
+      [ "$output" = $'model?\neffort?' ] || { echo "LC_ALL=$loc value sp=[$sp] -> [$output]"; false; }
+    done
+    # A control character is the ASCII ones, by list, in every locale.
+    run _in_locale "$loc" adapter_burn_knobs_from_args exec \
+      -m $'gpt\033x' -c $'model_reasoning_effort="hi\177gh"' 'do it'
+    [ "$output" = $'model?\neffort?' ] || { echo "LC_ALL=$loc cntrl -> [$output]"; false; }
+    run _in_locale "$loc" adapter_burn_knobs_from_args exec -m "gpt${_NEL}x" 'do it'
+    [ "$output" = "model=gpt${_NEL}x" ] || { echo "LC_ALL=$loc nel -> [$output]"; false; }
+  done
+}
+
+@test "codex raw argv: a key behind a space that is not plain is unknown in every locale, never a declared value (#237)" {
+  _codex_profiled
+  local loc sp
+  for loc in C C.UTF-8 en_US.UTF-8; do
+    for sp in "$_NBSP" "$_EM_SPACE"; do
+      rm -f "$L" "$A"
+      LC_ALL="$loc" _work_json --require-declared \
+        -- exec -c "model_reasoning_effort${sp}= \"high\"" 'do it'
+      [ "$status" -eq 1 ] || { echo "LC_ALL=$loc sp=[$sp] ran: $output"; false; }
+      [ "$(_json_field reason)" = "refused: unknown effort" ]
+      [ "$(_json_field effort)" = unknown ]
+      [ "$(_json_field effort_source)" = unknown ]
+      [ ! -e "$L" ]
+    done
+  done
+}
+
+@test "codex: the argv reader matches no named character class, which is the C library's to define (#237)" {
+  local body
+  body="$(sed -n '/^# The character sets this reader matches with/,/^# _codex_config_root /p' "$CLIKAE_LIB/adapters/codex.sh")"
+  # The section is the one meant: it holds the reader and its helpers.
+  [[ "$body" == *"adapter_burn_knobs_from_args() {"* ]] || false
+  [[ "$body" == *"_codex_override_key() {"* ]] || false
+  [[ "$body" == *"_codex_override_string() {"* ]] || false
+  run grep -nE '^[^#]*\[\[:[a-z]+:\]\]' <<<"$body"
+  [ "$status" -eq 1 ] || { echo "$output"; false; }
+}
