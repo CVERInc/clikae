@@ -155,7 +155,7 @@ source is one of:</p>
 </tr>
 <tr>
 <td><code>unknown</code></td>
-<td>the argv after <code>--</code> sets it, in a form burn cannot read with certainty (an escape in the value, a number, a key that is quoted or sits behind a no-break space). The value reads <code>&quot;unknown&quot;</code> too — never a guess</td>
+<td>the argv after <code>--</code> sets it, in a form burn cannot read with certainty (an escape in the value, a number, a key that is quoted or sits behind a no-break space), or a codex tank selects a profile whose layers do not lead to one value (below). The value reads <code>&quot;unknown&quot;</code> too — never a guess</td>
 </tr>
 </tbody>
 </table>
@@ -233,9 +233,30 @@ no-break space or inside quotes is still that setting: a duplicate of
 <code>--effort</code>, and never silently the profile's value. Its value is reported
 only when the key needed no more than plain trimming; otherwise it is
 <code>unknown</code>. The argv itself reaches the engine byte for byte.</p>
-<p>Not covered by this reading, so not reflected in the report: codex profile
-layering (<code>-p &lt;profile&gt;</code> and the <code>profile</code> key), clustered short options,
-and anything beyond the plain option forms in the claude and agy argv.</p>
+<p>A codex tank that selects a profile is reported with a value only when it is
+certain which one applies. A profile is selected by a root <code>profile = &quot;&lt;name&gt;&quot;</code>
+key in <code>config.toml</code>, or by <code>-p &lt;name&gt;</code>, <code>-p&lt;name&gt;</code>, <code>-p=&lt;name&gt;</code>,
+<code>--profile &lt;name&gt;</code> or <code>--profile=&lt;name&gt;</code> in the argv before a bare <code>--</code>. What
+<code>codex exec --help</code> documents is the option: it layers
+<code>&lt;name&gt;.config.toml</code>, next to <code>config.toml</code>, on top of it — so a model or
+effort that file sets is the one reported (still as <code>profile</code>), and one it
+leaves out comes from the root table. That help says nothing about the
+<code>profile</code> key, <code>[profiles.&lt;name&gt;]</code> tables, or which wins when the option and
+the key name different profiles, so no order is assumed between them: if any
+other selected layer — <code>[profiles.&lt;name&gt;]</code> for either name, or the key's
+<code>&lt;name&gt;.config.toml</code> — sets the value to something else, it is <code>unknown</code>. So
+the issue's case (root table one model, <code>profile = &quot;x&quot;</code>, <code>[profiles.x]</code>
+another) is <code>unknown</code>, and a selected profile that repeats the root table's
+value, or does not set it, is that value. Also <code>unknown</code>: a selected name
+that exists as neither a table nor a file, a name that cannot be read (the
+option given twice, a <code>-c profile=…</code> or <code>-c profiles.…</code> override, a name with
+a <code>/</code>), a layer file that is not valid TOML or carries profile settings of
+its own, and a value that is not a one-line string. The burn says which of
+these it was. <code>--model</code> / <code>--effort</code> are still reported as <code>flag</code>.</p>
+<p>Not covered by this reading, so not reflected in the report: clustered short
+options, <code>--ignore-user-config</code>, config layers outside the tank (system,
+project), and anything beyond the plain option forms in the claude and agy
+argv.</p>
 <p><strong><code>--require-declared</code></strong> refuses to start when the model or the effort is
 <code>undeclared</code> or <code>unknown</code>, and refuses a reroute hop onto a tank where it is
 (<code>reason: &quot;refused: undeclared effort&quot;</code>). Passing both flags always satisfies it.</p>
