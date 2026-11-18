@@ -291,144 +291,379 @@ adapter_burn_knobs_check() {
   return 0
 }
 
-# The options of `claude --help` (claude 2.1.326), by what each does with the
+# The options of `claude --help` (claude 2.1.326), each written as the help
+# writes it. What follows the names says what the option does with the
 # argument after it — which is what decides whether a later `--model` is an
-# option at all. Lists, each name between spaces:
-#   flag      takes no value
-#   value     `<x>` or `<x...>`: the next argument is its value whatever it
-#             looks like, `--` and `--model` included
-#   optional  `[x]`: the next argument is its value unless that one starts
-#             with `-` (--tmux is here for its documented `--tmux=classic`)
-#   variadic  `<x...>`: a value option that also takes the plain arguments
-#             after its first
-# The model and the effort have a long form only: `--model <model>` and
-# `--effort <level>`, each also written with `=`. There is no `-m`, and an
-# abbreviation is refused (`claude --vers`: "unknown option"). Short options
-# cluster (`claude -vh` prints the version), a value glued to the last.
-_CLAUDE_OPTS_FLAG=" --allow-dangerously-skip-permissions --ax-screen-reader --bg --background --bare --brief --chrome --continue --dangerously-skip-permissions --desktop --disable-slash-commands --exclude-dynamic-system-prompt-sections --fork-session --forward-subagent-text --help --ide --include-hook-events --include-partial-messages --no-chrome --no-session-persistence --print --replay-user-messages --restricted --safe-mode --strict-mcp-config --verbose --version "
-_CLAUDE_OPTS_VALUE=" --add-dir --agent --agents --allowedTools --allowed-tools --append-system-prompt --autocompact --betas --debug-file --disallowedTools --disallowed-tools --environment --fallback-model --file --input-format --json-schema --max-budget-usd --mcp-config --name --output-format --permission-mode --permission-prompts --plugin-dir --plugin-url --remote-control-session-name-prefix --session-id --setting-sources --settings --system-prompt --system-prompt-snapshot --tools "
-_CLAUDE_OPTS_OPTIONAL=" --cloud --debug --from-pr --prompt-suggestions --remote-control --resume --teleport --tmux --worktree "
-_CLAUDE_OPTS_VARIADIC=" --add-dir --allowedTools --allowed-tools --betas --disallowedTools --disallowed-tools --file --mcp-config --tools "
-# The first plain argument, when it is one of these, is a subcommand with
-# options of its own.
-_CLAUDE_COMMANDS=" agents attach auth auto-mode doctor gateway import install logs mcp plugin plugins purge respawn rm setup-token stop kill ultrareview update upgrade "
+# option at all:
+#   (nothing)  a flag: takes no value
+#   <x>        a value: the next argument is its value whatever it looks like,
+#              `--` and `--model` included
+#   <x...>     variadic: a value, and then every argument up to the next one
+#              that starts with `-`
+#   [x]        optional: the next argument is its value unless it starts with
+#              `-` (then the option has no value and that argument is read on
+#              its own — `--` after it is the terminator)
+# tests/bats/burn-knobs-argv.bats reads the installed `claude --help` and is
+# red when it lists an option that is missing here, or with another kind.
+_CLAUDE_HELP_OPTIONS='
+--add-dir <directories...>
+--agent <agent>
+--agents <json-or-file>
+--allow-dangerously-skip-permissions
+--allowedTools, --allowed-tools <tools...>
+--append-system-prompt <prompt>
+--autocompact <auto|tokens>
+--ax-screen-reader
+--bg, --background
+--bare
+--betas <betas...>
+--brief
+--chrome
+--cloud [description|session_id|url]
+-c, --continue
+--dangerously-skip-permissions
+-d, --debug [filter]
+--debug-file <path>
+--desktop
+--disable-slash-commands
+--disallowedTools, --disallowed-tools <tools...>
+--effort <level>
+--environment <environment_id>
+--exclude-dynamic-system-prompt-sections
+--fallback-model <model>
+--file <specs...>
+--fork-session
+--forward-subagent-text
+--from-pr [value]
+-h, --help
+--ide
+--include-hook-events
+--include-partial-messages
+--input-format <format>
+--json-schema <schema>
+--max-budget-usd <amount>
+--mcp-config <configs...>
+--model <model>
+-n, --name <name>
+--no-chrome
+--no-session-persistence
+--output-format <format>
+--permission-mode <mode>
+--permission-prompts <target>
+--plugin-dir <path>
+--plugin-url <url>
+-p, --print
+--prompt-suggestions [value]
+--remote-control [name]
+--remote-control-session-name-prefix <prefix>
+--replay-user-messages
+--restricted
+-r, --resume [value]
+--safe-mode
+--session-id <uuid>
+--setting-sources <sources>
+--settings <file-or-json>
+--strict-mcp-config
+--system-prompt <prompt>
+--system-prompt-snapshot <on|off>
+--teleport [session]
+--tmux
+--tools <tools...>
+--verbose
+-v, --version
+-w, --worktree [name]
+'
+# The options claude 2.1.326 accepts and its help does not list (`claude
+# --max-turns 1 --bogus` complains about --bogus only). They are declared in
+# the program next to the listed ones, in the same notation; the same test
+# file reads those declarations out of the installed claude and is red when
+# one is missing here.
+_CLAUDE_UNLISTED_OPTIONS='
+-d2e, --debug-to-stderr
+--advisor <model>
+--agent-color <color>
+--agent-id <id>
+--agent-name <name>
+--agent-type <type>
+--agents-view-if-allowed
+--allow-other-models
+--append-subagent-system-prompt <prompt>
+--append-subagent-system-prompt-file <file>
+--append-system-prompt-file <file>
+--attach-serve <session_id>
+--await-claim
+--await-initialize
+--channels <servers...>
+--client-data-url <url>
+--correlation-id <id>
+--dangerously-load-development-channels <servers...>
+--deep-link-cwd-b64 <b64>
+--deep-link-last-fetch <ms>
+--deep-link-origin
+--deep-link-repo <slug>
+--enable-auth-status
+--enable-auto-mode
+--fast-mode <on|off>
+--forward-home-settings <true|false>
+--host-auth-is-org-sign-in
+--include-unsupported-models
+--inherit-permission-mode <mode>
+--init
+--init-only
+--lead-verify-key <time.key>
+--maintenance
+--managed-settings <json>
+--managed-settings-in-initialize
+--max-thinking-tokens <tokens>
+--max-turns <turns>
+--messaging-socket-path <path>
+--on-branch <branch>
+--parent-session-id <id>
+--permission-prompt-tool <tool>
+--plan-mode-instructions <instructions>
+--plan-mode-required
+--plugin-dir-no-mcp <path>
+--pool <pool_id>
+--prefill <text>
+--prefill-b64 <b64>
+--proactivity <level>
+--project-config-root <dir>
+--rc [name]
+--ref <ref>
+--remote [description|session_id|url]
+--reply-on-resume
+--resume-drops-turn <message id>
+--resume-session-at <message id>
+--rewind-files <user-message-id>
+--runner-declares <names>
+--sdk-url <url>
+--session-began-as-copy <value>
+--session-mirror
+--system-prompt-file <file>
+--task-budget <tokens>
+--team-name <name>
+--teammate-mode <mode>
+--thinking <mode>
+--thinking-display <display>
+--watch-artifact <artifact>
+--watch-artifact-no-autoreact <artifact>
+--workload <tag>
+'
+# The first plain argument that is not an option's value, when it is one of
+# these, is a subcommand: claude reads no option of its own after it. The
+# first line is what `claude --help` lists, the second the ones it does not.
+_CLAUDE_COMMANDS=" agents attach auth auto-mode doctor gateway import install logs mcp plugin plugins purge respawn rm setup-token stop kill ultrareview update upgrade \
+edit-hook import-conversations project rc remote-control rollback sandbox workspace-trust worktree-hook "
 # ASCII control characters, by list: a named class is the C library's and the
 # locale's to define (see lib/adapters/codex.sh).
 _CLAUDE_CNTRL=$'[\001\002\003\004\005\006\007\010\011\012\013\014\015\016\017\020\021\022\023\024\025\026\027\030\031\032\033\034\035\036\037\177]'
 
-# _claude_opt_in <list> <word>: is <word> one of the names in <list>?
-_claude_opt_in() {
-  case "$2" in ''|*' '*) return 1 ;; esac
-  [[ "$1" == *" $2 "* ]]
+# The two lists above, by kind — every name, short ones included, between
+# spaces. A variadic option is in _CLAUDE_OPTS_VALUE too. Filled on first use.
+_CLAUDE_OPTS_FLAG="" _CLAUDE_OPTS_VALUE="" _CLAUDE_OPTS_OPTIONAL="" _CLAUDE_OPTS_VARIADIC=""
+
+_claude_opts_load() {
+  [ -z "$_CLAUDE_OPTS_FLAG" ] || return 0
+  local line names n kind f=" " v=" " o=" " r=" " IFS=$' \t\n'
+  while IFS= read -r line; do
+    [ -n "$line" ] || continue
+    case "$line" in
+      *' <'*'...>') kind=r ;;
+      *' <'*)       kind=v ;;
+      *' ['*)       kind=o ;;
+      *)            kind=f ;;
+    esac
+    names="${line%% [<[]*}"
+    for n in ${names//,/}; do
+      case "$kind" in
+        f) f="$f$n " ;;
+        v) v="$v$n " ;;
+        r) v="$v$n "; r="$r$n " ;;
+        o) o="$o$n " ;;
+      esac
+    done
+  done <<EOF
+$_CLAUDE_HELP_OPTIONS
+$_CLAUDE_UNLISTED_OPTIONS
+EOF
+  _CLAUDE_OPTS_FLAG="$f"; _CLAUDE_OPTS_VALUE="$v"; _CLAUDE_OPTS_OPTIONAL="$o"; _CLAUDE_OPTS_VARIADIC="$r"
 }
 
-# _claude_knob_value <model|effort> <value> <separate:0|1> -> `=<value>` when
-# that is certainly what claude gets, else `?`. A separate value that starts
-# with `-` is taken by claude as the value; it is reported as "cannot tell"
-# because it is far more likely a slip than a name. An effort is one of the
-# levels the help lists, or it is not known what runs.
+# _claude_opt_kind <word> -> _claude_kind: flag | value | variadic | optional,
+# or empty when <word> is not the name of an option claude has.
+_claude_opt_kind() {
+  _claude_kind=""
+  case "$1" in ''|*' '*) return 0 ;; esac
+  _claude_opts_load
+  if   [[ "$_CLAUDE_OPTS_FLAG" == *" $1 "* ]];     then _claude_kind=flag
+  elif [[ "$_CLAUDE_OPTS_VARIADIC" == *" $1 "* ]]; then _claude_kind=variadic
+  elif [[ "$_CLAUDE_OPTS_VALUE" == *" $1 "* ]];    then _claude_kind=value
+  elif [[ "$_CLAUDE_OPTS_OPTIONAL" == *" $1 "* ]]; then _claude_kind=optional
+  fi
+  return 0
+}
+
+# _claude_knob_value <model|effort> <value> <separate:0|1> -> _claude_value:
+# `=<value>` when that is certainly what claude gets, else `?`. A separate
+# value that starts with `-` is taken by claude as the value; it is reported
+# as "cannot tell" because it is far more likely a slip than a name. An effort
+# is one of the levels the help lists, or it is not known what runs.
 _claude_knob_value() {
   local LC_ALL=C v="$2"
-  case "$v" in ''|*$_CLAUDE_CNTRL*) printf '?'; return 0 ;; esac
-  if [ "$3" -eq 1 ]; then case "$v" in -*) printf '?'; return 0 ;; esac; fi
+  _claude_value="?"
+  case "$v" in ''|*$_CLAUDE_CNTRL*) return 0 ;; esac
+  if [ "$3" -eq 1 ]; then case "$v" in -*) return 0 ;; esac; fi
   if [ "$1" = effort ]; then
-    case "$v" in low|medium|high|xhigh|max) ;; *) printf '?'; return 0 ;; esac
+    case "$v" in low|medium|high|xhigh|max) ;; *) return 0 ;; esac
   fi
-  printf '=%s' "$v"
+  _claude_value="=$v"
 }
 
-# What the argv names, read with the option syntax above (#240) — not a second
-# parser of everything claude does, only enough to know whether a `--model` /
-# `--effort` in it is an option, and which value it carries:
-#   · `--` ends the options — unless it stands where an option takes its value
-#   · an option that takes a value takes the next argument, so
-#     `--system-prompt --model x` names no model
-#   · a cluster of short options is read letter by letter
-#   · a knob given twice with two different values is "cannot tell": the help
-#     does not say which wins
-#   · after anything this cannot place — an option or a short letter the help
-#     does not list, a subcommand, an optional-value option right before `--`
-#     — a later `--model` / `--effort` is "cannot tell", up to a `--` that is
-#     certainly the terminator
+# _claude_read_argv <guesses> <argv...> — one reading of the argv, by the
+# rules claude's own option parser applies (#240, #242), in its order:
+#   · `--`, read where an option could stand, ends the options. Where an
+#     option takes its value it is the value: `--system-prompt -- --model x`
+#     names a model, `--debug -- --model x` does not
+#   · a variadic option takes every argument up to the next that starts
+#     with `-`
+#   · an argument that is an option's name is that option, and takes the next
+#     argument by its kind (see the lists above)
+#   · a cluster of short options is read letter by letter: a letter that
+#     takes a value takes the rest of the cluster, one that takes none leaves
+#     the rest to be read as `-<rest>`
+#   · `--name=value` is one argument
+#   · the first plain argument that no option took, when it names a
+#     subcommand, ends claude's own options. What follows is the subcommand's;
+#     a `--model` / `--effort` there is "cannot tell"
+# The model and the effort have a long form only, `--model <model>` and
+# `--effort <level>`, each also written with `=`: there is no `-m`, and an
+# abbreviation is refused (`claude --vers`: "unknown option"). A knob given
+# twice with two different values is "cannot tell".
+#
+# An option that is in neither list cannot be placed: claude 2.1.326 refuses
+# it, a later claude may have it, as a flag or with a value. <guesses> says
+# what to take each such option for, one letter per option in the order met:
+# F a flag, R a value, V variadic (an optional value reads as F or as R, by
+# what follows). When the letters run out the reading stops and
+# _claude_fork says how many guesses the option it stopped at has (3; 2 for a
+# letter in a cluster with more after it — the rest is its value or is not).
+# Result in _claude_m / _claude_e: empty, `?` or `=<value>`.
+_claude_read_argv() {
+  local guesses="$1" a v knob used=0 variadic=0 operand=0
+  shift
+  _claude_m=""; _claude_e=""; _claude_fork=0
+  while [ "$#" -gt 0 ]; do
+    a="$1"; shift
+    [ "$a" != "--" ] || break
+    case "$a" in
+      -?*) ;;
+      *)
+        # A plain argument (a lone `-` included): a variadic option's value,
+        # a subcommand, or the prompt.
+        [ "$variadic" -eq 0 ] || continue
+        if [ "$operand" -eq 0 ] && [[ "$a" != *' '* ]] && [[ "$_CLAUDE_COMMANDS" == *" $a "* ]]; then
+          for a in "$@"; do
+            case "$a" in
+              --model|--model=*)   _claude_m="?" ;;
+              --effort|--effort=*) _claude_e="?" ;;
+            esac
+          done
+          return 0
+        fi
+        operand=1
+        continue ;;
+    esac
+    variadic=0
+    knob=""
+    _claude_opt_kind "$a"
+    case "$_claude_kind" in
+      flag) ;;
+      value|variadic)
+        case "$a" in --model|--effort) knob="${a#--}"; v="?" ;; esac
+        if [ "$#" -ge 1 ]; then
+          if [ -n "$knob" ]; then _claude_knob_value "$knob" "$1" 1; v="$_claude_value"; fi
+          shift
+        fi
+        [ "$_claude_kind" != variadic ] || variadic=1 ;;
+      optional)
+        if [ "$#" -ge 1 ]; then case "$1" in -?*) ;; *) shift ;; esac; fi ;;
+      *)
+        case "$a" in
+          --model=*|--effort=*)
+            knob="${a%%=*}"; knob="${knob#--}"
+            _claude_knob_value "$knob" "${a#*=}" 0; v="$_claude_value" ;;
+          --*=*) ;;               # one argument, whichever option it is
+          --*|-?)
+            case "${guesses:$used:1}" in
+              '') _claude_fork=3; return 0 ;;
+              R)  [ "$#" -lt 1 ] || shift ;;
+              V)  variadic=1 ;;
+            esac
+            used=$((used + 1)) ;;
+          *)
+            # A cluster: its first letter decides.
+            _claude_opt_kind "-${a:1:1}"
+            case "$_claude_kind" in
+              flag) set -- "-${a:2}" "$@" ;;
+              '')
+                case "${guesses:$used:1}" in
+                  '') _claude_fork=2; return 0 ;;
+                  F)  set -- "-${a:2}" "$@" ;;
+                esac
+                used=$((used + 1)) ;;
+            esac ;;
+        esac ;;
+    esac
+    case "$knob" in
+      model)  case "$_claude_m" in ''|"$v") _claude_m="$v" ;; *) _claude_m="?" ;; esac ;;
+      effort) case "$_claude_e" in ''|"$v") _claude_e="$v" ;; *) _claude_e="?" ;; esac ;;
+    esac
+  done
+  return 0
+}
+
+# What the argv names. With every option known there is one reading
+# (_claude_read_argv), and its answer is certain. With an option claude's
+# lists do not have, the argv is read once per way that option could be
+# taken, and a knob is reported only as far as every reading agrees:
+#   · the same value in all of them: that value
+#   · no model in any of them: none — text that every reading leaves after
+#     the terminator, or as some option's value, names nothing
+#   · anything else: "cannot tell". The declared value is not reported in its
+#     place: one of the readings is of a model that would outrank it
+# With more than four such options the readings are not all made: any
+# argument that looks like the knob at all is "cannot tell".
 # Out comes `model=<v>` / `effort=<v>`, or `model?` / `effort?` for one that
 # is set but cannot be read with certainty. `effort-outranked` stands for an
 # effort the argv sets while CLAUDE_CODE_EFFORT_LEVEL is set: the variable is
 # what runs here, but the argument is still in the argv. Not read: a model or
 # effort inside `--settings <file-or-json>`. The argv itself is never touched.
 adapter_burn_knobs_from_args() {
-  local LC_ALL=C a v knob rest ch m="" e=""
-  # unsure: the argv can no longer be placed with certainty. fresh: the
-  # argument that made it so was the previous one, so a `--` here may be its
-  # value. operand: a plain argument that is certainly not an option's value
-  # was seen. soft: how many following plain arguments may be option values
-  # (1 after an optional-value option, -1 = all of them after a variadic one).
-  local unsure=0 fresh=0 operand=0 soft=0
-  while [ "$#" -gt 0 ]; do
-    a="$1"; shift
-    if [ "$unsure" -eq 1 ]; then
-      case "$a" in
-        --) [ "$fresh" -eq 1 ] || break ;;
-        --model|--model=*)   m="?" ;;
-        --effort|--effort=*) e="?" ;;
-      esac
-      fresh=0
-      continue
+  local LC_ALL=C a m="" e="" g todo="." seen=0 readings=0
+  _claude_opts_load
+  while [ -n "$todo" ]; do
+    g="${todo%% *}"
+    if [ "$g" = "$todo" ]; then todo=""; else todo="${todo#* }"; fi
+    readings=$((readings + 1))
+    if [ "$readings" -gt 121 ]; then
+      m=""; e=""
+      for a in "$@"; do
+        case "$a" in *-model*) m="?" ;; esac
+        case "$a" in *-effort*) e="?" ;; esac
+      done
+      break
     fi
-    knob=""
-    case "$a" in
-      --) break ;;
-      --model|--effort)
-        knob="${a#--}"
-        if [ "$#" -ge 1 ]; then v="$(_claude_knob_value "$knob" "$1" 1)"; shift; else v="?"; fi
-        soft=0 ;;
-      --model=*|--effort=*)
-        knob="${a%%=*}"; knob="${knob#--}"
-        v="$(_claude_knob_value "$knob" "${a#*=}" 0)"
-        soft=0 ;;
-      --*=*) soft=0 ;;          # one argument, whichever option it is
-      --*)
-        soft=0
-        if _claude_opt_in "$_CLAUDE_OPTS_VALUE" "$a"; then
-          [ "$#" -lt 1 ] || shift
-          ! _claude_opt_in "$_CLAUDE_OPTS_VARIADIC" "$a" || soft=-1
-        elif _claude_opt_in "$_CLAUDE_OPTS_OPTIONAL" "$a"; then
-          soft=1
-          if [ "${1:-}" = "--" ]; then unsure=1; fresh=1; fi
-        elif ! _claude_opt_in "$_CLAUDE_OPTS_FLAG" "$a"; then
-          unsure=1; fresh=1
-        fi ;;
-      -?*)
-        soft=0
-        rest="${a#-}"
-        while [ -n "$rest" ]; do
-          ch="${rest:0:1}"; rest="${rest:1}"
-          case "$ch" in
-            c|h|p|v) ;;                                   # no value
-            n) [ -n "$rest" ] || [ "$#" -lt 1 ] || shift  # -n <name>
-               rest="" ;;
-            d|r|w)                                        # optional value
-               if [ -z "$rest" ]; then
-                 soft=1
-                 if [ "${1:-}" = "--" ]; then unsure=1; fresh=1; fi
-               fi
-               rest="" ;;
-            *) unsure=1; fresh=1; rest="" ;;
-          esac
-        done ;;
-      *)
-        # A plain argument (a lone `-` included): the prompt, a subcommand, or
-        # the value of the optional/variadic option before it.
-        if [ "$operand" -eq 0 ] && _claude_opt_in "$_CLAUDE_COMMANDS" "$a"; then
-          unsure=1; fresh=0
-        elif [ "$soft" -eq 0 ]; then
-          operand=1
-        fi
-        [ "$soft" -le 0 ] || soft=0 ;;
+    _claude_read_argv "${g#.}" "$@"
+    case "$_claude_fork" in
+      3) todo="${g}F ${g}R ${g}V${todo:+ $todo}"; continue ;;
+      2) todo="${g}F ${g}R${todo:+ $todo}"; continue ;;
     esac
-    case "$knob" in
-      model)  case "$m" in ''|"$v") m="$v" ;; *) m="?" ;; esac ;;
-      effort) case "$e" in ''|"$v") e="$v" ;; *) e="?" ;; esac ;;
-    esac
+    if [ "$seen" -eq 0 ]; then
+      m="$_claude_m"; e="$_claude_e"; seen=1
+    else
+      [ "$m" = "$_claude_m" ] || m="?"
+      [ "$e" = "$_claude_e" ] || e="?"
+    fi
   done
   case "$m" in '') ;; '?') printf 'model?\n' ;; *) printf 'model=%s\n' "${m#=}" ;; esac
   case "$e" in

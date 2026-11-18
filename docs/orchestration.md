@@ -197,11 +197,21 @@ The claude and agy argv are read with each engine's own option syntax too,
 taken from its `--help` (claude 2.1.326, agy 1.5.9):
 
 - **claude**: `--model <m>` / `--model=<m>` and `--effort <e>` / `--effort=<e>`.
-  There is no short form and no abbreviation. Reading stops at a bare `--`.
+  There is no short form and no abbreviation. Reading stops at a bare `--`
+  that stands where an option could.
   An option that takes a value takes the next argument whatever it looks
-  like, so `--system-prompt --model x` names no model. Short options cluster
+  like, so `--system-prompt --model x` names no model, and
+  `--system-prompt -- --model x` names one. An option with an optional value
+  (`--debug [filter]`, `-r [value]`) never takes an argument that starts with
+  `-`, so `--debug -- --model` is a prompt. A list option
+  (`--add-dir <directories...>`) takes every argument up to the next one that
+  starts with `-`. Short options cluster
   (`-pc`), with a value glued to the last (`-nNAME`); a cluster is read
-  letter by letter.
+  letter by letter. The first plain argument that no option took, when it
+  names a claude subcommand, ends claude's own options; `mcp` in
+  `--add-dir lib mcp` or `-r mcp` is a value, not a subcommand. The reader
+  has every option the installed claude declares, including the ones
+  `--help` does not list (`--max-turns`, `--permission-prompt-tool`, …).
 - **agy**: `--model` / `-model` and `--effort` / `-effort`, the value as the
   next argument or after `=`. There is no short form and no clustering.
   Reading stops at a bare `--` and at the first argument that is not a flag.
@@ -211,13 +221,15 @@ taken from its `--help` (claude 2.1.326, agy 1.5.9):
 For both, a model or effort is `unknown` rather than guessed when: it is
 given twice with different values; its value is empty, holds a control
 character, or is a separate argument starting with `-`; an effort is not one
-of the levels the help lists; or it comes after something the reader cannot
-place — an option the help does not list (for agy that includes `-m`, and
-`--remote-agent` / `--remote-control`, whose kind the help does not show), a
-letter in a cluster that is not a claude short option, a claude subcommand,
-or a claude option with an optional value directly before `--`. An option the
-installed engine has but that help does not list has the same effect: write
-the model with `--model` / `--effort` to burn instead.
+of the levels the help lists; it comes after a claude subcommand; or its
+reading depends on an option the reader does not have (for agy that includes
+`-m`; for claude, a letter in a cluster that is not a short option). Such an
+option may be a flag or may take the next argument, so the arguments are read
+each way: a model or effort that every reading gives is reported, one that no
+reading gives is not there (`--frobnicate y -- --model=x` names none), and
+anything else is `unknown` — the profile's value is never reported in its
+place. An option a newer engine adds has that effect until the reader learns
+it: write the model with `--model` / `--effort` to burn instead.
 
 An effort in the arguments after `--`, like a model there, is refused with a
 `--to` that names another engine

@@ -66,12 +66,14 @@
 _BURN_KNOBS_AGY_EFFORTS="low medium high xhigh max"
 
 # The flags `agy --help` lists (agy 1.5.9), by whether one takes the argument
-# after it. The help does not say; each was asked — `agy --<flag>` as the last
-# argument answers "flag needs an argument" for the first list and not for the
-# second. --remote-agent and --remote-control are in neither: asking would
-# have opened a connection, so their kind is not known here.
-_BURN_KNOBS_AGY_VALUE=" add-dir agent conversation i input-format json-schema log-file mode output-format p print print-timeout project prompt prompt-interactive settings "
-_BURN_KNOBS_AGY_BOOL=" c continue dangerously-skip-permissions disable-slash-commands new-project sandbox "
+# after it. The help does not say; each was asked with two flags agy does not
+# have after it — `agy --<flag> --no-such-a --no-such-b`. agy stops there
+# without starting anything and names the ones it does not know: only the
+# second for the first list (the first was taken as the value), both for the
+# second list. tests/bats/burn-knobs-argv.bats reads the installed
+# `agy --help` and is red when it lists a flag that is in neither.
+_BURN_KNOBS_AGY_VALUE=" add-dir agent conversation effort i input-format json-schema log-file mode model output-format p print print-timeout project prompt prompt-interactive settings "
+_BURN_KNOBS_AGY_BOOL=" c continue dangerously-skip-permissions disable-slash-commands new-project remote-agent remote-control sandbox "
 # ASCII control characters, by list: a named class is the C library's and the
 # locale's to define (see lib/adapters/codex.sh).
 _BURN_KNOBS_CNTRL=$'[\001\002\003\004\005\006\007\010\011\012\013\014\015\016\017\020\021\022\023\024\025\026\027\030\031\032\033\034\035\036\037\177]'
@@ -95,8 +97,8 @@ _burn_knobs_agy_value() {
   printf '=%s' "$v"
 }
 
-# _burn_knobs_agy_from_args <argv...> — agy's reader (#240), with the syntax
-# agy 1.5.9 shows when asked:
+# _burn_knobs_agy_read <guesses> <argv...> — one reading of the argv (#240,
+# #242), with the syntax agy 1.5.9 shows when asked:
 #   · a flag is `-name` or `--name`, its value the next argument or after `=`
 #     (`agy -version` answers as `--version` does)
 #   · the model is `model` and the effort `effort` in those spellings; there
@@ -104,34 +106,29 @@ _burn_knobs_agy_value() {
 #     (`-pc`: the same)
 #   · a flag that takes a value takes the next argument whatever it looks
 #     like, `--` included (`agy --model -- --bogus` complains about --bogus)
-#   · `--`, or the first argument that is not a flag, ends the flags
+#   · no flag takes its value optionally, and none takes more than one
+#   · `--`, or the first argument that is not a flag, ends the flags: a
+#     subcommand is such an argument, so nothing after it is read
 #   · a knob given twice with two different values is "cannot tell"
-#   · after a flag this cannot place — one the help does not list, or one of
-#     the two whose kind is not known — a later model or effort is "cannot
-#     tell". `-m` is read as that: clikae took it for agy's model flag before,
-#     and whoever writes it means one.
-# Same output as an adapter's adapter_burn_knobs_from_args.
-_burn_knobs_agy_from_args() {
-  local LC_ALL=C a name key v knob has_eq m="" e=""
-  # unsure / fresh: as in claude's reader — the argv can no longer be placed
-  # with certainty / the argument that made it so was the previous one.
-  local unsure=0 fresh=0
+# A flag that is in neither list cannot be placed: agy 1.5.9 refuses it, a
+# later agy may have it, with a value or without. <guesses> says what to take
+# each such flag for, one letter per flag in the order met: B takes no value,
+# V takes the next argument. When the letters run out the reading stops with
+# _burn_knobs_agy_fork=1. `-m` is such a flag, and names a model whatever
+# else is true: clikae took it for agy's model flag before, and whoever
+# writes it means one. Result in _burn_knobs_agy_m / _burn_knobs_agy_e:
+# empty, `?` or `=<value>`.
+_burn_knobs_agy_read() {
+  local guesses="$1" a name key v knob has_eq used=0
+  shift
+  _burn_knobs_agy_m=""; _burn_knobs_agy_e=""; _burn_knobs_agy_fork=0
   while [ "$#" -gt 0 ]; do
     a="$1"; shift
-    case "$a" in
-      --) [ "$unsure" -eq 1 ] && [ "$fresh" -eq 1 ] || break; fresh=0; continue ;;
-      -?*) ;;
-      *)  [ "$unsure" -eq 1 ] && [ "$fresh" -eq 1 ] || break; fresh=0; continue ;;
-    esac
+    case "$a" in --) break ;; -?*) ;; *) break ;; esac
     name="${a#-}"; name="${name#-}"
     case "$name" in ''|-*|=*) break ;; esac      # not a flag agy can parse
     key="${name%%=*}"; has_eq=0
     case "$name" in *=*) has_eq=1 ;; esac
-    if [ "$unsure" -eq 1 ]; then
-      case "$key" in model|m) m="?" ;; effort) e="?" ;; esac
-      fresh=0
-      continue
-    fi
     knob=""
     case "$key" in
       model|effort)
@@ -139,18 +136,61 @@ _burn_knobs_agy_from_args() {
         if [ "$has_eq" -eq 1 ]; then v="$(_burn_knobs_agy_value "$knob" "${name#*=}" 0)"
         elif [ "$#" -ge 1 ]; then v="$(_burn_knobs_agy_value "$knob" "$1" 1)"; shift
         else v="?"; fi ;;
-      m) m="?"
-         if [ "$has_eq" -eq 0 ]; then unsure=1; fresh=1; fi ;;
       *) if [[ "$key" != *' '* ]] && [[ "$_BURN_KNOBS_AGY_VALUE" == *" $key "* ]]; then
            [ "$has_eq" -eq 1 ] || [ "$#" -lt 1 ] || shift
          elif [[ "$key" == *' '* ]] || [[ "$_BURN_KNOBS_AGY_BOOL" != *" $key "* ]]; then
-           if [ "$has_eq" -eq 0 ]; then unsure=1; fresh=1; fi
+           [ "$key" != m ] || _burn_knobs_agy_m="?"
+           if [ "$has_eq" -eq 0 ]; then
+             case "${guesses:$used:1}" in
+               '') _burn_knobs_agy_fork=1; return 0 ;;
+               V)  [ "$#" -lt 1 ] || shift ;;
+             esac
+             used=$((used + 1))
+           fi
          fi ;;
     esac
     case "$knob" in
-      model)  case "$m" in ''|"$v") m="$v" ;; *) m="?" ;; esac ;;
-      effort) case "$e" in ''|"$v") e="$v" ;; *) e="?" ;; esac ;;
+      model)  case "$_burn_knobs_agy_m" in ''|"$v") _burn_knobs_agy_m="$v" ;; *) _burn_knobs_agy_m="?" ;; esac ;;
+      effort) case "$_burn_knobs_agy_e" in ''|"$v") _burn_knobs_agy_e="$v" ;; *) _burn_knobs_agy_e="?" ;; esac ;;
     esac
+  done
+  return 0
+}
+
+# _burn_knobs_agy_from_args <argv...> — agy's reader. With every flag known
+# there is one reading (_burn_knobs_agy_read), and its answer is certain. With
+# a flag agy's lists do not have, the argv is read once per way that flag
+# could be taken, and a knob is reported only as far as every reading agrees:
+# the same value in all of them is that value, none in any of them is none,
+# anything else is "cannot tell" — never the declared value in its place.
+# With more than five such flags the readings are not all made: any argument
+# that looks like the knob at all is "cannot tell".
+# Same output as an adapter's adapter_burn_knobs_from_args.
+_burn_knobs_agy_from_args() {
+  local LC_ALL=C a m="" e="" g todo="." seen=0 readings=0
+  while [ -n "$todo" ]; do
+    g="${todo%% *}"
+    if [ "$g" = "$todo" ]; then todo=""; else todo="${todo#* }"; fi
+    readings=$((readings + 1))
+    if [ "$readings" -gt 63 ]; then
+      m=""; e=""
+      for a in "$@"; do
+        case "$a" in *-model*|-m|-m=*|--m|--m=*) m="?" ;; esac
+        case "$a" in *-effort*) e="?" ;; esac
+      done
+      break
+    fi
+    _burn_knobs_agy_read "${g#.}" "$@"
+    if [ "$_burn_knobs_agy_fork" -eq 1 ]; then
+      todo="${g}B ${g}V${todo:+ $todo}"
+      continue
+    fi
+    if [ "$seen" -eq 0 ]; then
+      m="$_burn_knobs_agy_m"; e="$_burn_knobs_agy_e"; seen=1
+    else
+      [ "$m" = "$_burn_knobs_agy_m" ] || m="?"
+      [ "$e" = "$_burn_knobs_agy_e" ] || e="?"
+    fi
   done
   case "$m" in '') ;; '?') printf 'model?\n' ;; *) printf 'model=%s\n' "${m#=}" ;; esac
   case "$e" in '') ;; '?') printf 'effort?\n' ;; *) printf 'effort=%s\n' "${e#=}" ;; esac

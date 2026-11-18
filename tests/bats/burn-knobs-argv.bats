@@ -8,9 +8,17 @@
 #      effort and no other; what cannot be read with certainty is `unknown`;
 #   3. a knob named to burn and again after `--` is refused;
 #   4. an effort after `--` is refused with a cross-engine --to, as a model is;
-#   5. nothing on these paths depends on the locale.
+#   5. nothing on these paths depends on the locale;
+#   6. (#242) the claude reader applies the rules of claude's own option
+#      parser — a value option takes the next argument even when it is `--`,
+#      an optional value is never an argument that starts with `-`, a list
+#      option takes the plain arguments after it, and only a plain argument
+#      that no option took can be a subcommand — and an option a reader does
+#      not have is read each way it could be taken;
+#   7. (#242) the option lists are the installed engine's.
 # Each engine's syntax is the one its own --help lists (claude 2.1.326,
-# agy 1.5.9). Stub engines only; no real engine is ever launched.
+# agy 1.5.9). Stub engines only; no real engine is ever launched. Section 7
+# asks the installed engine for its --help and --version, and skips without it.
 # (`[[ … ]]` carry `|| false`; see tests/README.md.)
 
 load '../helpers'
@@ -213,7 +221,9 @@ setup_knob_lib() { CLIKAE_LIB="${CLIKAE_LIB:-$CLIKAE_TEST_ROOT/lib}"; export CLI
 @test "claude reader: after an option it does not know, a model or effort is unknown, never a guess (#240)" {
   setup_knob_lib
   _reads claude 'model?' --frobnicate --model x
-  _reads claude $'model?\neffort?' --frobnicate --model x --effort high
+  # `--model` may be that option's value. The effort is read the same way
+  # whether it is or not.
+  _reads claude $'model?\neffort=high' --frobnicate --model x --effort high
   # With = the unknown option is one argument: nothing is left open.
   _reads claude 'model=x' --frobnicate=1 --model x
   # Is `--` its value or the terminator? Not known.
@@ -222,15 +232,13 @@ setup_knob_lib() { CLIKAE_LIB="${CLIKAE_LIB:-$CLIKAE_TEST_ROOT/lib}"; export CLI
   # What was read before it stands.
   _reads claude 'model=a' --model a --frobnicate y
   _reads claude 'model?' --model a --frobnicate --model b
-  # An option with an optional value, then `--`.
-  _reads claude 'model?' -r -- --model=x
-  _reads claude 'effort?' --debug -- --effort=low
 }
 
 @test "claude reader: a subcommand has its own options — a model after it is unknown (#240)" {
   setup_knob_lib
   _reads claude 'model?' mcp list --model x
-  _reads claude 'model?' -r mcp --model x
+  # `mcp` after -r [value] is the session to resume, not the subcommand.
+  _reads claude 'model=x' -r mcp --model x
   _reads claude 'model=x' -p 'do it' --model x
   _reads claude 'model=x' -p 'do it' mcp --model x
 }
@@ -264,9 +272,9 @@ setup_knob_lib() { CLIKAE_LIB="${CLIKAE_LIB:-$CLIKAE_TEST_ROOT/lib}"; export CLI
   _reads agy 'model?' --frobnicate --model x
   _reads agy 'model=x' --frobnicate=1 --model x
   _reads agy '' --frobnicate y -- --model=x
-  # Flags whose kind its --help does not show.
-  _reads agy 'model?' --remote-control --model x
-  _reads agy 'model=x' --remote-control=true --model x
+  # Flags whose kind its --help does not show: neither takes a value.
+  _reads agy 'model=x' --remote-control --model x
+  _reads agy 'model=x' --remote-agent --remote-control=true --model x
 }
 
 @test "agy reader: a value that cannot be the one that runs is unknown (#240)" {
@@ -285,15 +293,21 @@ setup_knob_lib() { CLIKAE_LIB="${CLIKAE_LIB:-$CLIKAE_TEST_ROOT/lib}"; export CLI
 @test "claude: an unknown model after -- is reported as unknown, and --require-declared refuses it (#240)" {
   _stub_engine claude
   _claude_tank work '{ "model": "opus" }'
-  _burn_j claude work --artifact "$A" --json -- -px 'do it' --model sonnet
+  # -x is not a claude option: `--model` may be its value.
+  _burn_j claude work --artifact "$A" --json -- -px --model sonnet 'do it'
   [ "$status" -eq 0 ]
   [ "$(_json_field model)" = unknown ]
   [ "$(_json_field model_source)" = unknown ]
   rm -f "$L" "$A"
-  _burn_j claude work --artifact "$A" --json --require-declared -- -px 'do it' --model sonnet
+  _burn_j claude work --artifact "$A" --json --require-declared -- -px --model sonnet 'do it'
   [ "$status" -eq 1 ]
   [ "$(_json_field reason)" = "refused: unknown model" ]
   [ ! -e "$L" ]
+  # With the prompt between them every reading gives the same model.
+  _burn_j claude work --artifact "$A" --json -- -px 'do it' --model sonnet
+  [ "$status" -eq 0 ]
+  [ "$(_json_field model)" = sonnet ]
+  [ "$(_json_field model_source)" = flag ]
 }
 
 @test "agy: a model after -- in the one-dash spelling is reported as a flag (#240)" {
@@ -458,4 +472,293 @@ setup_knob_lib() { CLIKAE_LIB="${CLIKAE_LIB:-$CLIKAE_TEST_ROOT/lib}"; export CLI
   _reads agy "model=a${nbsp}b" -model "a${nbsp}b"
   _reads claude 'effort?' --effort "high${nbsp}"
   _reads agy 'effort?' --effort="${nbsp}high"
+}
+
+# ── 6. the engine's own rules, case by case (#242) ───────────────────────────
+# Each expectation below is what claude 2.1.326's option parser does with the
+# argv: which options it sets, and what it leaves as the prompt.
+
+@test "claude reader: an option claude has but its help does not list is read by its kind (#242)" {
+  setup_knob_lib
+  # --max-turns <turns> takes `1`; --system-prompt <prompt> takes `--`; the
+  # model option after it is one.
+  _reads claude 'model=sonnet' -p --max-turns 1 --system-prompt -- --model sonnet 'do it'
+  # …and with a model before it, the two differ.
+  _reads claude 'model?' -p --model opus --max-turns 1 --system-prompt -- --model sonnet 'do it'
+  _reads claude 'model=sonnet' --system-prompt -- --model sonnet -p 'do it'
+  # --permission-prompt-tool <tool> takes `--model`: no model is named.
+  _reads claude '' -p --permission-prompt-tool --model 'do it'
+  _reads claude 'model=x' --max-turns 3 --thinking enabled --init --model x
+  _reads claude 'model=x' --rc --model x
+  # -d2e is one option, not a cluster of -d.
+  _reads claude 'model=x' -d2e --model x
+}
+
+@test "claude reader: an optional value is never an argument that starts with a dash (#242)" {
+  setup_knob_lib
+  # `--` after --debug [filter] is the terminator; `--model` is the prompt.
+  _reads claude '' -p --debug -- --model
+  _reads claude '' -p -d -- --model
+  _reads claude '' -r -- --model=x
+  _reads claude '' --debug -- --effort=low
+  _reads claude '' -w -- --model x --effort high
+  _reads claude '' --from-pr -- --model x
+  # A dash-prefixed argument after it is an option of its own.
+  _reads claude 'model=x' --debug --model x
+  _reads claude 'model=x' -r --model x
+  # A plain one is its value: `mcp` here is a session name, `x` a filter.
+  _reads claude $'model=sonnet\neffort=high' -r mcp --model sonnet --effort high -p 'do it'
+  _reads claude 'model=y' --debug x --model y
+}
+
+@test "claude reader: a list option takes the plain arguments after it; none of them is a subcommand (#242)" {
+  setup_knob_lib
+  _reads claude $'model=sonnet\neffort=high' --add-dir lib mcp --model sonnet --effort high -p 'do it'
+  _reads claude 'model=x' --allowedTools Bash Edit mcp --model x
+  _reads claude 'model=x' --add-dir=lib --model x
+  # The list ends at the next option; a subcommand after that is one.
+  _reads claude 'model?' --add-dir lib -p mcp --model x
+  # The terminator ends the list too.
+  _reads claude '' --add-dir lib mcp -- --model x
+  # The value of a plain value option is not a subcommand either.
+  _reads claude 'model=x' --session-id mcp --model x
+  _reads claude 'model=x' -n mcp --model x
+}
+
+@test "claude reader: only the first plain argument that no option took can be a subcommand (#242)" {
+  setup_knob_lib
+  _reads claude 'model?' -p mcp --model x
+  _reads claude $'model?\neffort?' agents --model x --effort=high
+  # What stood before the subcommand was claude's own.
+  _reads claude 'model=a' --model a mcp list
+  _reads claude 'model?' --model a mcp --model a
+  # After a subcommand `--` is the subcommand's to read.
+  _reads claude 'model?' mcp add x -- --model y
+  _reads claude 'model=x' hello mcp --model x
+  _reads claude '' mcp list
+}
+
+@test "claude reader: a flag letter leaves the rest of its cluster to be read as an argument (#242)" {
+  setup_knob_lib
+  # `-p-` is -p, then `--`.
+  _reads claude '' -p- --model x
+  _reads claude 'model=x' -pcv --model x
+  # -r [value] and -d [filter] take what is glued on; -w too.
+  _reads claude 'model=x' -rmcp --model x
+  _reads claude 'model=x' -pwname --model x
+}
+
+@test "claude reader: an option it does not have is read each way it could be taken (#242)" {
+  setup_knob_lib
+  # Flag, value or list: `1` aside, the model option is read the same.
+  _reads claude 'model=sonnet' -p --frobnicate 1 --system-prompt -- --model sonnet 'do it'
+  # A flag: --system-prompt takes `--`, the model is sonnet. A value option:
+  # it takes `--system-prompt`, `--` ends the options. Not the profile's.
+  _reads claude 'model?' -p --frobnicate --system-prompt -- --model sonnet 'do it'
+  _reads claude 'model?' --model opus --frobnicate --system-prompt -- --model sonnet
+  # Every reading leaves this after the terminator: it names nothing.
+  _reads claude '' --frobnicate y -- --model=x
+  _reads claude '' --frobnicate -p -- --model x
+  # Its value may be what makes `mcp` the subcommand.
+  _reads claude 'model?' --frobnicate x mcp --model y
+  _reads claude 'model=y' --frobnicate=x hello --model y
+  # Two of them, and more than can be read out.
+  _reads claude $'model?\neffort=high' --foo --bar --model x --effort high
+  _reads claude 'model=x' --foo 1 --bar 2 --model x
+  _reads claude $'model?\neffort?' --a1 --a2 --a3 --a4 --a5 --model x --effort=high
+  _reads claude '' --a1 --a2 --a3 --a4 --a5 'do it'
+}
+
+@test "agy reader: a flag it does not have is read each way it could be taken (#242)" {
+  setup_knob_lib
+  # No value: --print takes `--`, the model is x. A value: it takes
+  # `--print`, and `--` ends the flags. Not the profile's.
+  _reads agy 'model?' --frobnicate --print -- --model x
+  _reads agy 'model?' --model a --frobnicate --print -- --model b
+  _reads agy 'model=x' --frobnicate --sandbox --model x
+  _reads agy '' --frobnicate y -- --model=x
+  # Is `--` its value or the terminator? Not known.
+  _reads agy 'model?' --frobnicate -- --model=x
+  # A subcommand is a plain argument: agy reads no flag after it.
+  _reads agy '' mcp --model x
+  _reads agy 'model=x' --add-dir mcp --model x
+  _reads agy $'model?\neffort?' --a1 --a2 --a3 --a4 --a5 --a6 --model x -effort=high
+}
+
+@test "claude: a model after an unlisted option and a value option's \`--\` is the one reported (#242)" {
+  _stub_engine claude
+  _claude_tank work '{"model":"opus"}'
+  CLAUDE_CODE_EFFORT_LEVEL=high _burn_j claude work --artifact "$A" --json --require-declared \
+    -- -p --max-turns 1 --system-prompt -- --model sonnet 'do it'
+  [ "$status" -eq 0 ]
+  [ "$(_json_field model)" = sonnet ]
+  [ "$(_json_field model_source)" = flag ]
+  grep -qx sonnet "$L"
+  # An option the reader does not have, in the same place: not the profile's
+  # model, and --require-declared refuses.
+  rm -f "$L" "$A"
+  CLAUDE_CODE_EFFORT_LEVEL=high _burn_j claude work --artifact "$A" --json --require-declared \
+    -- -p --frobnicate --system-prompt -- --model sonnet 'do it'
+  [ "$status" -eq 1 ]
+  [ "$(_json_field reason)" = "refused: unknown model" ]
+  [ ! -e "$L" ]
+}
+
+@test "claude: a prompt that looks like a flag, after --debug and the terminator, runs (#242)" {
+  _stub_engine claude
+  _claude_tank work '{"model":"opus"}'
+  CLAUDE_CODE_EFFORT_LEVEL=high _burn_j claude work --artifact "$A" --json --require-declared \
+    -- -p --debug -- --model
+  [ "$status" -eq 0 ]
+  [ "$(_json_field model)" = opus ]
+  [ "$(_json_field model_source)" = profile ]
+  grep -qx -- '--model' "$L"
+}
+
+@test "claude: a directory or a session named like a subcommand does not hide the model and effort (#242)" {
+  _stub_engine claude
+  _claude_tank work '{"model":"opus"}'
+  mkdir -p "$BATS_TEST_TMPDIR/lib" "$BATS_TEST_TMPDIR/mcp"
+  cd "$BATS_TEST_TMPDIR"
+  _burn_j claude work --artifact "$A" --json --require-declared \
+    -- --add-dir lib mcp --model sonnet --effort high -p 'do it'
+  [ "$status" -eq 0 ]
+  [ "$(_json_field model)" = sonnet ]
+  [ "$(_json_field model_source)" = flag ]
+  [ "$(_json_field effort)" = high ]
+  [ "$(_json_field effort_source)" = flag ]
+  rm -f "$L" "$A"
+  _burn_j claude work --artifact "$A" --json --require-declared \
+    -- -r mcp --model sonnet --effort high -p 'do it'
+  [ "$status" -eq 0 ]
+  [ "$(_json_field model)" = sonnet ]
+  [ "$(_json_field effort)" = high ]
+}
+
+# ── 7. the option lists against the installed engine (#242) ──────────────────
+# These three read the engine that is installed on this machine — its help
+# text, and for claude the option declarations in its program file. Nothing is
+# launched: `--help` and `--version` only. Without the engine they SKIP, and
+# say so; they never pass unseen.
+
+# _installed <engine> <pattern> -> the path of the real engine on PATH, or
+# empty: a test double does not answer --version like the real one.
+_installed() {
+  local bin
+  bin="$(command -v "$1" 2>/dev/null)" || return 0
+  [ -n "$bin" ] || return 0
+  if command -v timeout >/dev/null 2>&1; then
+    timeout 30 "$bin" --version 2>/dev/null | grep -q -- "$2" || return 0
+  else
+    "$bin" --version 2>/dev/null | grep -q -- "$2" || return 0
+  fi
+  printf '%s\n' "$bin"
+}
+
+# _spec_kinds: option specs, one per line as claude writes them
+# (`-n, --name <name>`) -> `<kind> <name>` for every name.
+_spec_kinds() {
+  awk '{
+    line = $0; kind = "flag"
+    if (line ~ / <[^>]*\.\.\.>$/) kind = "variadic"
+    else if (line ~ / <.*>$/) kind = "value"
+    else if (line ~ / \[.*\]$/) kind = "optional"
+    sub(/ [<\[].*$/, "", line)
+    n = split(line, names, ", ")
+    for (i = 1; i <= n; i++) if (names[i] != "") print kind, names[i]
+  }'
+}
+
+# _reader_disagrees: `<kind> <name>` lines on stdin -> one line per option the
+# claude reader has as another kind, or does not have.
+_reader_disagrees() {
+  bash -c '
+    source "$1/adapters/claude.sh" 2>/dev/null
+    while read -r kind name; do
+      _claude_opt_kind "$name"
+      [ "$_claude_kind" = "$kind" ] || printf "%s: the installed claude has it as %s, the reader as %s\n" \
+        "$name" "$kind" "${_claude_kind:-(not in its lists)}"
+    done' _ "$CLIKAE_LIB"
+}
+
+@test "claude reader: has every option the installed claude --help lists, as the same kind (#242)" {
+  setup_knob_lib
+  local bin help specs n bad cmds c
+  bin="$(_installed claude 'Claude Code')"
+  [ -n "$bin" ] || skip "claude is not installed here: its --help cannot be compared with the reader's lists"
+  help="$("$bin" --help 2>/dev/null)"
+  # An option line is indented by two; its description starts after two or
+  # more spaces, or on the next line.
+  specs="$(printf '%s\n' "$help" | awk '
+    /^Options:/ { on = 1; next }
+    /^Commands:/ { on = 0 }
+    on && /^  -/ { line = $0; sub(/^  /, "", line); sub(/  +.*$/, "", line); print line }' | _spec_kinds)"
+  n="$(printf '%s\n' "$specs" | grep -c . || true)"
+  [ "$n" -ge 40 ] || { echo "only $n options read out of claude --help: $help"; false; }
+  # The parse itself: these four are one of each kind.
+  [[ $'\n'"$specs"$'\n' == *$'\n''flag --print'$'\n'* ]] || false
+  [[ $'\n'"$specs"$'\n' == *$'\n''value --model'$'\n'* ]] || false
+  [[ $'\n'"$specs"$'\n' == *$'\n''optional -r'$'\n'* ]] || false
+  [[ $'\n'"$specs"$'\n' == *$'\n''variadic --add-dir'$'\n'* ]] || false
+  bad="$(printf '%s\n' "$specs" | _reader_disagrees)"
+  [ -z "$bad" ] || { echo "$bad"; false; }
+  # The subcommands it lists, aliases included (`stop|kill <id>`).
+  cmds="$(printf '%s\n' "$help" | awk '
+    /^Commands:/ { on = 1; next }
+    on && /^  [a-z]/ { name = $1; gsub(/\|/, " ", name); print name }')"
+  [ -n "$cmds" ] || { echo "no subcommand read out of claude --help"; false; }
+  for c in $cmds; do
+    # shellcheck disable=SC2016  # expanded by the child shell
+    run bash -c 'source "$1/adapters/claude.sh" 2>/dev/null; [[ "$_CLAUDE_COMMANDS" == *" $2 "* ]]' _ "$CLIKAE_LIB" "$c"
+    [ "$status" -eq 0 ] || { echo "subcommand $c is in claude --help and not in _CLAUDE_COMMANDS"; false; }
+  done
+}
+
+@test "claude reader: has every option the installed claude declares, listed in --help or not (#242)" {
+  setup_knob_lib
+  local bin real specs n bad
+  bin="$(_installed claude 'Claude Code')"
+  [ -n "$bin" ] || skip "claude is not installed here: its option declarations cannot be compared with the reader's lists"
+  real="$(realpath "$bin" 2>/dev/null || readlink -f "$bin" 2>/dev/null || true)"
+  [ -n "$real" ] && [ -f "$real" ] || skip "the installed claude ($bin) cannot be resolved to a file to read"
+  # An option is declared as `.option("<spec>", …)` or `new <Option>("<spec>", …)`.
+  # The main program's declarations stand together; the anchor is -p, --print,
+  # and the run of declarations around it less than 20000 bytes apart is the
+  # main program's (the subcommands' own are far away, and are not claude's).
+  specs="$(LC_ALL=C grep -aobE '(\.option\(|new [A-Za-z_$][A-Za-z0-9_$]*\()"-[^"\\]{1,90}"' "$real" 2>/dev/null | awk '
+    {
+      off[NR] = $0; sub(/:.*$/, "", off[NR])
+      spec[NR] = $0; sub(/^[^"]*"/, "", spec[NR]); sub(/"$/, "", spec[NR])
+      if (spec[NR] == "-p, --print" && !anchor) anchor = NR
+    }
+    END {
+      if (!anchor) exit
+      lo = anchor; while (lo > 1 && off[lo] - off[lo - 1] < 20000) lo--
+      hi = anchor; while (hi < NR && off[hi + 1] - off[hi] < 20000) hi++
+      for (i = lo; i <= hi; i++)
+        if (spec[i] ~ /^(-[A-Za-z0-9]+, )?--[A-Za-z0-9-]+(, --[A-Za-z0-9-]+)?( [<\[].*[>\]])?$/) print spec[i]
+    }' | _spec_kinds)"
+  n="$(printf '%s\n' "$specs" | grep -c . || true)"
+  [ "$n" -ge 60 ] || skip "the installed claude ($real) does not hold its option declarations in a form this test reads ($n found)"
+  [[ $'\n'"$specs"$'\n' == *$'\n''value --model'$'\n'* ]] || false
+  [[ $'\n'"$specs"$'\n' == *$'\n''value --max-turns'$'\n'* ]] || false
+  bad="$(printf '%s\n' "$specs" | _reader_disagrees)"
+  [ -z "$bad" ] || { echo "$bad"; false; }
+}
+
+@test "agy reader: has every flag the installed agy --help lists (#242)" {
+  setup_knob_lib
+  local bin help flags f n=0
+  bin="$(_installed agy '[0-9]')"
+  [ -n "$bin" ] || skip "agy is not installed here: its --help cannot be compared with the reader's lists"
+  help="$("$bin" --help 2>&1 || true)"
+  [[ "$help" == *"Usage of agy"* ]] || skip "the installed agy ($bin) does not print the help this test reads"
+  flags="$(printf '%s\n' "$help" | awk '/^Available subcommands/ { exit } /^  -/ { f = $1; sub(/^--?/, "", f); print f }')"
+  for f in $flags; do
+    n=$((n + 1))
+    # shellcheck disable=SC2016  # expanded by the child shell
+    run bash -c 'source "$1/core/burn_knobs.sh"; [[ "$_BURN_KNOBS_AGY_VALUE$_BURN_KNOBS_AGY_BOOL" == *" $2 "* ]]' _ "$CLIKAE_LIB" "$f"
+    [ "$status" -eq 0 ] || { echo "flag --$f is in agy --help and in neither of the reader's lists"; false; }
+  done
+  [ "$n" -ge 20 ] || { echo "only $n flags read out of agy --help: $help"; false; }
 }
