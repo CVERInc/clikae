@@ -32,6 +32,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **`clikae cockpit --off` removes legacy guards regardless of their installation path**, including
+  duplicates, and reports the number removed per tank. Moving or repairing the cockpit recognizes
+  those guards too. `clikae burn` warns when the calling session's tank differs from the recorded cockpit.
 - **A Codex tank that selects a profile is no longer reported with the root table's model and effort.**
   With a root `profile = "<name>"` key in `config.toml`, or `-p` / `--profile` in the arguments after `--`,
   burn read the root table as if nothing were selected, called the result `profile`, and

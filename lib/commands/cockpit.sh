@@ -18,8 +18,32 @@
 # no cockpit). The settings.json edit itself rides #76/#85's write mechanism
 # (_settings_write_file, lib/commands/settings.sh) — union merge onto the
 # tank's hooks.PreToolUse array, identified by a marker key ("_clikae":
-# "cockpit-guard") on OUR array entry so a human's own hooks (any entry
-# without that marker, any other hook event) are never touched.
+# "cockpit-guard") or the guard command's path suffix, for older unmarked
+# entries. Other entries and hook events are left alone.
+
+# One predicate for discovery, removal and repair, independent of the install
+# directory. Accept unquoted and shell-quoted paths without executing them.
+_cockpit_guard_jq() {
+  cat <<'JQ'
+def cockpit_guard:
+  (._clikae == "cockpit-guard") or
+  any(.hooks[]?;
+    (.command? // "" | strings |
+      test("(^|[/\"\u0027])hooks/cockpit-guard\\.sh[\"\u0027]?$")));
+JQ
+}
+
+# Parse valid JSON so escaped paths work too. A broken file containing a guard
+# still needs the normal removal attempt, which reports why it cannot be edited.
+_cockpit_hook_candidate() {
+  local rc=0
+  # An unreadable file cannot establish that the guard is absent.
+  [ -r "$1" ] || return 0
+  jq -e "$(_cockpit_guard_jq)"' any(.hooks.PreToolUse[]?; cockpit_guard)' "$1" >/dev/null 2>&1 || rc=$?
+  [ "$rc" -eq 0 ] && return 0
+  [ "$rc" -eq 1 ] && return 1
+  grep -qE '"_clikae"[[:space:]]*:[[:space:]]*"cockpit-guard"|hooks/cockpit-guard[.]sh' "$1" 2>/dev/null
+}
 
 _cockpit_state_file() { printf '%s/state/cockpit\n' "$CLIKAE_HOME"; }
 _cockpit_allow_file() { printf '%s/state/cockpit-allow\n' "$CLIKAE_HOME"; }
@@ -182,7 +206,7 @@ _cockpit_hook_install() (
   # clikae#146: the engine runs this hook for the tank's whole life, across
   # upgrades — spell the stable copy, synced here.
   runtime_sync || true
-  if ! new="$(jq -n --arg cmd "$(runtime_lib)/hooks/cockpit-guard.sh" --slurpfile current "$input" '
+  if ! new="$(jq -n --arg cmd "$(runtime_lib)/hooks/cockpit-guard.sh" --slurpfile current "$input" "$(_cockpit_guard_jq)"'
       def valid: type == "object";
       if ($current | length) > 1 or (($current | length) == 1 and ($current[0] | valid | not))
         then error("invalid settings") else . end |
@@ -194,9 +218,10 @@ _cockpit_hook_install() (
       # is rewritten on the next `clikae cockpit <tank>`.
       ($cmd | @sh) as $cmd |
       ($old.hooks.PreToolUse // []) as $pre |
-      ($pre | map(select((._clikae // "") != "cockpit-guard"))) as $rest |
-      (($pre | map(select((._clikae // "") == "cockpit-guard"))) as $ours |
+      ($pre | map(select(cockpit_guard | not))) as $rest |
+      (($pre | map(select(cockpit_guard))) as $ours |
         (($ours | length) == 1
+         and ($ours[0]._clikae == "cockpit-guard")
          and ($ours[0].matcher == "Agent")
          and (($ours[0].hooks // [])[0].command == $cmd)
          and (($ours[0].hooks // [])[0].timeout == 5))) as $already |
@@ -237,7 +262,7 @@ _cockpit_hook_install() (
   printf '%s/%s: cockpit guard installed\n' "$engine" "$tank"
 )
 
-# _cockpit_hook_remove <engine> <tank> -> remove ONLY our marked block. Empties
+# _cockpit_hook_remove <engine> <tank> -> remove marked and legacy guards. Empties
 # `hooks.PreToolUse` (and `hooks` itself) rather than leaving a dangling `[]`
 # when nothing else used them — so a tank that had no hooks before we visited
 # it comes back exactly as it was. Prints one status line.
@@ -251,12 +276,12 @@ _cockpit_hook_remove() (
     printf '%s/%s: cockpit guard not installed here (unchanged)\n' "$engine" "$tank"
     return 0
   fi
-  if ! new="$(jq '
-      ((.hooks.PreToolUse // []) | map(select((._clikae // "") == "cockpit-guard"))) as $ours |
+  if ! new="$(jq "$(_cockpit_guard_jq)"'
+      ((.hooks.PreToolUse // []) | map(select(cockpit_guard))) as $ours |
       if ($ours | length) == 0 then
         { changed: false, settings: . }
       else
-        ((.hooks.PreToolUse // []) | map(select((._clikae // "") != "cockpit-guard"))) as $rest |
+        ((.hooks.PreToolUse // []) | map(select(cockpit_guard | not))) as $rest |
         ( if ($rest | length) == 0 then
             ( if has("hooks") then
                 (.hooks |= del(.PreToolUse)) |
@@ -266,7 +291,7 @@ _cockpit_hook_remove() (
             (.hooks.PreToolUse = $rest)
           end
         ) as $out |
-        { changed: true, settings: $out }
+        { changed: true, removed: ($ours | length), settings: $out }
       end
     ' "$_SETTINGS_SNAP" 2>/dev/null)"; then
     printf '%s/%s: skipped — settings.json is not valid JSON\n' "$engine" "$tank" >&2
@@ -284,7 +309,10 @@ _cockpit_hook_remove() (
     return 1
   }
   _settings_write_file "$file" "$settings_out" "$engine/$tank" "$_SETTINGS_SNAP" || return 1
-  printf '%s/%s: cockpit guard removed\n' "$engine" "$tank"
+  local removed unit=entries
+  removed="$(printf '%s' "$new" | jq -r '.removed')"
+  [ "$removed" -ne 1 ] || unit=entry
+  printf '%s/%s: cockpit guard removed (%s %s)\n' "$engine" "$tank" "$removed" "$unit"
 )
 
 _cockpit_show() {
@@ -481,10 +509,8 @@ _cockpit_move() {
 #      the record is still cleared, but we SAY so rather than implying the
 #      guard went with it.
 #   2. every `<engine>/<tank>/settings.json` under profiles_root that
-#      actually carries our `"_clikae": "cockpit-guard"` marker. Reading a
-#      settings.json and finding OUR marker in it is a far tighter gate than
-#      "is a tank" — a directory clikae never named cannot have acquired that
-#      marker except from a `clikae cockpit` run that named it.
+#      carries our marker or a legacy cockpit-guard.sh command. Guard identity
+#      survives both a lost tank marker and a changed installation directory.
 #
 # Everything else in clikae that walks the store goes through the one
 # enumerator (#61 P2-6) and must keep doing so. This is the documented
@@ -505,7 +531,7 @@ _cockpit_off() {
     if [ -d "$rec_dir" ]; then
       rec_phys="$(cd -P "$rec_dir" 2>/dev/null && pwd -P)" || rec_phys=""
       if [ -f "$rec_dir/settings.json" ] \
-         && grep -q '"_clikae"[[:space:]]*:[[:space:]]*"cockpit-guard"' "$rec_dir/settings.json" 2>/dev/null; then
+         && _cockpit_hook_candidate "$rec_dir/settings.json"; then
         any=1
         _cockpit_hook_remove "$rec_engine" "$rec_tank" || failed="$failed $rec_engine/$rec_tank"
       fi
@@ -520,7 +546,7 @@ _cockpit_off() {
     cli="${path%/*}"; cli="${cli##*/}"
     [ -n "$cli" ] && [ -n "$profile" ] || continue
     [ -f "$path/settings.json" ] || continue
-    grep -q '"_clikae"[[:space:]]*:[[:space:]]*"cockpit-guard"' "$path/settings.json" 2>/dev/null || continue
+    _cockpit_hook_candidate "$path/settings.json" || continue
     # Already done above, by name or by physical identity (a symlink alias of
     # the recorded tank is the same settings.json, and removing twice would
     # print a second, contradictory "not installed here" line).
