@@ -240,6 +240,7 @@ load_adapter() {
            adapter_transcript_is_resumable adapter_session_mode adapter_session_continued \
            adapter_cwd_from_args adapter_ephemeral_flags \
            adapter_mcp_config_file adapter_hooks_config_file adapter_tank_fingerprint \
+           adapter_burn_knobs_check adapter_burn_knobs_from_args adapter_burn_knobs_declared \
            2>/dev/null || true
 
   # shellcheck source=/dev/null

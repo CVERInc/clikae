@@ -50,8 +50,22 @@ Three dispatch shapes — full field guide in
   ```
 
   `{ok, engine, tank, artifact, artifact_bytes, reason, reset, rerouted_from[],
-  elapsed_s, run_id}`. Read `tank`, not the one you asked for — with rerouting
-  they are often different, and `rerouted_from` is the trail. `rc` distinguishes
+  elapsed_s, run_id, model, model_source, effort, effort_source}`. Read `tank`,
+  not the one you asked for — with rerouting they are often different, and
+  `rerouted_from` is the trail.
+
+  **Name the model and effort; a prompt cannot.** You pick a tank by quota, so
+  its profile decides what your task runs with unless you say otherwise:
+  `--model <m> --effort <e>` reach the engine in its own flags (and fail before
+  starting if it cannot honour them), `model_source` / `effort_source` say
+  where each value came from (`flag`, `env`, `profile`, `undeclared`, or
+  `unknown` when raw argv sets it unreadably), and `--require-declared`
+  refuses a run whose model or effort is `undeclared` or `unknown`. A model
+  name belongs to one engine: with a `--to` on another engine, name that
+  engine's model with `--to-model <m>`, or the burn is refused up front.
+  "Effort: high" written in the prompt changes nothing.
+
+  `rc` distinguishes
   two SHAPES of "no work happened" from a real failure — rc 2 for both
   `reason: no-tank-available` (auto-reroute exhausted the whole reserve) and
   `reason: tank ran dry and --no-reroute is set` (stopped after the first dry

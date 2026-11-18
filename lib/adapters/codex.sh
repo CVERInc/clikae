@@ -63,6 +63,11 @@ adapter_run() {
 adapter_burn_flags() {
   local prompt="$1"; shift
   printf 'exec\0'
+  # #237: burn's --model / --effort, in codex's own words (contract and
+  # sources below, at adapter_burn_knobs_check). Ahead of the prompt, which
+  # stays the last argument.
+  [ -z "${burn_model_flag:-}" ] || printf -- '-m\0%s\0' "$burn_model_flag"
+  [ -z "${burn_effort_flag:-}" ] || printf -- '-c\0model_reasoning_effort="%s"\0' "$burn_effort_flag"
   [ $# -gt 0 ] && printf -- '-C\0%s\0' "$1"
   # Like Claude's burn_permission, permission_set and dir are cmd_burn locals
   # inherited through Bash dynamic scope. dir names the current tank, including
@@ -81,6 +86,192 @@ adapter_burn_flags() {
   fi
   [ -z "$sandbox" ] || printf -- '-s\0%s\0' "$sandbox"
   printf '%s\0' "$prompt"
+}
+
+# --- #237: the model and effort a burn runs with ---------------------------
+# Contract: lib/core/burn_knobs.sh. From `codex exec --help` (codex-cli
+# 0.167.1): `-m, --model <MODEL>` names the model, and there is NO effort
+# flag — effort is the config.toml key `model_reasoning_effort`, reached for
+# one run through `-c, --config <key=value>`, which that help documents as
+# overriding any value config.toml would load (the value is parsed as TOML,
+# hence the quotes burn puts round it).
+#
+# The help lists no set of effort levels, so none is checked here: burn only
+# requires one plain word, and an unknown one is codex's to reject.
+adapter_burn_knobs_check() {
+  : "$1" "$2"
+  return 0
+}
+
+# The character sets this reader matches with, each SPELLED OUT. A named class
+# or a range means whatever the C library and the locale say it means, and
+# they do not agree: `[[:space:]]` holds U+00A0, U+2007 and U+202F on macOS
+# and not on glibc; in a UTF-8 locale glibc's holds U+2003 and its `[[:cntrl:]]`
+# holds U+0085; a range goes by collation order in bash 3.2. A list of ASCII
+# characters matches those characters and nothing else, in every locale and
+# every bash. (The functions here also set LC_ALL=C, so the match is by byte
+# where the shell honours that; nothing depends on it.)
+#   plain whitespace: space, tab, LF, VT, FF, CR
+#   control:          0x01-0x1f and 0x7f
+#   bare word:        ASCII letters, digits, `_`, `.`, `-`
+_CODEX_NOT_WS=$'[! \t\n\013\014\r]'
+_CODEX_CNTRL=$'[\001\002\003\004\005\006\007\010\011\012\013\014\015\016\017\020\021\022\023\024\025\026\027\030\031\032\033\034\035\036\037\177]'
+_CODEX_NOT_BARE='[!abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_.-]'
+
+# _codex_trim <text> -> _CODEX_TRIMMED: the text without leading and trailing
+# plain (ASCII) whitespace. Any other space — a no-break one, an em space — is
+# not plain and stays, wherever this runs.
+_codex_trim() {
+  local LC_ALL=C v="$1"
+  # The pattern variables are meant as patterns, so they are not quoted.
+  # shellcheck disable=SC2295
+  v="${v#"${v%%$_CODEX_NOT_WS*}"}"
+  # shellcheck disable=SC2295
+  v="${v%"${v##*$_CODEX_NOT_WS}"}"
+  _CODEX_TRIMMED="$v"
+}
+
+# _codex_override_string <value of a `-c key=value`> -> the string codex ends
+# up with, when that is certain; rc 1 when it is not. Codex trims the value,
+# parses it as TOML, and falls back to the raw text (outer quotes stripped)
+# when that fails (codex-rs/utils/cli/src/config_override.rs). Certain here
+# means: one quoted string with no escape and no inner quote, or a bare word
+# that is not a TOML literal. Anything else — an escape, a number, a boolean,
+# a trailing comment — is left as "cannot tell".
+_codex_override_string() {
+  local LC_ALL=C v
+  _codex_trim "$1"; v="$_CODEX_TRIMMED"
+  case "$v" in
+    \"*\") v="${v#\"}"; v="${v%\"}"; case "$v" in ''|*[\"\\]*|*$_CODEX_CNTRL*) return 1 ;; esac ;;
+    \'*\') v="${v#\'}"; v="${v%\'}"; case "$v" in ''|*\'*|*$_CODEX_CNTRL*) return 1 ;; esac ;;
+    ''|true|false|inf|nan) return 1 ;;
+    *$_CODEX_NOT_BARE*) return 1 ;;
+    [0123456789._-]*) return 1 ;;     # a bare word starts with a letter
+  esac
+  printf '%s' "$v"
+}
+
+# _codex_override_key <key of a `-c key=value`> -> the key, reduced to the
+# characters a bare key can be made of: ASCII letters, digits, `_`, `.`, `-`.
+# Everything else is dropped — ASCII and Unicode whitespace, quotes, anything
+# — so there is one rule and no list of code points to keep in step with
+# codex's own trimming (it trims the key with Rust's `trim()`, which knows
+# U+00A0, U+2007, U+202F and the rest). The kept characters are a spelled-out
+# list (above), so a multi-byte character goes whole whatever the caller's
+# locale or bash. A key that comes out as `model` or `model_reasoning_effort`
+# IS an override of that setting: erring that way refuses or reports
+# `unknown`; erring the other way lets a second value through unseen.
+_codex_override_key() {
+  local LC_ALL=C k="$1"
+  # shellcheck disable=SC2295  # a pattern, on purpose
+  printf '%s' "${k//$_CODEX_NOT_BARE/}"
+}
+
+# What the argv names, read the way codex reads it — not a second parser of
+# codex's whole grammar, only the two options that carry these values:
+#   · `-m <v>`, `-m<v>`, `-m=<v>`, `--model <v>`, `--model=<v>`
+#   · `-c <k=v>`, `-c<k=v>`, `-c=<k=v>`, `--config <k=v>`, `--config=<k=v>`;
+#     the split is at the first `=`, and the key is compared through
+#     _codex_override_key — however it is dressed, it is that setting
+#   · `--` ends the options: what follows is the prompt
+#   · precedence: an explicit model option beats any `-c model=…`
+#     (`let model = model.or(cfg.model)`, codex-rs/core/src/config/mod.rs);
+#     among `-c` overrides of one key the last is applied last, so it wins.
+# A value this cannot read with certainty comes out as `model?` / `effort?`
+# rather than as a guess. The argv itself is never touched.
+adapter_burn_knobs_from_args() {
+  local LC_ALL=C a kv key bare v has_kv m_opt="" m_cfg="" e_cfg=""
+  while [ "$#" -gt 0 ]; do
+    a="$1"; shift; kv=""; has_kv=0
+    case "$a" in
+      --) break ;;
+      -m|--model)  [ "$#" -ge 1 ] || break; v="$1"; shift
+                   case "$v" in ''|-*|*$_CODEX_CNTRL*) m_opt="?" ;; *) m_opt="=$v" ;; esac ;;
+      --model=*|-m=*|-m?*)
+                   case "$a" in --model=*) v="${a#--model=}" ;; -m=*) v="${a#-m=}" ;; *) v="${a#-m}" ;; esac
+                   case "$v" in ''|*$_CODEX_CNTRL*) m_opt="?" ;; *) m_opt="=$v" ;; esac ;;
+      -c|--config) [ "$#" -ge 1 ] || break; kv="$1"; has_kv=1; shift ;;
+      --config=*)  kv="${a#--config=}"; has_kv=1 ;;
+      -c=*)        kv="${a#-c=}"; has_kv=1 ;;
+      -c?*)        kv="${a#-c}"; has_kv=1 ;;
+    esac
+    [ "$has_kv" -eq 1 ] || continue
+    case "$kv" in *=*) ;; *) continue ;; esac     # no `=`: codex rejects it
+    key="${kv%%=*}"
+    bare="$(_codex_override_key "$key")"
+    case "$bare" in
+      model|model_reasoning_effort) ;;
+      *) continue ;;
+    esac
+    # It IS an override of that setting. Its value is reported only when the
+    # key needed nothing but plain trimming: what codex makes of a key that
+    # had to be cleaned further (a quoted one, one behind a no-break space)
+    # is not for this reader to decide, so that one reads as "cannot tell".
+    # Plain means ASCII whitespace, by list: `[[:space:]]` here once trimmed
+    # a no-break space on macOS and not on Linux, so the same argv was
+    # `unknown` on one and a declared value on the other.
+    _codex_trim "$key"; key="$_CODEX_TRIMMED"
+    if [ "$bare" = "$key" ] && v="$(_codex_override_string "${kv#*=}")"; then v="=$v"; else v="?"; fi
+    if [ "$bare" = model ]; then m_cfg="$v"; else e_cfg="$v"; fi
+  done
+  [ -n "$m_opt" ] || m_opt="$m_cfg"
+  case "$m_opt" in '') ;; '?') printf 'model?\n' ;; *) printf 'model=%s\n' "${m_opt#=}" ;; esac
+  case "$e_cfg" in '') ;; '?') printf 'effort?\n' ;; *) printf 'effort=%s\n' "${e_cfg#=}" ;; esac
+  return 0
+}
+
+# _codex_config_root <config.toml> -> what the ROOT table of the file declares:
+# `model<TAB><v>` and `effort<TAB><v>` for root members `model` and
+# `model_reasoning_effort` that are one-line strings, or one `note<TAB><why>`
+# line when the file could not be read as TOML. The same key under a table
+# (`[profiles.x]`, `[tui]`) is a different setting; text inside a multi-line
+# string is text.
+#
+# TOML is read by a TOML parser — python3's tomllib (3.11+) — not by matching
+# lines: a line scan takes `model = "…"` inside a multi-line string for a
+# setting and misses a quoted key. clikae needs no python anywhere else, so
+# its absence must not break a burn: the profile then reads as undeclared and
+# the burn says why. Never a guess. (-I: no user site, no PYTHON* variables.)
+_codex_config_root() {
+  local f="$1" out="" rc=0
+  [ -f "$f" ] || return 0
+  if ! command -v python3 >/dev/null 2>&1; then rc=127
+  else
+    out="$(python3 -I -c '
+import sys
+try:
+    import tomllib
+except ImportError:
+    sys.exit(4)
+try:
+    with open(sys.argv[1], "rb") as fh:
+        root = tomllib.load(fh)
+except (OSError, ValueError):
+    sys.exit(3)
+for key, name in (("model", "model"), ("model_reasoning_effort", "effort")):
+    v = root.get(key)
+    if isinstance(v, str) and v and not any(ord(c) < 32 or ord(c) == 127 for c in v):
+        print(name + "\t" + v)
+' "$f" 2>/dev/null)" || rc=$?
+  fi
+  case "$rc" in
+    0) [ -z "$out" ] || printf '%s\n' "$out" ;;
+    3) printf 'note\t%s\n' "config.toml is not valid TOML (or could not be opened), so it declares nothing here; codex will say what is wrong with it." ;;
+    *) printf 'note\t%s\n' "config.toml was not read: that needs python3 3.11 or newer (for its TOML parser), and none is usable on PATH. Whatever the file declares is reported as undeclared, not guessed. Pass --model / --effort to name them." ;;
+  esac
+  return 0
+}
+
+adapter_burn_knobs_declared() {
+  local dir="$1" model="$2" kind val
+  while IFS=$'\t' read -r kind val; do
+    case "$kind" in
+      model)  [ -n "$model" ] || printf 'model\tprofile\t%s\n' "$val" ;;
+      effort) printf 'effort\tprofile\t%s\n' "$val" ;;
+      note)   printf 'note\t%s\tany\n' "$val" ;;
+    esac
+  done < <(_codex_config_root "$dir/config.toml")
+  return 0
 }
 
 # Optional hook: start a session seeded with an initial prompt (for

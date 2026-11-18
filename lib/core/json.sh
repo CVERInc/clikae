@@ -47,3 +47,54 @@ json_value_for_key() {
     | sed -E 's/^"[^"]*"[[:space:]]*:[[:space:]]*"//; s/"$//' || true
   return 0
 }
+
+# json_string_leaves <file>  -> one `<path><TAB><value>` line per STRING-valued
+# member of the JSON in <file>, where <path> is the member's keys from the
+# root joined by `US` (\037): `model` is a top-level "model", and
+# `modelSettings<US><name><US>effortLevel` is that nested one. This is what
+# json_value_for_key cannot say — it matches a key at any depth, and a settings
+# file may repeat a key name under another object (#237: Claude's
+# `effortLevel` is both a top-level key and a per-model one).
+# A character walk in awk (no jq/python): a string is consumed as a string, so
+# a brace or a colon inside a value moves nothing. Anything inside an array is
+# not reported (it has no key path). \" and \\ are unescaped; other escapes
+# are left as written. Prints nothing for a missing or unreadable file; never
+# aborts the caller.
+json_string_leaves() {
+  [ -f "$1" ] || return 0
+  awk '
+    { text = text $0 "\n" }
+    END {
+      n = length(text); depth = 0; pending = ""; havepending = 0; wantvalue = 0
+      for (i = 1; i <= n; i++) {
+        c = substr(text, i, 1)
+        if (c == "\"") {
+          s = ""
+          for (i++; i <= n; i++) {
+            c = substr(text, i, 1)
+            if (c == "\\") { i++; d = substr(text, i, 1); s = s ((d == "\"" || d == "\\") ? d : "\\" d); continue }
+            if (c == "\"") break
+            s = s c
+          }
+          if (depth < 1 || inarr[depth] || skip[depth]) continue
+          if (wantvalue) {
+            path = ""
+            for (j = 1; j < depth; j++) path = path keys[j] "\037"
+            print path keys[depth] "\t" s
+            wantvalue = 0
+          } else { pending = s; havepending = 1 }
+          continue
+        }
+        if (c == ":") { if (havepending) { keys[depth] = pending; wantvalue = 1 } havepending = 0; continue }
+        if (c == "{" || c == "[") {
+          depth++
+          inarr[depth] = (c == "[")
+          skip[depth] = (depth > 1 && (skip[depth - 1] || inarr[depth - 1]))
+          wantvalue = 0; havepending = 0; continue
+        }
+        if (c == "}" || c == "]") { if (depth > 0) depth--; wantvalue = 0; havepending = 0; continue }
+        if (c == ",") { wantvalue = 0; havepending = 0 }
+      }
+    }' "$1" 2>/dev/null || true
+  return 0
+}

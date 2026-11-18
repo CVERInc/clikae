@@ -33,7 +33,8 @@ state lives*, it never sits in the middle of a request and never grades output.
   your interactive session is on). Use it for an unattended task that must finish
   *somewhere*.
 - **legs** (the [`conductor`](https://github.com/CVERInc/clikae) Claude Code skill)
-  add the `--effort` knob the Agent tool doesn't expose, and `--tank <name>` routes
+  add the `--effort` knob the Agent tool doesn't expose (`burn` has its own
+  `--model` / `--effort` — see "Model and effort" below), and `--tank <name>` routes
   through `clikae env` so a leg runs on a real named account (and, for a `--write`
   leg, inherits that tank's git identity — see §6). A leg is a single shot; if it
   must survive a dry tank, use `burn` instead.
@@ -92,6 +93,110 @@ generated flags — if that trailing argv contains `--permission-mode` or
 `--dangerously-skip-permissions`, clikae warns once (without altering argv),
 since it can collide with or override the `--permission-mode` clikae just
 composed.
+
+### Model and effort (#237)
+
+An orchestrator picks a tank by its quota, not by its profile. So the model and
+the reasoning effort a task runs with are whatever that tank happens to
+declare, or the engine's default when it declares nothing — and writing
+"Effort: high" in the prompt changes nothing while reading as if it did.
+
+**Every burn says what it ran with.** Its first line, and again for each tank
+it reroutes onto:
+
+```
+burn codex/T1: model gpt-x (profile), effort undeclared
+```
+
+`--json` and the status file carry the same four facts — `model`,
+`model_source`, `effort`, `effort_source` — for the tank that did the work. A
+source is one of:
+
+| source | meaning |
+|---|---|
+| `flag` | burn's `--model` / `--effort`, or the engine's own flag in the argv after `--` |
+| `env` | a variable the engine ranks above its settings file (Claude's `ANTHROPIC_MODEL`, `CLAUDE_CODE_EFFORT_LEVEL`) — a burn hands the engine the caller's environment |
+| `profile` | the tank's own config, read the way the engine reads it |
+| `undeclared` | none of the above: the engine's default decides. The value reads `"undeclared"` too |
+| `unknown` | the argv after `--` sets it, in a form burn cannot read with certainty (an escape in the value, a number, a key that is quoted or sits behind a no-break space). The value reads `"unknown"` too — never a guess |
+
+**`--model <m>` and `--effort <e>` name them**, for a `--prompt` /
+`--prompt-file` task. Each adapter writes them in its engine's own words, so a
+cross-engine reroute regenerates the flags:
+
+| engine | `--model` becomes | `--effort` becomes | the profile is |
+|---|---|---|---|
+| claude | `--model <m>` | `--effort <e>` (low, medium, high, xhigh, max) | `settings.json`: `model`; effort from `modelSettings.<model>.effortLevel` |
+| codex | `-m <m>` | `-c model_reasoning_effort="<e>"` — codex has no effort flag; `-c` is its documented one-run override of a `config.toml` key | `config.toml`: the root table's `model`, `model_reasoning_effort`, read with a TOML parser (needs `python3` 3.11+; without one the file reads as `undeclared` and the burn says why) |
+| agy | `--model <m>` | `--effort <e>` (low, medium, high, xhigh, max) | nothing — agy documents no settings key for either, so without a flag both are `undeclared` |
+| grok, others | — | — | not read: always `undeclared` |
+
+**A model name belongs to one engine; `--to-model <m>` names the other one's.**
+`--model gpt-x` means nothing to claude, so burn's `--model` never crosses a
+`--to <engine>/<tank>` that names a different engine. With `--model` and such a
+`--to`, add `--to-model <m>` — the model the task runs on if it does take that
+hop — or the burn is refused before anything starts, naming both engines.
+`--to-model` alone is fine too (the first tank keeps its profile's model), and
+with neither, each tank's profile decides. `--effort` does cross the hop, but
+only if the other engine accepts that level; otherwise that is refused up
+front as well. So is a model in the arguments after `--` (`-- --model gpt-x`,
+or a raw command that carries one) together with such a `--to`, with or
+without `--to-model`: those arguments reach both engines byte for byte, so a
+model there cannot be one engine's alone. Take it out and use `--model` /
+`--to-model` on a `--prompt` task, or name none.
+
+```sh
+clikae burn codex work --to claude/spare --prompt-file t.md --artifact out.md \
+  --model gpt-x --to-model sonnet --effort high
+```
+
+**An engine that cannot honour one fails before anything starts** — no lock
+taken, no `--fresh` deletion, no launch; rc 1, `reason: "refused: …"`. That
+covers an engine with no mapping (grok), a level the engine's help does not
+list, a `CLAUDE_CODE_EFFORT_LEVEL` in the environment that differs from
+`--effort` (Claude Code ranks the variable above the flag), a knob named both
+to burn and again after `--`, and an explicit cross-engine `--to` whose engine
+could not honour it — asked up front, not after the first tank has run. With a
+raw `-- <cmd...>` task the flags are refused: put the engine's own flag in
+that command, and burn reports it as `flag`.
+
+For codex, the argv after `--` is read the way codex reads it: `-m <v>`,
+`-m<v>`, `--model=<v>`; `-c <key=value>` in every spelling codex accepts
+(`-c<key=value>`, `--config=…`, spaces round the key); nothing after a bare
+`--`, which is the prompt; an explicit model option above a `-c model=…`, and
+the last of several `-c` overrides of one key. A `-c` key is compared with
+everything dropped that cannot be part of a bare key (anything but ASCII
+letters, digits, `_`, `.`, `-`), so `model_reasoning_effort` behind a
+no-break space or inside quotes is still that setting: a duplicate of
+`--effort`, and never silently the profile's value. Its value is reported
+only when the key needed no more than plain trimming; otherwise it is
+`unknown`. The argv itself reaches the engine byte for byte.
+
+Not covered by this reading, so not reflected in the report: codex profile
+layering (`-p <profile>` and the `profile` key), clustered short options,
+and anything beyond the plain option forms in the claude and agy argv.
+
+**`--require-declared`** refuses to start when the model or the effort is
+`undeclared` or `unknown`, and refuses a reroute hop onto a tank where it is
+(`reason: "refused: undeclared effort"`). Passing both flags always satisfies it.
+
+What the report can and cannot know:
+
+- **Claude's effort is per model.** In a tank's own `settings.json` a level
+  saved under `modelSettings` by the model's full name is what applies; the
+  top-level `effortLevel` reaches only older models, and newer ones ignore it.
+  clikae cannot resolve an alias (`opus`) to a full name, so it reports an
+  effort as `profile` only on an exact `modelSettings` match (a `[1m]` suffix
+  aside) and otherwise says `undeclared`, with a line explaining why. Pass
+  `--effort` to pin it.
+- **Only the tank's own file is read.** A project's `.claude/settings.json` or
+  `.codex/config.toml`, managed settings, an `env` block inside a settings
+  file, a `maxEffortLevel` cap, or a codex `--profile` can still change what
+  the engine does. A flag is the one source nothing in a profile outranks —
+  except Claude's `CLAUDE_CODE_EFFORT_LEVEL`, which is why a differing one is
+  refused.
+- **codex effort levels are not checked.** Its help lists none, so burn only
+  requires one plain word; an unknown level is codex's to reject.
 
 ### agy (Antigravity) is the exception — read this before dispatching to it
 
@@ -254,6 +359,8 @@ object can't give it:
                             // reading from the last 7 days; see
                             // docs/DESIGN-board-fuel-dots.md
   "rerouted_from": [],      // ["codex/T1", …] — every tank tried before this one
+  "model": "gpt-x", "model_source": "profile",        // #237 — what THIS tank runs with,
+  "effort": "undeclared", "effort_source": "undeclared", // and where each came from
   "elapsed_s": 4,
   "run_id": "burn-28186",   // stable across this burn's whole reroute walk
   "state": "running",       // running | waiting-reset | done | dry | dry-paused | fail | infra
