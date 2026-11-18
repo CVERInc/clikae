@@ -182,7 +182,7 @@ var require_react_production = /* @__PURE__ */ __commonJSMin(((exports) => {
 	}
 	function lazyInitializer(payload) {
 		if (-1 === payload._status) {
-			var ctor = payload._result, thenable = ctor();
+			var thenable = (0, payload._result)();
 			thenable.then(function(moduleObject) {
 				if (0 === payload._status || -1 === payload._status) payload._status = 1, payload._result = moduleObject, void 0 === thenable.status && (thenable.status = "fulfilled", thenable.value = moduleObject);
 			}, function(error) {
@@ -631,7 +631,7 @@ var require_scheduler_production = /* @__PURE__ */ __commonJSMin(((exports) => {
 				timeout = 250;
 				break;
 			case 5:
-				timeout = 1073741823;
+				timeout = 0x3fffffff;
 				break;
 			case 4:
 				timeout = 1e4;
@@ -1345,10 +1345,10 @@ var require_react_dom_client_production = /* @__PURE__ */ __commonJSMin(((export
 			case 16777216:
 			case 33554432: return lanes & 62914560;
 			case 67108864: return 67108864;
-			case 134217728: return 134217728;
+			case 0x8000000: return 0x8000000;
 			case 268435456: return 268435456;
 			case 536870912: return 536870912;
-			case 1073741824: return 0;
+			case 0x40000000: return 0;
 			default: return lanes;
 		}
 	}
@@ -1357,7 +1357,7 @@ var require_react_dom_client_production = /* @__PURE__ */ __commonJSMin(((export
 		if (0 === pendingLanes) return 0;
 		var nextLanes = 0, suspendedLanes = root.suspendedLanes, pingedLanes = root.pingedLanes;
 		root = root.warmLanes;
-		var nonIdlePendingLanes = pendingLanes & 134217727;
+		var nonIdlePendingLanes = pendingLanes & 0x7ffffff;
 		0 !== nonIdlePendingLanes ? (pendingLanes = nonIdlePendingLanes & ~suspendedLanes, 0 !== pendingLanes ? nextLanes = getHighestPriorityLanes(pendingLanes) : (pingedLanes &= nonIdlePendingLanes, 0 !== pingedLanes ? nextLanes = getHighestPriorityLanes(pingedLanes) : rootHasPendingCommit || (rootHasPendingCommit = nonIdlePendingLanes & ~root, 0 !== rootHasPendingCommit && (nextLanes = getHighestPriorityLanes(rootHasPendingCommit))))) : (nonIdlePendingLanes = pendingLanes & ~suspendedLanes, 0 !== nonIdlePendingLanes ? nextLanes = getHighestPriorityLanes(nonIdlePendingLanes) : 0 !== pingedLanes ? nextLanes = getHighestPriorityLanes(pingedLanes) : rootHasPendingCommit || (rootHasPendingCommit = pendingLanes & ~root, 0 !== rootHasPendingCommit && (nextLanes = getHighestPriorityLanes(rootHasPendingCommit))));
 		return 0 === nextLanes ? 0 : 0 !== wipLanes && wipLanes !== nextLanes && 0 === (wipLanes & suspendedLanes) && (suspendedLanes = nextLanes & -nextLanes, rootHasPendingCommit = wipLanes & -wipLanes, suspendedLanes >= rootHasPendingCommit || 32 === suspendedLanes && 0 !== (rootHasPendingCommit & 4194048)) ? wipLanes : nextLanes;
 	}
@@ -1403,10 +1403,10 @@ var require_react_dom_client_production = /* @__PURE__ */ __commonJSMin(((export
 			case 16777216:
 			case 33554432: return -1;
 			case 67108864:
-			case 134217728:
+			case 0x8000000:
 			case 268435456:
 			case 536870912:
-			case 1073741824: return -1;
+			case 0x40000000: return -1;
 			default: return -1;
 		}
 	}
@@ -1454,7 +1454,7 @@ var require_react_dom_client_production = /* @__PURE__ */ __commonJSMin(((export
 		root.suspendedLanes &= ~spawnedLane;
 		var spawnedLaneIndex = 31 - clz32(spawnedLane);
 		root.entangledLanes |= spawnedLane;
-		root.entanglements[spawnedLaneIndex] = root.entanglements[spawnedLaneIndex] | 1073741824 | entangledLanes & 261930;
+		root.entanglements[spawnedLaneIndex] = root.entanglements[spawnedLaneIndex] | 0x40000000 | entangledLanes & 261930;
 	}
 	function markRootEntangled(root, entangledLanes) {
 		var rootEntangledLanes = root.entangledLanes |= entangledLanes;
@@ -1501,7 +1501,7 @@ var require_react_dom_client_production = /* @__PURE__ */ __commonJSMin(((export
 				lane = 128;
 				break;
 			case 268435456:
-				lane = 134217728;
+				lane = 0x8000000;
 				break;
 			default: lane = 0;
 		}
@@ -1509,7 +1509,7 @@ var require_react_dom_client_production = /* @__PURE__ */ __commonJSMin(((export
 	}
 	function lanesToEventPriority(lanes) {
 		lanes &= -lanes;
-		return 2 < lanes ? 8 < lanes ? 0 !== (lanes & 134217727) ? 32 : 268435456 : 8 : 2;
+		return 2 < lanes ? 8 < lanes ? 0 !== (lanes & 0x7ffffff) ? 32 : 268435456 : 8 : 2;
 	}
 	function resolveUpdatePriority() {
 		var updatePriority = ReactDOMSharedInternals.p;
@@ -2637,7 +2637,7 @@ var require_react_dom_client_production = /* @__PURE__ */ __commonJSMin(((export
 	function createWorkInProgress(current, pendingProps) {
 		var workInProgress = current.alternate;
 		null === workInProgress ? (workInProgress = createFiberImplClass(current.tag, pendingProps, current.key, current.mode), workInProgress.elementType = current.elementType, workInProgress.type = current.type, workInProgress.stateNode = current.stateNode, workInProgress.alternate = current, current.alternate = workInProgress) : (workInProgress.pendingProps = pendingProps, workInProgress.type = current.type, workInProgress.flags = 0, workInProgress.subtreeFlags = 0, workInProgress.deletions = null);
-		workInProgress.flags = current.flags & 1206910976;
+		workInProgress.flags = current.flags & 0x47f00000;
 		workInProgress.childLanes = current.childLanes;
 		workInProgress.lanes = current.lanes;
 		workInProgress.child = current.child;
@@ -2656,7 +2656,7 @@ var require_react_dom_client_production = /* @__PURE__ */ __commonJSMin(((export
 		return workInProgress;
 	}
 	function resetWorkInProgress(workInProgress, renderLanes) {
-		workInProgress.flags &= 1206910978;
+		workInProgress.flags &= 0x47f00002;
 		var current = workInProgress.alternate;
 		null === current ? (workInProgress.childLanes = 0, workInProgress.lanes = renderLanes, workInProgress.child = null, workInProgress.subtreeFlags = 0, workInProgress.memoizedProps = null, workInProgress.memoizedState = null, workInProgress.updateQueue = null, workInProgress.dependencies = null, workInProgress.stateNode = null) : (workInProgress.childLanes = current.childLanes, workInProgress.lanes = current.lanes, workInProgress.child = current.child, workInProgress.subtreeFlags = 0, workInProgress.deletions = null, workInProgress.memoizedProps = current.memoizedProps, workInProgress.memoizedState = current.memoizedState, workInProgress.updateQueue = current.updateQueue, workInProgress.type = current.type, renderLanes = current.dependencies, workInProgress.dependencies = null === renderLanes ? null : {
 			lanes: renderLanes.lanes,
@@ -3228,8 +3228,7 @@ var require_react_dom_client_production = /* @__PURE__ */ __commonJSMin(((export
 	}
 	function resolveLazy(lazyType) {
 		try {
-			var init = lazyType._init;
-			return init(lazyType._payload);
+			return (0, lazyType._init)(lazyType._payload);
 		} catch (x) {
 			if (null !== x && "object" === typeof x && "function" === typeof x.then) throw suspendedThenable = x, SuspenseException;
 			throw x;
@@ -3289,11 +3288,11 @@ var require_react_dom_client_production = /* @__PURE__ */ __commonJSMin(((export
 			if (!shouldTrackSideEffects) return newFiber.flags |= 1048576, lastPlacedIndex;
 			newIndex = newFiber.alternate;
 			if (null !== newIndex) return newIndex = newIndex.index, newIndex < lastPlacedIndex ? (newFiber.flags |= 2, lastPlacedIndex) : newIndex;
-			newFiber.flags |= 134217730;
+			newFiber.flags |= 0x8000002;
 			return lastPlacedIndex;
 		}
 		function placeSingleChild(newFiber) {
-			shouldTrackSideEffects && null === newFiber.alternate && (newFiber.flags |= 134217730);
+			shouldTrackSideEffects && null === newFiber.alternate && (newFiber.flags |= 0x8000002);
 			return newFiber;
 		}
 		function updateTextNode(returnFiber, current, textContent, lanes) {
@@ -4408,7 +4407,7 @@ var require_react_dom_client_production = /* @__PURE__ */ __commonJSMin(((export
 		return prevState;
 	}
 	function mountDeferredValueImpl(hook, value, initialValue) {
-		if (void 0 === initialValue || 0 !== (renderLanes & 1073741824) && 0 === (workInProgressRootRenderLanes & 261930)) return hook.memoizedState = value;
+		if (void 0 === initialValue || 0 !== (renderLanes & 0x40000000) && 0 === (workInProgressRootRenderLanes & 261930)) return hook.memoizedState = value;
 		hook.memoizedState = initialValue;
 		hook = requestDeferredLane();
 		currentlyRenderingFiber.lanes |= hook;
@@ -4418,7 +4417,7 @@ var require_react_dom_client_production = /* @__PURE__ */ __commonJSMin(((export
 	function updateDeferredValueImpl(hook, prevValue, value, initialValue) {
 		if (objectIs(value, prevValue)) return value;
 		if (null !== currentTreeHiddenStackCursor.current) return hook = mountDeferredValueImpl(hook, value, initialValue), objectIs(hook, prevValue) || (didReceiveUpdate = !0), hook;
-		if (0 === (renderLanes & 106) || 0 !== (renderLanes & 1073741824) && 0 === (workInProgressRootRenderLanes & 261930)) return didReceiveUpdate = !0, hook.memoizedState = value;
+		if (0 === (renderLanes & 106) || 0 !== (renderLanes & 0x40000000) && 0 === (workInProgressRootRenderLanes & 261930)) return didReceiveUpdate = !0, hook.memoizedState = value;
 		hook = requestDeferredLane();
 		currentlyRenderingFiber.lanes |= hook;
 		workInProgressRootSkippedLanes |= hook;
@@ -4449,8 +4448,7 @@ var require_react_dom_client_production = /* @__PURE__ */ __commonJSMin(((export
 	function noop() {}
 	function startHostTransition(formFiber, pendingState, action, formData) {
 		if (5 !== formFiber.tag) throw Error(formatProdErrorMessage(476));
-		var queue = ensureFormComponentIsStateful(formFiber).queue;
-		startTransition(formFiber, queue, pendingState, sharedNotPendingObject, null === action ? noop : function() {
+		startTransition(formFiber, ensureFormComponentIsStateful(formFiber).queue, pendingState, sharedNotPendingObject, null === action ? noop : function() {
 			requestFormReset$1(formFiber);
 			return action(formData);
 		});
@@ -4905,8 +4903,7 @@ var require_react_dom_client_production = /* @__PURE__ */ __commonJSMin(((export
 	}
 	function logUncaughtError(root, errorInfo) {
 		try {
-			var onUncaughtError = root.onUncaughtError;
-			onUncaughtError(errorInfo.value, { componentStack: errorInfo.stack });
+			(0, root.onUncaughtError)(errorInfo.value, { componentStack: errorInfo.stack });
 		} catch (e$78) {
 			setTimeout(function() {
 				throw e$78;
@@ -4915,8 +4912,7 @@ var require_react_dom_client_production = /* @__PURE__ */ __commonJSMin(((export
 	}
 	function logCaughtError(root, boundary, errorInfo) {
 		try {
-			var onCaughtError = root.onCaughtError;
-			onCaughtError(errorInfo.value, {
+			(0, root.onCaughtError)(errorInfo.value, {
 				componentStack: errorInfo.stack,
 				errorBoundary: 1 === boundary.tag ? boundary.stateNode : null
 			});
@@ -5165,7 +5161,7 @@ var require_react_dom_client_production = /* @__PURE__ */ __commonJSMin(((export
 					renderDidSuspendDelayIfPossible();
 				}
 				workInProgress = retryActivityComponentWithoutHydrating(current, workInProgress, renderLanes);
-			} else current = prevState.treeContext, nextHydratableInstance = getNextHydratable(dehydrated.nextSibling), hydrationParentFiber = workInProgress, isHydrating = !0, hydrationErrors = null, rootOrSingletonContext = !1, null !== current && restoreSuspendedTreeContext(workInProgress, current), workInProgress = mountActivityChildren(workInProgress, nextProps), workInProgress.flags |= 134221824;
+			} else current = prevState.treeContext, nextHydratableInstance = getNextHydratable(dehydrated.nextSibling), hydrationParentFiber = workInProgress, isHydrating = !0, hydrationErrors = null, rootOrSingletonContext = !1, null !== current && restoreSuspendedTreeContext(workInProgress, current), workInProgress = mountActivityChildren(workInProgress, nextProps), workInProgress.flags |= 0x8001000;
 			return workInProgress;
 		}
 		current = createWorkInProgress(current.child, {
@@ -5337,7 +5333,7 @@ var require_react_dom_client_production = /* @__PURE__ */ __commonJSMin(((export
 		if (showFallback) return reuseSuspenseHandlerOnStack(), showFallback = nextProps.fallback, didSuspend = workInProgress.mode, prevState = current.child, dehydrated$96 = prevState.sibling, nextProps = createWorkInProgress(prevState, {
 			mode: "hidden",
 			children: nextProps.children
-		}), nextProps.subtreeFlags = prevState.subtreeFlags & 1206910976, null !== dehydrated$96 ? showFallback = createWorkInProgress(dehydrated$96, showFallback) : (showFallback = createFiberFromFragment(showFallback, didSuspend, renderLanes, null), showFallback.flags |= 2), showFallback.return = workInProgress, nextProps.return = workInProgress, nextProps.sibling = showFallback, workInProgress.child = nextProps, bailoutOffscreenComponent(null, nextProps), nextProps = workInProgress.child, showFallback = current.child.memoizedState, null === showFallback ? showFallback = mountSuspenseOffscreenState(renderLanes) : (didSuspend = showFallback.cachePool, null !== didSuspend ? (prevState = CacheContext._currentValue, didSuspend = didSuspend.parent !== prevState ? {
+		}), nextProps.subtreeFlags = prevState.subtreeFlags & 0x47f00000, null !== dehydrated$96 ? showFallback = createWorkInProgress(dehydrated$96, showFallback) : (showFallback = createFiberFromFragment(showFallback, didSuspend, renderLanes, null), showFallback.flags |= 2), showFallback.return = workInProgress, nextProps.return = workInProgress, nextProps.sibling = showFallback, workInProgress.child = nextProps, bailoutOffscreenComponent(null, nextProps), nextProps = workInProgress.child, showFallback = current.child.memoizedState, null === showFallback ? showFallback = mountSuspenseOffscreenState(renderLanes) : (didSuspend = showFallback.cachePool, null !== didSuspend ? (prevState = CacheContext._currentValue, didSuspend = didSuspend.parent !== prevState ? {
 			parent: prevState,
 			pool: prevState
 		} : didSuspend) : didSuspend = getSuspendedCache(), showFallback = {
@@ -5432,7 +5428,7 @@ var require_react_dom_client_production = /* @__PURE__ */ __commonJSMin(((export
 		rootOrSingletonContext = !1;
 		null !== current && restoreSuspendedTreeContext(workInProgress, current);
 		workInProgress = mountSuspensePrimaryChildren(workInProgress, nextProps.children);
-		workInProgress.flags |= 134221824;
+		workInProgress.flags |= 0x8001000;
 		return workInProgress;
 	}
 	function scheduleSuspenseWorkOnFiber(fiber, renderLanes, propagationRoot) {
@@ -5688,7 +5684,7 @@ var require_react_dom_client_production = /* @__PURE__ */ __commonJSMin(((export
 						hydrationErrors = null;
 						rootOrSingletonContext = !0;
 						renderLanes = mountChildFibers(workInProgress, null, props, renderLanes);
-						for (workInProgress.child = renderLanes; renderLanes;) renderLanes.flags = renderLanes.flags & -3 | 134221824, renderLanes = renderLanes.sibling;
+						for (workInProgress.child = renderLanes; renderLanes;) renderLanes.flags = renderLanes.flags & -3 | 0x8001000, renderLanes = renderLanes.sibling;
 					}
 					else {
 						resetHydrationState();
@@ -5790,7 +5786,7 @@ var require_react_dom_client_production = /* @__PURE__ */ __commonJSMin(((export
 	}
 	function bubbleProperties(completedWork) {
 		var didBailout = null !== completedWork.alternate && completedWork.alternate.child === completedWork.child, newChildLanes = 0, subtreeFlags = 0;
-		if (didBailout) for (var child$113 = completedWork.child; null !== child$113;) newChildLanes |= child$113.lanes | child$113.childLanes, subtreeFlags |= child$113.subtreeFlags & 1206910976, subtreeFlags |= child$113.flags & 1206910976, child$113.return = completedWork, child$113 = child$113.sibling;
+		if (didBailout) for (var child$113 = completedWork.child; null !== child$113;) newChildLanes |= child$113.lanes | child$113.childLanes, subtreeFlags |= child$113.subtreeFlags & 0x47f00000, subtreeFlags |= child$113.flags & 0x47f00000, child$113.return = completedWork, child$113 = child$113.sibling;
 		else for (child$113 = completedWork.child; null !== child$113;) newChildLanes |= child$113.lanes | child$113.childLanes, subtreeFlags |= child$113.subtreeFlags, subtreeFlags |= child$113.flags, child$113.return = completedWork, child$113 = child$113.sibling;
 		completedWork.subtreeFlags |= subtreeFlags;
 		completedWork.childLanes = newChildLanes;
@@ -7958,7 +7954,7 @@ var require_react_dom_client_production = /* @__PURE__ */ __commonJSMin(((export
 	function renderDidSuspendDelayIfPossible() {
 		workInProgressRootExitStatus = 4;
 		workInProgressRootDidSkipSuspendedSiblings || (workInProgressRootRenderLanes & 4194048) !== workInProgressRootRenderLanes && null !== suspenseHandlerStackCursor.current || (workInProgressRootIsPrerendering = !0);
-		0 === (workInProgressRootSkippedLanes & 134217727) && 0 === (workInProgressRootInterleavedUpdatedLanes & 134217727) || null === workInProgressRoot || markRootSuspended(workInProgressRoot, workInProgressRootRenderLanes, workInProgressDeferredLane, !1);
+		0 === (workInProgressRootSkippedLanes & 0x7ffffff) && 0 === (workInProgressRootInterleavedUpdatedLanes & 0x7ffffff) || null === workInProgressRoot || markRootSuspended(workInProgressRoot, workInProgressRootRenderLanes, workInProgressDeferredLane, !1);
 	}
 	function renderRootSync(root, lanes, shouldYieldForPrerendering) {
 		var prevExecutionContext = executionContext;
@@ -8244,10 +8240,7 @@ var require_react_dom_client_production = /* @__PURE__ */ __commonJSMin(((export
 		shouldStartViewTransition ? pendingViewTransition = startViewTransition(suspendedState, root.containerInfo, pendingTransitionTypes, flushMutationEffects, flushLayoutEffects, flushAfterMutationEffects, flushSpawnedWork, flushPassiveEffects, reportViewTransitionError, null, null) : (flushMutationEffects(), flushLayoutEffects(), flushSpawnedWork());
 	}
 	function reportViewTransitionError(error) {
-		if (0 !== pendingEffectsStatus) {
-			var onRecoverableError = pendingEffectsRoot.onRecoverableError;
-			onRecoverableError(error, { componentStack: null });
-		}
+		if (0 !== pendingEffectsStatus) (0, pendingEffectsRoot.onRecoverableError)(error, { componentStack: null });
 	}
 	function flushAfterMutationEffects() {
 		3 === pendingEffectsStatus && (pendingEffectsStatus = 0, commitAfterMutationEffectsOnFiber(pendingFinishedWork, pendingEffectsRoot), pendingEffectsStatus = 4);
@@ -8509,7 +8502,7 @@ var require_react_dom_client_production = /* @__PURE__ */ __commonJSMin(((export
 							var suspendedLanes = root$190.suspendedLanes, pingedLanes = root$190.pingedLanes;
 							JSCompiler_inline_result = (1 << 31 - clz32(42 | syncTransitionLanes) + 1) - 1;
 							JSCompiler_inline_result &= pendingLanes & ~(suspendedLanes & ~pingedLanes);
-							JSCompiler_inline_result = JSCompiler_inline_result & 201326741 ? JSCompiler_inline_result & 201326741 | 1 : JSCompiler_inline_result ? JSCompiler_inline_result | 2 : 0;
+							JSCompiler_inline_result = JSCompiler_inline_result & 0xc000095 ? JSCompiler_inline_result & 0xc000095 | 1 : JSCompiler_inline_result ? JSCompiler_inline_result | 2 : 0;
 						}
 						0 !== JSCompiler_inline_result && (didPerformSomeWork = !0, performSyncWorkOnRoot(root$190, JSCompiler_inline_result));
 					} else JSCompiler_inline_result = workInProgressRootRenderLanes, JSCompiler_inline_result = getNextLanes(root$190, root$190 === workInProgressRoot ? JSCompiler_inline_result : 0, null !== root$190.cancelPendingCommit || -1 !== root$190.timeoutHandle), 0 === (JSCompiler_inline_result & 3) || checkIfRootIsPrerendering(root$190, JSCompiler_inline_result) || (didPerformSomeWork = !0, performSyncWorkOnRoot(root$190, JSCompiler_inline_result));
@@ -11341,8 +11334,7 @@ var require_react_dom_client_production = /* @__PURE__ */ __commonJSMin(((export
 	ReactDOMHydrationRoot.prototype.render = ReactDOMRoot.prototype.render = function(children) {
 		var root = this._internalRoot;
 		if (null === root) throw Error(formatProdErrorMessage(409));
-		var current = root.current;
-		updateContainerImpl(current, requestUpdateLane(), children, root, null, null);
+		updateContainerImpl(root.current, requestUpdateLane(), children, root, null, null);
 	};
 	ReactDOMHydrationRoot.prototype.unmount = ReactDOMRoot.prototype.unmount = function() {
 		var root = this._internalRoot;
@@ -11797,7 +11789,7 @@ function startJuneClient(options) {
 	const routerRoot = document.querySelector("[data-june-root]");
 	if (!routerRoot) return;
 	if (routerRoot.getAttribute("data-june-router") === "flight") {
-		import("./client-router-flight-929a41e1.js").then(({ startFlightRouter }) => startFlightRouter());
+		import("./client-router-flight-18bc2712.js").then(({ startFlightRouter }) => startFlightRouter());
 		return;
 	}
 	startClientRouter(rehydrate);
@@ -12556,7 +12548,7 @@ function setup(opts) {
 	const locale = trigger?.dataset.locale || void 0;
 	let loadingHandle = null;
 	const getHandle = () => loadingHandle ??= (async () => {
-		const [{ createSearch }, res] = await Promise.all([import("./search-d04d2109.js"), fetch(endpoint, { headers: { accept: "application/json" } })]);
+		const [{ createSearch }, res] = await Promise.all([import("./search-43537636.js"), fetch(endpoint, { headers: { accept: "application/json" } })]);
 		if (!res.ok) throw new Error(`search index ${res.status}`);
 		const data = await res.json();
 		return createSearch({

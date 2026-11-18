@@ -1,8 +1,8 @@
 // node_modules/@kurajs/core/dist/kb.js
 const popcount = (x) => {
-	x = x - (x >>> 1 & 1431655765);
+	x = x - (x >>> 1 & 0x55555555);
 	x = (x & 858993459) + (x >>> 2 & 858993459);
-	x = x + (x >>> 4) & 252645135;
+	x = x + (x >>> 4) & 0xf0f0f0f;
 	return x * 16843009 >>> 24;
 };
 var Kb = class Kb {

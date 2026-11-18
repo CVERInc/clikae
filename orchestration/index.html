@@ -253,10 +253,51 @@ option given twice, a <code>-c profile=…</code> or <code>-c profiles.…</code
 a <code>/</code>), a layer file that is not valid TOML or carries profile settings of
 its own, and a value that is not a one-line string. The burn says which of
 these it was. <code>--model</code> / <code>--effort</code> are still reported as <code>flag</code>.</p>
-<p>Not covered by this reading, so not reflected in the report: clustered short
-options, <code>--ignore-user-config</code>, config layers outside the tank (system,
-project), and anything beyond the plain option forms in the claude and agy
-argv.</p>
+<p>The claude and agy argv are read with each engine's own option syntax too,
+taken from its <code>--help</code> (claude 2.1.326, agy 1.5.9):</p>
+<ul>
+<li><strong>claude</strong>: <code>--model &lt;m&gt;</code> / <code>--model=&lt;m&gt;</code> and <code>--effort &lt;e&gt;</code> / <code>--effort=&lt;e&gt;</code>.
+There is no short form and no abbreviation. Reading stops at a bare <code>--</code>
+that stands where an option could.
+An option that takes a value takes the next argument whatever it looks
+like, so <code>--system-prompt --model x</code> names no model, and
+<code>--system-prompt -- --model x</code> names one. An option with an optional value
+(<code>--debug [filter]</code>, <code>-r [value]</code>) never takes an argument that starts with
+<code>-</code>, so <code>--debug -- --model</code> is a prompt. A list option
+(<code>--add-dir &lt;directories...&gt;</code>) takes every argument up to the next one that
+starts with <code>-</code>. Short options cluster
+(<code>-pc</code>), with a value glued to the last (<code>-nNAME</code>); a cluster is read
+letter by letter. The first plain argument that no option took, when it
+names a claude subcommand, ends claude's own options; <code>mcp</code> in
+<code>--add-dir lib mcp</code> or <code>-r mcp</code> is a value, not a subcommand. The reader
+has every option the installed claude declares, including the ones
+<code>--help</code> does not list (<code>--max-turns</code>, <code>--permission-prompt-tool</code>, …).</li>
+<li><strong>agy</strong>: <code>--model</code> / <code>-model</code> and <code>--effort</code> / <code>-effort</code>, the value as the
+next argument or after <code>=</code>. There is no short form and no clustering.
+Reading stops at a bare <code>--</code> and at the first argument that is not a flag.
+A flag that takes a value takes the next argument, so <code>-p --model=x</code> is a
+prompt.</li>
+</ul>
+<p>For both, a model or effort is <code>unknown</code> rather than guessed when: it is
+given twice with different values; its value is empty, holds a control
+character, or is a separate argument starting with <code>-</code>; an effort is not one
+of the levels the help lists; it comes after a claude subcommand; or its
+reading depends on an option the reader does not have (for agy that includes
+<code>-m</code>; for claude, a letter in a cluster that is not a short option). Such an
+option may be a flag or may take the next argument, so the arguments are read
+each way: a model or effort that every reading gives is reported, one that no
+reading gives is not there (<code>--frobnicate y -- --model=x</code> names none), and
+anything else is <code>unknown</code> — the profile's value is never reported in its
+place. An option a newer engine adds has that effect until the reader learns
+it: write the model with <code>--model</code> / <code>--effort</code> to burn instead.</p>
+<p>An effort in the arguments after <code>--</code>, like a model there, is refused with a
+<code>--to</code> that names another engine
+(<code>reason: &quot;refused: the arguments after -- name an effort; …&quot;</code>): those
+arguments reach both engines unchanged. <code>--effort</code> is the form that crosses.</p>
+<p>Not covered by this reading, so not reflected in the report: a model or
+effort inside claude's <code>--settings &lt;file-or-json&gt;</code> or agy's <code>--settings</code>,
+codex's <code>--ignore-user-config</code>, config layers outside the tank (system,
+project), and codex's clustered short options.</p>
 <p><strong><code>--require-declared</code></strong> refuses to start when the model or the effort is
 <code>undeclared</code> or <code>unknown</code>, and refuses a reroute hop onto a tank where it is
 (<code>reason: &quot;refused: undeclared effort&quot;</code>). Passing both flags always satisfies it.</p>
@@ -1193,4 +1234,4 @@ surprises), and the <code>conductor</code> Claude Code skill for session-driven 
   sync();
   var outlet=document.querySelector('[data-june-outlet]');
   if(outlet) new MutationObserver(sync).observe(outlet,{childList:true,subtree:true});
-})();</script><script type="module" src="/_june/client.9d80473a.js"></script></body></html>
+})();</script><script type="module" src="/_june/client.60280bb0.js"></script></body></html>
