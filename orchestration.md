@@ -268,6 +268,71 @@ What the report can and cannot know:
 - **codex effort levels are not checked.** Its help lists none, so burn only
   requires one plain word; an unknown level is codex's to reject.
 
+### A memory cap on the engine (#236)
+
+A cap put *around* the burn — `systemd-run --user --scope -p MemoryMax=10G
+clikae burn …` — caps nothing that matters: burn hands the engine to tmux, so
+the engine and everything it starts run in the tmux server's cgroup (a
+`tmux-spawn-*.scope`, or the login session's scope), not in the burn's.
+
+`--memory-max <size>` (env `CLIKAE_BURN_MEMORY_MAX`), optionally with
+`--memory-high <size>` (env `CLIKAE_BURN_MEMORY_HIGH`), starts the engine
+itself as
+
+    systemd-run --user --scope --quiet --unit=clikae-burn-<run id>-l<n>-<nonce> \
+      -p MemoryMax=<size> [-p MemoryHigh=<size>] -p MemorySwapMax=0 \
+      -p TimeoutStopSec=10s -- sh -c '<record $INVOCATION_ID>; exec "$@"' … <engine argv>
+
+once per launch. `<n>` counts the burn's launches, so every reroute hop,
+retry and same-tank re-fire (`--wait-for-reset`, the `--no-reroute` dry
+pause) has its own unit, and `systemctl --user status 'clikae-burn-*'` names
+the lane; `<nonce>` is 8 random hex digits, because the run id ends in a pid,
+and a pid is reused (or shared across PID namespaces under one user manager).
+The `sh` records the scope's invocation id and execs the engine in its place
+(same pid). `MemorySwapMax=0` because on a host with swap a cap alone does not
+stop a runaway engine: the kernel pages it out instead (measured: 128M
+touched under `MemoryMax=64M` lived on, 72M of it in swap). `--json` and the status file carry `memory_max`, `memory_high` and
+`memory_unit` (the latest launch's unit; all three `null` without a cap). A
+size is bytes or a number with `K`, `M`, `G` or `T`, and at least `64M`.
+
+**When the engine exits, its scope is stopped.** A scope lives as long as any
+process in it, so a child the engine left behind — a dev server, a stuck
+subprocess — would keep running after the burn returned, with nobody coming
+back for it. Stopping the scope ends those processes (SIGTERM, then SIGKILL
+after 10s), and burn names them first (pid and command, five at most, then
+"and N more"). That is deliberate: an unattended lane should leave nothing
+running. Start anything that must outlive the task outside the burn.
+
+Only a scope this launch started is stopped. The scope's invocation id,
+recorded from inside it, must match the unit's when burn comes to stop it; a
+launch that systemd-run refused (the name was already loaded) never recorded
+one, so whatever holds the name is left alone.
+
+**An engine the cap killed says so.** When the scope recorded an OOM kill
+(`Result=oom-kill`, or `oom_kill` in its `memory.events`), burn warns that the
+engine hit its cap, and a run with no artifact fails as "ended by the memory
+cap (--memory-max <size>)" — in the message and in `reason` — not as a real
+task failure. The scope is not `--collect`ed for that reason: burn reads it,
+then resets it.
+
+**What the cap does not hold.** It holds every process the engine forks. It
+does not hold a process the engine has the *tmux server* start: the engine
+runs in a tmux pane, and `tmux new-session …` (or anything else that asks the
+server for a new pane) is started by the server, in the server's cgroup,
+outside the cap. A nested `clikae burn` is capped only when it inherits
+`CLIKAE_BURN_MEMORY_MAX` from the environment — the flag is not inherited —
+and then in its own scope beside the outer one, not inside it.
+
+It is refused before anything starts — never run uncapped with a warning —
+when the size is invalid, when there is no `systemd-run` (macOS, Windows,
+Linux without systemd), when the user manager cannot start a scope, or when
+a probe scope's own cgroup does not carry the requested `memory.max` (cgroup
+v1, or the memory controller not delegated to the user manager) or still
+allows swap (`memory.swap.max` other than 0; a kernel without swap accounting
+has no such file and passes). The refusal starts with what set the value
+(`--memory-max` or `CLIKAE_BURN_MEMORY_MAX`), and so does its `reason`. Drop
+the flag (or unset the variable) to run uncapped.
+
 ### agy (Antigravity) is the exception — read this before dispatching to it
 
 agy's login is one **global** Keychain entry, so there's no per-shell env to
@@ -431,6 +496,8 @@ object can't give it:
   "rerouted_from": [],      // ["codex/T1", …] — every tank tried before this one
   "model": "gpt-x", "model_source": "profile",        // #237 — what THIS tank runs with,
   "effort": "undeclared", "effort_source": "undeclared", // and where each came from
+  "memory_max": null, "memory_high": null,            // #236 — --memory-max / --memory-high, as given
+  "memory_unit": null,      // the latest launch's systemd scope, e.g. clikae-burn-codex-T1-burn-28186-l1-3f9a0c1e.scope
   "elapsed_s": 4,
   "run_id": "burn-28186",   // stable across this burn's whole reroute walk
   "state": "running",       // running | waiting-reset | done | dry | dry-paused | fail | infra
