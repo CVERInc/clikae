@@ -1,0 +1,116 @@
+1..114
+ok 1 doctor reports environment + a row per supported CLI
+ok 2 doctor lists ALL adapters including the last one (vercel)
+ok 3 doctor counts a created profile and suggests the next step
+ok 4 doctor changes nothing on disk (read-only)
+ok 5 doctor changes nothing on disk with the default socket location (no TMUX_TMPDIR)
+ok 6 doctor rejects unexpected arguments
+ok 7 doctor names a tank left signed out by a refresh failure
+ok 8 doctor stays quiet once the tank was logged back in
+ok 9 doctor says nothing about a tank with no daemon log
+ok 10 doctor separates agy tanks that carry a login from those that don't # skip keychain section is macOS-only
+ok 11 doctor: says nothing about old names when there are none
+ok 12 doctor: counts state files still carrying the old prefix
+ok 13 doctor: a readable Soul store says nothing
+ok 14 doctor: an unreadable Soul store is reported, with the engines that share it
+ok 15 doctor: an ordinary chmod on a Soul store is reported as itself
+ok 16 doctor: the memory block's labels line up with the rows above it
+ok 17 doctor reports permissions drift once per tank
+ok 18 doctor reports a recorded cockpit that has lost its guard
+ok 19 doctor says nothing about the cockpit when it really is armed
+ok 20 doctor reports a stray guard on a tank that is not the recorded cockpit
+ok 21 doctor reports a recorded cockpit whose tank no longer exists
+ok 22 doctor stays silent about cockpit when none is set
+ok 23 doctor scans for guards even when the state file is EMPTY (#63 r5 P2-3)
+ok 24 doctor scans for guards even when the state file is ABSENT (#63 r5 P2-3)
+ok 25 doctor names a state file that is a symlink (#63 r5 P2-3)
+ok 26 doctor reports a settings lock dir with no pid file (#63 r6 P3-3)
+ok 27 doctor's cockpit check changes nothing on disk (read-only)
+ok 28 doctor names a missing permissions template instead of blaming settings.json
+ok 29 doctor reports a live session whose PANE PROCESS lacks the guard on PATH
+ok 30 doctor checks a live session still under the PRE-0.28.3 prefix — the one that CANNOT have the guard
+ok 31 doctor stays silent when the live session's PANE PROCESS actually has the guard first on PATH
+ok 32 doctor changes nothing on disk when checking the tmux guard (read-only)
+ok 33 _doctor_pane_path (macOS ps eww fallback) reads the LAST PATH= token, not the command line's own
+ok 34 _doctor_pane_start_command_path extracts the FIRST PATH= token, not one from inside the wrapped command
+ok 35 _doctor_pane_start_command_path returns empty for a plain command with no env PATH= wrapper
+ok 36 _doctor_pane_path falls back to the pane's spawn command when ps returns nothing at all
+ok 37 _doctor_pane_path still fails when BOTH ps and the spawn command have nothing to offer
+ok 38 doctor verifies a guarded session via the spawn-command fallback when ps can't read process env (the real macOS defect)
+ok 39 doctor still says 'could not verify', not 'missing', for an unguarded session when ps can't read process env # skip this host reads /proc directly (Linux): ps can't-read is not reachable, see the sibling test below
+ok 40 doctor reports 'not first on PATH', not 'could not verify', for an unguarded session on a host whose /proc genuinely answers (the Linux branch's sibling of the test above)
+ok 41 doctor's tmux guard check survives list-panes failing on a vanished session (set -eo pipefail)
+ok 42 doctor's tmux guard check survives an unreadable pane environment (set -eo pipefail)
+ok 43 doctor reports 'could not verify', never 'not first on PATH' / 'restart the tank', when it cannot read the pane
+ok 44 _doctor_pane_path returns nonzero, not an empty PATH, when it cannot read the process
+ok 45 doctor names a non-solo tank that does not run a shared hook
+ok 46 doctor says NOTHING about fleet config when every tank has everything
+ok 47 doctor never reports a SOLO tank as missing fleet config
+ok 48 doctor names a non-solo tank that is missing a shared MCP server
+ok 49 doctor stays read-only while checking fleet config
+ok 50 doctor: names an agy tank whose harness copy differs from the template, and only then
+ok 51 runtime_sync: the first call copies a complete lib/ tree and writes VERSION
+ok 52 runtime_sync: same version is a no-op (a probe file survives)
+ok 53 runtime_sync: a source file newer than the copy re-copies at the same version (dev checkout)
+ok 54 runtime_sync: a different version re-copies, and keeps the previous tree for a hook mid-run
+ok 55 runtime_sync: a missing tree with a matching VERSION is re-copied
+ok 56 CLIKAE_RUNTIME_STABLE=0: runtime_lib prints CLIKAE_LIB and sync writes nothing
+ok 57 site 1+3+4: a spawned session's pane PATH, touch bindings and status row all name the runtime copy
+ok 58 site 5: clikae cockpit writes the runtime hook path into settings.json
+ok 59 site 6 + doctor: a session whose recorded shim dir is gone is named as a moved install
+ok 60 doctor control: a session whose shim dir exists says nothing about a moved install
+ok 61 doctor: a spawned session with the runtime shim first counts as guarded
+ok 62 doctor: a key binding running a script from a deleted dir is named, with the server-wide repair
+ok 63 doctor reports the runtime copy and its version
+ok 64 adoption: inclusive one-time sweep adopts every pre-existing shape, fingerprint or not, and never re-opens
+ok 65 adoption: a store whose flag can't be written lists correctly and warns exactly once, every run
+ok 66 #61 round-4 P3-4: a read-only store warns once even on --version/help/adapters, not just tank-reading commands
+ok 67 adoption: doctor's per-adapter scan does not turn one read-only tank into many warning lines
+ok 68 doctor --adopt persists the flag once the store becomes writable, and reports it
+ok 69 doctor --adopt on an already-adopted store is a no-op — it must not readmit a post-adoption stray
+ok 70 doctor --adopt on a half-adopted store (flag present, a content-shaped stray missing its marker) names the fix instead of claiming nothing to do
+ok 71 #61 round-5 P3-4: doctor --adopt prints only commands that work; unadoptable names are named, not commanded
+ok 72 adoption: a symlink alias for a real, adopted tank is not reported as a stray directory
+ok 73 settings apply on an explicitly named non-tank directory is refused, and never adopts it
+ok 74 settings apply #61 P1-2: a pre-marker real tank passes as the very first command run
+ok 75 adoption #61 P1-2: a store with no profiles/ dir yet is left untouched by the hoist
+ok 76 #61 round-5 P3-5: the first init on a brand-new store writes the flag; a directory appearing after it is not a tank
+ok 77 adoption warn: one WARN line and NO file left behind in TMPDIR
+ok 78 #61 round-4 P2-1: --version on a writable store forks neither ps nor date
+ok 79 #61 round-5 P3-1: --version on a read-only store forks neither ps nor date either
+ok 80 adoption warn dedupe: one line per process AND inherited by every fork and exec (#61 round-5 P3-1)
+ok 81 #61 round-6 P3-2: the warn dedupe is keyed by STORE — a second read-only store still gets its line
+ok 82 #61 round-6 P3-3: the read-only adoption flag is INTERNAL and means exactly 1
+ok 83 #61 round-6 P3-1: an unreadable marker is one WARN and a COMPLETE list, never a raw shell error
+ok 84 #61 round-6 P3-1: list_all_profiles under `set -u` returns a COMPLETE list whatever position is unreadable
+ok 85 adoption warn: launching a tank on a read-only store warns ONCE and leaves TMPDIR empty (#61 round-5 P3-1)
+ok 86 #114: an engine that inherited the warn dedupe is quiet about the SAME store and warns again once the store changed
+ok 87 a marker with a trailing CRLF still names a real tank
+ok 88 a marker with trailing whitespace still names a real tank
+ok 89 a marker naming a DIFFERENT engine is still correctly rejected (exact match not loosened)
+ok 90 #61 round-4 P3-3: a marker with garbage after the first line still names a tank (first-line semantics, documented)
+ok 91 #61 round-4 P3-3: a 200 KB marker still names a tank, and reading it stays cheap (bounded to the first line, not the whole file)
+ok 92 #61 round-5 P3-3: a marker with 16 KB of trailing whitespace still names a tank, in bounded time
+ok 93 #61 round-5 P3-3: a marker whose first line is longer than the bound is not a tank, and costs nothing to reject
+ok 94 the claude permissions template is valid, shaped JSON with no exact-duplicate rules
+ok 95 settings unions both lists and preserves other keys and backup
+ok 96 second apply is a byte-identical no-op
+ok 97 check detects hand-edited drift and goes green after apply
+ok 98 init creates settings that pass check
+ok 99 invalid JSON is skipped while other tanks are applied
+ok 100 dry-run previews all tanks without creating settings
+ok 101 settings rejects malformed shapes and empty files unchanged
+ok 102 settings rejects unsupported engines missing tanks and conflicting flags
+ok 103 settings apply without jq fails clearly and does not write
+ok 104 an allow rule that matches a deny rule by the same string is applied, not refused
+ok 105 settings apply with no tanks of the engine says so and exits 0
+ok 106 settings apply with a hello.lock/ dir and a zzempty/ dir present writes nothing into them
+ok 107 doctor permissions helper reports each drifted tank and stays read-only
+ok 108 targeted apply leaves other tanks alone and expands $HOME
+ok 109 $HOME/* expands the same whether or not the caller's HOME has a trailing slash
+ok 110 a colon-spelled allow rule is recognized as equivalent to the template's space-spelled rule
+ok 111 symlinked settings are skipped without changing the target
+ok 112 failed rename preserves the live file and cleans the temporary file
+ok 113 _settings_write_file refuses empty content and leaves the live file byte-identical (#63 P2-4)
+ok 114 settings.json.clikae.bak.* is capped at the newest 5 per tank (#63 P3-11)
+rc=0

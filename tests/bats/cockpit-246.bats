@@ -19,9 +19,12 @@ _review_off() { [ ! -e "$CLIKAE_HOME/state/cockpit" ]; }
 {"hooks":{"PreToolUse":[{"matcher":"Agent","hooks":[{"type":"command","command":"/example/audit.sh --label /example/hooks/cockpit-guard.sh"}]}]}}
 JSON
   run clikae cockpit --off
-  [ "$status" -eq 0 ]
+  # Kept, never deleted; reported (r2 P2-1), since the audit may run it.
+  [ "$status" -eq 1 ]
   _review_unchanged
   _review_off
+  [[ "$output" == *'claude/A: hook entry left for you to check: "/example/audit.sh --label /example/hooks/cockpit-guard.sh"'* ]] || false
+  [[ "$output" != *'cockpit: off'* ]] || false
 }
 
 @test "246 different_matcher: a deliberate Read matcher is preserved" {
@@ -127,10 +130,13 @@ JSON
   _review_settings <<'JSON'
 {"hooks":{"PreToolUse":[{"matcher":"Agent","_clikae":"cockpit-guard","hooks":[{"type":"command","command":"/example/hooks/cockpit-guard.sh"},{"type":"command","command":"/example/audit.sh"},{"type":"command","command":"/example/hooks/cockpit-guard.sh --user-option"},{"command":"/example/hooks/cockpit-guard.sh"},{"type":"prompt","command":"/example/hooks/cockpit-guard.sh"}]}]}}
 JSON
-  jq 'del(.hooks.PreToolUse[0].hooks[0])' "$REVIEW_FILE" > "$BATS_TEST_TMPDIR/expected.json"
+  # r2 P2-3: the marker leaves with the command it named.
+  jq 'del(.hooks.PreToolUse[0].hooks[0]) | del(.hooks.PreToolUse[0]._clikae)' "$REVIEW_FILE" > "$BATS_TEST_TMPDIR/expected.json"
   run clikae cockpit --off
-  [ "$status" -eq 0 ]
+  # r2 P2-1: the --user-option copy still runs the guard: kept and reported.
+  [ "$status" -eq 1 ]
   cmp "$BATS_TEST_TMPDIR/expected.json" "$REVIEW_FILE"
+  [[ "$output" == *'claude/A: hook entry left for you to check: "/example/hooks/cockpit-guard.sh --user-option"'* ]] || false
   # Install and repair may remove only the one new command they own, too.
   run clikae cockpit claude A
   [ "$status" -eq 0 ]
@@ -140,7 +146,7 @@ JSON
   [ "$status" -eq 0 ]
   [[ "$output" == *'cockpit guard already installed (unchanged)'* ]] || false
   run clikae cockpit --off
-  [ "$status" -eq 0 ]
+  [ "$status" -eq 1 ]
   cmp "$BATS_TEST_TMPDIR/expected.json" "$REVIEW_FILE"
 }
 
@@ -148,11 +154,13 @@ JSON
   _review_settings <<'JSON'
 {"hooks":{"PreToolUse":[{"matcher":"Agent","hooks":[{"type":"command","command":"  /example/old\\ checkout/hooks/cockpit-guard.sh\t"},{"type":"command","command":"'/example/it'\\''s here/hooks/cockpit-guard.sh'"},{"type":"command","command":"\"/example/a\\q/hooks/cockpit-guard.sh\""},{"type":"command","command":"\"/example/\\$literal/hooks/cockpit-guard.sh\""},{"type":"command","command":"hooks/cockpit-guard.sh"}]}]}}
 JSON
+  # r2 P3: the relative path may be a project script: kept and reported.
+  jq '.hooks.PreToolUse[0].hooks |= [.[-1]]' "$REVIEW_FILE" > "$BATS_TEST_TMPDIR/expected.json"
   run clikae cockpit --off
-  [ "$status" -eq 0 ]
-  printf '{}\n' > "$BATS_TEST_TMPDIR/expected.json"
+  [ "$status" -eq 1 ]
   cmp "$BATS_TEST_TMPDIR/expected.json" "$REVIEW_FILE"
-  [[ "$output" == *'cockpit guard removed (5 entries)'* ]] || false
+  [[ "$output" == *'cockpit guard removed (4 entries)'* ]] || false
+  [[ "$output" == *'claude/A: hook entry left for you to check: "hooks/cockpit-guard.sh"'* ]] || false
 }
 
 @test "246 uncertain syntax is never executed or deleted and does not prevent removing known guards" {
@@ -244,7 +252,9 @@ JSON
   _review_settings <<'JSON'
 {"hooks":{"PreToolUse":[{"matcher":"Agent","hooks":[{"type":"command","command":"'' /example/hooks/cockpit-guard.sh"}]}]}}
 JSON
+  # Not ours, so never deleted; it names the guard path, so it is reported.
   run clikae cockpit --off
-  [ "$status" -eq 0 ]
+  [ "$status" -eq 1 ]
   _review_unchanged
+  [[ "$output" == *"claude/A: hook entry left for you to check: \"'' /example/hooks/cockpit-guard.sh\""* ]] || false
 }

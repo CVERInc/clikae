@@ -1,0 +1,37 @@
+1..10
+not ok 1 246 r2 P2-1 guard_args, command_prefix, timeout_prefix, double_slash: a working guard copy is review, not a clean off
+# (from function `_r2_expect_review' in file tests/bats/cockpit-246-r2.bats, line 23,
+#  in test file tests/bats/cockpit-246-r2.bats, line 47)
+#   `_r2_expect_review "$(jq -nc --arg c "$command" '$c')"' failed
+not ok 2 246 r2 P2-1 matcher_regex, matcher_star, matcher_space, no_matcher: a group that runs on Agent is review
+# (from function `_r2_expect_review' in file tests/bats/cockpit-246-r2.bats, line 23,
+#  in test file tests/bats/cockpit-246-r2.bats, line 57)
+#   `_r2_expect_review '"/ex/hooks/cockpit-guard.sh"'' failed
+not ok 3 246 r2 P2-1 move: a --verbose guard copy on the old cockpit is reported, and the move still lands
+# (in test file tests/bats/cockpit-246-r2.bats, line 72)
+#   `[[ "$output" == *'claude/A: hook entry left for you to check: "/ex/hooks/cockpit-guard.sh --verbose"'* ]] || false' failed
+not ok 4 246 r2 P2-2 marker_unquoted_space: fc3ffe4's unquoted guard in a marked group is the installer's
+# (in test file tests/bats/cockpit-246-r2.bats, line 84)
+#   `[[ "$output" == *'claude/A: cockpit guard removed (1 entry)'* ]] || false' failed
+not ok 5 246 r2 P2-3 marker_sibling_plain, marker_sibling_bash: the marker leaves with the guard, the sibling stays
+# (in test file tests/bats/cockpit-246-r2.bats, line 107)
+#   `cmp "$BATS_TEST_TMPDIR/expected.json" "$R2_FILE"' failed
+# /tmp/bats-run-DAG8aD/test/5/expected.json /tmp/clikae-test.L4h69n/.clikae/profiles/claude/A/settings.json differ: byte 193, line 11
+not ok 6 246 r2 P2-4 redirect_mention, nonexec_bash, comment: a hook that only names the file is the user's
+# (from function `_r2_expect_user' in file tests/bats/cockpit-246-r2.bats, line 36,
+#  in test file tests/bats/cockpit-246-r2.bats, line 138)
+#   `_r2_expect_user' failed
+not ok 7 246 r2 P2-4 move: the old cockpit's guard is removed and a mention is not called a failure
+# (in test file tests/bats/cockpit-246-r2.bats, line 152)
+#   `[[ "$output" != *'could not clean up'* ]] || false' failed
+not ok 8 246 r2 P2-4 rollback: entries kept on the new tank do not turn a rolled-back guard into a failed one
+# (in test file tests/bats/cockpit-246-r2.bats, line 173)
+#   `[[ "$output" == *'claude/B: hook entry left for you to check: "/ex/hooks/cockpit-guard.sh --verbose"'* ]] || false' failed
+not ok 9 246 r2 P2-5 dangling_symlink: an unrelated tank's dead settings.json link is skipped
+# (in test file tests/bats/cockpit-246-r2.bats, line 186)
+#   `[ "$status" -eq 0 ]' failed
+not ok 10 246 r2 P3 relative: hooks/cockpit-guard.sh may be a project script, so it is kept and reported
+# (from function `_r2_expect_review' in file tests/bats/cockpit-246-r2.bats, line 23,
+#  in test file tests/bats/cockpit-246-r2.bats, line 206)
+#   `_r2_expect_review '"hooks/cockpit-guard.sh"'' failed
+rc=1

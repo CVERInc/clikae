@@ -57,20 +57,73 @@ def cockpit_words:
 
 def cockpit_path: test("(^|/)hooks/cockpit-guard\\.sh\\z");
 
+# Detection, never ownership: a path that resolves to the guard's file name
+# (repeated slashes and ./ segments collapsed). `.log`, `.disabled` and a
+# bare `cockpit-guard.sh` in a comment do not end in hooks/cockpit-guard.sh.
+def cockpit_mention:
+  gsub("/+"; "/") | gsub("/(\\./)+"; "/") | test("(^|/)hooks/cockpit-guard\\.sh\\z");
+
+# Loose words for text the literal parser refuses (or a script argument such
+# as bash -c '...'): operators and newlines separate, a word-initial # starts
+# a comment, expansions stay literal. Used only to decide "review" vs "user",
+# so a guess here can keep and report an entry, never delete one.
+def cockpit_loose_words:
+  reduce (explode[]) as $c
+    ({mode: "bare", escape: false, comment: false, active: false, word: "", words: []};
+     if .comment then (if $c == 10 then .comment = false else . end)
+     elif .escape then
+       .escape = false | .active = (.active or ($c != 10)) |
+       if $c == 10 then . else .word += ([$c] | implode) end
+     elif .mode == "single" then
+       if $c == 39 then .mode = "bare" else .word += ([$c] | implode) end
+     elif $c == 92 then .escape = true
+     elif .mode == "double" then
+       if $c == 34 then .mode = "bare" else .word += ([$c] | implode) end
+     elif $c == 39 then .mode = "single" | .active = true
+     elif $c == 34 then .mode = "double" | .active = true
+     elif $c == 35 and (.active | not) then .comment = true
+     elif ([0,9,10,13,32,59,38,124,60,62,40,41,96] | index($c)) != null then
+       if .active then .words += [.word] | .word = "" | .active = false else . end
+     else .word += ([$c] | implode) | .active = true end) |
+  .words + (if .active then [.word] else [] end);
+
+def cockpit_text_mention:
+  any(cockpit_loose_words[] | splits("[$(){}`]"); cockpit_mention);
+
+# Claude Code runs a group on Agent calls when its matcher is absent, empty,
+# "*", a |-list naming Agent (or Task, its former name), or a regex that
+# matches it. Anything but a string we can rule out counts as matching.
+def cockpit_runs_on_agent:
+  if type != "string" then true
+  else . as $m | gsub("^\\s+|\\s+$"; "") as $t |
+    $t == "" or $t == "*" or
+    any($t | split("|")[] | gsub("^\\s+|\\s+$"; ""); . == "Agent" or . == "Task") or
+    (try ("Agent" | test($m)) catch false) or (try ("Agent" | test($t)) catch false)
+  end;
+
 # Called on ONE hook, with its containing entry's matcher and marker.
 # A marker never grants ownership of unrelated sibling commands.
+# owned:  what an installer wrote — one absolute literal word naming the guard
+#         under matcher exactly "Agent", or (marked group only) fc3ffe4's
+#         unquoted $CLIKAE_LIB/hooks/cockpit-guard.sh, spaces included.
+# review: anything else that may run the guard on an Agent call — the guard
+#         ignores its arguments and wrappers, so it still enforces; kept and
+#         reported, never deleted. A relative path may be a project script.
+# user:   everything else, including mere mentions of the file name.
 def cockpit_guard($entry):
-  if ($entry.hooks | type) != "array" or $entry.matcher != "Agent"
+  if ($entry.hooks | type) != "array"
      or .type != "command" or (.command | type) != "string"
+     or ($entry.matcher | cockpit_runs_on_agent | not)
   then "user"
   else (.command | cockpit_words) as $words |
-    if $words != null and ($words | length) == 1 and ($words[0] | cockpit_path)
+    if $entry.matcher == "Agent" and $words != null and ($words | length) == 1
+       and ($words[0] | startswith("/") and cockpit_path)
       then "owned"
-    elif ((.command | gsub("[\\\\\"']"; "") | contains("cockpit-guard.sh"))
-          or $entry._clikae == "cockpit-guard")
-      and ($words == null or
-        (($words[0] // "" | split("/") | last) as $program |
-         ["bash", "sh", "dash", "zsh", "ksh", "env", "eval", "exec"] | index($program)) != null)
+    elif $entry.matcher == "Agent" and $entry._clikae == "cockpit-guard"
+       and (.command | test("^/[^\\n\\r;&|<>()`$]*/hooks/cockpit-guard\\.sh\\z"))
+      then "owned"
+    elif (if $words == null then .command | cockpit_text_mention
+          else any($words[]; cockpit_mention or (test("[ \\t'\"]") and cockpit_text_mention)) end)
       then "review"
     else "user" end
   end;
@@ -89,7 +142,10 @@ def cockpit_strip:
     [.hooks[]? | select(cockpit_guard($entry) == "owned")] as $ours |
     if ($ours | length) == 0 then .
     else .hooks |= map(select(cockpit_guard($entry) != "owned")) |
-      select(.hooks | length > 0)
+      select(.hooks | length > 0) |
+      # The marker named the command just removed; a user's sibling that
+      # stays behind is not ours, and doctor reads the marker as a guard.
+      if ._clikae == "cockpit-guard" then del(._clikae) else . end
     end);
 JQ
 }
@@ -98,6 +154,8 @@ JQ
 # Send it to the snapshot/removal path to report it without rewriting the file.
 _cockpit_hook_candidate() {
   local rc=0
+  # A dangling symlink holds nothing an engine could run: not a candidate.
+  if [ -L "$1" ] && [ ! -e "$1" ]; then return 1; fi
   [ -f "$1" ] && [ -r "$1" ] || return 0
   jq -se "$(_cockpit_guard_jq)"'
     if length != 1 then error("invalid settings") else .[0] end |
@@ -529,9 +587,15 @@ _cockpit_move() {
     if ! _cockpit_state_names "$cur"; then
       log_fail "cockpit: could not confirm the new cockpit record ($engine/$tank), and the state file no longer reads as ${cur:-empty} — $engine/$tank's guard was KEPT (over-guarded is the safe direction). Run \`clikae doctor\` to see what is guarded, then \`clikae cockpit --off\` and mark the right tank."
     fi
-    local rollback_msg="its guard was rolled back"
-    _cockpit_hook_remove "$engine" "$tank" >/dev/null 2>&1 \
-      || rollback_msg="its guard could NOT be rolled back either — run \`clikae cockpit --off\` to clear it"
+    # rc 2 = our guard is gone, but entries we do not own were kept; install
+    # already listed them above, so the rollback itself succeeded.
+    local rollback_msg="its guard was rolled back" rollback_rc=0
+    _cockpit_hook_remove "$engine" "$tank" >/dev/null 2>&1 || rollback_rc=$?
+    case "$rollback_rc" in
+      0) ;;
+      2) rollback_msg="its guard was rolled back; hook entries there were left for you to check (listed above)" ;;
+      *) rollback_msg="its guard could NOT be rolled back either — run \`clikae cockpit --off\` to clear it" ;;
+    esac
     if [ -n "$cur_engine" ]; then
       log_fail "cockpit: could not record the new cockpit ($engine/$tank) — $rollback_msg; $cur_engine/$cur_tank is still the cockpit, unchanged"
     else
@@ -540,7 +604,13 @@ _cockpit_move() {
   fi
 
   if [ -n "$cur_engine" ] && profile_exists "$cur_engine" "$cur_tank"; then
-    _cockpit_hook_remove "$cur_engine" "$cur_tank" || log_warn "cockpit: could not clean up the old cockpit ($cur_engine/$cur_tank) — its guard was NOT removed; run \`clikae cockpit --off\` to clear it."
+    local old_rc=0
+    _cockpit_hook_remove "$cur_engine" "$cur_tank" || old_rc=$?
+    case "$old_rc" in
+      0) ;;
+      2) log_warn "cockpit: the guard clikae installed on the old cockpit ($cur_engine/$cur_tank) is gone; hook entries there were left for you to check (listed above)." ;;
+      *) log_warn "cockpit: could not clean up the old cockpit ($cur_engine/$cur_tank) — its guard was NOT removed; run \`clikae cockpit --off\` to clear it." ;;
+    esac
   elif [ -n "$cur_engine" ]; then
     log_warn "cockpit: recorded cockpit $cur_engine/$cur_tank no longer exists; dropping the record."
   fi

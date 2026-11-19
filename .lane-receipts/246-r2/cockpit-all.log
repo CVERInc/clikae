@@ -1,0 +1,151 @@
+1..149
+ok 1 246 r2 P2-1 guard_args, command_prefix, timeout_prefix, double_slash: a working guard copy is review, not a clean off
+ok 2 246 r2 P2-1 matcher_regex, matcher_star, matcher_space, no_matcher: a group that runs on Agent is review
+ok 3 246 r2 P2-1 move: a --verbose guard copy on the old cockpit is reported, and the move still lands
+ok 4 246 r2 P2-2 marker_unquoted_space: fc3ffe4's unquoted guard in a marked group is the installer's
+ok 5 246 r2 P2-3 marker_sibling_plain, marker_sibling_bash: the marker leaves with the guard, the sibling stays
+ok 6 246 r2 P2-4 redirect_mention, nonexec_bash, comment: a hook that only names the file is the user's
+ok 7 246 r2 P2-4 move: the old cockpit's guard is removed and a mention is not called a failure
+ok 8 246 r2 P2-4 rollback: entries kept on the new tank do not turn a rolled-back guard into a failed one
+ok 9 246 r2 P2-5 dangling_symlink: an unrelated tank's dead settings.json link is skipped
+ok 10 246 r2 P3 relative: hooks/cockpit-guard.sh may be a project script, so it is kept and reported
+ok 11 246 argument_only: a guard path argument does not make the audit executable ours
+ok 12 246 different_matcher: a deliberate Read matcher is preserved
+ok 13 246 mixed_group: only the legacy command is removed, retaining its sibling and matcher
+ok 14 246 nested_quotes: bash -c is preserved and reported with tank and command
+ok 15 246 split_quotes: quoted fragments of the plain executable are removed
+ok 16 246 trailing_space: a quoted plain executable with trailing whitespace is removed
+ok 17 246 malformed and malformed_escaped: neither spelling establishes absence in broken JSON
+ok 18 246 install and repair preserve argument-only, different-matcher and mixed-group user hooks
+ok 19 246 command ownership requires type and no arguments, even in marked groups
+ok 20 246 literal shell words cover quote concatenation, escaped spaces, quotes and backslashes
+ok 21 246 uncertain syntax is never executed or deleted and does not prevent removing known guards
+ok 22 246 a quoted newline after the guard filename is a different executable
+ok 23 246 malformed settings without a recognizable guard still report uncertainty and stay untouched
+ok 24 246 unreadable settings leave bytes intact in off and install
+ok 25 246 entry shape: a user map of hooks is not the installer's hook array
+ok 26 246 line_continuation: an escaped newline does not create an empty argument
+ok 27 235 point 1: off removes all four unmarked guards across runtime and checkout paths
+ok 28 235 point 2: burn warns when the calling session has moved away from the recorded cockpit
+ok 29 235 off handles unquoted and double-quoted paths without a record or tank marker, and backs up settings
+ok 30 235 off matches decoded JSON paths but preserves other events and similar command names
+ok 31 235 off reports a broken legacy guard, continues the sweep, and never claims off
+ok 32 235 off refuses a symlinked legacy guard without altering its target
+ok 33 235 moving and repairing the role remove legacy duplicates without accumulating guards
+ok 34 235 burn warns on stderr even when allowed onto the caller tank and keeps JSON stdout valid
+ok 35 235 burn leaves matching, ambiguous and unidentified callers quiet
+ok 36 235 off refuses to claim success when legacy settings cannot be read
+ok 37 bare 'clikae cockpit' with nothing set says so
+ok 38 marking a tank installs the guard and records state
+ok 39 an install under a path with a space (and a quote) stores a command the shell runs as one word, and it refuses (#63 r5 P3-1)
+ok 40 an older UNQUOTED guard entry is repaired to the quoted form on the next mark (#63 r5 P3-1)
+ok 41 marking the SAME tank twice is idempotent and says unchanged
+ok 42 a bare unique tank name resolves across engines, like 'clikae <name>'
+ok 43 an ambiguous bare tank name across engines is refused, not guessed
+ok 44 an unknown tank name is refused with exactly one error, no stray validate_name line (#63 r6 P3-4)
+ok 45 an ambiguous bare tank name is refused with exactly its own message, no stray validate_name line (#63 r6 P3-4)
+ok 46 moving from A to B removes the guard from A and installs it on B
+ok 47 a human's own PreToolUse hook on A survives the guard's install and later removal, byte for byte
+ok 48 a HAND-WRITTEN settings.json survives content-intact but gets reformatted, not byte-for-byte (#63 P2-6)
+ok 49 --off removes the guard from wherever it is and clears the state
+ok 50 moving to a new tank sweeps past a broken OLD tank instead of aborting the move (#63 P2-2)
+ok 51 moving to a NEW tank that can't be armed leaves the OLD cockpit untouched, rc 1 (#63 P2-1)
+ok 52 a state file mode 444 no longer blocks a move: the record is replaced atomically, not rewritten in place (#63 r5 P2-3)
+ok 53 a state file symlinked elsewhere is refused before any guard is written (#63 r4 P2-1, r5 P2-3)
+ok 54 probe: a real kernel short write of the record keeps the old state and rolls the new guard back (#63 r5 P2-3)
+ok 55 probe: a short write with no prior cockpit leaves nothing recorded and nothing armed (#63 r5 P2-3)
+ok 56 probe: SIGKILL at the state write never empties the record, and doctor names the extra guard (#63 r5 P2-3)
+ok 57 probe: a state path symlinked at the new tank's settings.json is refused; that settings.json is untouched (#63 r5 P2-3)
+ok 58 two concurrent moves: exactly one transition wins, the other refuses, the recorded cockpit stays guarded (#63 r5 P2-4)
+ok 59 a waiting move proceeds once the running one finishes (#63 r5 P2-4)
+ok 60 --off and settings apply take the same lock: both refuse while a transition holds it (#63 r5 P2-4)
+ok 61 a lock left by a dead holder is named, not broken; doctor reports it (#63 r5 P2-4)
+ok 62 --off breaks a stale (dead-pid) lock instead of staying blocked by it (#63 r6 P3-3)
+ok 63 --off still refuses while a LIVE holder has the lock (unaffected by the stale-lock break, #63 r6 P3-3)
+ok 64 a stray .cockpit.XXXXXX temp file from an earlier crash is swept on the next successful state write (#63 r6 P3-3)
+ok 65 moving to a symlink alias of the current cockpit is refused as the same tank; the guard stays (#63 r5 P2-2)
+ok 66 moving to a tank whose settings.json is a hard link of the cockpit's is refused the same way (#63 r5 P2-2)
+ok 67 probe: settings.json swapped for a symlink right after it is read never lands the link's target in a backup (#63 r5 P3-3)
+ok 68 probe: a swap AFTER the snapshot changes nothing that is read — backup and content come from the snapshot (#63 r5 P3-3)
+ok 69 a tank directory that is a symlink to a real directory is written through its physical path (#63 r5 P3-3)
+ok 70 --off with nothing set is an idempotent no-op
+ok 71 --off is idempotent when run twice in a row
+ok 72 --off sweeps a stray guard even when the state file disagrees (crash-recovery)
+ok 73 --off sweeps past a broken tank instead of aborting the whole sweep (#63 P1-3)
+ok 74 #61 round-6 P2-2: --off removes the guard from a cockpit tank whose marker is GONE
+ok 75 #61 round-6 P2-2: --off removes the guard when the marker is UNREADABLE (mode 000)
+ok 76 #61 round-6 P2-2: --off SAYS the recorded cockpit directory is gone, and still clears the record
+ok 77 #61 round-6 P2-2: a marker-less guarded tank the state does NOT name is still swept
+ok 78 #61 round-6 P2-2: --off reports the guard removed exactly once for a symlink-aliased cockpit
+ok 79 #114: --off on codex and antigravity too — a move interrupted mid-way, both markers lost, a live allowance
+ok 80 --off clears a live timed allowance too, not just the guard and state (#63 P1-3)
+ok 81 settings apply --check on a cockpit tank reports the guard as expected, not as drift
+ok 82 cockpit requires jq and does not write without it
+ok 83 cockpit refuses a tank that does not exist
+ok 84 --allow-agents writes a timed allowance and reports when it expires
+ok 85 --allow-agents rejects a bad duration and writes nothing
+ok 86 bare 'clikae cockpit' warns when the recorded tank no longer exists (#63 P3-8)
+ok 87 #109 P3-8: 'clikae cockpit agy <tank>' marks the tank, recorded under its on-disk name
+ok 88 #109 P3-8: 'agy' and 'antigravity' name the same cockpit — the second is an idempotent no-op
+ok 89 #109 P3-8: an unknown agy tank still fails, naming the on-disk engine
+ok 90 installing from a git checkout no longer warns: the hook names the runtime copy, which outlives the checkout (#63 P3-12, #146)
+ok 91 with the stable runtime off, installing from a git checkout still warns (#63 P3-12)
+ok 92 #103: installing the guard keeps settings.json's prior file mode
+ok 93 #103: a skipped install reports on stderr only, in the same 'skipped —' form
+ok 94 allows a non-Agent tool without looking at model/prompt at all
+ok 95 allows a haiku Explore spawn
+ok 96 refuses a sonnet build brief mentioning worktree
+ok 97 refuses a missing-model spawn regardless of the prompt
+ok 98 allows an opus spawn whose prompt has no lane heuristic
+ok 99 each documented heuristic phrase refuses a sonnet/opus spawn
+ok 100 allows the real captured PreToolUse payload (#63 P1-1, compact JSON)
+ok 101 the whitespace fix reaches end to end: a pretty-printed payload refuses like its compact twin (#63 P1-1)
+ok 102 no tool_name field at all REFUSES, fail-closed (#63 P1-2, r5 P2-5)
+ok 103 an ordinary non-Agent tool call stays silent (no stderr note, unlike a truly malformed payload)
+ok 104 tool_input entirely absent REFUSES with its own reason, fail-closed (#63 P1-2, r5 P2-5)
+ok 105 truncated tool_input JSON REFUSES as malformed, not as a model-less spawn (#63 P1-2, r5 P2-5)
+ok 106 honours the env escape hatch
+ok 107 honours a live timed allowance and names its expiry
+ok 108 an expired timed allowance refuses again
+ok 109 names the current reserve, excluding the cockpit tank itself
+ok 110 with no state/cockpit record, a refusal still lists every idle tank in the reserve (#61 round-6 P3-4)
+ok 111 #61 round-6 P3-4: an empty store with no state/cockpit still SAYS the reserve is empty
+ok 112 #114: the reserve still hides a tank with a LIVE burn, and a store full of finished burns cannot push a refusal past the hook timeout
+ok 113 #61 round-6 P3-1: an unreadable marker does not truncate the reserve, and says nothing to the model
+ok 114 fails CLOSED on an empty payload (#63 r5 P2-5)
+ok 115 fails CLOSED on malformed JSON (#63 r5 P2-5)
+ok 116 the escape hatches still lift a fail-closed refusal: they are read before the payload (#63 r5 P2-5)
+ok 117 a missing dependency (no jq on PATH) refuses instead of allowing (#63 r5 P2-5/P2-6)
+ok 118 six serialization variants of a refused call all refuse with the plain form's exact stderr (#63 r5 P2-6)
+ok 119 a surrogate pair decodes to ONE character: 1,000 emoji + an innocuous word stays under the length tripwire (#63 r5 P2-6)
+ok 120 a model field elsewhere in the payload cannot stand in for tool_input.model (#63 r5 P2-6)
+ok 121 two concatenated JSON objects are malformed input, refused (#63 r5 P2-6)
+ok 122 large payloads refuse in BOTH compact and pretty-printed form: 65,536 / 131,073 / 1,048,576 (#63 r5 P2-5)
+ok 123 runs comfortably inside the 50ms budget
+ok 124 the 14-item corpus: heuristic hit rate matches its documented, measured behavior
+ok 125 the 10-item false-refusal corpus: outcome matches docs/usage.md's table (#63 P3-5)
+ok 126 a multi-byte character straddling the old 8192-byte cut still refuses (#63 P1-1 fix2)
+ok 127 a JS-escaped \n straddling the old 8192-byte cut still refuses (#63 P1-1 fix2)
+ok 128 100 synthetic zh+en briefs over 8 KiB all refuse on sonnet (#63 P1-1 fix2)
+ok 129 a prompt over 8,192 characters with NO heuristic keyword still refuses on length alone (#63 P1-1 fix2)
+ok 130 `model` before a large prompt is found either way (#63 P2-1 fix2)
+ok 131 family-prefixed model ids refuse like their short aliases (#63 P3-1)
+ok 132 provider-spelled ids are placed in their family; unknown ids are checked, never silently allowed (#63 r5 P3-2)
+ok 133 #103: the five reported shapes are classified as opus/sonnet tiers, not left unknown
+ok 134 #103: gateway prefixes are stripped only where they name anthropic; a slash cannot smuggle haiku
+ok 135 #103: an unknown shape is refused on a benign prompt, naming the literal id and the allow line
+ok 136 #103: the printed allow line, once added, admits the id as checked (tripwire still applies)
+ok 137 #103: every refusal branch writes to stderr only, nothing to stdout
+ok 138 a 200kB prompt stays inside a generous timing budget (median of 5)
+ok 139 the hook decides nothing on disk: no marker, no adoption flag, even on a never-swept store (#61 round-5 merge)
+ok 140 #109 P3-5: a fable build brief refuses, in every family spelling
+ok 141 #109 P3-5: a short non-lane fable prompt is still allowed, silently
+ok 142 #109 P3-5: a long fable prompt refuses on the length tripwire alone
+ok 143 #109 P3-7: a \u0000 escape in model or tool_name fails closed instead of being cleaned up
+ok 144 #109 P3-7: a prompt that merely TALKS about a NUL escape is not refused for it
+ok 145 #109 P3-7: haiku LOOKALIKES are checked, not exempted
+ok 146 #109 P3-9: an oversized integer in the allow file refuses WITHOUT shell noise
+ok 147 #109 P3-9: a non-numeric allow file refuses without noise, and a live one still allows
+ok 148 #109 P3-9: the guard sets its shell options exactly once
+ok 149 a read-only store leaves no adopt-warn sentinel and no WARN behind (#61 round-5 merge, r5 P3-1)
+rc=0
