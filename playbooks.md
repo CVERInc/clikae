@@ -7,7 +7,7 @@ canonical: "https://clikae.cver.net/playbooks"
 
 Every other page documents a *capability*. This one maps **situations to moves**: which
 play to reach for, and the exact call. If you are an agent driving clikae, this is your
-decision layer — [AGENTS.md](https://github.com/CVERInc/clikae/blob/cd11929d93278300083a90faa48f55a44cc85fe1/AGENTS.md) and [orchestration.md](/orchestration.md) give
+decision layer — [AGENTS.md](https://github.com/CVERInc/clikae/blob/5d28f09108b48226a1fb7ca93b342f281cdc47e3/AGENTS.md) and [orchestration.md](/orchestration.md) give
 the mechanics and the non-negotiable rules; this gives the *when*.
 
 The through-line: an account switcher gives you another **login**. clikae gives you a
