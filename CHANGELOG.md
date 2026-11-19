@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **`clikae usage codex` distinguishes absent windows from unreadable ones**, including live
+  app-server readings, and no longer guesses a window from its position when its duration is missing.
+  Historical, per-model and agy group percentages now name the used unit too; older JSON names remain
+  aliases for one release.
+
 ## [0.46.0] — 2026-11-19
 
 ### Added

@@ -134,11 +134,11 @@ usage_unknown() {
   esac
   case "${1:-}" in
     rate-limited)
-      printf '{"window_pct":null,"weekly_pct":null,"window_resets_at":null,"weekly_resets_at":null,"source":"unknown","reason":"rate-limited"%s}\n' "$_u_retry" ;;
+      printf '{"window_used_pct":null,"weekly_used_pct":null,"window_pct":null,"weekly_pct":null,"window_resets_at":null,"weekly_resets_at":null,"source":"unknown","reason":"rate-limited"%s}\n' "$_u_retry" ;;
     needs-refresh|relogin-required|keychain-denied|no-credentials|network|unparseable)
-      printf '{"window_pct":null,"weekly_pct":null,"window_resets_at":null,"weekly_resets_at":null,"source":"unknown","reason":"%s"}\n' "$1" ;;
+      printf '{"window_used_pct":null,"weekly_used_pct":null,"window_pct":null,"weekly_pct":null,"window_resets_at":null,"weekly_resets_at":null,"source":"unknown","reason":"%s"}\n' "$1" ;;
     *)
-      printf '%s\n' '{"window_pct":null,"weekly_pct":null,"window_resets_at":null,"weekly_resets_at":null,"source":"unknown"}' ;;
+      printf '%s\n' '{"window_used_pct":null,"weekly_used_pct":null,"window_pct":null,"weekly_pct":null,"window_resets_at":null,"weekly_resets_at":null,"source":"unknown"}' ;;
   esac
 }
 
@@ -588,6 +588,12 @@ _usage_public() {
     . as $r | del(.cached_at, .scanned_at, .last_good) |
     . + {age_sec:(if ($r.cached_at|type) == "number" then ([$now - $r.cached_at, 0]|max) else null end)} |
     . + {window_used_pct:.window_pct, weekly_used_pct:.weekly_pct} |
+    (if (.groups|type) == "array" then
+       .groups |= map(. + {window_used_pct:.window_pct, weekly_used_pct:.weekly_pct})
+     else . end) |
+    (if (.models|type) == "array" then
+       .models |= map(. + {used_pct:.pct})
+     else . end) |
     (if (.window_pct != null or .weekly_pct != null) and (.age_sec // 0) > '"$_USAGE_STALE_SEC"'
      then . + {stale:true} else . end) |
     (if (.window_pct != null) and (.window_resets_at|expired) then . + {window_reset_passed:true} else . end) |
@@ -599,6 +605,8 @@ _usage_public() {
                 else "no-signal" end),
            last_window_pct:($r.last_good.window_pct // null),
            last_weekly_pct:($r.last_good.weekly_pct // null),
+           last_window_used_pct:($r.last_good.window_pct // null),
+           last_weekly_used_pct:($r.last_good.weekly_pct // null),
            last_at:($r.last_good.at // null),
            last_age_sec:(if ($r.last_good.at|type) == "number"
                          then ([$now - $r.last_good.at, 0]|max) else null end),

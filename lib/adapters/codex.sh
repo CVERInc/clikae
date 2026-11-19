@@ -1165,30 +1165,39 @@ adapter_all_transcripts() {
 # returns), not "now" — usage_read only falls back to "now" when a reading
 # carries no usable event time of its own, so a week-old rollout is never
 # stamped as freshly read.
+# Shared by rollout and app-server readings. Null is a missing plan window;
+# a missing/invalid duration or percentage is unreadable, never positional.
+_CODEX_USAGE_WINDOWS_JQ='
+  def windows($duration; $used; $reset):
+    def class:
+      if type != "object" then null
+      elif (.[$duration]|type) != "number" then null
+      elif .[$duration] <= 0 then null
+      elif .[$duration] <= 360 then "window" else "weekly" end;
+    def pct: if type == "number" and . >= 0 and . <= 100 then . else null end;
+    def stamp: if type == "number" then (try todateiso8601 catch null) else null end;
+    (has("primary") and has("secondary") and
+      ([.primary,.secondary] | all(. == null or class != null))) as $known |
+    ([.primary,.secondary] | map(select(class == "window"))[0]) as $w |
+    ([.primary,.secondary] | map(select(class == "weekly"))[0]) as $k |
+    {window_pct:($w[$used]|pct), weekly_pct:($k[$used]|pct),
+     window_resets_at:($w[$reset]|stamp), weekly_resets_at:($k[$reset]|stamp)}
+    + (if $known and $w == null and $k != null then {window_absent:true} else {} end)
+    + (if $known and $k == null and $w != null then {weekly_absent:true} else {} end);
+'
+
 adapter_usage() {
-  local fields pu pw pr su sw sr ts
-  if ! fields="$(_limit_codex_rate_limits "$1" 2>/dev/null)"; then
+  local event
+  if ! event="$(_limit_codex_rate_limits "$1" --event 2>/dev/null)"; then
     _codex_usage_probe "$1"; return
   fi
-  IFS=$'\037' read -r pu pw pr su sw sr ts <<< "$fields"
-  # Each side is classified by its own window length, as _codex_usage_probe does.
-  # Plans with one window report a 7-day window as `primary`. A side with no
-  # length falls back to its position (primary = window, secondary = weekly).
-  jq -cn --arg pu "$pu" --arg pw "$pw" --arg pr "$pr" --arg su "$su" --arg sw "$sw" --arg sr "$sr" --arg ts "$ts" '
-    def pct: try tonumber catch null;
-    def stamp: try (tonumber | todateiso8601) catch null;
-    def norm_stamp: sub("\\.[0-9]+";"") | sub("[+-]00:00$";"Z");
-    def class($mins; $fallback): ($mins|pct) as $m | if $m == null then $fallback elif $m <= 360 then "window" else "weekly" end;
-    [{c:class($pw;"window"),pct:($pu|pct),at:($pr|stamp),known:($pw != "")},
-     {c:class($sw;"weekly"),pct:($su|pct),at:($sr|stamp),known:($sw != "")}]
-    | map(select(.pct != null)) as $sides
-    | ([$sides[]|select(.c == "window")][0]) as $w
-    | ([$sides[]|select(.c == "weekly")][0]) as $k
-    | {window_pct:$w.pct,weekly_pct:$k.pct,
-     window_resets_at:$w.at,weekly_resets_at:$k.at,source:"transcript"}
-    + (if $w == null and ($k.known // false) then {window_absent:true} else {} end)
-    + (if $k == null and ($w.known // false) then {weekly_absent:true} else {} end)
-    + {event_epoch:(if $ts == "" then null else ($ts|norm_stamp|try fromdateiso8601 catch null) end)}'
+  printf '%s\n' "$event" | jq -c "$_CODEX_USAGE_WINDOWS_JQ"'
+    .timestamp as $ts |
+    .payload.rate_limits | windows("window_minutes"; "used_percent"; "resets_at") |
+    (if .window_pct == null then .window_resets_at = null else . end) |
+    (if .weekly_pct == null then .weekly_resets_at = null else . end) |
+    . + {source:"transcript", event_epoch:
+      ($ts | sub("\\.[0-9]+"; "") | sub("[+-]00:00$"; "Z") | try fromdateiso8601 catch null)}'
 }
 
 # #149: the per-tank LIVE reading codex itself exposes. `codex app-server`
@@ -1227,16 +1236,11 @@ _codex_usage_probe() {
       esac > "$out" 2>/dev/null || rc=$?
   : "$rc"
   local reading
-  reading="$(jq -c 'select(type == "object" and .id == 2) | .result.rateLimits // empty |
-    def slot($w): [.primary, .secondary][] | select(type == "object")
-      | select((.windowDurationMins|type) == "number")
-      | select(if $w == "window" then .windowDurationMins <= 360 else .windowDurationMins > 360 end);
-    def at: if type == "number" then todateiso8601 else null end;
-    ([slot("window")][0]) as $w | ([slot("weekly")][0]) as $k |
-    select($w != null or $k != null) |
-    {window_pct:($w.usedPercent // null), weekly_pct:($k.usedPercent // null),
-     window_resets_at:(($w.resetsAt // null)|at), weekly_resets_at:(($k.resetsAt // null)|at),
-     source:"vendor"}' "$out" 2>/dev/null | head -n 1)"
+  reading="$(jq -c "$_CODEX_USAGE_WINDOWS_JQ"'
+    select(type == "object" and .id == 2) | .result.rateLimits // empty |
+    windows("windowDurationMins"; "usedPercent"; "resetsAt") |
+    select(.window_pct != null or .weekly_pct != null) |
+    . + {source:"vendor"}' "$out" 2>/dev/null | head -n 1)"
   local answered=0
   grep -q '"id":2' "$out" 2>/dev/null && answered=1
   rm -f "$out"

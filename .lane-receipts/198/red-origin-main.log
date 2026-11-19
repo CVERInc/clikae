@@ -1,0 +1,49 @@
+1..12
+ok 1 198 point 1: weekly-only prolite and team remain weekly on the last day
+ok 2 198 point 1: both windows follow duration even when swapped
+not ok 3 198 point 1: missing duration is unreadable, never positional
+# (from function `_check_198' in file tests/bats/usage-contract-198.bats, line 27,
+#  in test file tests/bats/usage-contract-198.bats, line 50)
+#   `_check_198 '.window_used_pct == null and .weekly_used_pct == 5 and (has("window_absent")|not)'' failed
+# false
+# Last output:
+# {"engine":"codex","tank":"sample","window_pct":0.0,"weekly_pct":5.0,"window_resets_at":"2026-11-19T07:31:15Z","weekly_resets_at":"2026-11-19T08:31:15Z","source":"transcript","age_sec":0,"window_used_pct":0.0,"weekly_used_pct":5.0}
+not ok 4 198 point 1: malformed percentage is unreadable, not an absent window
+# (from function `_check_198' in file tests/bats/usage-contract-198.bats, line 27,
+#  in test file tests/bats/usage-contract-198.bats, line 57)
+#   `_check_198 '.window_used_pct == null and .weekly_used_pct == 5 and (has("window_absent")|not)'' failed
+# false
+# Last output:
+# {"engine":"codex","tank":"sample","window_pct":null,"weekly_pct":5.0,"window_resets_at":null,"weekly_resets_at":"2026-11-19T08:31:16Z","source":"transcript","window_absent":true,"age_sec":0,"window_used_pct":null,"weekly_used_pct":5.0}
+not ok 5 198 point 1: app-server weekly-only plan explicitly lacks the short window
+# (from function `_check_198' in file tests/bats/usage-contract-198.bats, line 27,
+#  in test file tests/bats/usage-contract-198.bats, line 79)
+#   `_check_198 '.source == "vendor" and .weekly_used_pct == 89 and .window_used_pct == null and .window_absent == true'' failed
+# false
+# Last output:
+# {"engine":"codex","tank":"sample","window_pct":null,"weekly_pct":89,"window_resets_at":null,"weekly_resets_at":"2100-01-01T00:00:00Z","source":"vendor","age_sec":0,"window_used_pct":null,"weekly_used_pct":89}
+ok 6 198 point 2: old transcript is stale in JSON and aged in the summary
+ok 7 198 point 2: fresh transcript is not stale and reset passage is explicit
+ok 8 198 point 3: transcript used percentages equal 100 minus status text left
+ok 9 198 point 3: every engine public reading names used units and retains aliases
+not ok 10 198 point 3: agy group percentages name used units and retain aliases
+# (from function `_check_198' in file tests/bats/usage-contract-198.bats, line 27,
+#  in test file tests/bats/usage-contract-198.bats, line 128)
+#   `_check_198 '.groups[0] | .window_used_pct == 12 and .weekly_used_pct == 34 and .window_pct == .window_used_pct and .weekly_pct == .weekly_used_pct'' failed
+# false
+# Last output:
+# {"source":"quota-api","window_pct":12,"weekly_pct":34,"groups":[{"name":"gemini","window_pct":12,"weekly_pct":34}],"age_sec":0,"window_used_pct":12,"weekly_used_pct":34}
+not ok 11 198 point 3: last known percentages name used units and retain aliases
+# (from function `_check_198' in file tests/bats/usage-contract-198.bats, line 27,
+#  in test file tests/bats/usage-contract-198.bats, line 133)
+#   `_check_198 '.last_window_used_pct == 12 and .last_weekly_used_pct == 34 and .last_window_pct == .last_window_used_pct and .last_weekly_pct == .last_weekly_used_pct'' failed
+# false
+# Last output:
+# {"source":"unknown","window_pct":null,"weekly_pct":null,"age_sec":0,"window_used_pct":null,"weekly_used_pct":null,"gap":"no-probe","last_window_pct":12,"last_weekly_pct":34,"last_at":1999900000,"last_age_sec":100000,"dry_marked_at":null}
+not ok 12 198 point 3: model percentages name used units and retain aliases
+# (from function `_check_198' in file tests/bats/usage-contract-198.bats, line 27,
+#  in test file tests/bats/usage-contract-198.bats, line 138)
+#   `_check_198 '.models[0] | .used_pct == 56 and .pct == .used_pct'' failed
+# false
+# Last output:
+# {"source":"vendor","window_pct":12,"weekly_pct":34,"models":[{"name":"example","pct":56}],"age_sec":0,"window_used_pct":12,"weekly_used_pct":34}

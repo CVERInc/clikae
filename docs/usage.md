@@ -113,6 +113,15 @@ says nothing about the current window (#174). The summary line prints the age
 past an hour (`claude 92 3h ago`) and says `reset` instead of a percentage
 whose window has since reset.
 
+Usage JSON percentages are **used**, named `window_used_pct` and
+`weekly_used_pct` across engines, including each agy `groups[]` entry.
+Per-model rows use `models[].used_pct`; historical readings use
+`last_window_used_pct` and `last_weekly_used_pct`. The older percentage names
+remain aliases for one release. `stale: true` marks readings over six hours old.
+Codex classifies windows by their duration, never their position or time until
+reset. `window_absent: true` or `weekly_absent: true` means the plan has no such
+window; an unreadable window is null without an absence marker.
+
 On the board that reads `7d █░░░░░░░ 15% · 5h ago · needs-refresh`. An agy tank whose
 saved access token is still live (Linux file backend; the token lives an hour
 and only agy refreshes it) is read through agy's own
