@@ -75,25 +75,52 @@ _r2_expect_user() {
   [ "$(jq -c '.hooks.PreToolUse' "$f")" = '[{"matcher":"Agent","hooks":[{"type":"command","command":"/ex/hooks/cockpit-guard.sh --verbose"}]}]' ]
 }
 
-@test "246 r2 P2-2 marker_unquoted_space: fc3ffe4's unquoted guard in a marked group is the installer's" {
+@test "246 r2 P2-2 marker_unquoted_space: fc3ffe4's unquoted guard in a marked group is review, not the installer's" {
   _r2_settings <<'JSON'
 {"hooks":{"PreToolUse":[{"matcher":"Agent","hooks":[{"type":"command","command":"/ex dir/hooks/cockpit-guard.sh","timeout":5}],"_clikae":"cockpit-guard"}]}}
+JSON
+  # Third review: the marker grants nothing; the copy is reported for the user to remove.
+  _r2_expect_review '"/ex dir/hooks/cockpit-guard.sh"'
+  # Install keeps it byte for byte too, reports it, and adds its own group.
+  run clikae cockpit claude A
+  [ "$status" -eq 0 ]
+  [[ "$output" == *'claude/A: hook entry left for you to check: "/ex dir/hooks/cockpit-guard.sh"'* ]] || false
+  [ "$(jq -c '.hooks.PreToolUse[0]' "$R2_FILE")" = "$(jq -c '.hooks.PreToolUse[0]' "$BATS_TEST_TMPDIR/before.json")" ]
+  [ "$(jq '.hooks.PreToolUse | length' "$R2_FILE")" -eq 2 ]
+}
+
+@test "246 r3 marker_user_commands: a marked group never makes a user command that names the guard the installer's" {
+  local command
+  for command in '/example/audit.sh --label /example/hooks/cockpit-guard.sh' \
+                 '/bin/rm -f /x/hooks/cockpit-guard.sh' '/usr/bin/env FOO=1 /x/hooks/cockpit-guard.sh' \
+                 '/opt/run.sh "/x/hooks/cockpit-guard.sh'; do
+    _r2_settings < <(jq -nc --arg c "$command" '{hooks:{PreToolUse:[{matcher:"Agent",_clikae:"cockpit-guard",hooks:[{type:"command",command:$c}]}]}}')
+    _r2_expect_review "$(jq -nc --arg c "$command" '$c')"
+    # Install's strip keeps it byte for byte as well.
+    run clikae cockpit claude A
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"claude/A: hook entry left for you to check: $(jq -nc --arg c "$command" '$c')"* ]] || false
+    [ "$(jq -c '.hooks.PreToolUse[0]' "$R2_FILE")" = "$(jq -c '.hooks.PreToolUse[0]' "$BATS_TEST_TMPDIR/before.json")" ]
+    rm -f "$CLIKAE_HOME/state/cockpit"
+  done
+}
+
+@test "246 r3 marker_comment_sibling: the quoted guard goes, a user hook whose comment names it stays" {
+  _r2_settings <<'JSON'
+{"hooks":{"PreToolUse":[{"matcher":"Agent","_clikae":"cockpit-guard","hooks":[{"type":"command","command":"'/x/hooks/cockpit-guard.sh'"},{"type":"command","command":"/opt/notify.sh # replaced /x/hooks/cockpit-guard.sh"}]}]}}
 JSON
   run clikae cockpit --off
   [ "$status" -eq 0 ]
   [[ "$output" == *'claude/A: cockpit guard removed (1 entry)'* ]] || false
   [[ "$output" == *'cockpit: off'* ]] || false
-  printf '{}\n' > "$BATS_TEST_TMPDIR/expected.json"
-  cmp "$BATS_TEST_TMPDIR/expected.json" "$R2_FILE"
-  run clikae doctor
-  [[ "$output" != *'guard found on tank(s)'* ]] || false
-  # Install repairs it in place: one marked group, not a second one.
+  [ "$(jq -c '.hooks.PreToolUse' "$R2_FILE")" = '[{"matcher":"Agent","hooks":[{"type":"command","command":"/opt/notify.sh # replaced /x/hooks/cockpit-guard.sh"}]}]' ]
+  # Install removes the same one command and keeps the notifier.
   cp "$BATS_TEST_TMPDIR/before.json" "$R2_FILE"
   rm -f "$CLIKAE_HOME/state/cockpit"
   run clikae cockpit claude A
   [ "$status" -eq 0 ]
-  [ "$(jq '[.hooks.PreToolUse[] | select(._clikae == "cockpit-guard")] | length' "$R2_FILE")" -eq 1 ]
-  [ "$(jq '.hooks.PreToolUse | length' "$R2_FILE")" -eq 1 ]
+  [ "$(jq -c '.hooks.PreToolUse[0]' "$R2_FILE")" = '{"matcher":"Agent","hooks":[{"type":"command","command":"/opt/notify.sh # replaced /x/hooks/cockpit-guard.sh"}]}' ]
+  [ "$(jq '.hooks.PreToolUse | length' "$R2_FILE")" -eq 2 ]
 }
 
 @test "246 r2 P2-3 marker_sibling_plain, marker_sibling_bash: the marker leaves with the guard, the sibling stays" {

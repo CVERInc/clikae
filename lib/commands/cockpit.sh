@@ -104,8 +104,9 @@ def cockpit_runs_on_agent:
 # Called on ONE hook, with its containing entry's matcher and marker.
 # A marker never grants ownership of unrelated sibling commands.
 # owned:  what an installer wrote — one absolute literal word naming the guard
-#         under matcher exactly "Agent", or (marked group only) fc3ffe4's
-#         unquoted $CLIKAE_LIB/hooks/cockpit-guard.sh, spaces included.
+#         under matcher exactly "Agent". fc3ffe4's unquoted path with a space
+#         in it is review even in a marked group: no rule tells it apart from
+#         a user command that ends in the guard path.
 # review: anything else that may run the guard on an Agent call — the guard
 #         ignores its arguments and wrappers, so it still enforces; kept and
 #         reported, never deleted. A relative path may be a project script.
@@ -118,9 +119,6 @@ def cockpit_guard($entry):
   else (.command | cockpit_words) as $words |
     if $entry.matcher == "Agent" and $words != null and ($words | length) == 1
        and ($words[0] | startswith("/") and cockpit_path)
-      then "owned"
-    elif $entry.matcher == "Agent" and $entry._clikae == "cockpit-guard"
-       and (.command | test("^/[^\\n\\r;&|<>()`$]*/hooks/cockpit-guard\\.sh\\z"))
       then "owned"
     elif (if $words == null then .command | cockpit_text_mention
           else any($words[]; cockpit_mention or (test("[ \\t'\"]") and cockpit_text_mention)) end)

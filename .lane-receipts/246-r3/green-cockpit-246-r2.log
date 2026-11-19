@@ -1,0 +1,13 @@
+1..12
+ok 1 246 r2 P2-1 guard_args, command_prefix, timeout_prefix, double_slash: a working guard copy is review, not a clean off
+ok 2 246 r2 P2-1 matcher_regex, matcher_star, matcher_space, no_matcher: a group that runs on Agent is review
+ok 3 246 r2 P2-1 move: a --verbose guard copy on the old cockpit is reported, and the move still lands
+ok 4 246 r2 P2-2 marker_unquoted_space: fc3ffe4's unquoted guard in a marked group is review, not the installer's
+ok 5 246 r3 marker_user_commands: a marked group never makes a user command that names the guard the installer's
+ok 6 246 r3 marker_comment_sibling: the quoted guard goes, a user hook whose comment names it stays
+ok 7 246 r2 P2-3 marker_sibling_plain, marker_sibling_bash: the marker leaves with the guard, the sibling stays
+ok 8 246 r2 P2-4 redirect_mention, nonexec_bash, comment: a hook that only names the file is the user's
+ok 9 246 r2 P2-4 move: the old cockpit's guard is removed and a mention is not called a failure
+ok 10 246 r2 P2-4 rollback: entries kept on the new tank do not turn a rolled-back guard into a failed one
+ok 11 246 r2 P2-5 dangling_symlink: an unrelated tank's dead settings.json link is skipped
+ok 12 246 r2 P3 relative: hooks/cockpit-guard.sh may be a project script, so it is kept and reported

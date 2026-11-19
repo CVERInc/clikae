@@ -1,0 +1,58 @@
+1..57
+ok 1 bare 'clikae cockpit' with nothing set says so
+ok 2 marking a tank installs the guard and records state
+ok 3 an install under a path with a space (and a quote) stores a command the shell runs as one word, and it refuses (#63 r5 P3-1)
+ok 4 an older UNQUOTED guard entry is repaired to the quoted form on the next mark (#63 r5 P3-1)
+ok 5 marking the SAME tank twice is idempotent and says unchanged
+ok 6 a bare unique tank name resolves across engines, like 'clikae <name>'
+ok 7 an ambiguous bare tank name across engines is refused, not guessed
+ok 8 an unknown tank name is refused with exactly one error, no stray validate_name line (#63 r6 P3-4)
+ok 9 an ambiguous bare tank name is refused with exactly its own message, no stray validate_name line (#63 r6 P3-4)
+ok 10 moving from A to B removes the guard from A and installs it on B
+ok 11 a human's own PreToolUse hook on A survives the guard's install and later removal, byte for byte
+ok 12 a HAND-WRITTEN settings.json survives content-intact but gets reformatted, not byte-for-byte (#63 P2-6)
+ok 13 --off removes the guard from wherever it is and clears the state
+ok 14 moving to a new tank sweeps past a broken OLD tank instead of aborting the move (#63 P2-2)
+ok 15 moving to a NEW tank that can't be armed leaves the OLD cockpit untouched, rc 1 (#63 P2-1)
+ok 16 a state file mode 444 no longer blocks a move: the record is replaced atomically, not rewritten in place (#63 r5 P2-3)
+ok 17 a state file symlinked elsewhere is refused before any guard is written (#63 r4 P2-1, r5 P2-3)
+ok 18 probe: a real kernel short write of the record keeps the old state and rolls the new guard back (#63 r5 P2-3)
+ok 19 probe: a short write with no prior cockpit leaves nothing recorded and nothing armed (#63 r5 P2-3)
+ok 20 probe: SIGKILL at the state write never empties the record, and doctor names the extra guard (#63 r5 P2-3)
+ok 21 probe: a state path symlinked at the new tank's settings.json is refused; that settings.json is untouched (#63 r5 P2-3)
+ok 22 two concurrent moves: exactly one transition wins, the other refuses, the recorded cockpit stays guarded (#63 r5 P2-4)
+ok 23 a waiting move proceeds once the running one finishes (#63 r5 P2-4)
+ok 24 --off and settings apply take the same lock: both refuse while a transition holds it (#63 r5 P2-4)
+ok 25 a lock left by a dead holder is named, not broken; doctor reports it (#63 r5 P2-4)
+ok 26 --off breaks a stale (dead-pid) lock instead of staying blocked by it (#63 r6 P3-3)
+ok 27 --off still refuses while a LIVE holder has the lock (unaffected by the stale-lock break, #63 r6 P3-3)
+ok 28 a stray .cockpit.XXXXXX temp file from an earlier crash is swept on the next successful state write (#63 r6 P3-3)
+ok 29 moving to a symlink alias of the current cockpit is refused as the same tank; the guard stays (#63 r5 P2-2)
+ok 30 moving to a tank whose settings.json is a hard link of the cockpit's is refused the same way (#63 r5 P2-2)
+ok 31 probe: settings.json swapped for a symlink right after it is read never lands the link's target in a backup (#63 r5 P3-3)
+ok 32 probe: a swap AFTER the snapshot changes nothing that is read — backup and content come from the snapshot (#63 r5 P3-3)
+ok 33 a tank directory that is a symlink to a real directory is written through its physical path (#63 r5 P3-3)
+ok 34 --off with nothing set is an idempotent no-op
+ok 35 --off is idempotent when run twice in a row
+ok 36 --off sweeps a stray guard even when the state file disagrees (crash-recovery)
+ok 37 --off sweeps past a broken tank instead of aborting the whole sweep (#63 P1-3)
+ok 38 #61 round-6 P2-2: --off removes the guard from a cockpit tank whose marker is GONE
+ok 39 #61 round-6 P2-2: --off removes the guard when the marker is UNREADABLE (mode 000)
+ok 40 #61 round-6 P2-2: --off SAYS the recorded cockpit directory is gone, and still clears the record
+ok 41 #61 round-6 P2-2: a marker-less guarded tank the state does NOT name is still swept
+ok 42 #61 round-6 P2-2: --off reports the guard removed exactly once for a symlink-aliased cockpit
+ok 43 #114: --off on codex and antigravity too — a move interrupted mid-way, both markers lost, a live allowance
+ok 44 --off clears a live timed allowance too, not just the guard and state (#63 P1-3)
+ok 45 settings apply --check on a cockpit tank reports the guard as expected, not as drift
+ok 46 cockpit requires jq and does not write without it
+ok 47 cockpit refuses a tank that does not exist
+ok 48 --allow-agents writes a timed allowance and reports when it expires
+ok 49 --allow-agents rejects a bad duration and writes nothing
+ok 50 bare 'clikae cockpit' warns when the recorded tank no longer exists (#63 P3-8)
+ok 51 #109 P3-8: 'clikae cockpit agy <tank>' marks the tank, recorded under its on-disk name
+ok 52 #109 P3-8: 'agy' and 'antigravity' name the same cockpit — the second is an idempotent no-op
+ok 53 #109 P3-8: an unknown agy tank still fails, naming the on-disk engine
+ok 54 installing from a git checkout no longer warns: the hook names the runtime copy, which outlives the checkout (#63 P3-12, #146)
+ok 55 with the stable runtime off, installing from a git checkout still warns (#63 P3-12)
+ok 56 #103: installing the guard keeps settings.json's prior file mode
+ok 57 #103: a skipped install reports on stderr only, in the same 'skipped —' form
