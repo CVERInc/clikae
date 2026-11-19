@@ -38,6 +38,9 @@ roots_discovery_timeout ditto
 model_source       a field in `clikae burn --json`'s result object and in status.json (#237), not a function
 effort_source      ditto
 model_reasoning_effort  a codex config.toml key (#237: what burn's --effort overrides with `-c`), not a function
+memory_max         a field in `clikae burn --json`'s result object and in status.json (#236), not a function
+memory_high        ditto
+memory_unit        ditto
 reset_at           a field in #41's status.json (P1-2, 2026-09-09 round-1 review), not a function
 started_at         a field in #41's status.json, not a function
 updated_at         two unrelated fields, both quoted on purpose: a field in #41's status.json (P2-1, 2026-09-14 round-1 fix review), and the field GitHub's search API returns per issue/PR (#92's tail-sweep/cursor field name) — neither is a function

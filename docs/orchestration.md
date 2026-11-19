@@ -274,12 +274,30 @@ the engine and everything it starts run in the tmux server's cgroup (a
 `--memory-high <size>` (env `CLIKAE_BURN_MEMORY_HIGH`), starts the engine
 itself as
 
-    systemd-run --user --scope --quiet --collect --unit=clikae-burn-<run id> \
+    systemd-run --user --scope --quiet --collect --unit=clikae-burn-<run id>-l<n> \
       -p MemoryMax=<size> [-p MemoryHigh=<size>] -- <engine argv>
 
-once per launch, so every reroute hop and retry has its own unit and
-`systemctl --user status 'clikae-burn-*'` names the lane. A size is bytes or
-a number with `K`, `M`, `G` or `T`.
+once per launch. `<n>` counts the burn's launches, so every reroute hop,
+retry and same-tank re-fire (`--wait-for-reset`, the `--no-reroute` dry
+pause) has its own unit, and `systemctl --user status 'clikae-burn-*'` names
+the lane. `--json` and the status file carry `memory_max`, `memory_high` and
+`memory_unit` (the latest launch's unit; all three `null` without a cap). A
+size is bytes or a number with `K`, `M`, `G` or `T`, and at least `64M`.
+
+**When the engine exits, its scope is stopped.** A scope lives as long as any
+process in it, so a child the engine left behind — a dev server, a stuck
+subprocess — would keep running after the burn returned, with nobody coming
+back for it. Stopping the scope ends those processes (SIGTERM, then SIGKILL).
+That is deliberate: an unattended lane should leave nothing running. Start
+anything that must outlive the task outside the burn.
+
+**What the cap does not hold.** It holds every process the engine forks. It
+does not hold a process the engine has the *tmux server* start: the engine
+runs in a tmux pane, and `tmux new-session …` (or anything else that asks the
+server for a new pane) is started by the server, in the server's cgroup,
+outside the cap. A nested `clikae burn` is capped only when it inherits
+`CLIKAE_BURN_MEMORY_MAX` from the environment — the flag is not inherited —
+and then in its own scope beside the outer one, not inside it.
 
 It is refused before anything starts — never run uncapped with a warning —
 when the size is invalid, when there is no `systemd-run` (macOS, Windows,
@@ -451,6 +469,8 @@ object can't give it:
   "rerouted_from": [],      // ["codex/T1", …] — every tank tried before this one
   "model": "gpt-x", "model_source": "profile",        // #237 — what THIS tank runs with,
   "effort": "undeclared", "effort_source": "undeclared", // and where each came from
+  "memory_max": null, "memory_high": null,            // #236 — --memory-max / --memory-high, as given
+  "memory_unit": null,      // the latest launch's systemd scope, e.g. clikae-burn-codex-T1-burn-28186-l1.scope
   "elapsed_s": 4,
   "run_id": "burn-28186",   // stable across this burn's whole reroute walk
   "state": "running",       // running | waiting-reset | done | dry | dry-paused | fail | infra

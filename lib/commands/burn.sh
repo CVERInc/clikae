@@ -140,6 +140,7 @@ Give the task in one of two ways:
                         {ok, engine, tank, artifact, artifact_bytes, reason,
                          reset, rerouted_from[], elapsed_s, run_id, resumed,
                          model, model_source, effort, effort_source,
+                         memory_max, memory_high, memory_unit,
                          left_behind[],
                          left_behind_truncated, left_behind_truncation{},
                          left_behind_kill_mode, left_behind_unavailable}
@@ -199,19 +200,30 @@ Give the task in one of two ways:
   --memory-max <size> (#236) run the ENGINE, and everything it starts, in its
                       own memory-capped systemd user scope:
                         systemd-run --user --scope -p MemoryMax=<size> -- <engine>
-                      one unit per launch, named clikae-burn-<run id>.scope, so
-                      `systemctl --user status 'clikae-burn-*'` shows which lane
-                      it is. Every reroute hop and retry gets its own capped
-                      scope. <size> is bytes, or a number with K, M, G or T
-                      (1024-based, as systemd reads it). A cap put AROUND
-                      `clikae burn` does not reach the engine: tmux starts it.
-                      Needs Linux with a systemd user manager whose cgroup
-                      carries the memory controller; anywhere else the burn is
-                      refused before anything starts (drop the flag to run
-                      uncapped). Env: CLIKAE_BURN_MEMORY_MAX.
+                      one unit per launch, named
+                      clikae-burn-<run id>-l<n>.scope (<n> counts this burn's
+                      launches), so `systemctl --user status 'clikae-burn-*'`
+                      shows which lane it is. Every reroute hop, retry and
+                      same-tank re-fire gets its own capped scope; --json and
+                      the status file name it (memory_unit) with the cap
+                      (memory_max, memory_high). When the engine exits its
+                      scope is stopped, which ENDS anything the engine left
+                      running in it. <size> is bytes, or a number with K, M,
+                      G or T (1024-based, as systemd reads it), at least 64M.
+                      A cap put AROUND `clikae burn` does not reach the engine:
+                      tmux starts it. For the same reason, anything the engine
+                      starts THROUGH tmux (tmux new-session, a nested
+                      `clikae burn`) runs in the tmux server's cgroup, outside
+                      this cap; a nested burn is capped only if it inherits
+                      CLIKAE_BURN_MEMORY_MAX (not the flag), and then in its
+                      own scope beside this one. Needs Linux with a systemd
+                      user manager whose cgroup carries the memory controller;
+                      anywhere else the burn is refused before anything starts
+                      (drop the flag to run uncapped).
+                      Env: CLIKAE_BURN_MEMORY_MAX.
   --memory-high <size> (#236) also set MemoryHigh (the throttle point below the
-                      hard cap). Needs --memory-max; must not exceed it.
-                      Env: CLIKAE_BURN_MEMORY_HIGH.
+                      hard cap). Needs --memory-max; must not exceed it; at
+                      least 64M. Env: CLIKAE_BURN_MEMORY_HIGH.
 
 Outcomes: artifact present -> done (exit 0); every reachable tank dry/skipped
 (in interactive use, or sharing an already-dry account) -> reason:
@@ -1219,6 +1231,8 @@ _agy_burn() {
     fi
     local run_id="agy-${cur}-burn-$$"
     _burn_memcap_runner "$run_id" "agy/$cur"   # #236
+    # The `running` row above was written before this launch had a unit.
+    [ -z "${burn_memory_max:-}" ] || _burn_status_write running null "$status_engine" "$cur" "$artifact" "" ""
     local evidence_file; evidence_file="$(mktemp "${TMPDIR:-/tmp}/clikae-agy-artifact.XXXXXX")"
     local artifact_fresh=0 artifact_bytes_snapshot=null
     art_pre="$(_clikae_mtime "$artifact")"
@@ -1240,6 +1254,7 @@ _agy_burn() {
       "${runner[@]}" agy "${gen[@]}" </dev/null 2>&1 || printf '%s' "$?" > "$rc_file"
       _burn_snapshot "$artifact" "$art_pre" "$evidence_file"
     )" || true
+    _burn_memcap_reap "agy/$cur"   # #236
     read -r artifact_fresh artifact_bytes_snapshot < "$evidence_file"
     [ ! -s "$rc_file" ] || IFS= read -r agy_rc < "$rc_file" || true
     rm -f "$evidence_file" "$rc_file"
@@ -2677,11 +2692,11 @@ _burn_result() {
   fi
   # A number or null, never the summary line's "?" (a directory, a vanished file).
   case "$bytes" in ''|*[!0-9]*) bytes=null ;; esac
-  printf '{"ok":%s,"engine":%s,"tank":%s,"artifact":%s,"artifact_bytes":%s,"reason":%s,"reset":%s,"rerouted_from":[%s],"elapsed_s":%s,"queued_for_s":%s,"run_id":%s,"resumed":%s,%s,"left_behind":%s,%s}\n' \
+  printf '{"ok":%s,"engine":%s,"tank":%s,"artifact":%s,"artifact_bytes":%s,"reason":%s,"reset":%s,"rerouted_from":[%s],"elapsed_s":%s,"queued_for_s":%s,"run_id":%s,"resumed":%s,%s,%s,"left_behind":%s,%s}\n' \
     "$ok" "$(json_or_null "$eng")" "$(json_or_null "$tk")" "$(json_or_null "$art")" \
     "${bytes:-null}" "$(json_str "$reason")" "$(json_or_null "$reset")" \
     "$(_burn_tried_json "${tried:-}")" "$burn_elapsed_s" "${queued_for_s:-0}" \
-    "$(json_or_null "${run_id:-}")" "${resumed:-0}" "$(_burn_knobs_json)" "$left_behind" "$left_behind_meta" >&4
+    "$(json_or_null "${run_id:-}")" "${resumed:-0}" "$(_burn_knobs_json)" "$(_burn_memcap_json)" "$left_behind" "$left_behind_meta" >&4
 }
 
 # `tried` accumulates "engine/tank" words as the reroute walks the reserve.
@@ -2761,12 +2776,12 @@ _burn_status_write() {
   local f="$run_dir/status.json"
   mkdir -p "$run_dir" 2>/dev/null || true
   {
-    printf '{"ok":%s,"engine":%s,"tank":%s,"artifact":%s,"artifact_bytes":%s,"reason":%s,"reset":%s,"rerouted_from":[%s],"elapsed_s":%s,"run_id":%s,"state":%s,"started_at":%s,"updated_at":%s,"pid":%s,"log":%s,"reset_at":%s,%s}\n' \
+    printf '{"ok":%s,"engine":%s,"tank":%s,"artifact":%s,"artifact_bytes":%s,"reason":%s,"reset":%s,"rerouted_from":[%s],"elapsed_s":%s,"run_id":%s,"state":%s,"started_at":%s,"updated_at":%s,"pid":%s,"log":%s,"reset_at":%s,%s,%s}\n' \
       "${ok:-null}" "$(json_or_null "$eng")" "$(json_or_null "$tk")" "$(json_or_null "$art")" \
       "${bytes:-null}" "$(json_or_null "$reason")" "$(json_or_null "$reset")" \
       "$(_burn_tried_json "${tried:-}")" "$elapsed" "$(json_or_null "${burn_id:-}")" \
       "$(json_str "$state")" "${started_at:-null}" "$now" "$$" "$(json_or_null "${log_file:-}")" \
-      "${reset_at}" "$(_burn_knobs_json)"
+      "${reset_at}" "$(_burn_knobs_json)" "$(_burn_memcap_json)"
   } > "$f.tmp" 2>/dev/null && mv -f "$f.tmp" "$f" 2>/dev/null || true
   # P1-1 (2026-09-09 round-1 review): `ok` is null for every state that is
   # still IN PROGRESS and true/false only once a real terminal outcome is
@@ -4048,21 +4063,56 @@ _burn_memcap_bytes() {
   printf '%s\n' "$((num * mult))"
 }
 
+# The smallest cap accepted. Below it no engine starts at all (systemd-run's
+# own exec, a node runtime), and the failure would surface as a refusal that
+# blames the user manager instead of the size. 64M = 67108864 bytes.
+_BURN_MEMCAP_MIN_BYTES=67108864
+
+# _burn_memcap_name <max|high> — what the user set, in the words they set it:
+# the flag, or the environment variable (cmd_burn's burn_memory_*_src).
+_burn_memcap_name() {
+  case "$1:${burn_memory_max_src:-}:${burn_memory_high_src:-}" in
+    max:env:*)    printf 'CLIKAE_BURN_MEMORY_MAX' ;;
+    max:*)        printf -- '--memory-max' ;;
+    high:*:env)   printf 'CLIKAE_BURN_MEMORY_HIGH' ;;
+    high:*)       printf -- '--memory-high' ;;
+  esac
+}
+
+# _burn_memcap_said <max|high> — "--memory-max 4G" or "CLIKAE_BURN_MEMORY_MAX=4G".
+_burn_memcap_said() {
+  local name val
+  name="$(_burn_memcap_name "$1")"
+  if [ "$1" = max ]; then val="$burn_memory_max"; else val="$burn_memory_high"; fi
+  case "$name" in
+    --*) printf '%s %s' "$name" "$val" ;;
+    *)   printf '%s=%s' "$name" "$val" ;;
+  esac
+}
+
 # _burn_memcap_validate — the values alone, at parse time (cmd_burn's locals
 # burn_memory_max / burn_memory_high, by dynamic scope).
 _burn_memcap_validate() {
   [ -n "$burn_memory_max$burn_memory_high" ] || return 0
   if [ -z "$burn_memory_max" ]; then
-    log_fail "--memory-high (or CLIKAE_BURN_MEMORY_HIGH) needs --memory-max (or CLIKAE_BURN_MEMORY_MAX): a throttle without a hard cap does not contain a runaway engine. Nothing was started."
+    log_fail "$(_burn_memcap_said high) needs --memory-max (or CLIKAE_BURN_MEMORY_MAX): a throttle without a hard cap does not contain a runaway engine. Nothing was started."
   fi
-  local max_b high_b
+  local max_b high_b knob b
   max_b="$(_burn_memcap_bytes "$burn_memory_max")" \
-    || log_fail "--memory-max (or CLIKAE_BURN_MEMORY_MAX): not a size: '$burn_memory_max' (use bytes, or a number with K, M, G or T, e.g. 10G). Nothing was started."
-  [ -n "$burn_memory_high" ] || return 0
-  high_b="$(_burn_memcap_bytes "$burn_memory_high")" \
-    || log_fail "--memory-high (or CLIKAE_BURN_MEMORY_HIGH): not a size: '$burn_memory_high' (use bytes, or a number with K, M, G or T, e.g. 8G). Nothing was started."
+    || log_fail "$(_burn_memcap_name max): not a size: '$burn_memory_max' (use bytes, or a number with K, M, G or T, e.g. 10G). Nothing was started."
+  if [ -n "$burn_memory_high" ]; then
+    high_b="$(_burn_memcap_bytes "$burn_memory_high")" \
+      || log_fail "$(_burn_memcap_name high): not a size: '$burn_memory_high' (use bytes, or a number with K, M, G or T, e.g. 8G). Nothing was started."
+  fi
+  for knob in max high; do
+    if [ "$knob" = max ]; then b="$max_b"; else b="${high_b:-}"; fi
+    [ -n "$b" ] || continue
+    [ "$b" -ge "$_BURN_MEMCAP_MIN_BYTES" ] \
+      || log_fail "$(_burn_memcap_said "$knob") is below the smallest cap burn accepts, 64M ($_BURN_MEMCAP_MIN_BYTES bytes): no engine starts under less. Nothing was started."
+  done
+  [ -n "${high_b:-}" ] || return 0
   [ "$high_b" -le "$max_b" ] \
-    || log_fail "--memory-high $burn_memory_high is above --memory-max $burn_memory_max: it would never throttle before the hard cap. Nothing was started."
+    || log_fail "$(_burn_memcap_said high) is above $(_burn_memcap_said max): it would never throttle before the hard cap. Nothing was started."
 }
 
 # _burn_memcap_preflight <engine> <tank> — prove, before anything starts, that
@@ -4073,7 +4123,12 @@ _burn_memcap_validate() {
 # memory.max is. Refuses through _burn_knobs_refuse (status file + --json).
 _burn_memcap_preflight() {
   [ -n "$burn_memory_max" ] || return 0
-  local eng="$1" tk="$2" tail="Nothing was started; drop --memory-max to run uncapped."
+  local eng="$1" tk="$2" tail
+  if [ "$(_burn_memcap_name max)" = --memory-max ]; then
+    tail="Nothing was started; drop --memory-max to run uncapped."
+  else
+    tail="Nothing was started; unset CLIKAE_BURN_MEMORY_MAX to run uncapped."
+  fi
   if ! command -v systemd-run >/dev/null 2>&1; then
     _burn_knobs_refuse "$eng" "$tk" 0 "refused: --memory-max needs systemd-run" \
       "--memory-max needs systemd-run (Linux with a systemd user manager); there is none on this $(uname -s 2>/dev/null || echo unknown) system. $tail"
@@ -4116,15 +4171,53 @@ _burn_memcap_matches() {   # <cgroup value> <wanted bytes>
 # forks — starts inside its own capped unit. `systemd-run --scope` execs the
 # command in place: same pid, stdio, exit code, and the `timeout` in front of
 # it still bounds the same process. --collect so a scope that ended failed
-# (an OOM kill) does not linger and block a later unit of the same name.
+# (an OOM kill) does not linger.
+#
+# The unit name carries this burn's launch counter (-l<n>), not only the run
+# id: a re-fire on the same tank (--wait-for-reset, the --no-reroute dry
+# pause) reuses the run id, and a unit name that is still loaded — a child
+# the last launch left running — makes systemd-run refuse the next launch.
+# Sets burn_memory_unit (cmd_burn's local) for _burn_memcap_reap and --json.
 _burn_memcap_runner() {
   [ -n "${burn_memory_max:-}" ] || return 0
-  local unit="clikae-burn-$1"
+  burn_memcap_launches=$(( ${burn_memcap_launches:-0} + 1 ))
+  local unit="clikae-burn-$1-l$burn_memcap_launches"
+  burn_memory_unit="$unit.scope"
   runner+=(systemd-run --user --scope --quiet --collect "--unit=$unit"
            "--description=clikae burn $2" -p "MemoryMax=$burn_memory_max")
   [ -z "${burn_memory_high:-}" ] || runner+=(-p "MemoryHigh=$burn_memory_high")
   runner+=(--)
   log_info "memory cap: $2 runs in $unit.scope (MemoryMax=$burn_memory_max${burn_memory_high:+, MemoryHigh=$burn_memory_high})"
+}
+
+# _burn_memcap_reap <engine/tank> — once the engine has exited, stop its scope
+# if anything it started is still in it. A scope lives while any process in it
+# does, so a child the engine left behind (a dev server, a stuck subprocess)
+# would otherwise keep running, under the cap, after the burn returned — and
+# an unattended lane is exactly where nobody comes back for it. Stopping the
+# scope ends those processes (SIGTERM, then systemd's SIGKILL). Best effort:
+# it never changes the burn's outcome. Only the burn's own unit is touched.
+_burn_memcap_reap() {
+  [ -n "${burn_memory_max:-}" ] && [ -n "${burn_memory_unit:-}" ] || return 0
+  command -v systemctl >/dev/null 2>&1 || return 0
+  systemctl --user is-active --quiet "$burn_memory_unit" 2>/dev/null || return 0
+  local cg n=0
+  cg="$(systemctl --user show -p ControlGroup --value "$burn_memory_unit" 2>/dev/null || true)"
+  if [ -n "$cg" ] && [ -r "/sys/fs/cgroup$cg/cgroup.procs" ]; then
+    n="$(wc -l < "/sys/fs/cgroup$cg/cgroup.procs" 2>/dev/null | tr -d ' ')" || n=0
+  fi
+  if [ "${n:-0}" -gt 0 ] 2>/dev/null; then
+    log_info "memory cap: $1 exited and left $n process(es) in $burn_memory_unit; stopping the scope, which ends them."
+  fi
+  systemctl --user stop "$burn_memory_unit" >/dev/null 2>&1 || true
+}
+
+# _burn_memcap_json — the --json / status.json fragment: the cap asked for and
+# the unit of the latest launch (null when uncapped, or before any launch).
+_burn_memcap_json() {
+  printf '"memory_max":%s,"memory_high":%s,"memory_unit":%s' \
+    "$(json_or_null "${burn_memory_max:-}")" "$(json_or_null "${burn_memory_high:-}")" \
+    "$(json_or_null "${burn_memory_unit:-}")"
 }
 
 # _burn_check_codex_git_cwd — refuse to compose a codex argv whose cwd isn't a
@@ -4313,6 +4406,11 @@ cmd_burn() {
   local -a burn_argv=("$@")
   # #236: the engine's own memory cap. Flags win over the environment.
   local burn_memory_max="${CLIKAE_BURN_MEMORY_MAX:-}" burn_memory_high="${CLIKAE_BURN_MEMORY_HIGH:-}"
+  # Where each value came from, so a refusal names what the user actually set;
+  # the launch counter and the current launch's unit (see _burn_memcap_runner).
+  local burn_memory_max_src="" burn_memory_high_src="" burn_memcap_launches=0 burn_memory_unit=""
+  [ -z "$burn_memory_max" ] || burn_memory_max_src="env"
+  [ -z "$burn_memory_high" ] || burn_memory_high_src="env"
   # #74 round-2 P1-1 (round-3 P1-1: raw mode): the cwd the engine actually
   # runs in, not the cwd of THIS shell. Defaults to $PWD here (agy — the only
   # caller that ever reads this default value directly, before any reset
@@ -4361,8 +4459,8 @@ cmd_burn() {
       --queue-timeout) shift; [ $# -gt 0 ] || log_fail "--queue-timeout needs a duration (e.g. 2h)"; queue_timeout_raw="$1"; shift ;;
       --force-cockpit) force_cockpit=1; shift ;;
       --fresh)      fresh=1; shift ;;
-      --memory-max)  shift; [ $# -gt 0 ] && [ -n "$1" ] || log_fail "--memory-max needs a size (e.g. 10G)"; burn_memory_max="$1"; shift ;;
-      --memory-high) shift; [ $# -gt 0 ] && [ -n "$1" ] || log_fail "--memory-high needs a size (e.g. 8G)"; burn_memory_high="$1"; shift ;;
+      --memory-max)  shift; [ $# -gt 0 ] && [ -n "$1" ] || log_fail "--memory-max needs a size (e.g. 10G)"; burn_memory_max="$1"; burn_memory_max_src=flag; shift ;;
+      --memory-high) shift; [ $# -gt 0 ] && [ -n "$1" ] || log_fail "--memory-high needs a size (e.g. 8G)"; burn_memory_high="$1"; burn_memory_high_src=flag; shift ;;
       --)           shift; cmd=("$@"); break ;;
       -*)           log_fail "Unknown flag: $1  (try: clikae burn --help)" ;;
       *)            if [ -z "$cli" ]; then cli="$1"
@@ -5146,7 +5244,8 @@ KV
       # all means no `tee "$log_file"` ever ran.
       printf '%s\n' "$out" > "$log_file" 2>/dev/null || true
     fi
-    
+    _burn_memcap_reap "$cli/$cur"   # #236: the engine has exited, on every path above
+
     if [ -f "$evidence_file" ]; then
       read -r artifact_fresh artifact_bytes_snapshot < "$evidence_file"
     fi
