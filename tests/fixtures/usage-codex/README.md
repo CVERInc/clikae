@@ -18,7 +18,8 @@ and durations unchanged. Malformed and swapped variants are synthetic mutations.
 ## captured/ (captured 2026-11-19, sanitized)
 
 Real `token_count` events copied from codex rollout files on one machine, one
-file per plan shape. Sanitized: each line keeps only `timestamp`, `type`,
+file per plan shape. The two `plus-transient-*` files were added later the same
+day with the same sanitizer. Sanitized: each line keeps only `timestamp`, `type`,
 `payload.type` and these `payload.rate_limits` fields: `limit_id`, `plan_type`,
 `rate_limit_reached_type`, and each window's `used_percent`, `window_minutes`
 and `resets_at`. No account identifier, email, path, prompt, model output or
@@ -33,6 +34,13 @@ distances are the captured ones.
   followed by an empty `premium` event with a credits-depleted reason.
 - `plus-zero-duration.jsonl`: a plus plan event whose only window reports
   `window_minutes: 0` (seen once in a live session), after a normal event.
+- `plus-transient-weekly-only.jsonl`: a plus event with both windows, then
+  one 33 seconds later whose only window is the 10080-minute one as
+  `primary` (the weekly-only shape, on a plan that has both). The next event
+  in the source rollout had both windows again.
+- `plus-transient-window-only.jsonl`: a plus event with both windows, then
+  one 6 seconds later with the 300-minute window and `secondary: null`.
+  The next event in the source rollout had both windows again.
 
 No vendor `/status` text was captured alongside these. The status-text check
 still uses `status.txt` above; the captured check compares usage JSON with

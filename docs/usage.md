@@ -119,8 +119,23 @@ Per-model rows use `models[].used_pct`; historical readings use
 `last_window_used_pct` and `last_weekly_used_pct`. The older percentage names
 remain aliases for one release. `stale: true` marks readings over six hours old.
 Codex classifies windows by their duration, never their position or time until
-reset. `window_absent: true` or `weekly_absent: true` means the plan has no such
-window; an unreadable window is null without an absence marker.
+reset: exactly 300 minutes is the 5-hour window and 10080 the weekly one. Any
+other length (a free plan's 30-day window) is listed under `other_windows` as
+`{window_minutes, used_pct, resets_at}` and is in neither slot.
+
+Codex sometimes writes a single rollout event that leaves out a window the plan
+has, then a complete one seconds later. So each window comes from the newest of
+the last 16 rollout events (same plan) that has it, and the reading's age is
+that of the oldest event it used. `window_absent: true` or `weekly_absent: true`
+means none of those recent events showed such a window. It is never claimed for
+a plus plan, which has both. An unreadable window is null without an absence
+marker. A zero-length window is unreadable and never chosen. When no recent
+event has a readable window, clikae asks codex itself (the app-server probe)
+instead.
+
+Burn's tank choice never treats a null window as 0% used. A tank with an
+unreadable window ranks with the unread tanks, or with the nearly empty ones
+when its readable window is at 90% or more.
 
 On the board that reads `7d █░░░░░░░ 15% · 5h ago · needs-refresh`. An agy tank whose
 saved access token is still live (Linux file backend; the token lives an hour

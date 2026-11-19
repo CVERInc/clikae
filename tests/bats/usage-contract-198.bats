@@ -211,12 +211,6 @@ _seed_captured_198() {
   _check_198 '.window_used_pct == null and .weekly_used_pct == 100 and .window_absent == true and (has("weekly_absent")|not)'
 }
 
-@test "198 captured: a zero-length window is unreadable and proves no absence" {
-  _seed_captured_198 plus-zero-duration
-  run clikae usage codex sample --fresh --json
-  _check_198 '.window_used_pct == null and .weekly_used_pct == null and (has("window_absent")|not) and (has("weekly_absent")|not)'
-}
-
 @test "198 captured: an old capture is stale" {
   _seed_captured_198 team-weekly-only 172800
   run clikae usage codex sample --fresh --json
@@ -242,4 +236,144 @@ _seed_captured_198() {
       . "$CLIKAE_TEST_ROOT/lib/core/limit.sh"
       limit_codex_status_note "$pu" "$pw" "" "$su" "$sw" "" "$(date +%s)"; })"
   [ "$note" = "5h ${short}% left · 7d ${weekly}% left" ]
+}
+
+# --- r1: one-off events, durations of other lengths, burn's unknown side ---
+# A captured file with the rows its filter keeps, then seeded like the rest.
+_seed_captured_rows_198() {
+  local src="$CLIKAE_TEST_ROOT/tests/fixtures/usage-codex/captured" root="$TEST_HOME/fxroot"
+  mkdir -p "$root/tests/fixtures/usage-codex/captured"
+  jq -c "$2" "$src/$1.jsonl" > "$root/tests/fixtures/usage-codex/captured/r1.jsonl"
+  CLIKAE_TEST_ROOT="$root" _seed_captured_198 r1 "${3:-0}"
+}
+
+@test "198 r1 captured: plus 7-day-only one-off keeps the 5-hour reading from the event before" {
+  _seed_captured_198 plus-transient-weekly-only
+  run --separate-stderr clikae usage codex sample --fresh --json
+  # shellcheck disable=SC2154
+  _check_198 '.window_used_pct == 14 and .weekly_used_pct == 9 and (has("window_absent")|not) and (has("weekly_absent")|not) and .age_sec >= 33'
+  run --separate-stderr clikae usage codex sample
+  [ "$status" -eq 0 ]
+  [ "$stderr" = 'codex 91' ]
+}
+
+@test "198 r1 captured: plus 5-hour-only one-off keeps the weekly reading from the event before" {
+  _seed_captured_198 plus-transient-window-only
+  run clikae usage codex sample --fresh --json
+  _check_198 '.window_used_pct == 65 and .weekly_used_pct == 41 and (has("window_absent")|not) and (has("weekly_absent")|not)'
+}
+
+@test "198 r1 captured: a zero-length window never wins over the readings before it" {
+  _seed_captured_198 plus-zero-duration
+  run clikae usage codex sample --fresh --json
+  _check_198 '.source == "transcript" and .window_used_pct == 19 and .weekly_used_pct == 93 and (has("window_absent")|not) and (has("weekly_absent")|not)'
+}
+
+@test "198 r1 captured: a plus one-off alone is never an absent window" {
+  _seed_captured_rows_198 plus-transient-weekly-only 'select(.payload.rate_limits.secondary == null)'
+  run clikae usage codex sample --fresh --json
+  _check_198 '.window_used_pct == null and .weekly_used_pct == 9 and (has("window_absent")|not)'
+  _seed_captured_rows_198 plus-transient-window-only 'select(.payload.rate_limits.secondary == null)'
+  run clikae usage codex sample --fresh --json
+  _check_198 '.window_used_pct == 65 and .weekly_used_pct == null and (has("weekly_absent")|not)'
+}
+
+@test "198 r1: absence needs every recent event to agree, and a plan change starts over" {
+  # Same shape on a plan that may lack the window, but an earlier event had it.
+  _seed_captured_rows_198 plus-transient-weekly-only '.payload.rate_limits.plan_type = "team"'
+  run clikae usage codex sample --fresh --json
+  _check_198 '.window_used_pct == 14 and .weekly_used_pct == 9 and (has("window_absent")|not)'
+  # A plus reading, then the plan became prolite: the plus 5-hour reading is not carried over.
+  _seed_captured_rows_198 plus-transient-weekly-only 'if .payload.rate_limits.secondary == null then .payload.rate_limits.plan_type = "prolite" else . end'
+  run clikae usage codex sample --fresh --json
+  _check_198 '.window_used_pct == null and .weekly_used_pct == 9 and .window_absent == true'
+}
+
+@test "198 r1: a rollout whose only window is zero-length still asks app-server" {
+  _probe_198
+  _seed_captured_rows_198 plus-zero-duration 'select(.payload.rate_limits.secondary == null)'
+  export USAGE_198_PROBE='{"id":2,"result":{"rateLimits":{"primary":{"usedPercent":12,"windowDurationMins":300,"resetsAt":4102444800},"secondary":{"usedPercent":34,"windowDurationMins":10080,"resetsAt":4102444800}}}}'
+  run clikae usage codex sample --fresh --json
+  _check_198 '.source == "vendor" and .window_used_pct == 12 and .weekly_used_pct == 34'
+}
+
+@test "198 r1: only 300 and 10080 minutes fill the slots; other lengths keep their own minutes" {
+  _seed_198 weekly-only
+  for minutes in 43200 1440 360; do
+    _mutate_198 ".payload.rate_limits.plan_type = \"free\" | .payload.rate_limits.primary.window_minutes = $minutes"
+    run clikae usage codex sample --fresh --json
+    _check_198 ".window_used_pct == null and .weekly_used_pct == null and .other_windows[0].window_minutes == $minutes and .other_windows[0].used_pct == 89 and (.other_windows[0].resets_at|type) == \"string\" and (has(\"gap\")|not)"
+  done
+  run --separate-stderr clikae usage codex sample
+  [ "$status" -eq 0 ]
+  [ "$stderr" = 'codex 11' ]
+}
+
+@test "198 r1: app-server other lengths keep their own minutes" {
+  _probe_198
+  export USAGE_198_PROBE='{"id":2,"result":{"rateLimits":{"primary":{"usedPercent":100,"windowDurationMins":43200,"resetsAt":4102444800},"secondary":null}}}'
+  run clikae usage codex sample --fresh --json
+  _check_198 '.source == "vendor" and .window_used_pct == null and .weekly_used_pct == null and .other_windows == [{"window_minutes":43200,"used_pct":100,"resets_at":"2100-01-01T00:00:00Z"}]'
+  source "$CLIKAE_TEST_ROOT/lib/core/usage.sh"
+  run usage_board_fields codex sample
+  [ "$(printf '%s' "$output" | cut -f1-3)" = "$(printf -- '-\t-\t100')" ]
+  [ "$(printf '%s' "$output" | cut -f5)" = "30d:100" ]
+}
+
+_peek_198() {
+  mkdir -p "$CLIKAE_HOME/state/usage/codex"
+  printf '%s\n' "$2" | jq -c --argjson now "$(date +%s)" '. + {source:"transcript", cached_at:$now, scanned_at:$now}' \
+    > "$CLIKAE_HOME/state/usage/codex/$1.json"
+}
+
+@test "198 r1 burn: an unreadable side is not 0% used; known values rank as before" {
+  # shellcheck source=/dev/null
+  source "$CLIKAE_TEST_ROOT/lib/core/usage.sh"
+  _peek_198 known '{"window_pct":12,"weekly_pct":34}'
+  run usage_cache_peek codex known
+  [ "$status" -eq 0 ]; [ "$output" = "$(printf '12\t34\t34')" ]
+  _peek_198 absent '{"window_pct":null,"weekly_pct":34,"window_absent":true}'
+  run usage_cache_peek codex absent
+  [ "$status" -eq 0 ]; [ "$output" = "$(printf '0\t34\t34')" ]
+  _peek_198 unread '{"window_pct":null,"weekly_pct":34}'
+  run usage_cache_peek codex unread
+  [ "$status" -ne 0 ]; [ -z "$output" ]
+  _peek_198 unreadfull '{"window_pct":95,"weekly_pct":null}'
+  run usage_cache_peek codex unreadfull
+  [ "$status" -eq 0 ]; [ "$output" = "$(printf '95\t100\t100')" ]
+  _peek_198 other '{"window_pct":null,"weekly_pct":null,"window_absent":true,"weekly_absent":true,"other_windows":[{"window_minutes":43200,"used_pct":100,"resets_at":"2100-01-01T00:00:00Z"}]}'
+  run usage_cache_peek codex other
+  [ "$status" -eq 0 ]; [ "$output" = "$(printf '0\t0\t100')" ]
+}
+
+@test "198 r1 burn: a tank with an unreadable window ranks after one with known headroom" {
+  export CLIKAE_LIB="$CLIKAE_TEST_ROOT/lib"
+  # shellcheck source=/dev/null
+  source "$CLIKAE_LIB/core/log.sh"
+  source "$CLIKAE_LIB/core/profile_store.sh"
+  source "$CLIKAE_LIB/core/adapter_loader.sh"
+  source "$CLIKAE_LIB/core/limit.sh"
+  source "$CLIKAE_LIB/core/usage.sh"
+  source "$CLIKAE_LIB/commands/burn.sh"
+  local tank
+  for tank in aaunread bbknown; do
+    clikae init codex "$tank" >/dev/null 2>&1
+    mkdir -p "$CLIKAE_HOME/profiles/codex/$tank/sessions"
+    jq -c --argjson now "$(date +%s)" '.timestamp = ($now | todateiso8601) |
+      .payload.rate_limits.primary.resets_at = ($now + 3600) |
+      .payload.rate_limits.secondary.resets_at = ($now + 7200) |
+      .payload.rate_limits.primary.used_percent = 50 | .payload.rate_limits.secondary.used_percent = 50' \
+      "$CLIKAE_TEST_ROOT/tests/fixtures/usage-codex/two-windows.jsonl" \
+      > "$CLIKAE_HOME/profiles/codex/$tank/sessions/rollout-$tank.jsonl"
+  done
+  # aaunread: the 5-hour side has no duration (unreadable), weekly 5% used.
+  # It used to rank as 0% / 5%, ahead of bbknown's real 50% / 50%.
+  jq -c '.payload.rate_limits.secondary.used_percent = 5 | del(.payload.rate_limits.primary.window_minutes)' \
+    "$CLIKAE_HOME/profiles/codex/aaunread/sessions/rollout-aaunread.jsonl" > "$TEST_HOME/r.jsonl"
+  mv "$TEST_HOME/r.jsonl" "$CLIKAE_HOME/profiles/codex/aaunread/sessions/rollout-aaunread.jsonl"
+  clikae usage codex aaunread --fresh --json >/dev/null 2>&1
+  clikae usage codex bbknown --fresh --json >/dev/null 2>&1
+  run _burn_next_same_engine codex '' '' '' 1
+  [ "$status" -eq 0 ]
+  [ "$output" = bbknown ]
 }

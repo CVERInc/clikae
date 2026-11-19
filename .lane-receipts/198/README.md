@@ -36,3 +36,27 @@ zero-length-window event. No vendor `/status` text was recorded alongside them.
   exit 0. It is a count summary plus this issue's test lines; the raw log
   repeats every existing test name and is not committed.
 - `load-full-suite.log`: load1 samples taken before the full suite started.
+
+## r1 (review fixes)
+
+Baseline for red: an immutable `git archive` export of `8012a5bef6`, with only
+the r1 test files (`usage-contract-198.bats`, `usage-legible.bats`) and the two
+new captured fixtures copied in.
+
+- `r1-red-contract-8012a5b.log`: 30 contract tests on that export: the 20
+  earlier ones pass, all 10 r1 tests fail; exit 1. In the burn peek test the
+  known-value assertions pass on the export too (ordering for known values is
+  unchanged); it fails at the unreadable-side assertion.
+- `r1-red-legible-8012a5b.log`: the updated #149 probe test (30-day window in
+  `other_windows`, not the weekly slot) fails on the export; exit 1.
+- `r1-green-targeted.log`: usage*, limit* and burn* bats files with the fix,
+  `bats -j 4`: 732 of 733 pass. The one failure is a 20-second wall-clock bound
+  on a claude Keychain read (`P2-2: the Keychain read is bounded by the PERL
+  arm`), unrelated to this change; rerun alone it passes, and it passes in the
+  full suite.
+- `r1-full-suite.log` / `r1-full-suite.exit`: full `scripts/test.sh --locked`
+  under the suite lock: shellcheck, doc names, 2719 bats (0 failed, 30
+  skipped), 43 pty smoke checks; exit 0. `r1-load-full-suite.log`: load before
+  it started.
+- `r1-output-examples.log`: literal `clikae usage` output for the captured
+  one-off events and a 30-day window.

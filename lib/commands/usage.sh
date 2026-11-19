@@ -43,7 +43,8 @@ _usage_print() {
 # A "(name pct)" suffix is a vendor per-model row (from the reading's own
 # `models[]`, never a name clikae knows) whose pct is above the tank's weekly.
 # One token per tank, engines in the order their tanks were listed: the
-# weekly percentage (the window's when a vendor reports no weekly), a
+# weekly percentage (the window's when a vendor reports no weekly, else the
+# highest of other_windows, e.g. a free plan's 30-day window), a
 # last-known number marked "?" when there is no current one, "??" when there
 # never was one. agy has no number at all, so its token is when a tank of it
 # last ran. Human output only, on stderr: stdout stays one "<engine>/<tank>
@@ -85,6 +86,8 @@ _usage_summary_add() {
       (if .weekly_reset_passed == true then "reset" else (.weekly_pct|l) + $sp end) + $a
     elif (.window_pct|r) != null then
       (if .window_reset_passed == true then "reset" else (.window_pct|l) + $sp end) + $a
+    elif ([(.other_windows // [])[] | .used_pct | numbers] | max) != null then
+      ([(.other_windows // [])[] | .used_pct | numbers] | max | l) + $a
     elif (.last_used_at|type) == "number" then
       ($now - .last_used_at) as $d |
       "@" + (if $d < 3600 then "\($d/60|floor)m" elif $d < 86400 then "\($d/3600|floor)h" else "\($d/86400|floor)d" end)
@@ -142,8 +145,10 @@ window_pct and weekly_pct are the same numbers under their older names),
 last_window_used_pct and last_weekly_used_pct (the last known reading),
 groups[].window_used_pct / weekly_used_pct and models[].used_pct use the same
 unit. The older percentage names remain aliases for one release.
-window_absent or weekly_absent (true: this plan has no such window, which is not
-the same as could-not-read), stale (true: the reading is over 6 hours old),
+window_absent or weekly_absent (true: no recent reading showed such a window;
+null without it means it could not be read), other_windows (a window that is
+neither 5 hours nor 7 days: window_minutes, used_pct, resets_at; codex),
+stale (true: the reading is over 6 hours old),
 window_resets_at,
 weekly_resets_at (ISO instants, or null), source. source is "vendor" (a
 live call answered), "quota-api" (agy: its own retrieveUserQuotaSummary

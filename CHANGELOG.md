@@ -13,6 +13,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   app-server readings, and no longer guesses a window from its position when its duration is missing.
   Historical, per-model and agy group percentages now name the used unit too; older JSON names remain
   aliases for one release.
+- **A one-off codex event that leaves out a window no longer erases it.** Each window comes from the
+  newest of the last 16 rollout events that has it, so a plus plan keeps both readings, and
+  `window_absent` / `weekly_absent` now mean no recent event showed that window (never on plus). A
+  zero-length window is never chosen. Only 300 and 10080 minutes fill the 5-hour and weekly slots;
+  other lengths are listed under `other_windows`.
+- **`clikae burn` no longer reads an unreadable window as 0% used** when choosing a tank: such a
+  tank ranks with the unread ones, or with the nearly empty ones when its readable window is at 90%
+  or more.
 
 ## [0.46.0] — 2026-11-19
 

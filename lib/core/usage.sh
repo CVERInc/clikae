@@ -150,7 +150,7 @@ usage_unknown() {
 _USAGE_NUMERIC_RECORD_JQ='type == "object"
   and (.source == "vendor" or .source == "transcript" or .source == "quota-api")
   and (.cached_at|type) == "number"
-  and ([.window_pct, .weekly_pct] | any(type == "number"))
+  and (([.window_pct, .weekly_pct] | any(type == "number")) or ((.other_windows // []) | length > 0))
   and ([.window_pct, .weekly_pct] | all(. == null or (type == "number" and . >= 0 and . <= 100)))'
 
 usage_read() (
@@ -321,6 +321,16 @@ _usage_read_finish() {
         and .retry_after >= 1 and .retry_after <= 86400
         and (.retry_after|floor) == .retry_after
      then (.retry_after|floor) else null end) as $retry |
+    # #198: a codex window that is neither the 5-hour nor the weekly one
+    # (such as a free plan 30-day window), with its own length in minutes. At most
+    # 4, each a positive whole number of minutes, a percentage in 0..100 and
+    # a `stamp` timestamp or null.
+    (if (.source == "vendor" or .source == "transcript") and (.other_windows|type) == "array" then
+       [ .other_windows[] | select(type == "object") |
+         {window_minutes, used_pct: (.used_pct|pct), resets_at: (.resets_at|stamp)} |
+         select((.window_minutes|type) == "number" and .window_minutes > 0
+                and (.window_minutes|floor) == .window_minutes and .used_pct != null) ] | .[0:4]
+     else [] end) as $others |
     # #137: the per-model weekly rows, whitelisted field by field
     # like everything else that reaches this cache — a bounded array of
     # at most 8 `{name, pct, resets_at}` with a name of at most 40 characters,
@@ -357,6 +367,7 @@ _usage_read_finish() {
     if .source == "unknown" and $reason != null then . + {reason:$reason} else . end |
     if .source != "unknown" and $window_absent and .window_pct == null then . + {window_absent:true} else . end |
     if .source != "unknown" and $weekly_absent and .weekly_pct == null then . + {weekly_absent:true} else . end |
+    if .source != "unknown" and ($others|length) > 0 then . + {other_windows:$others} else . end |
     if .source == "unknown" and $reason == "rate-limited" and $retry != null
     then . + {retry_after:$retry} else . end |
     if (.source == "vendor" or .source == "quota-api") and ($models|length) > 0 then . + {models:$models} else . end |
@@ -396,7 +407,8 @@ _usage_read_finish() {
   [ -n "$prev" ] || prev="{}"
   if [ "$appeared" = true ] &&
      printf '%s' "$reading" | jq -e --argjson prev "$prev" --argjson stamp "$stamp" --argjson now "$now" '
-       def has_pct: (.window_pct|type) == "number" or (.weekly_pct|type) == "number";
+       def has_pct: (.window_pct|type) == "number" or (.weekly_pct|type) == "number"
+         or ((.other_windows // []) | length > 0);
        ($prev.scanned_at // $prev.cached_at) as $s
        | ($s|type) == "number" and $s <= $now
          and ($prev.source == "vendor" or $prev.source == "transcript"
@@ -409,7 +421,7 @@ _usage_read_finish() {
   record="$(printf '%s' "$reading" | jq -c --argjson now "$stamp" --arg ev "$event_epoch" --argjson prev "$prev" '
     def num: type == "number";
     . + {cached_at:(if $ev == "" then $now else ($ev|tonumber) end), scanned_at:$now} |
-    if (.window_pct == null and .weekly_pct == null) then
+    if (.window_pct == null and .weekly_pct == null and ((.other_windows // []) | length == 0)) then
       (if (($prev.window_pct|num) or ($prev.weekly_pct|num)) and ($prev.cached_at|num)
        then {window_pct:$prev.window_pct, weekly_pct:$prev.weekly_pct, at:$prev.cached_at}
        elif ($prev.last_good|type) == "object" then $prev.last_good
@@ -594,11 +606,12 @@ _usage_public() {
     (if (.models|type) == "array" then
        .models |= map(. + {used_pct:.pct})
      else . end) |
-    (if (.window_pct != null or .weekly_pct != null) and (.age_sec // 0) > '"$_USAGE_STALE_SEC"'
+    ((.other_windows // []) | length > 0) as $other |
+    (if (.window_pct != null or .weekly_pct != null or $other) and (.age_sec // 0) > '"$_USAGE_STALE_SEC"'
      then . + {stale:true} else . end) |
     (if (.window_pct != null) and (.window_resets_at|expired) then . + {window_reset_passed:true} else . end) |
     (if (.weekly_pct != null) and (.weekly_resets_at|expired) then . + {weekly_reset_passed:true} else . end) |
-    if (.window_pct == null and .weekly_pct == null) then
+    if (.window_pct == null and .weekly_pct == null and ($other|not)) then
       . + {gap:(if .reason == "needs-refresh" or .reason == "relogin-required" or .reason == "keychain-denied" then .reason
                 elif $engine == "antigravity" then "no-signal"
                 elif $engine == "codex" and (.reason == null) then "no-probe"
@@ -782,7 +795,10 @@ esac
 # with age (window/weekly readings only fall or reset, never rise), so
 # trusting an old "0%" here is exactly backwards from what "stale beats
 # nothing" was meant to buy. Only a missing cache, missing jq, a reading
-# older than the ceiling, or a non-vendor/incomplete reading is "unknown":
+# older than the ceiling, a non-vendor/incomplete reading, or (#198) one
+# with a side that could not be read and no known side at 90% or more, is
+# "unknown" (a null side is never 0% used; only a passed reset or a window
+# the plan does not have is):
 # empty stdout, rc=4 (jq -er's exit status when the pipeline produces no
 # output at all, not rc=1 — rc=1 is "last value was false/null", which
 # never happens here since select() either produces a value or nothing).
@@ -807,16 +823,28 @@ usage_cache_peek() {
   [ -n "$now" ] || now="$(date +%s)"
   jq -er --argjson now "$now" --argjson max_age "$_USAGE_CACHE_PEEK_MAX_AGE_SEC" "$_USAGE_NORM_STAMP_JQ"'
     select(.source == "vendor" or .source == "transcript" or .source == "quota-api") |
-    select(.window_pct != null or .weekly_pct != null) |
+    select(.window_pct != null or .weekly_pct != null or ((.other_windows // []) | length > 0)) |
     (.cached_at) as $evidence |
     select($evidence != null) |
     # P3-7 (round-6 review): one clock-skew rule, shared with the board.
     # A timestamp in the FUTURE counts as age 0. See this function header.
     (if ($now - $evidence) < 0 then 0 else ($now - $evidence) end) as $age |
     select($age <= $max_age) |
-    (if (.window_resets_at|expired) then 0 else (.window_pct // 0) end) as $w |
-    (if (.weekly_resets_at|expired) then 0 else (.weekly_pct // 0) end) as $k |
-    [$w,$k,([$w,$k]|max)] | @tsv' "$cache" 2>/dev/null
+    # #198: a side is 0 only when its reset passed or the plan has no such
+    # window (`*_absent`); null means it could not be read, never 0% used.
+    (if (.window_resets_at|expired) then 0 elif .window_pct != null then .window_pct
+     elif .window_absent == true then 0 else null end) as $w |
+    (if (.weekly_resets_at|expired) then 0 elif .weekly_pct != null then .weekly_pct
+     elif .weekly_absent == true then 0 else null end) as $k |
+    # A window of another length (a free plan'"'"'s 30-day one) binds too.
+    ([(.other_windows // [])[] | select((.resets_at|expired) | not) | .used_pct | numbers] | max) as $o |
+    ([$w,$k,$o] | map(numbers) | max) as $known |
+    if $w != null and $k != null then [$w,$k,([$w,$k,$o]|map(numbers)|max)]
+    # An unreadable side is not known headroom: the reading ranks as unknown,
+    # unless what IS known already says nearly out (>= 90). Then the
+    # unreadable side counts as spent, so it never sorts ahead of a sibling.
+    elif $known != null and $known >= 90 then [($w // 100),($k // 100),100]
+    else empty end | @tsv' "$cache" 2>/dev/null
 }
 
 # P3-4 (round-5 review): does a candidate have ANY on-disk numeric reading at
@@ -835,7 +863,7 @@ usage_cache_has_reading() {
   local cache="$CLIKAE_HOME/state/usage/$1/$2.json"
   [ -f "$cache" ] || return 1
   command -v jq >/dev/null 2>&1 || return 1
-  jq -e '(.source == "vendor" or .source == "transcript" or .source == "quota-api") and (.window_pct != null or .weekly_pct != null)' \
+  jq -e '(.source == "vendor" or .source == "transcript" or .source == "quota-api") and (.window_pct != null or .weekly_pct != null or ((.other_windows // []) | length > 0))' \
     "$cache" >/dev/null 2>&1
 }
 
@@ -855,10 +883,12 @@ usage_board_fields() {
   [ -n "$now" ] || now="$(date +%s)"
   jq -er --argjson now "$now" "$_USAGE_NORM_STAMP_JQ"'
     select(.source == "vendor" or .source == "transcript" or .source == "quota-api") |
-    select(.window_pct != null or .weekly_pct != null) |
-    # #149: one axis may be absent (a codex free plan has a single 30-day
-    # window, read as weekly). "-" marks it — never 0, and never an empty
-    # field: tab is IFS whitespace, so the reader would collapse it.
+    select(.window_pct != null or .weekly_pct != null or ((.other_windows // []) | length > 0)) |
+    # #149: one axis may be absent. "-" marks it — never 0, and never an
+    # empty field: tab is IFS whitespace, so the reader would collapse it.
+    # #198: a window of another length (a codex free plan'"'"'s single 30-day
+    # window) is in neither axis; it rides in the 5th column like a binding
+    # model row, labelled by its own length ("30d:100").
     (if .window_pct == null then "-" elif (.window_resets_at|expired) then 0 else .window_pct end) as $w |
     (if .weekly_pct == null then "-" elif (.weekly_resets_at|expired) then 0 else .weekly_pct end) as $k |
     # #149: the vendor'"'"'s own per-model rows that BIND — a row whose pct is
@@ -868,9 +898,12 @@ usage_board_fields() {
     # while one model is at 100% (measured on a real tank), and the board
     # says so instead of looking healthy. A row below the tank value, or no
     # `models[]` at all, adds nothing.
-    ([(.models // [])[] | select(.pct > ($k | numbers // -1)) | select((.resets_at|expired) | not)
-      | "\(.name):\(.pct)"] | join(",")) as $bind |
-    [$w,$k,([$w,$k]|map(numbers)|max),.cached_at,(if $bind == "" then "-" else $bind end)] | @tsv' "$cache" 2>/dev/null
+    def span: if . % 1440 == 0 then "\(. / 1440)d" elif . % 60 == 0 then "\(. / 60)h" else "\(.)m" end;
+    ([(.other_windows // [])[] | select((.resets_at|expired) | not)] ) as $other |
+    ([($other[] | "\(.window_minutes|span):\(.used_pct)"),
+      ((.models // [])[] | select(.pct > ($k | numbers // -1)) | select((.resets_at|expired) | not)
+      | "\(.name):\(.pct)")] | join(",")) as $bind |
+    [$w,$k,([$w,$k,$other[].used_pct]|map(numbers)|max // "-"),.cached_at,(if $bind == "" then "-" else $bind end)] | @tsv' "$cache" 2>/dev/null
 }
 
 # Board reads, fresh only (within the TTL): never do network I/O during a

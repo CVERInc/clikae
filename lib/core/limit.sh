@@ -1643,9 +1643,15 @@ _limit_codex_window_label() {
 # (the winning event's own timestamp) rides along as a 7th field so a caller
 # combining several already-scanned files (the per-file cache) can pick the
 # newest across them without re-parsing anything.
+_LIMIT_CODEX_EVENT_LOOKBACK=16
 _limit_codex_rate_limits_from_files() {
-  # --event preserves the winning event's window objects for usage JSON:
-  # flattened empty fields cannot distinguish null from an unreadable window.
+  # --event (usage JSON only) prints whole events instead of seven fields:
+  # flattened empty fields cannot tell a null window from an unreadable one,
+  # and one event is not enough. Codex sometimes writes a single event that
+  # omits a window the plan has, then a complete one seconds later, so usage
+  # chooses each window from a short look-back (adapter_usage). The newest
+  # _LIMIT_CODEX_EVENT_LOOKBACK events with a window object are printed,
+  # oldest first, from the same tails the seven-field form reads.
   local out event=0
   if [ "${1:-}" = --event ]; then event=1; shift; fi
   out="$(for f in "$@"; do
@@ -1678,21 +1684,19 @@ _limit_codex_rate_limits_from_files() {
         p = side(rl, "primary"); s = side(rl, "secondary")
         if (p == "" && s == "") next
         t = ts($0)
+        if (event) { if (t != "") print t "\t" $0; next }
         if (t != "" && (maxT == "" || t > maxT)) {
           maxT = t
-          latest = $0
           pu = field(p, "used_percent"); pw = field(p, "window_minutes"); pr = field(p, "resets_at")
           su = field(s, "used_percent"); sw = field(s, "window_minutes"); sr = field(s, "resets_at")
         }
       }
-      END {
-        if (event) { if (latest != "" && (pu != "" || su != "")) print latest }
-        else printf "%s\037%s\037%s\037%s\037%s\037%s\037%s\n", pu, pw, pr, su, sw, sr, maxT
-      }
+      END { if (!event) printf "%s\037%s\037%s\037%s\037%s\037%s\037%s\n", pu, pw, pr, su, sw, sr, maxT }
     ')"
   if [ "$event" = 1 ]; then
     [ -n "$out" ] || return 1
-    printf '%s\n' "$out"
+    printf '%s\n' "$out" | LC_ALL=C sort -s -t "$(printf '\t')" -k1,1 |
+      tail -n "$_LIMIT_CODEX_EVENT_LOOKBACK" | cut -f2-
     return
   fi
   local pu pw pr su sw sr ts

@@ -1,0 +1,14 @@
+# clikae usage codex sample --fresh (stdout line, then the stderr summary),
+# with each captured fixture shifted so its last event is now.
+== plus-transient-weekly-only
+codex/sample {"window_pct":14.0,"weekly_pct":9.0,"window_resets_at":"2026-11-19T15:15:42Z","weekly_resets_at":"2026-11-26T04:41:21Z","source":"transcript","age_sec":33,"window_used_pct":14.0,"weekly_used_pct":9.0}
+codex 91
+== plus-transient-window-only
+codex/sample {"window_pct":65.0,"weekly_pct":41.0,"window_resets_at":"2026-11-19T14:31:34Z","weekly_resets_at":"2026-11-25T23:31:11Z","source":"transcript","age_sec":6,"window_used_pct":65.0,"weekly_used_pct":41.0}
+codex 59
+== plus-zero-duration
+codex/sample {"window_pct":19.0,"weekly_pct":93.0,"window_resets_at":"2026-11-19T16:24:40Z","weekly_resets_at":"2026-11-22T05:39:56Z","source":"transcript","age_sec":17,"window_used_pct":19.0,"weekly_used_pct":93.0}
+codex 7
+== weekly-only.jsonl mutated to plan_type free, window_minutes 43200
+codex/sample {"window_pct":null,"weekly_pct":null,"window_resets_at":null,"weekly_resets_at":null,"source":"transcript","window_absent":true,"weekly_absent":true,"other_windows":[{"window_minutes":43200,"used_pct":89.0,"resets_at":"2026-11-20T13:21:35Z"}],"age_sec":0,"window_used_pct":null,"weekly_used_pct":null}
+codex 11

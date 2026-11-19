@@ -95,14 +95,18 @@ STUB
   chmod +x "$TEST_HOME/.testbin/codex"
   CLIKAE_CODEX_USAGE_PROBE=1 run clikae usage codex marlin --fresh --json
   [ "$status" -eq 0 ]
-  echo "$output" | jq -e '.source == "vendor" and .weekly_pct == 100 and .window_pct == null
+  # #198: a 30-day window is in neither slot; it keeps its own minutes.
+  echo "$output" | jq -e '.source == "vendor" and .weekly_pct == null and .window_pct == null
+    and .other_windows[0].window_minutes == 43200 and .other_windows[0].used_pct == 100
     and (has("gap") | not)' || { echo "got: $output"; false; }
   grep -q "CODEX_HOME=$CLIKAE_HOME/profiles/codex/marlin" "$CODEX_PROBE_LOG"
-  # The board reads the one axis it has; the missing one is "-", never 0.
+  # The board has neither axis ("-", never 0) and shows the window by its length.
   source "$CLIKAE_LIB/core/usage.sh"
   run usage_board_fields codex marlin
   [ "$(printf '%s' "$output" | cut -f1)" = "-" ]
-  [ "$(printf '%s' "$output" | cut -f2)" = "100" ]
+  [ "$(printf '%s' "$output" | cut -f2)" = "-" ]
+  [ "$(printf '%s' "$output" | cut -f3)" = "100" ]
+  [ "$(printf '%s' "$output" | cut -f5)" = "30d:100" ]
 }
 
 @test "#149 codex probe off (the suite default): the stub is never run" {
