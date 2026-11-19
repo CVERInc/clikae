@@ -4062,7 +4062,8 @@ _burn_memcap_bytes() {
   case "$raw" in
     ''|*[!0-9KMGT]*) return 1 ;;
   esac
-  num="${raw%[KMGT]}"
+  # The case above allows only digits and K/M/G/T, so a non-digit last character is the unit.
+  case "$raw" in *[0-9]) num="$raw" ;; *) num="${raw%?}" ;; esac
   case "$num" in ''|*[!0-9]*) return 1 ;; esac
   [ "${#num}" -le 12 ] || return 1
   case "$raw" in
