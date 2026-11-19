@@ -1,0 +1,16 @@
+1..9
+ok 1 235 point 1: off removes all four unmarked guards across runtime and checkout paths
+ok 2 235 point 2: burn warns when the calling session has moved away from the recorded cockpit
+ok 3 235 off handles unquoted and double-quoted paths without a record or tank marker, and backs up settings
+ok 4 235 off matches decoded JSON paths but preserves other events and similar command names
+ok 5 235 off reports a broken legacy guard, continues the sweep, and never claims off
+ok 6 235 off refuses a symlinked legacy guard without altering its target
+ok 7 235 moving and repairing the role remove legacy duplicates without accumulating guards
+ok 8 235 burn warns on stderr even when allowed onto the caller tank and keeps JSON stdout valid
+ok 9 235 burn leaves matching, ambiguous and unidentified callers quiet
+
+The following warnings were encountered during tests:
+BW02: Using flags on `run` requires at least BATS_VERSION=1.5.0. Use `bats_require_minimum_version 1.5.0` to fix this message.
+      (from function `bats_warn_minimum_guaranteed_version' in file /usr/lib/bats-core/warnings.bash, line 32,
+       from function `run' in file /usr/lib/bats-core/test_functions.bash, line 351,
+       in test file tests/bats/cockpit-235.bats, line 159)

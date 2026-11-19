@@ -1,0 +1,42 @@
+=== 58fe127
+input: {"hooks":{"PreToolUse":[{"matcher":"Agent","_clikae":"cockpit-guard","hooks":[{"type":"command","command":"/example/audit.sh --label /example/hooks/cockpit-guard.sh"}]}]}}
+  | claude/A: cockpit guard removed (1 entry)
+  | cockpit: off
+  rc=0 file={}
+input: {"hooks":{"PreToolUse":[{"matcher":"Agent","_clikae":"cockpit-guard","hooks":[{"type":"command","command":"'/x/hooks/cockpit-guard.sh'"},{"type":"command","command":"/opt/notify.sh # replaced /x/hooks/cockpit-guard.sh"}]}]}}
+  | claude/A: cockpit guard removed (2 entries)
+  | cockpit: off
+  rc=0 file={}
+input: {"hooks":{"PreToolUse":[{"matcher":"Agent","_clikae":"cockpit-guard","hooks":[{"type":"command","command":"/bin/rm -f /x/hooks/cockpit-guard.sh"}]}]}}
+  | claude/A: cockpit guard removed (1 entry)
+  | cockpit: off
+  rc=0 file={}
+input: {"hooks":{"PreToolUse":[{"matcher":"Agent","_clikae":"cockpit-guard","hooks":[{"type":"command","command":"/usr/bin/env FOO=1 /x/hooks/cockpit-guard.sh"}]}]}}
+  | claude/A: cockpit guard removed (1 entry)
+  | cockpit: off
+  rc=0 file={}
+input: {"hooks":{"PreToolUse":[{"matcher":"Agent","hooks":[{"type":"command","command":"/ex dir/hooks/cockpit-guard.sh","timeout":5}],"_clikae":"cockpit-guard"}]}}
+  | claude/A: cockpit guard removed (1 entry)
+  | cockpit: off
+  rc=0 file={}
+=== fix
+input: {"hooks":{"PreToolUse":[{"matcher":"Agent","_clikae":"cockpit-guard","hooks":[{"type":"command","command":"/example/audit.sh --label /example/hooks/cockpit-guard.sh"}]}]}}
+  | claude/A: hook entry left for you to check: "/example/audit.sh --label /example/hooks/cockpit-guard.sh"
+  | cockpit: state cleared; hook entries remain for you to check: claude/A
+  rc=1 file={"hooks":{"PreToolUse":[{"matcher":"Agent","_clikae":"cockpit-guard","hooks":[{"type":"command","command":"/example/audit.sh --label /example/hooks/cockpit-guard.sh"}]}]}}
+input: {"hooks":{"PreToolUse":[{"matcher":"Agent","_clikae":"cockpit-guard","hooks":[{"type":"command","command":"'/x/hooks/cockpit-guard.sh'"},{"type":"command","command":"/opt/notify.sh # replaced /x/hooks/cockpit-guard.sh"}]}]}}
+  | claude/A: cockpit guard removed (1 entry)
+  | cockpit: off
+  rc=0 file={"hooks":{"PreToolUse":[{"matcher":"Agent","hooks":[{"type":"command","command":"/opt/notify.sh # replaced /x/hooks/cockpit-guard.sh"}]}]}}
+input: {"hooks":{"PreToolUse":[{"matcher":"Agent","_clikae":"cockpit-guard","hooks":[{"type":"command","command":"/bin/rm -f /x/hooks/cockpit-guard.sh"}]}]}}
+  | claude/A: hook entry left for you to check: "/bin/rm -f /x/hooks/cockpit-guard.sh"
+  | cockpit: state cleared; hook entries remain for you to check: claude/A
+  rc=1 file={"hooks":{"PreToolUse":[{"matcher":"Agent","_clikae":"cockpit-guard","hooks":[{"type":"command","command":"/bin/rm -f /x/hooks/cockpit-guard.sh"}]}]}}
+input: {"hooks":{"PreToolUse":[{"matcher":"Agent","_clikae":"cockpit-guard","hooks":[{"type":"command","command":"/usr/bin/env FOO=1 /x/hooks/cockpit-guard.sh"}]}]}}
+  | claude/A: hook entry left for you to check: "/usr/bin/env FOO=1 /x/hooks/cockpit-guard.sh"
+  | cockpit: state cleared; hook entries remain for you to check: claude/A
+  rc=1 file={"hooks":{"PreToolUse":[{"matcher":"Agent","_clikae":"cockpit-guard","hooks":[{"type":"command","command":"/usr/bin/env FOO=1 /x/hooks/cockpit-guard.sh"}]}]}}
+input: {"hooks":{"PreToolUse":[{"matcher":"Agent","hooks":[{"type":"command","command":"/ex dir/hooks/cockpit-guard.sh","timeout":5}],"_clikae":"cockpit-guard"}]}}
+  | claude/A: hook entry left for you to check: "/ex dir/hooks/cockpit-guard.sh"
+  | cockpit: state cleared; hook entries remain for you to check: claude/A
+  rc=1 file={"hooks":{"PreToolUse":[{"matcher":"Agent","hooks":[{"type":"command","command":"/ex dir/hooks/cockpit-guard.sh","timeout":5}],"_clikae":"cockpit-guard"}]}}

@@ -1,0 +1,17 @@
+1..16
+ok 1 246 argument_only: a guard path argument does not make the audit executable ours
+ok 2 246 different_matcher: a deliberate Read matcher is preserved
+ok 3 246 mixed_group: only the legacy command is removed, retaining its sibling and matcher
+ok 4 246 nested_quotes: bash -c is preserved and reported with tank and command
+ok 5 246 split_quotes: quoted fragments of the plain executable are removed
+ok 6 246 trailing_space: a quoted plain executable with trailing whitespace is removed
+ok 7 246 malformed and malformed_escaped: neither spelling establishes absence in broken JSON
+ok 8 246 install and repair preserve argument-only, different-matcher and mixed-group user hooks
+ok 9 246 command ownership requires type and no arguments, even in marked groups
+ok 10 246 literal shell words cover quote concatenation, escaped spaces, quotes and backslashes
+ok 11 246 uncertain syntax is never executed or deleted and does not prevent removing known guards
+ok 12 246 a quoted newline after the guard filename is a different executable
+ok 13 246 malformed settings without a recognizable guard still report uncertainty and stay untouched
+ok 14 246 unreadable settings leave bytes intact in off and install
+ok 15 246 entry shape: a user map of hooks is not the installer's hook array
+ok 16 246 line_continuation: an escaped newline does not create an empty argument

@@ -561,6 +561,24 @@ _burn_dry_epoch() {
   limit_reset_epoch "$1" "$(date +%s)"
 }
 
+# Warn once, before the first gate, using the same environment-based identity
+# resolution as `clikae to`. Do not guess from recent transcripts or move the
+# role automatically: a worker can also invoke burn. The subshell keeps adapter
+# detection from changing the adapter the burn has already loaded.
+_burn_cockpit_warn_caller() (
+  local cur caller engine tank
+  _cockpit_state_unparseable && return 0
+  cur="$(_cockpit_state_read)"
+  [ -n "$cur" ] || return 0
+  # shellcheck source=./to.sh
+  source "$CLIKAE_LIB/commands/to.sh"
+  caller="$(_to_detect_source || true)"
+  case "$caller" in ''|*$'\n'*) return 0 ;; esac
+  IFS=$'\t' read -r engine tank <<< "$caller"
+  _cockpit_is_recorded "$engine" "$tank" && return 0
+  log_warn "cockpit: calling session $engine/$tank differs from recorded cockpit $cur; run \`clikae cockpit $engine $tank\` if this session now steers."
+)
+
 # _burn_cockpit_gate <engine> <tank> <force_cockpit> -> 0 when a burn may launch
 # on <engine>/<tank>; 1 (sentence in $_BURN_COCKPIT_REFUSAL) when it is the
 # recorded cockpit and the operator did not pass --force-cockpit.
@@ -4426,6 +4444,7 @@ cmd_burn() {
   # #63 round-5 P2-1: the named target, before any lock, --fresh deletion or
   # engine launch. The status file is written first so `clikae wait burn-<pid>`
   # reads a terminal refusal instead of stalling on a burn that never started.
+  _burn_cockpit_warn_caller
   if ! _burn_cockpit_gate "$status_engine" "$tank" "$force_cockpit"; then
     _burn_status_write fail false "$status_engine" "$tank" "$artifact" \
       "cockpit: $status_engine/$tank is the recorded cockpit (--force-cockpit to override)" ""
