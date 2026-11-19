@@ -38,7 +38,7 @@
 #       results cannot be read with certainty. A bare `effort-outranked` line
 #       is an effort the argv sets while something the engine ranks higher
 #       (a variable) decides what runs: not this engine's effort, but still
-#       in the argv, which matters to a cross-engine --to (#240).
+#       in the argv, which matters to duplicate naming and a cross-engine --to.
 #       A `profile=<name>` / `profile?`
 #       line is a profile the argv selects (codex, #239): it is handed back
 #       to adapter_burn_knobs_declared as a <selection>, `=<name>` or `?`.
@@ -310,7 +310,8 @@ _burn_knobs_check_hop() {
 }
 
 # _burn_knobs_from_args <engine> <argv...> -> `model=<v>` / `effort=<v>` lines
-# (`model?` / `effort?` for one the argv sets unreadably).
+# (`model?` / `effort?` for one the argv sets unreadably, `effort-outranked`
+# for an effort named there whose value loses to the environment).
 _burn_knobs_from_args() {
   local eng="$1"; shift
   if _burn_knobs_is_agy "$eng"; then _burn_knobs_agy_from_args "$@"; return 0; fi
@@ -326,6 +327,7 @@ _burn_knobs_from_args() {
 _burn_knobs_resolve() {
   local eng="$1" kdir="$2"; shift 2
   local line kind src val a_model="" a_effort="" unsure=""
+  local argv_model=0 argv_effort=0
   local -a selections=()
   burn_model=undeclared; burn_model_source=undeclared
   burn_effort=undeclared; burn_effort_source=undeclared
@@ -334,6 +336,12 @@ _burn_knobs_resolve() {
   # PROFILE left unknown — _burn_knobs_gate words its refusal from these.
   _BURN_KNOBS_UNSURE_ARGV=""; _BURN_KNOBS_UNSURE_WHY=""
   while IFS= read -r line; do
+    # Naming a knob is independent of its effective value: an outranked
+    # argument still duplicates burn's flag, without changing env precedence.
+    case "$line" in
+      model=*|'model?') argv_model=1 ;;
+      effort=*|'effort?'|effort-outranked) argv_effort=1 ;;
+    esac
     case "$line" in
       model=?*)  a_model="${line#model=}" ;;
       effort=?*) a_effort="${line#effort=}" ;;
@@ -343,9 +351,9 @@ _burn_knobs_resolve() {
       'profile?') selections+=("?") ;;
     esac
   done < <(_burn_knobs_from_args "$eng" "$@")
-  # Readable or not, a knob the argv sets is a second naming of it.
-  [ -z "${burn_model_flag:-}" ] || [ -z "$a_model" ] || _BURN_KNOBS_TWICE="--model"
-  [ -z "${burn_effort_flag:-}" ] || [ -z "$a_effort" ] || _BURN_KNOBS_TWICE="${_BURN_KNOBS_TWICE:+$_BURN_KNOBS_TWICE and }--effort"
+  # Readable or not, winning or not, a knob named in argv is a second naming.
+  [ -z "${burn_model_flag:-}" ] || [ "$argv_model" -eq 0 ] || _BURN_KNOBS_TWICE="--model"
+  [ -z "${burn_effort_flag:-}" ] || [ "$argv_effort" -eq 0 ] || _BURN_KNOBS_TWICE="${_BURN_KNOBS_TWICE:+$_BURN_KNOBS_TWICE and }--effort"
   if [ -n "${burn_model_flag:-}" ]; then burn_model="$burn_model_flag"; burn_model_source=flag
   elif [ "$a_model" = "?" ]; then burn_model=unknown; burn_model_source=unknown; unsure="model"
   elif [ -n "$a_model" ]; then burn_model="$a_model"; burn_model_source=flag; fi

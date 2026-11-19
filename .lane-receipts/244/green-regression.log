@@ -1,0 +1,7 @@
+1..6
+ok 1 claude: environment precedence does not permit effort named twice (#244)
+ok 2 claude: an outranked effort duplicates burn's flag even if equal or unreadable (#244)
+ok 3 claude: both duplicate knobs are reported when argv effort is outranked (#244)
+ok 4 claude: model naming still refuses readable and unknown argv with an environment model (#244)
+ok 5 claude: an outranked argv effort alone still reports the environment (#244)
+ok 6 claude: effort text consumed as a value or after the terminator is not a duplicate (#244)
