@@ -7,61 +7,61 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.46.0] — 2026-11-19
+
 ### Added
 
 - **`clikae burn` says which model and reasoning effort a task ran with, and lets you name them.** A burn
   is dispatched to a tank chosen for its quota, so the tank's profile decided both, and nothing in the
   output said what they were; "Effort: high" in a prompt changed nothing. Every burn now opens with
-  `burn <engine>/<tank>: model <m> (<source>), effort <e> (<source>)`, and `--json` and the status file carry
-  `model`, `model_source`, `effort` and `effort_source`. A source is `flag`, `env`, `profile`,
-  `undeclared`, or `unknown` when the argv after `--` sets it in a form burn cannot read with certainty.
+  `burn <engine>/<tank>: model <m> (<source>), effort <e> (<source>)` (a value that is `undeclared` or
+  `unknown` is printed as that word alone), and `--json` and the status file carry `model`,
+  `model_source`, `effort` and `effort_source`. A source is `flag`, `env`, `profile`, `undeclared`, or
+  `unknown` when the argv after `--` or the tank's own config sets it in a way burn cannot read with
+  certainty.
 - **`burn --model <m>` and `--effort <e>`**, passed in each engine's own words: claude `--model` /
   `--effort`, codex `-m` / `-c model_reasoning_effort="<e>"`, agy `--model` / `--effort`. An engine that
-  cannot honour one fails before anything starts.
+  cannot honour one fails before anything starts. Named again in the arguments after `--`, in any
+  spelling that engine accepts (for agy, `-model` / `-effort` too), the burn is refused as given twice.
 - **`burn --to-model <m>`** names the model for a `--to` on another engine. A model name belongs to one
   engine, so `--model` never crosses that hop: `--model` with a cross-engine `--to` and no `--to-model`
-  is refused before anything starts. `--effort` crosses only if the other engine accepts that level. A
-  model in the arguments after `--` is refused with a cross-engine `--to` as well: those arguments reach
-  both engines unchanged.
+  is refused before anything starts. `--effort` crosses only if the other engine accepts that level.
 - **`burn --require-declared`** refuses to start, or to reroute onto a tank, when the model or the effort
   is undeclared or unknown.
 - A Codex tank's `config.toml` is read with a TOML parser (`python3` 3.11 or newer). Without one the
   profile reads as `undeclared` and the burn says why; nothing else in clikae needs python.
+- **A Codex tank that selects a profile is read in the layer the option documents.** With a root
+  `profile = "<name>"` key in `config.toml`, or `-p` / `--profile` in the arguments after `--`, burn reads
+  `<name>.config.toml` on top of `config.toml`, and reports a value only when no other selected layer
+  (`[profiles.<name>]`, the key's own file) sets it to something else. Otherwise the value is `unknown`,
+  the burn says why, and `--require-declared` refuses. A selected profile that exists nowhere is
+  `unknown` too. `--model` and `--effort` still win and are reported as `flag`.
 - For a Claude tank, a top-level `effortLevel` alone is reported as `undeclared`: Claude Code applies that
   key in a tank's own settings only to older models. The burn says so, and `--effort` pins it.
-
-### Fixed
-
-- **A Codex tank that selects a profile is no longer reported with the root table's model and effort.**
-  With a root `profile = "<name>"` key in `config.toml`, or `-p` / `--profile` in the arguments after `--`,
-  burn read the root table as if nothing were selected, called the result `profile`, and
-  `--require-declared` passed. It now reads the layer the option documents — `<name>.config.toml` on top of
-  `config.toml` — and reports a value only when no other selected layer (`[profiles.<name>]`, the key's own
-  file) sets it to something else. Otherwise the value is `unknown`, the burn says why, and
-  `--require-declared` refuses. A selected profile that exists nowhere is `unknown` too. `--model` and
-  `--effort` still win and are reported as `flag`. A tank that selects no profile reads as before.
 - **The Claude and agy arguments after `--` are read with each engine's own option syntax.** Text after
-  the option terminator was read as a flag: `burn claude w -- -p -- '--model=not-a-flag'` reported
-  `model not-a-flag (flag)`. So was the value of another option (`--system-prompt --model x`; for agy,
-  `-p --model=x`). Both readers now stop at `--`, know which options take the next argument, and read
-  the spellings the engine's `--help` lists: claude `--model` / `--effort` with a separate value or `=`,
+  the option terminator is not a flag (`burn claude w -- -p -- '--model=not-a-flag'` does not report
+  `not-a-flag`), and neither is the value of another option (`--system-prompt --model x`; for agy,
+  `-p --model=x`). Both readers stop at `--`, know which options take the next argument, and read the
+  spellings the engine's `--help` lists: claude `--model` / `--effort` with a separate value or `=`,
   clustered short options letter by letter; agy the same two with one dash or two. A model or effort
   that cannot be read with certainty is `unknown`: one given twice with different values, an effort
-  that is not a listed level, or one whose reading depends on an option the reader does not have. Such
-  an option may be a flag or take a value: the arguments are read each way, and a model or effort is
-  reported only when every reading gives the same one — never the profile's value in its place. The
-  claude reader has every option the installed claude declares, the ones its `--help` omits
-  (`--max-turns`, …) included, and applies claude's own rules: a value option takes the next argument
-  even when that is `--`, an optional value is never an argument that starts with `-` (so
-  `--debug -- --model` is a prompt), and a subcommand name that is an option's value
-  (`--add-dir lib mcp`, `-r mcp`) is not a subcommand. agy's `-m`, which agy does not define, now reads
-  as `unknown` instead of as the model. A plain `--model <m>` / `--effort <e>` after `--` reads as
-  before.
-- **An effort in the arguments after `--` is refused with a cross-engine `--to`**, before anything
-  starts, as a model already was. Those arguments reach both engines unchanged; `--effort` is the form
-  that crosses.
-- For agy, a model or effort written `-model` / `-effort` after `--` together with burn's own `--model` /
-  `--effort` is now refused as given twice. It ran before, with both in the argv.
+  that is not a listed level, one after a claude subcommand, or one whose reading depends on an option
+  the reader does not have. Such an option may be a flag or take a value: the arguments are read each
+  way, and a model or effort is reported only when every reading gives the same one — never the
+  profile's value in its place. The claude reader has every option the installed claude declares, the
+  ones its `--help` omits (`--max-turns`, …) included, and applies claude's own rules: a value option
+  takes the next argument even when that is `--`, an optional value is never an argument that starts
+  with `-` (so `--debug -- --model` is a prompt), and a subcommand name that is an option's value
+  (`--add-dir lib mcp`, `-r mcp`) is not a subcommand. agy's `-m`, which agy does not define, reads as
+  `unknown`, not as the model. Not read: a model or effort inside claude's `--settings`; the burn
+  reports the profile's value there.
+
+### Changed
+
+- **A `burn` with a cross-engine `--to` and a model or an effort in the arguments after `--` is refused
+  before anything starts.** Those arguments reach both engines unchanged, so the other engine was handed
+  a model or level it may not have. Name the destination's model with `--to-model`, and the effort with
+  `--effort`, the form that crosses.
 
 ## [0.45.3] — 2026-11-05
 
