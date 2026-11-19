@@ -1,0 +1,28 @@
+1..1
+not ok 1 claude: environment precedence does not permit effort named twice (#244)
+# (in test file tests/bats/burn-knobs-twice-env.bats, line 26)
+#   `[ "$status" -eq 1 ]' failed
+# [ DONE ] Created tank: claude/work  (/tmp/clikae-test.6Pw6Bn/.clikae/profiles/claude/work)
+# claude/work: +88 allow / +4 deny
+#          Broad shell/file permissions applied for headless use; deny rules are advisory, not a sandbox. Use --no-template to skip.
+#          No alias added. Run `clikae alias claude work` to add one.
+#
+# Next steps:
+#   clikae claude work           # switch to it and run
+#   clikae alias claude work     # add a shell alias
+# Last output:
+#
+# A one-time note about your accounts
+# Different accounts for different purposes (work / personal / per client) is
+# explicitly fine under the vendors' terms. Using a second account to continue
+# the SAME task past a usage limit is not: OpenAI's terms name it directly,
+# and Anthropic's policy language is broad enough to cover it. Your accounts
+# carry the risk, so it is your call — the full, dated picture is here:
+#   https://github.com/CVERInc/clikae/blob/main/docs/terms-and-your-accounts.md
+#
+#          burn claude/work: model undeclared, effort high (flag)
+#          task: /tmp/clikae-test.6Pw6Bn/.clikae/logs/burn-2455641/prompt.txt
+#          preview: do it
+#          burn claude/work → claude (task: /tmp/clikae-test.6Pw6Bn/.clikae/logs/burn-2455641/prompt.txt)
+# [ DONE ] Done on claude/work — artifact present at engine exit: /tmp/clikae-test.6Pw6Bn/out.md
+#          summary: tank=claude/work  reroutes=0  elapsed=1s  artifact=9B
