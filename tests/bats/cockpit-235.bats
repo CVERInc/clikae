@@ -184,7 +184,7 @@ STUB
   done
   # Set the additional engine's variable only in the child process.
   export CLAUDE_CONFIG_DIR="$CLIKAE_HOME/profiles/claude/B"
-  run env CODEX_HOME="$CLIKAE_HOME/profiles/codex/C" clikae burn claude A --artifact "$BATS_TEST_TMPDIR/out.md" -- -p test
+  run env CODEX_HOME="$CLIKAE_HOME/profiles/codex/C" "$CLIKAE_BIN" burn claude A --artifact "$BATS_TEST_TMPDIR/out.md" -- -p test
   [ "$status" -eq 1 ]
   [[ "$output" != *'calling session'* ]] || false
 }

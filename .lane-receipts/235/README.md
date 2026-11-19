@@ -22,8 +22,9 @@ Green verification:
 - `green-reproductions.tap`: the original two reproductions after the fix.
 - `green-regressions.tap`: nine regression tests; includes the Bats minimum-version
   warning subsequently corrected in the test harness.
-- `green-targeted.tap`: 399 passing tests across `cockpit-235.bats`, `cockpit.bats`,
+- `green-targeted.tap`: 398 passes and one platform skip across `cockpit-235.bats`, `cockpit.bats`,
   `cockpit-guard.bats`, `burn.bats`, and `settings-apply.bats`, in that order.
+  The skipped existing burn test requires `lockf`, unavailable on this Linux host.
 - `green-final-cockpit.tap`: 67 passing tests in `cockpit-235.bats` and
   `cockpit.bats`, after adding unreadable-settings coverage and finishing the
   test harness. All existing test files are unchanged.
