@@ -438,9 +438,9 @@ _burn_knobs_refuse() {
   if [ "$hop" -eq 1 ]; then
     _burn_result false "$eng" "$tk" "${artifact:-}" "$reason" ""
   elif [ "${as_json:-0}" -eq 1 ]; then
-    printf '{"ok":false,"engine":%s,"tank":%s,"artifact":%s,"artifact_bytes":null,"reason":%s,"reset":null,"rerouted_from":[],"elapsed_s":0,"queued_for_s":0,"run_id":null,"resumed":0,%s,"left_behind":[],%s}\n' \
+    printf '{"ok":false,"engine":%s,"tank":%s,"artifact":%s,"artifact_bytes":null,"reason":%s,"reset":null,"rerouted_from":[],"elapsed_s":0,"queued_for_s":0,"run_id":null,"resumed":0,%s,%s,"left_behind":[],%s}\n' \
       "$(json_or_null "$eng")" "$(json_or_null "$tk")" "$(json_or_null "${artifact:-}")" \
-      "$(json_str "$reason")" "$(_burn_knobs_json)" "$(_burn_lb_meta 0 0 0 0 0)" >&4
+      "$(json_str "$reason")" "$(_burn_knobs_json)" "$(_burn_memcap_json)" "$(_burn_lb_meta 0 0 0 0 0)" >&4
   fi
   exit 1
 }

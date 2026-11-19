@@ -198,17 +198,25 @@ Give the task in one of two ways:
                       explicit --to still wins). Unparseable reset or cap
                       reached -> today's reroute-or-stop. Off by default.
   --memory-max <size> (#236) run the ENGINE, and everything it starts, in its
-                      own memory-capped systemd user scope:
-                        systemd-run --user --scope -p MemoryMax=<size> -- <engine>
-                      one unit per launch, named
-                      clikae-burn-<run id>-l<n>.scope (<n> counts this burn's
-                      launches), so `systemctl --user status 'clikae-burn-*'`
-                      shows which lane it is. Every reroute hop, retry and
-                      same-tank re-fire gets its own capped scope; --json and
-                      the status file name it (memory_unit) with the cap
+                      own memory-capped systemd user scope, with no swap:
+                        systemd-run --user --scope -p MemoryMax=<size> \
+                          -p MemorySwapMax=0 -- <engine>
+                      (without MemorySwapMax=0 a host with swap pages a
+                      runaway engine out instead of stopping it). One unit
+                      per launch, named
+                      clikae-burn-<run id>-l<n>-<nonce>.scope (<n> counts this
+                      burn's launches; <nonce> is 8 random hex digits), so
+                      `systemctl --user status 'clikae-burn-*'` shows which
+                      lane it is. Every reroute hop, retry and same-tank
+                      re-fire gets its own capped scope; --json and the
+                      status file name it (memory_unit) with the cap
                       (memory_max, memory_high). When the engine exits its
                       scope is stopped, which ENDS anything the engine left
-                      running in it. <size> is bytes, or a number with K, M,
+                      running in it (SIGTERM, SIGKILL after 10s); burn names
+                      those processes. Only a scope this launch started is
+                      ever stopped. An engine the cap killed is reported as
+                      "ended by the memory cap", not as a task failure.
+                      <size> is bytes, or a number with K, M,
                       G or T (1024-based, as systemd reads it), at least 64M.
                       A cap put AROUND `clikae burn` does not reach the engine:
                       tmux starts it. For the same reason, anything the engine
@@ -1458,9 +1466,16 @@ _agy_burn() {
       log_info "summary: tank=agy/$cur  reroutes=$((${#agy_tried[@]} - 1))  elapsed=${burn_elapsed_s:-$((SECONDS - t0))}s  artifact=none"
       return 1
     else
-      log_err "agy/$cur produced NOTHING and shows no limit — a real task failure, not a dry tank."
-      _burn_status_write fail false "$status_engine" "$cur" "$artifact" "engine produced nothing and showed no limit" ""
-      _burn_result false agy "$cur" "$artifact" "engine produced nothing and showed no limit"
+      local agy_fail_reason="engine produced nothing and showed no limit" memcap_ended
+      memcap_ended="$(_burn_memcap_ended)"   # #236
+      if [ -n "$memcap_ended" ]; then
+        log_err "agy/$cur produced NOTHING: it was $memcap_ended, not a dry tank. Raise the cap, or give the task less to hold at once."
+        agy_fail_reason="$memcap_ended"
+      else
+        log_err "agy/$cur produced NOTHING and shows no limit — a real task failure, not a dry tank."
+      fi
+      _burn_status_write fail false "$status_engine" "$cur" "$artifact" "$agy_fail_reason" ""
+      _burn_result false agy "$cur" "$artifact" "$agy_fail_reason"
       log_dim  "agy buffers a large answer into its own brain dir and can print nothing at all; a silent run is not proof it did no work — check ~/.gemini/antigravity-cli/brain/ before re-firing."
       _burn_output_tail "$out"
       log_info "summary: tank=agy/$cur  reroutes=$((${#agy_tried[@]} - 1))  elapsed=${burn_elapsed_s:-$((SECONDS - t0))}s  artifact=none"
@@ -4117,48 +4132,60 @@ _burn_memcap_validate() {
 
 # _burn_memcap_preflight <engine> <tank> — prove, before anything starts, that
 # a user scope can be created here AND that its cgroup really carries the
-# requested memory.max. systemd accepts MemoryMax= even where the kernel will
-# not enforce it (cgroup v1, memory controller not delegated to the user
-# manager), so creating the scope is not proof; reading the probe's own
-# memory.max is. Refuses through _burn_knobs_refuse (status file + --json).
+# requested memory.max (and memory.swap.max 0). systemd accepts MemoryMax=
+# even where the kernel will not enforce it (cgroup v1, memory controller not
+# delegated to the user manager), so creating the scope is not proof; reading
+# the probe's own memory.max is. Refuses through _burn_knobs_refuse (status
+# file + --json). Every message starts with what set the value (the flag or
+# the environment variable), and so does its `reason`.
 _burn_memcap_preflight() {
   [ -n "$burn_memory_max" ] || return 0
-  local eng="$1" tk="$2" tail
-  if [ "$(_burn_memcap_name max)" = --memory-max ]; then
+  local eng="$1" tk="$2" tail knob
+  knob="$(_burn_memcap_name max)"
+  if [ "$knob" = --memory-max ]; then
     tail="Nothing was started; drop --memory-max to run uncapped."
   else
     tail="Nothing was started; unset CLIKAE_BURN_MEMORY_MAX to run uncapped."
   fi
   if ! command -v systemd-run >/dev/null 2>&1; then
-    _burn_knobs_refuse "$eng" "$tk" 0 "refused: --memory-max needs systemd-run" \
-      "--memory-max needs systemd-run (Linux with a systemd user manager); there is none on this $(uname -s 2>/dev/null || echo unknown) system. $tail"
+    _burn_knobs_refuse "$eng" "$tk" 0 "refused: $knob needs systemd-run" \
+      "$knob needs systemd-run (Linux with a systemd user manager); there is none on this $(uname -s 2>/dev/null || echo unknown) system. $tail"
   fi
   local max_b high_b="" out rc=0
   max_b="$(_burn_memcap_bytes "$burn_memory_max")"
   [ -z "$burn_memory_high" ] || high_b="$(_burn_memcap_bytes "$burn_memory_high")"
-  local -a probe=(systemd-run --user --scope --quiet --collect -p "MemoryMax=$burn_memory_max")
+  local -a probe=(systemd-run --user --scope --quiet --collect -p "MemoryMax=$burn_memory_max" -p MemorySwapMax=0)
   [ -z "$burn_memory_high" ] || probe+=(-p "MemoryHigh=$burn_memory_high")
   # $0 of the probe is a fixed marker, so a test double can recognise it.
   # shellcheck disable=SC2016  # expanded by the probe's own sh, not here
   out="$("${probe[@]}" -- sh -c '
     p="$(sed -n "s/^0:://p" /proc/self/cgroup)"
-    for f in memory.max memory.high; do
+    for f in memory.max memory.high memory.swap.max; do
       if [ -r "/sys/fs/cgroup$p/$f" ]; then cat "/sys/fs/cgroup$p/$f"; else echo none; fi
     done' clikae-memcap-probe 2>&1 </dev/null)" || rc=$?
   if [ "$rc" -ne 0 ]; then
     local why; why="$(printf '%s\n' "$out" | sed -n '/./{p;q;}')"
-    _burn_knobs_refuse "$eng" "$tk" 0 "refused: --memory-max could not start a systemd user scope" \
-      "--memory-max could not start a systemd user scope (rc $rc: ${why:-no message}). Is the user manager running and reachable (systemctl --user status)? $tail"
+    _burn_knobs_refuse "$eng" "$tk" 0 "refused: $knob could not start a systemd user scope" \
+      "$knob could not start a systemd user scope (rc $rc: ${why:-no message}). Is the user manager running and reachable (systemctl --user status)? $tail"
   fi
-  local got_max got_high
+  local got_max got_high got_swap
   got_max="$(printf '%s\n' "$out" | sed -n 1p)"
   got_high="$(printf '%s\n' "$out" | sed -n 2p)"
+  got_swap="$(printf '%s\n' "$out" | sed -n 3p)"
   # The kernel rounds a limit down to whole pages; allow that, nothing more.
   if ! _burn_memcap_matches "$got_max" "$max_b" \
      || { [ -n "$high_b" ] && ! _burn_memcap_matches "$got_high" "$high_b"; }; then
-    _burn_knobs_refuse "$eng" "$tk" 0 "refused: --memory-max does not apply in a systemd user scope here" \
-      "--memory-max: a systemd user scope started, but its cgroup does not carry the cap (memory.max: ${got_max:-none}, wanted $max_b bytes${high_b:+; memory.high: ${got_high:-none}, wanted $high_b bytes}). The memory controller is not available to the user manager (cgroup v2 with memory delegated is needed). $tail"
+    _burn_knobs_refuse "$eng" "$tk" 0 "refused: $knob does not apply in a systemd user scope here" \
+      "$knob: a systemd user scope started, but its cgroup does not carry the cap (memory.max: ${got_max:-none}, wanted $max_b bytes${high_b:+; memory.high: ${got_high:-none}, wanted $high_b bytes}). The memory controller is not available to the user manager (cgroup v2 with memory delegated is needed). $tail"
   fi
+  # Without swap accounting there is no memory.swap.max (and nothing to set);
+  # where there is one, a cap that swaps instead of stopping the engine is no
+  # cap: an engine 2x over MemoryMax=64M was measured alive, 72M in swap.
+  case "${got_swap:-none}" in
+    none|0) ;;
+    *) _burn_knobs_refuse "$eng" "$tk" 0 "refused: $knob does not apply in a systemd user scope here" \
+         "$knob: a systemd user scope started, but its cgroup lets the engine swap past the cap (memory.swap.max: $got_swap, wanted 0). $tail" ;;
+  esac
 }
 
 _burn_memcap_matches() {   # <cgroup value> <wanted bytes>
@@ -4166,50 +4193,141 @@ _burn_memcap_matches() {   # <cgroup value> <wanted bytes>
   [ "$1" -le "$2" ] && [ $(($2 - $1)) -lt 65536 ]
 }
 
+# _burn_memcap_nonce — 8 hex digits, fresh per launch.
+_burn_memcap_nonce() {
+  local n
+  n="$(od -An -N4 -tx1 /dev/urandom 2>/dev/null | tr -d ' \n')"
+  case "$n" in [0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f]) ;;
+    *) n="$(printf '%04x%04x' "$RANDOM" "$RANDOM")" ;; esac
+  printf '%s' "$n"
+}
+
 # _burn_memcap_runner <run-id> <engine/tank> — append the scope prefix to the
 # caller's `runner` array (dynamic scope), so the engine — and every child it
 # forks — starts inside its own capped unit. `systemd-run --scope` execs the
 # command in place: same pid, stdio, exit code, and the `timeout` in front of
-# it still bounds the same process. --collect so a scope that ended failed
-# (an OOM kill) does not linger.
+# it still bounds the same process.
 #
-# The unit name carries this burn's launch counter (-l<n>), not only the run
-# id: a re-fire on the same tank (--wait-for-reset, the --no-reroute dry
-# pause) reuses the run id, and a unit name that is still loaded — a child
-# the last launch left running — makes systemd-run refuse the next launch.
-# Sets burn_memory_unit (cmd_burn's local) for _burn_memcap_reap and --json.
+# The unit name carries this burn's launch counter (-l<n>) and a fresh nonce,
+# not only the run id: a re-fire on the same tank (--wait-for-reset, the
+# --no-reroute dry pause) reuses the run id, and the run id is only
+# <engine>-<tank>-burn-<pid> — a pid is reused, and two PID namespaces can
+# share one user manager. A unit name that is still loaded makes systemd-run
+# refuse the launch, and the reaper must never mistake that unit for ours.
+#
+# Proof of ownership: right after systemd-run has started the scope, a
+# one-line sh inside it writes the scope's $INVOCATION_ID (systemd sets it for
+# the scope) to a marker file, then execs the engine (same pid again). A
+# refused start never reaches that sh, so there is no marker, and
+# _burn_memcap_reap leaves the unit alone.
+#
+# MemorySwapMax=0: with swap the kernel pages a runaway engine out instead of
+# OOM-killing it at MemoryMax. TimeoutStopSec=10s: a leftover that ignores
+# SIGTERM is SIGKILLed after 10s, not the user manager's default 90s. No
+# --collect: a scope the cap ended (Result=oom-kill) must still be there when
+# the reaper reads it; the reaper resets it afterwards.
+# Sets burn_memory_unit / burn_memcap_mark (cmd_burn's locals).
 _burn_memcap_runner() {
   [ -n "${burn_memory_max:-}" ] || return 0
   burn_memcap_launches=$(( ${burn_memcap_launches:-0} + 1 ))
-  local unit="clikae-burn-$1-l$burn_memcap_launches"
+  burn_memcap_oom=0
+  local unit
+  unit="clikae-burn-$1-l$burn_memcap_launches-$(_burn_memcap_nonce)"
   burn_memory_unit="$unit.scope"
-  runner+=(systemd-run --user --scope --quiet --collect "--unit=$unit"
+  local mdir="${run_dir:-$HOME/.clikae/state}"
+  mkdir -p "$mdir" 2>/dev/null || true
+  burn_memcap_mark="$mdir/$unit.iid"
+  rm -f "$burn_memcap_mark"
+  runner+=(systemd-run --user --scope --quiet "--unit=$unit"
            "--description=clikae burn $2" -p "MemoryMax=$burn_memory_max")
   [ -z "${burn_memory_high:-}" ] || runner+=(-p "MemoryHigh=$burn_memory_high")
-  runner+=(--)
-  log_info "memory cap: $2 runs in $unit.scope (MemoryMax=$burn_memory_max${burn_memory_high:+, MemoryHigh=$burn_memory_high})"
+  # shellcheck disable=SC2016  # expanded by the scope's own sh, not here
+  runner+=(-p MemorySwapMax=0 -p TimeoutStopSec=10s --
+           sh -c '{ printf "%s\n" "${INVOCATION_ID:-}" > "$1"; } 2>/dev/null; shift; exec "$@"'
+           clikae-memcap-scope "$burn_memcap_mark")
+  log_info "memory cap: $2 runs in $unit.scope (MemoryMax=$burn_memory_max${burn_memory_high:+, MemoryHigh=$burn_memory_high}, no swap)"
 }
 
-# _burn_memcap_reap <engine/tank> — once the engine has exited, stop its scope
-# if anything it started is still in it. A scope lives while any process in it
-# does, so a child the engine left behind (a dev server, a stuck subprocess)
-# would otherwise keep running, under the cap, after the burn returned — and
-# an unattended lane is exactly where nobody comes back for it. Stopping the
-# scope ends those processes (SIGTERM, then systemd's SIGKILL). Best effort:
-# it never changes the burn's outcome. Only the burn's own unit is touched.
+# _burn_memcap_procs <cgroup> — "<n>\t<pid comm, …>" for what is still in it:
+# at most five named, then "and N more".
+_burn_memcap_procs() {
+  local f="/sys/fs/cgroup$1/cgroup.procs" pid comm n=0 list=""
+  [ -n "$1" ] && [ -r "$f" ] || { printf '0\t'; return 0; }
+  while IFS= read -r pid; do
+    [ -n "$pid" ] || continue
+    n=$((n + 1))
+    [ "$n" -le 5 ] || continue
+    comm="$(cat "/proc/$pid/comm" 2>/dev/null || echo '?')"
+    list="${list:+$list, }$pid $comm"
+  done < "$f"
+  [ "$n" -le 5 ] || list="$list, and $((n - 5)) more"
+  printf '%s\t%s' "$n" "$list"
+}
+
+# _burn_memcap_reap <engine/tank> — once the engine has exited: say so if the
+# cap is what ended it, and stop its scope if anything it started is still in
+# it. A scope lives while any process in it does, so a child the engine left
+# behind (a dev server, a stuck subprocess) would otherwise keep running,
+# under the cap, after the burn returned — and an unattended lane is exactly
+# where nobody comes back for it. Stopping the scope ends those processes
+# (SIGTERM, then SIGKILL after TimeoutStopSec). Best effort: it never changes
+# the burn's outcome.
+#
+# Only a unit THIS launch started is touched: the marker the scope's own sh
+# wrote must exist and name the InvocationID the unit has now. A refused start
+# (the name was taken), a unit already collected, or a later unit under the
+# same name all fail that check and are left alone.
 _burn_memcap_reap() {
   [ -n "${burn_memory_max:-}" ] && [ -n "${burn_memory_unit:-}" ] || return 0
+  local mine="" mark="${burn_memcap_mark:-}"
+  if [ -n "$mark" ]; then
+    [ ! -r "$mark" ] || IFS= read -r mine < "$mark" || true
+    rm -f "$mark"
+  fi
+  burn_memcap_mark=""
+  [ -n "$mine" ] || return 0
   command -v systemctl >/dev/null 2>&1 || return 0
-  systemctl --user is-active --quiet "$burn_memory_unit" 2>/dev/null || return 0
-  local cg n=0
-  cg="$(systemctl --user show -p ControlGroup --value "$burn_memory_unit" 2>/dev/null || true)"
-  if [ -n "$cg" ] && [ -r "/sys/fs/cgroup$cg/cgroup.procs" ]; then
-    n="$(wc -l < "/sys/fs/cgroup$cg/cgroup.procs" 2>/dev/null | tr -d ' ')" || n=0
+  local k v iid="" state="" result="" cg=""
+  while IFS='=' read -r k v; do
+    case "$k" in
+      InvocationID) iid="$v" ;;
+      ActiveState)  state="$v" ;;
+      Result)       result="$v" ;;
+      ControlGroup) cg="$v" ;;
+    esac
+  done < <(systemctl --user show -p InvocationID -p ActiveState -p Result -p ControlGroup \
+             "$burn_memory_unit" 2>/dev/null || true)
+  [ "$iid" = "$mine" ] || return 0
+  # Read before anything stops or resets the unit: both erase the record.
+  local ooms=0
+  if [ -n "$cg" ] && [ -r "/sys/fs/cgroup$cg/memory.events" ]; then
+    ooms="$(sed -n 's/^oom_kill //p' "/sys/fs/cgroup$cg/memory.events" 2>/dev/null)"
+    case "$ooms" in ''|*[!0-9]*) ooms=0 ;; esac
   fi
-  if [ "${n:-0}" -gt 0 ] 2>/dev/null; then
-    log_info "memory cap: $1 exited and left $n process(es) in $burn_memory_unit; stopping the scope, which ends them."
+  if [ "$result" = oom-kill ] || [ "$ooms" -gt 0 ]; then
+    burn_memcap_oom=1
+    log_warn "memory cap: $1 hit its memory cap ($(_burn_memcap_said max)): the kernel killed a process in $burn_memory_unit when it reached MemoryMax (oom-kill)."
   fi
-  systemctl --user stop "$burn_memory_unit" >/dev/null 2>&1 || true
+  case "$state" in
+    active|activating|deactivating|reloading)
+      local procs n list
+      procs="$(_burn_memcap_procs "$cg")"
+      n="${procs%%	*}"; list="${procs#*	}"
+      if [ "${n:-0}" -gt 0 ] 2>/dev/null; then
+        log_info "memory cap: $1 exited and left $n process(es) in $burn_memory_unit ($list); stopping the scope, which ends them."
+      fi
+      systemctl --user stop "$burn_memory_unit" >/dev/null 2>&1 || true
+      ;;
+  esac
+  # A failed scope (oom-kill, or a stop that had to SIGKILL) stays loaded.
+  systemctl --user reset-failed "$burn_memory_unit" >/dev/null 2>&1 || true
+}
+
+# _burn_memcap_ended — "ended by the memory cap (--memory-max 4G)" when this
+# launch's scope recorded an OOM kill, else nothing. For failure messages.
+_burn_memcap_ended() {
+  [ "${burn_memcap_oom:-0}" -eq 1 ] || return 0
+  printf 'ended by the memory cap (%s)' "$(_burn_memcap_said max)"
 }
 
 # _burn_memcap_json — the --json / status.json fragment: the cap asked for and
@@ -4407,8 +4525,10 @@ cmd_burn() {
   # #236: the engine's own memory cap. Flags win over the environment.
   local burn_memory_max="${CLIKAE_BURN_MEMORY_MAX:-}" burn_memory_high="${CLIKAE_BURN_MEMORY_HIGH:-}"
   # Where each value came from, so a refusal names what the user actually set;
-  # the launch counter and the current launch's unit (see _burn_memcap_runner).
+  # the launch counter, the current launch's unit, its ownership marker, and
+  # whether the cap ended it (see _burn_memcap_runner / _burn_memcap_reap).
   local burn_memory_max_src="" burn_memory_high_src="" burn_memcap_launches=0 burn_memory_unit=""
+  local burn_memcap_mark="" burn_memcap_oom=0
   [ -z "$burn_memory_max" ] || burn_memory_max_src="env"
   [ -z "$burn_memory_high" ] || burn_memory_high_src="env"
   # #74 round-2 P1-1 (round-3 P1-1: raw mode): the cwd the engine actually
@@ -5653,9 +5773,15 @@ KV
       log_info "summary: tank=$cli/$cur  reroutes=$(printf '%s' "$tried" | wc -w | tr -d ' ')  elapsed=${burn_elapsed_s:-$((SECONDS - t0))}s  artifact=none"
       return 1
     else
-      log_err "$cli/$cur produced no fresh artifact and shows no limit — a real task failure (rc=$rc), not a dry tank."
-      local failure_reason="no fresh artifact and no limit" stderr_first=""
-      if [ "$((SECONDS - attempt_started))" -le 5 ] && [ -s "$stderr_file" ]; then
+      local failure_reason="no fresh artifact and no limit" stderr_first="" memcap_ended
+      memcap_ended="$(_burn_memcap_ended)"   # #236: the cap, not the task, ended it
+      if [ -n "$memcap_ended" ]; then
+        log_err "$cli/$cur produced no fresh artifact: it was $memcap_ended (rc=$rc), not a dry tank. Raise the cap, or give the task less to hold at once."
+        failure_reason="$memcap_ended"
+      else
+        log_err "$cli/$cur produced no fresh artifact and shows no limit — a real task failure (rc=$rc), not a dry tank."
+      fi
+      if [ -z "$memcap_ended" ] && [ "$((SECONDS - attempt_started))" -le 5 ] && [ -s "$stderr_file" ]; then
         # P3-2 (#81 round-1 fix review): this used to go straight from the
         # RAW stderr line to _burn_sanitize_reason (which only escapes
         # control bytes for valid JSON, never redacts) — an engine that

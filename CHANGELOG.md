@@ -12,15 +12,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **`clikae burn --memory-max <size>` [`--memory-high <size>`] puts the engine under a memory cap.** A cap
   put around `clikae burn` never reached the engine: burn hands it to tmux, so it ran in the tmux server's
   cgroup. With the option (or `CLIKAE_BURN_MEMORY_MAX` / `CLIKAE_BURN_MEMORY_HIGH`) each launch runs as
-  `systemd-run --user --scope -p MemoryMax=…` in its own `clikae-burn-<run id>-l<n>.scope`, every reroute
-  hop, retry and same-tank re-fire included, and `--json` and the status file carry `memory_max`,
-  `memory_high` and `memory_unit`. When the engine exits, its scope is stopped: anything the engine left
-  running in it is ended, so an unattended lane leaves nothing behind. Processes the engine starts through
-  tmux (`tmux new-session`, a nested `clikae burn`) run in the tmux server's cgroup, outside the cap; a
-  nested burn is capped only through an inherited `CLIKAE_BURN_MEMORY_MAX`, in its own scope. Where the cap
-  cannot apply — no `systemd-run`, no reachable user manager, no memory controller in its scopes, an
-  invalid size or one below 64M — the burn is refused before anything starts, and the refusal names the
-  flag or the variable that set the value. Without the option nothing changes.
+  `systemd-run --user --scope -p MemoryMax=… -p MemorySwapMax=0` in its own
+  `clikae-burn-<run id>-l<n>-<nonce>.scope`, every reroute hop, retry and same-tank re-fire included, and
+  `--json` and the status file carry `memory_max`, `memory_high` and `memory_unit`. The scope gets no swap:
+  on a host with swap, a cap alone pages a runaway engine out instead of stopping it. When the engine exits,
+  its scope is stopped: anything the engine left running in it is ended (SIGTERM, then SIGKILL after 10s),
+  and burn names those processes, so an unattended lane leaves nothing behind. Only a scope this launch
+  started is stopped: if the name is taken, systemd-run refuses the launch and the other unit is left
+  alone. An engine the cap killed is reported as "ended by the memory cap (--memory-max …)", in the
+  message and in `reason`, not as a real task failure. Processes the engine starts through tmux
+  (`tmux new-session`, a nested `clikae burn`) run in the tmux server's cgroup, outside the cap; a nested
+  burn is capped only through an inherited `CLIKAE_BURN_MEMORY_MAX`, in its own scope. Where the cap cannot
+  apply — no `systemd-run`, no reachable user manager, no memory controller in its scopes, a scope that
+  can still swap, an invalid size or one below 64M — the burn is refused before anything starts, and the
+  refusal (message, `reason` and the `--json` object, which carries `memory_max` too) names the flag or the
+  variable that set the value. Without the option nothing changes.
 - **`clikae burn` says which model and reasoning effort a task ran with, and lets you name them.** A burn
   is dispatched to a tank chosen for its quota, so the tank's profile decided both, and nothing in the
   output said what they were; "Effort: high" in a prompt changed nothing. Every burn now opens with
