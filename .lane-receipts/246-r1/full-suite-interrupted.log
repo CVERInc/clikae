@@ -1,0 +1,271 @@
+→ shellcheck (severity=warning)
+→ doc names (every function a doc names must exist)
+  docs name nothing the code lacks (functions, call sites, tmux options)
+→ bats
+1..2707
+ok 1 antigravity recent_sids lists a session whose recorded cwd is the current dir
+ok 2 antigravity recent_sids keeps THIS directory's sessions when it has any
+ok 3 antigravity recent_sids falls back to the whole tank when this directory has none (#34)
+ok 4 antigravity recent_sids: newest-first, capped at limit, within this directory
+ok 5 antigravity recent_sids: the fallback is ranked and capped the same way
+ok 6 antigravity recent_sids: a cache entry pointing at a deleted brain dir is skipped, not an error (#34)
+ok 7 antigravity recent_sids: a present cache does not truncate a multi-row request (#34)
+ok 8 antigravity recent_sids: no brain dir at all -> empty, not an error
+ok 9 antigravity session_title extracts the opening USER_REQUEST
+ok 10 antigravity title_for_file falls back to (no preview) when nothing is extractable
+ok 11 antigravity session_title falls back to (no preview) too (not just title_for_file)
+ok 12 antigravity title_for_file on a missing file returns nothing (not an error, not the fallback)
+ok 13 antigravity summary title wins and both hooks collapse whitespace
+ok 14 antigravity empty summary title falls back to opening prompt
+ok 15 antigravity missing summary row falls back to opening prompt
+ok 16 antigravity no database falls back without creating a database
+ok 17 antigravity falls back cleanly when sqlite3 is entirely unavailable
+ok 18 antigravity summary lookup escapes quoted conversation IDs
+ok 19 antigravity unreadable summary database falls back without an error
+ok 20 antigravity whitespace-only summary title falls back to opening prompt
+ok 21 antigravity summary title with backslashes and quotes round-trips byte-identical
+ok 22 antigravity summary lookup with duplicate conversation_id picks the newest row
+ok 23 antigravity summary lookup always passes -readonly to sqlite3 (mutation guard)
+ok 24 antigravity adapter_sid_canonical is the brain/<sid>/ directory name
+ok 25 antigravity adapter_all_transcripts lists every session's transcript under a profile dir
+ok 26 antigravity cache lookup returns THIS cwd's sid, not a later key's, from a compact multi-entry cache
+ok 27 antigravity cache lookup: order reversed still returns THIS cwd's sid
+ok 28 antigravity recent_sids with limit>1 returns the cached hit PLUS the rest from disk, not just the cached one
+ok 29 antigravity recent_sids with limit=1 keeps the original single-stat cache fast path
+ok 30 antigravity recent_sids with limit>1 still caps at limit across cache+disk
+ok 31 antigravity recent_sids at limit=5: a stale cache pointer does not beat disk mtime order (#34 P2-2)
+ok 32 antigravity recent_sids at limit=4: the stale cache pointer is the row that gets squeezed out (#34 P2-2)
+ok 33 antigravity recent_sids n=1 answers THIS DIRECTORY's pointer, and n>1 keeps it in a scoped ranking (#34 P3-1)
+ok 34 stable path is a hard link to the installed version (not a symlink)
+ok 35 stable path is refreshed when the installed binary moves
+ok 36 copy fallback when the hard link fails
+ok 37 opt-out leaves the launch on the bare PATH name and creates nothing
+ok 38 clikae claude <tank> launches through the stable path
+ok 39 doctor: not created yet, up to date, then STALE after an update — read-only
+ok 40 doctor: opt-out is reported
+ok 41 adapters lists claude and the v0.2 adapters
+ok 42 claude adapter reports the env-dir strategy and its env var
+ok 43 claude alias exports CLAUDE_CONFIG_DIR at the profile path
+ok 44 claude title_for_file: aiTitle with escaped quotes survives intact
+ok 45 claude title_for_file: falls back to the first user message when no aiTitle
+ok 46 claude title_for_file: a USER-set custom-title outranks a later aiTitle
+ok 47 claude title_for_file: a transcript with only aiTitle is unchanged
+ok 48 claude title_for_file: a rename past line 100 wins over an early name
+ok 49 claude title_for_file: a runaway title is capped before it is cleaned
+ok 50 claude title_for_file: both title keys on ONE line still resolve by rank
+ok 51 claude title_for_file: the LAST customTitle wins when a line has two
+ok 52 claude adapter_sid_canonical is the transcript basename minus .jsonl
+ok 53 claude project slug: a directory reached through a symlink slugs by its real path (#194)
+ok 54 claude project slug: a path that does not exist is slugged as written
+ok 55 claude adapter_transcript_is_resumable: the basename is the whole rule
+ok 56 claude adapter_all_transcripts does not descend into a sid dir's own subagents/ files
+ok 57 claude adapter_recent_sids leaves subagent transcripts out of the board's list
+ok 58 claude adapter_find_session still finds a subagent transcript by its full id
+ok 59 codex recent_sids lists a session whose recorded cwd is the current dir
+ok 60 codex recent_sids EXCLUDES sessions recorded in a different cwd
+ok 61 codex session_title extracts the user_message prompt
+ok 62 codex session_title keeps a CJK prompt intact
+ok 63 codex resume_args emits 'resume <sid>'
+ok 64 codex transcript_path returns the current dir's newest rollout
+ok 65 codex cwd match is trailing-slash insensitive (recorded cwd has the slash)
+ok 66 codex cwd match still EXCLUDES a genuinely different dir after the fix
+ok 67 codex title_for_file keeps a prompt with escaped quotes intact (no truncation at \")
+ok 68 codex recent_sids survives a CLIKAE_HOME path containing a space
+ok 69 codex adapter_sid_canonical recovers the FULL uuid from a rollout path, not just its last hyphen segment
+ok 70 codex adapter_sid_canonical matches adapter_recent_sids's own sid, byte for byte
+ok 71 codex adapter_cwd_from_args recognises -C <dir> (spaced)
+ok 72 codex adapter_cwd_from_args recognises -C<dir> (attached)
+ok 73 codex adapter_cwd_from_args recognises --cd <dir> (spaced long alias)
+ok 74 codex adapter_cwd_from_args recognises --cd=<dir> (clap long = form)
+ok 75 codex adapter_cwd_from_args recognises -C=<dir> (clap short = form) without leaking the '='
+ok 76 codex adapter_cwd_from_args returns empty (rc 1) with no -C/--cd at all
+ok 77 codex adapter_cwd_from_args treats -C followed by another flag as no value given
+ok 78 codex adapter_cwd_from_args returns rc 1 on an explicit empty -C value
+ok 79 codex adapter_cwd_from_args returns rc 1 on --cd= with nothing after the =
+ok 80 codex adapter_cwd_from_args returns rc 1 on -C= with nothing after the =
+ok 81 codex recent_sids (#113): a rollout whose name carries NO uuid falls back to the body id
+ok 82 codex recent_sids (#113): uuid-SHAPED but not hex in the name is not a uuid — the body id wins
+ok 83 codex recent_sids (#113): a uuid-named rollout keeps the FAST path — the name is used, the body id is not read
+ok 84 codex adapter_session_mode: a subagent thread is headless though its originator says codex-tui
+ok 85 codex adapter_session_mode: either signal alone is enough — thread_source, or the source object
+ok 86 codex adapter_session_mode: a human session that only mentions the words is interactive
+ok 87 codex adapter_session_mode: codex exec stays headless, no originator stays unknown
+ok 88 adapters lists all 13 built-in CLIs
+ok 89 codex adapter reports env-dir + CODEX_HOME
+ok 90 codex alias exports CODEX_HOME at the profile dir
+ok 91 vercel adapter reports the flag strategy
+ok 92 vercel alias injects --global-config after the binary (flag strategy)
+ok 93 vercel fish alias injects the flag with no env wrapper (flag strategy)
+ok 94 codex shows the logged-in account (email) from its auth.json id_token
+ok 95 codex account label is empty (not an error) when there's no id_token
+ok 96 az adapter reports env-dir + AZURE_CONFIG_DIR
+ok 97 pulumi adapter reports env-dir + PULUMI_HOME
+ok 98 npm adapter reports env-file + NPM_CONFIG_USERCONFIG
+ok 99 terraform adapter reports env-file + TF_CLI_CONFIG_FILE
+ok 100 az alias exports AZURE_CONFIG_DIR at the profile dir
+ok 101 pulumi alias exports PULUMI_HOME at the profile dir
+ok 102 init seeds npm's per-profile npmrc file
+ok 103 npm alias points at the npmrc FILE (env-file)
+ok 104 init seeds terraform's per-profile terraformrc file
+ok 105 terraform alias points at the terraformrc FILE (env-file)
+ok 106 every adapter hook is in adapter_loader's unset list
+ok 107 an optional hook one adapter defines is not inherited by the next (leak-guard, generalised)
+ok 108 grok recent_sids lists a session whose recorded cwd is the current dir
+ok 109 grok recent_sids EXCLUDES sessions recorded in a different cwd
+ok 110 grok matches the recorded cwd, not the encoded group directory name
+ok 111 grok session_title prefers the generated_title
+ok 112 grok title_for_file shows the RENAME, not the machine title, when the two differ
+ok 113 grok title_for_file falls back to session_summary when generated_title is absent
+ok 114 grok session_title keeps a CJK title intact
+ok 115 grok title_for_file keeps a title with escaped quotes intact (no truncation at \")
+ok 116 grok sid extraction is not confused by request_id / current_model_id
+ok 117 grok resume_args emits '--resume <sid>'
+ok 118 grok transcript_path returns the current dir's newest chat_history.jsonl
+ok 119 grok find_session + session_cwd round-trip an id back to its directory
+ok 120 grok cwd match is trailing-slash insensitive (recorded cwd has the slash)
+ok 121 grok cwd match still EXCLUDES a genuinely different dir after the fix
+ok 122 grok recent_sids survives a CLIKAE_HOME path containing a space
+ok 123 grok account_label reads the email straight out of auth.json
+ok 124 grok account_label stays silent (status 0) when there is no auth.json
+ok 125 grok export_env / run point GROK_HOME at the profile dir
+ok 126 grok memory pointer lands on GROK_HOME/AGENTS.md (grok's global rules file)
+ok 127 grok burn_flags carry --cwd, bypassPermissions, the workspace sandbox and -p
+ok 128 grok burn_flags keep a MULTI-LINE prompt as one argv item
+ok 129 grok recent_sids (#113): a session dir that is NOT a uuid falls back to the id in summary.json
+ok 130 grok recent_sids (#113): uuid-SHAPED but not hex is not a uuid — the id in summary.json wins
+ok 131 grok recent_sids (#113): a uuid-named session dir keeps the FAST path — the dir name is used, summary.json's id is not read
+ok 132 session_meta finds the newest transcript and extracts the opening title
+ok 133 session_meta keeps a CJK title intact (no mid-character slicing)
+ok 134 session_meta prefers Claude's ai-title over the opening prompt
+ok 135 session_meta uses the LAST ai-title when a session was re-titled
+ok 136 session_meta keeps an ai-title's CJK intact
+ok 137 session_meta prefers a USER-set custom-title over a later ai-title
+ok 138 session_meta with only an ai-title (no rename) is unchanged
+ok 139 session_meta can target a specific session id
+ok 140 session_meta returns nonzero when there is no transcript
+ok 141 session_meta returns nonzero for a missing specific session id
+ok 142 session_meta falls back to a placeholder when there is no user text
+ok 143 list_sessions returns rows newest-first
+ok 144 list_sessions honours a limit
+ok 145 list_sessions applies the limit inside the loop (no SIGPIPE with agent-* interleaved)
+ok 146 list_sessions keeps CJK titles intact
+ok 147 list_sessions returns nonzero when there are no sessions
+ok 148 claude: the board's title and the picker's title are the same string
+ok 149 codex: the board's title and the picker's title are the same string
+ok 150 grok: the board's title and the picker's title are the same string
+ok 151 antigravity: the board's title and the picker's title are the same string
+ok 152 agy_email: the account from the NEWEST log wins
+ok 153 agy_email: newest-first holds when the names sort the other way
+ok 154 agy_email: a newer log with no account falls through to an older one
+ok 155 agy_email: a NUL byte in the log does not hide the account
+ok 156 agy_email: the last account in a single log wins (re-auth mid-session)
+ok 157 agy_email: a login well past the head bound is still found
+ok 158 agy_email: no log directory at all is silent and empty
+ok 159 agy_email: an empty log directory is silent and empty
+ok 160 agy_email: a plain FILE named log works, not just a directory
+ok 161 harness: a verified claim with ZERO commands run is not accepted
+ok 162 harness: the same claim WITH a command run is accepted
+ok 163 harness: an ordinary reply that claims nothing is left alone
+ok 164 harness: claiming tests were added without touching a test file is caught
+ok 165 harness: claiming tests were added AND touching one is accepted
+ok 166 harness: interactively it interrupts ONCE, then gets out of your way
+ok 167 harness: dispatched it holds on longer, but still stops
+ok 168 harness: the project's own gate is run, and its output is what comes back
+ok 169 harness: no project gate means no project check, not a silent pass claim
+ok 170 harness: a dispatched agent may not edit the ruler
+ok 171 harness: interactively YOU may edit your own tests
+ok 172 harness: an unparseable tool call is allowed, not blocked
+ok 173 harness: a missing transcript does not block anything
+ok 174 install: a new tank gets the harness, wired to its own copy
+ok 175 install: an existing file is never overwritten
+ok 176 install: someone else's hooks.json is left alone
+ok 177 seed: a tank made before the harness existed gets it on first switch
+ok 178 seed: deleting the harness means deleting it — clikae never puts it back
+ok 179 seed: the mark survives the tank being wiped
+ok 180 seed: an unseeded tank whose config holds someone else's hooks is not clobbered
+ok 181 harness: stale counters from abandoned conversations are swept
+ok 182 rule1: edit then stop is blocked with the fixed sentence
+ok 183 rule1: edit then read then stop is allowed
+ok 184 rule1: a read-only turn is allowed
+ok 185 rule1: two edits then one measurement is allowed
+ok 186 rule1: measurement then edit is blocked — order is what counts
+ok 187 rule1: the counter caps the block
+ok 188 rule1: a non-English final message changes nothing — the rule never reads text
+ok 189 rule1: it records interactively too, not only under dispatch
+ok 190 rule1: MCP writes count as changes and MCP probes as measurements
+ok 191 rule1: a build is neither — save_page then build_preview is still unmeasured
+ok 192 rule1: shell commands — a redirect or write verb mutates, a test run or read observes
+ok 193 rule1: a tool the table does not know is neither, and does not block
+ok 194 rule1: the ledger is per conversation
+ok 195 alias writes a sentinel-wrapped block to the rc file
+ok 196 alias embeds the adapter's env var (env-dir)
+ok 197 alias uses the profile NAME for an env-var adapter (aws)
+ok 198 alias points at the config FILE for an env-file adapter (kubectl)
+ok 199 re-running alias replaces rather than duplicates
+ok 200 alias --name overrides the default alias name
+ok 201 alias fails when the profile does not exist
+ok 202 alias backs up an existing rc file before editing
+ok 203 alias under fish writes fish syntax + env wrapper, creating config.fish
+ok 204 alias under fish wraps an env-var adapter (aws) through env too
+ok 205 remove cleans up a fish alias block
+ok 206 agy: no tanks by default, points at init
+ok 207 init agy: first time takes ~/.gemini over into a 'default' tank + makes the tank
+ok 208 rename agy: moves the tank dir, and repoints ~/.gemini for the active one
+ok 209 rename agy: rewrites hooks.json's harness path to the new tank, no trace of the old one left
+ok 210 rename agy: a hooks.json with no path in it is left byte-identical (control)
+ok 211 init agy: declined (answer N) changes nothing
+ok 212 init agy: second tank is a plain mkdir, no ceremony
+ok 213 agy <tank> repoints the active symlink
+ok 214 agy <tank> rejects an unknown tank
+ok 215 agy --release restores a real ~/.gemini from the active tank, keeps tanks, clears consent
+ok 216 remove agy: removing the LAST tank restores ~/.gemini and ends multi-account
+ok 217 remove agy refuses the active tank while others remain
+ok 218 rename/remove agy carry and drop the burn sidecar under the engine-id key, 'antigravity' (#113)
+ok 219 clikae tanks lists agy tanks without crashing (no adapter regression)
+ok 220 agy switch to a different tank stashes outgoing, restores incoming # skip agy keychain carry is macOS-only
+ok 221 agy switch to a tank with a prior stash restores its own token # skip agy keychain carry is macOS-only
+ok 222 agy switch to the already-active tank does NOT touch the Keychain # skip agy keychain carry is macOS-only
+ok 223 agy switch to the already-active tank is a no-op even with a live agy process (headless-on-active) # skip agy keychain carry is macOS-only
+ok 224 agy switch to a DIFFERENT tank still refuses while an agy process is live # skip agy keychain carry is macOS-only
+ok 225 agy switch refuses to proceed if the restore doesn't verify # skip agy keychain carry is macOS-only
+ok 226 rename agy carries the tank's Keychain slot across # skip agy keychain carry is macOS-only
+ok 227 live: an agy tank's preview shows its opening request, not a bare empty string
+ok 228 live: an agy tank with no extractable title falls back to (no preview), not empty
+ok 229 real Keychain: stash then restore round-trips the secret byte-for-byte # skip agy Keychain carry is macOS-only
+ok 230 real Keychain: restoring a tank with no stash clears canonical (clean logout) # skip agy Keychain carry is macOS-only
+ok 231 real Keychain: verify_restore catches a mismatched/corrupted restore # skip agy Keychain carry is macOS-only
+ok 232 real Keychain: rename carries the tank's slot and drops the old name # skip agy Keychain carry is macOS-only
+ok 233 linux agy: takeover keeps the login file in the adopted tank, 0600
+ok 234 linux agy: switch saves the outgoing login and restores the incoming one (round trip)
+ok 235 linux agy: a switch tightens a loosened token back to 0600
+ok 236 linux agy: switching to a tank with no login is reported, not a crash
+ok 237 linux agy: rename carries the login file
+ok 238 linux agy: remove drops only that tank's login
+ok 239 linux agy: doctor names the file backend and which tanks carry a login
+ok 240 autonomy read: the three real values round-trip
+ok 241 autonomy read: anything unrecognised normalises to ask, never upward
+ok 242 autonomy read: surrounding whitespace is stripped, as tr did
+ok 243 autonomy read: whitespace INSIDE the word is stripped too, as tr did
+ok 244 autonomy read: autonomy_getv and autonomy_get cannot disagree
+ok 245 autonomy read: autonomy_set then read gives back what was set
+ok 246 available JSON explains each skip reason and keeps eligible scores
+ok 247 available orders remaining quota per hour and relaxes only under 24 hours
+ok 248 available single window uses its own reset and has no separate 95 percent gate
+ok 249 available includes cockpit on request and compares full engine identity
+ok 250 available reads inventory anew and handles an empty inventory
+ok 251 available rejects missing resets and malformed readings without guessing
+ok 252 available normalizes reset offsets and floors elapsed reset hours
+ok 253 available agy: a tank whose first-run screen is unfinished is not available, in any group
+ok 254 available agy: each group has its own verdict and order, and one group never gates the other
+ok 255 available agy: --group needs agy and one of the two names
+ok 256 available: a model share over the weekly number gates the tank, for claude
+ok 257 available: a reading over six hours old is stale, not a number to act on
+ok 258 bats-dbracket-lint: a bare [[ ]] assertion line is caught (rc 1, file:line printed)
+ok 259 bats-dbracket-lint: a backslash-continued [[ ]] with no OR on the next line is caught
+ok 260 bats-dbracket-lint: a negated bare ! [[ ]] is caught
+ok 261 bats-dbracket-lint: legal forms pass (|| false, || {…}, &&, backslash + ||, if [[, heredoc body)
+ok 262 bats-dbracket-lint: every tracked .bats file in this repo is clean
+ok 263 board: no row overflows the terminal, at any width a real terminal has
+ok 264 board-width: both renderers print the truncation line from the in-process count, and it fits (#113)
+ok 265 board-width: the measurement itself can see an over-wide row
+Terminated

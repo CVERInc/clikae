@@ -1,0 +1,7 @@
+1..1
+not ok 1 246 line_continuation: an escaped newline does not create an empty argument
+# (in test file /tmp/clikae-r1-baseline.pcEWfD/tests/bats/cockpit-246.bats, line 241)
+#   `cmp "$BATS_TEST_TMPDIR/expected.json" "$REVIEW_FILE"' failed
+# /tmp/bats-run-Sin5Mf/test/1/expected.json /tmp/clikae-test.MONlB9/.clikae/profiles/claude/A/settings.json differ: byte 2, line 1
+# Last output:
+# cockpit: off

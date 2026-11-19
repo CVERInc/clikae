@@ -1,0 +1,68 @@
+1..67
+ok 1 235 point 1: off removes all four unmarked guards across runtime and checkout paths
+ok 2 235 point 2: burn warns when the calling session has moved away from the recorded cockpit
+ok 3 235 off handles unquoted and double-quoted paths without a record or tank marker, and backs up settings
+ok 4 235 off matches decoded JSON paths but preserves other events and similar command names
+ok 5 235 off reports a broken legacy guard, continues the sweep, and never claims off
+ok 6 235 off refuses a symlinked legacy guard without altering its target
+ok 7 235 moving and repairing the role remove legacy duplicates without accumulating guards
+ok 8 235 burn warns on stderr even when allowed onto the caller tank and keeps JSON stdout valid
+ok 9 235 burn leaves matching, ambiguous and unidentified callers quiet
+ok 10 235 off refuses to claim success when legacy settings cannot be read
+ok 11 bare 'clikae cockpit' with nothing set says so
+ok 12 marking a tank installs the guard and records state
+ok 13 an install under a path with a space (and a quote) stores a command the shell runs as one word, and it refuses (#63 r5 P3-1)
+ok 14 an older UNQUOTED guard entry is repaired to the quoted form on the next mark (#63 r5 P3-1)
+ok 15 marking the SAME tank twice is idempotent and says unchanged
+ok 16 a bare unique tank name resolves across engines, like 'clikae <name>'
+ok 17 an ambiguous bare tank name across engines is refused, not guessed
+ok 18 an unknown tank name is refused with exactly one error, no stray validate_name line (#63 r6 P3-4)
+ok 19 an ambiguous bare tank name is refused with exactly its own message, no stray validate_name line (#63 r6 P3-4)
+ok 20 moving from A to B removes the guard from A and installs it on B
+ok 21 a human's own PreToolUse hook on A survives the guard's install and later removal, byte for byte
+ok 22 a HAND-WRITTEN settings.json survives content-intact but gets reformatted, not byte-for-byte (#63 P2-6)
+ok 23 --off removes the guard from wherever it is and clears the state
+ok 24 moving to a new tank sweeps past a broken OLD tank instead of aborting the move (#63 P2-2)
+ok 25 moving to a NEW tank that can't be armed leaves the OLD cockpit untouched, rc 1 (#63 P2-1)
+ok 26 a state file mode 444 no longer blocks a move: the record is replaced atomically, not rewritten in place (#63 r5 P2-3)
+ok 27 a state file symlinked elsewhere is refused before any guard is written (#63 r4 P2-1, r5 P2-3)
+ok 28 probe: a real kernel short write of the record keeps the old state and rolls the new guard back (#63 r5 P2-3)
+ok 29 probe: a short write with no prior cockpit leaves nothing recorded and nothing armed (#63 r5 P2-3)
+ok 30 probe: SIGKILL at the state write never empties the record, and doctor names the extra guard (#63 r5 P2-3)
+ok 31 probe: a state path symlinked at the new tank's settings.json is refused; that settings.json is untouched (#63 r5 P2-3)
+ok 32 two concurrent moves: exactly one transition wins, the other refuses, the recorded cockpit stays guarded (#63 r5 P2-4)
+ok 33 a waiting move proceeds once the running one finishes (#63 r5 P2-4)
+ok 34 --off and settings apply take the same lock: both refuse while a transition holds it (#63 r5 P2-4)
+ok 35 a lock left by a dead holder is named, not broken; doctor reports it (#63 r5 P2-4)
+ok 36 --off breaks a stale (dead-pid) lock instead of staying blocked by it (#63 r6 P3-3)
+ok 37 --off still refuses while a LIVE holder has the lock (unaffected by the stale-lock break, #63 r6 P3-3)
+ok 38 a stray .cockpit.XXXXXX temp file from an earlier crash is swept on the next successful state write (#63 r6 P3-3)
+ok 39 moving to a symlink alias of the current cockpit is refused as the same tank; the guard stays (#63 r5 P2-2)
+ok 40 moving to a tank whose settings.json is a hard link of the cockpit's is refused the same way (#63 r5 P2-2)
+ok 41 probe: settings.json swapped for a symlink right after it is read never lands the link's target in a backup (#63 r5 P3-3)
+ok 42 probe: a swap AFTER the snapshot changes nothing that is read — backup and content come from the snapshot (#63 r5 P3-3)
+ok 43 a tank directory that is a symlink to a real directory is written through its physical path (#63 r5 P3-3)
+ok 44 --off with nothing set is an idempotent no-op
+ok 45 --off is idempotent when run twice in a row
+ok 46 --off sweeps a stray guard even when the state file disagrees (crash-recovery)
+ok 47 --off sweeps past a broken tank instead of aborting the whole sweep (#63 P1-3)
+ok 48 #61 round-6 P2-2: --off removes the guard from a cockpit tank whose marker is GONE
+ok 49 #61 round-6 P2-2: --off removes the guard when the marker is UNREADABLE (mode 000)
+ok 50 #61 round-6 P2-2: --off SAYS the recorded cockpit directory is gone, and still clears the record
+ok 51 #61 round-6 P2-2: a marker-less guarded tank the state does NOT name is still swept
+ok 52 #61 round-6 P2-2: --off reports the guard removed exactly once for a symlink-aliased cockpit
+ok 53 #114: --off on codex and antigravity too — a move interrupted mid-way, both markers lost, a live allowance
+ok 54 --off clears a live timed allowance too, not just the guard and state (#63 P1-3)
+ok 55 settings apply --check on a cockpit tank reports the guard as expected, not as drift
+ok 56 cockpit requires jq and does not write without it
+ok 57 cockpit refuses a tank that does not exist
+ok 58 --allow-agents writes a timed allowance and reports when it expires
+ok 59 --allow-agents rejects a bad duration and writes nothing
+ok 60 bare 'clikae cockpit' warns when the recorded tank no longer exists (#63 P3-8)
+ok 61 #109 P3-8: 'clikae cockpit agy <tank>' marks the tank, recorded under its on-disk name
+ok 62 #109 P3-8: 'agy' and 'antigravity' name the same cockpit — the second is an idempotent no-op
+ok 63 #109 P3-8: an unknown agy tank still fails, naming the on-disk engine
+ok 64 installing from a git checkout no longer warns: the hook names the runtime copy, which outlives the checkout (#63 P3-12, #146)
+ok 65 with the stable runtime off, installing from a git checkout still warns (#63 P3-12)
+ok 66 #103: installing the guard keeps settings.json's prior file mode
+ok 67 #103: a skipped install reports on stderr only, in the same 'skipped —' form

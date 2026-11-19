@@ -1,0 +1,18 @@
+1..2
+not ok 1 setup_file failed
+# (from function `_clikae_refuse_concurrent_suite' in file tests/bats/../helpers.bash, line 55,
+#  from function `setup_file' in test file tests/bats/../helpers.bash, line 59)
+#   `_clikae_refuse_concurrent_suite' failed
+#
+#   🔴 another clikae test suite is running on this machine.
+#
+#   They share what no test can isolate: the process table, tmux
+#   servers, ports, ~/.Trash. Running both produces a red that is about
+#   neither of them — and a red you learn to explain away is worse than
+#   no gate at all.
+#
+#   Wait for it, or run the whole thing:  ./scripts/test.sh
+#   If you are certain they cannot collide:
+#       CLIKAE_ALLOW_CONCURRENT_SUITE=1 bats <file>
+#
+# bats warning: Executed 1 instead of expected 2 tests

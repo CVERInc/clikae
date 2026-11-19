@@ -1,0 +1,7 @@
+1..2
+not ok 1 235 point 1: off removes all four unmarked guards across runtime and checkout paths
+# (in test file tests/bats/cockpit-235.bats, line 25)
+#   `[ "$(jq '.hooks.PreToolUse | length' "$f")" -eq 1 ]' failed
+not ok 2 235 point 2: burn warns when the calling session has moved away from the recorded cockpit
+# (in test file tests/bats/cockpit-235.bats, line 45)
+#   `[[ "$output" == *'cockpit: calling session claude/B differs from recorded cockpit claude/A; run `clikae cockpit claude B` if this session now steers.'* ]] || false' failed

@@ -1,0 +1,400 @@
+1..399
+ok 1 235 point 1: off removes all four unmarked guards across runtime and checkout paths
+ok 2 235 point 2: burn warns when the calling session has moved away from the recorded cockpit
+ok 3 235 off handles unquoted and double-quoted paths without a record or tank marker, and backs up settings
+ok 4 235 off matches decoded JSON paths but preserves other events and similar command names
+ok 5 235 off reports a broken legacy guard, continues the sweep, and never claims off
+ok 6 235 off refuses a symlinked legacy guard without altering its target
+ok 7 235 moving and repairing the role remove legacy duplicates without accumulating guards
+ok 8 235 burn warns on stderr even when allowed onto the caller tank and keeps JSON stdout valid
+ok 9 235 burn leaves matching, ambiguous and unidentified callers quiet
+ok 10 bare 'clikae cockpit' with nothing set says so
+ok 11 marking a tank installs the guard and records state
+ok 12 an install under a path with a space (and a quote) stores a command the shell runs as one word, and it refuses (#63 r5 P3-1)
+ok 13 an older UNQUOTED guard entry is repaired to the quoted form on the next mark (#63 r5 P3-1)
+ok 14 marking the SAME tank twice is idempotent and says unchanged
+ok 15 a bare unique tank name resolves across engines, like 'clikae <name>'
+ok 16 an ambiguous bare tank name across engines is refused, not guessed
+ok 17 an unknown tank name is refused with exactly one error, no stray validate_name line (#63 r6 P3-4)
+ok 18 an ambiguous bare tank name is refused with exactly its own message, no stray validate_name line (#63 r6 P3-4)
+ok 19 moving from A to B removes the guard from A and installs it on B
+ok 20 a human's own PreToolUse hook on A survives the guard's install and later removal, byte for byte
+ok 21 a HAND-WRITTEN settings.json survives content-intact but gets reformatted, not byte-for-byte (#63 P2-6)
+ok 22 --off removes the guard from wherever it is and clears the state
+ok 23 moving to a new tank sweeps past a broken OLD tank instead of aborting the move (#63 P2-2)
+ok 24 moving to a NEW tank that can't be armed leaves the OLD cockpit untouched, rc 1 (#63 P2-1)
+ok 25 a state file mode 444 no longer blocks a move: the record is replaced atomically, not rewritten in place (#63 r5 P2-3)
+ok 26 a state file symlinked elsewhere is refused before any guard is written (#63 r4 P2-1, r5 P2-3)
+ok 27 probe: a real kernel short write of the record keeps the old state and rolls the new guard back (#63 r5 P2-3)
+ok 28 probe: a short write with no prior cockpit leaves nothing recorded and nothing armed (#63 r5 P2-3)
+ok 29 probe: SIGKILL at the state write never empties the record, and doctor names the extra guard (#63 r5 P2-3)
+ok 30 probe: a state path symlinked at the new tank's settings.json is refused; that settings.json is untouched (#63 r5 P2-3)
+ok 31 two concurrent moves: exactly one transition wins, the other refuses, the recorded cockpit stays guarded (#63 r5 P2-4)
+ok 32 a waiting move proceeds once the running one finishes (#63 r5 P2-4)
+ok 33 --off and settings apply take the same lock: both refuse while a transition holds it (#63 r5 P2-4)
+ok 34 a lock left by a dead holder is named, not broken; doctor reports it (#63 r5 P2-4)
+ok 35 --off breaks a stale (dead-pid) lock instead of staying blocked by it (#63 r6 P3-3)
+ok 36 --off still refuses while a LIVE holder has the lock (unaffected by the stale-lock break, #63 r6 P3-3)
+ok 37 a stray .cockpit.XXXXXX temp file from an earlier crash is swept on the next successful state write (#63 r6 P3-3)
+ok 38 moving to a symlink alias of the current cockpit is refused as the same tank; the guard stays (#63 r5 P2-2)
+ok 39 moving to a tank whose settings.json is a hard link of the cockpit's is refused the same way (#63 r5 P2-2)
+ok 40 probe: settings.json swapped for a symlink right after it is read never lands the link's target in a backup (#63 r5 P3-3)
+ok 41 probe: a swap AFTER the snapshot changes nothing that is read — backup and content come from the snapshot (#63 r5 P3-3)
+ok 42 a tank directory that is a symlink to a real directory is written through its physical path (#63 r5 P3-3)
+ok 43 --off with nothing set is an idempotent no-op
+ok 44 --off is idempotent when run twice in a row
+ok 45 --off sweeps a stray guard even when the state file disagrees (crash-recovery)
+ok 46 --off sweeps past a broken tank instead of aborting the whole sweep (#63 P1-3)
+ok 47 #61 round-6 P2-2: --off removes the guard from a cockpit tank whose marker is GONE
+ok 48 #61 round-6 P2-2: --off removes the guard when the marker is UNREADABLE (mode 000)
+ok 49 #61 round-6 P2-2: --off SAYS the recorded cockpit directory is gone, and still clears the record
+ok 50 #61 round-6 P2-2: a marker-less guarded tank the state does NOT name is still swept
+ok 51 #61 round-6 P2-2: --off reports the guard removed exactly once for a symlink-aliased cockpit
+ok 52 #114: --off on codex and antigravity too — a move interrupted mid-way, both markers lost, a live allowance
+ok 53 --off clears a live timed allowance too, not just the guard and state (#63 P1-3)
+ok 54 settings apply --check on a cockpit tank reports the guard as expected, not as drift
+ok 55 cockpit requires jq and does not write without it
+ok 56 cockpit refuses a tank that does not exist
+ok 57 --allow-agents writes a timed allowance and reports when it expires
+ok 58 --allow-agents rejects a bad duration and writes nothing
+ok 59 bare 'clikae cockpit' warns when the recorded tank no longer exists (#63 P3-8)
+ok 60 #109 P3-8: 'clikae cockpit agy <tank>' marks the tank, recorded under its on-disk name
+ok 61 #109 P3-8: 'agy' and 'antigravity' name the same cockpit — the second is an idempotent no-op
+ok 62 #109 P3-8: an unknown agy tank still fails, naming the on-disk engine
+ok 63 installing from a git checkout no longer warns: the hook names the runtime copy, which outlives the checkout (#63 P3-12, #146)
+ok 64 with the stable runtime off, installing from a git checkout still warns (#63 P3-12)
+ok 65 #103: installing the guard keeps settings.json's prior file mode
+ok 66 #103: a skipped install reports on stderr only, in the same 'skipped —' form
+ok 67 allows a non-Agent tool without looking at model/prompt at all
+ok 68 allows a haiku Explore spawn
+ok 69 refuses a sonnet build brief mentioning worktree
+ok 70 refuses a missing-model spawn regardless of the prompt
+ok 71 allows an opus spawn whose prompt has no lane heuristic
+ok 72 each documented heuristic phrase refuses a sonnet/opus spawn
+ok 73 allows the real captured PreToolUse payload (#63 P1-1, compact JSON)
+ok 74 the whitespace fix reaches end to end: a pretty-printed payload refuses like its compact twin (#63 P1-1)
+ok 75 no tool_name field at all REFUSES, fail-closed (#63 P1-2, r5 P2-5)
+ok 76 an ordinary non-Agent tool call stays silent (no stderr note, unlike a truly malformed payload)
+ok 77 tool_input entirely absent REFUSES with its own reason, fail-closed (#63 P1-2, r5 P2-5)
+ok 78 truncated tool_input JSON REFUSES as malformed, not as a model-less spawn (#63 P1-2, r5 P2-5)
+ok 79 honours the env escape hatch
+ok 80 honours a live timed allowance and names its expiry
+ok 81 an expired timed allowance refuses again
+ok 82 names the current reserve, excluding the cockpit tank itself
+ok 83 with no state/cockpit record, a refusal still lists every idle tank in the reserve (#61 round-6 P3-4)
+ok 84 #61 round-6 P3-4: an empty store with no state/cockpit still SAYS the reserve is empty
+ok 85 #114: the reserve still hides a tank with a LIVE burn, and a store full of finished burns cannot push a refusal past the hook timeout
+ok 86 #61 round-6 P3-1: an unreadable marker does not truncate the reserve, and says nothing to the model
+ok 87 fails CLOSED on an empty payload (#63 r5 P2-5)
+ok 88 fails CLOSED on malformed JSON (#63 r5 P2-5)
+ok 89 the escape hatches still lift a fail-closed refusal: they are read before the payload (#63 r5 P2-5)
+ok 90 a missing dependency (no jq on PATH) refuses instead of allowing (#63 r5 P2-5/P2-6)
+ok 91 six serialization variants of a refused call all refuse with the plain form's exact stderr (#63 r5 P2-6)
+ok 92 a surrogate pair decodes to ONE character: 1,000 emoji + an innocuous word stays under the length tripwire (#63 r5 P2-6)
+ok 93 a model field elsewhere in the payload cannot stand in for tool_input.model (#63 r5 P2-6)
+ok 94 two concatenated JSON objects are malformed input, refused (#63 r5 P2-6)
+ok 95 large payloads refuse in BOTH compact and pretty-printed form: 65,536 / 131,073 / 1,048,576 (#63 r5 P2-5)
+ok 96 runs comfortably inside the 50ms budget
+ok 97 the 14-item corpus: heuristic hit rate matches its documented, measured behavior
+ok 98 the 10-item false-refusal corpus: outcome matches docs/usage.md's table (#63 P3-5)
+ok 99 a multi-byte character straddling the old 8192-byte cut still refuses (#63 P1-1 fix2)
+ok 100 a JS-escaped \n straddling the old 8192-byte cut still refuses (#63 P1-1 fix2)
+ok 101 100 synthetic zh+en briefs over 8 KiB all refuse on sonnet (#63 P1-1 fix2)
+ok 102 a prompt over 8,192 characters with NO heuristic keyword still refuses on length alone (#63 P1-1 fix2)
+ok 103 `model` before a large prompt is found either way (#63 P2-1 fix2)
+ok 104 family-prefixed model ids refuse like their short aliases (#63 P3-1)
+ok 105 provider-spelled ids are placed in their family; unknown ids are checked, never silently allowed (#63 r5 P3-2)
+ok 106 #103: the five reported shapes are classified as opus/sonnet tiers, not left unknown
+ok 107 #103: gateway prefixes are stripped only where they name anthropic; a slash cannot smuggle haiku
+ok 108 #103: an unknown shape is refused on a benign prompt, naming the literal id and the allow line
+ok 109 #103: the printed allow line, once added, admits the id as checked (tripwire still applies)
+ok 110 #103: every refusal branch writes to stderr only, nothing to stdout
+ok 111 a 200kB prompt stays inside a generous timing budget (median of 5)
+ok 112 the hook decides nothing on disk: no marker, no adoption flag, even on a never-swept store (#61 round-5 merge)
+ok 113 #109 P3-5: a fable build brief refuses, in every family spelling
+ok 114 #109 P3-5: a short non-lane fable prompt is still allowed, silently
+ok 115 #109 P3-5: a long fable prompt refuses on the length tripwire alone
+ok 116 #109 P3-7: a \u0000 escape in model or tool_name fails closed instead of being cleaned up
+ok 117 #109 P3-7: a prompt that merely TALKS about a NUL escape is not refused for it
+ok 118 #109 P3-7: haiku LOOKALIKES are checked, not exempted
+ok 119 #109 P3-9: an oversized integer in the allow file refuses WITHOUT shell noise
+ok 120 #109 P3-9: a non-numeric allow file refuses without noise, and a live one still allows
+ok 121 #109 P3-9: the guard sets its shell options exactly once
+ok 122 a read-only store leaves no adopt-warn sentinel and no WARN behind (#61 round-5 merge, r5 P3-1)
+ok 123 burn completes on a live tank and verifies by the artifact
+ok 124 burn reroutes from a dry tank to the next same-engine tank
+ok 125 burn honours an explicit --to next hop on a dry tank
+ok 126 burn fails when every reachable tank is dry
+ok 127 burn does NOT reroute a real task failure (no artifact, no limit)
+ok 128 burn --no-reroute runs once and stops on a dry tank
+ok 129 burn #61 P2-5: --no-reroute's dry stop and a real task failure use DIFFERENT rc (2 vs 1)
+ok 130 burn #61 P2-5: reroute exhaustion (no-tank-available) is the SAME rc as --no-reroute's dry stop
+ok 131 burn #61 P1-2: a directory dropped in AFTER the first command is never rerouted onto
+ok 132 burn rejects agy with no raw '-- <cmd...>' form (no adapter to fill flags)
+ok 133 burn: an --artifact path that is a directory still gets its refusal on screen
+ok 134 burn agy completes on the active tank and verifies by the artifact
+ok 135 burn agy hops to the next tank (Keychain carry) when the first runs dry
+ok 136 burn #61 P2-5: agy --no-reroute's dry stop is also rc 2, same as codex's
+ok 137 burn agy fails when every tank is dry
+ok 138 burn agy: the reroute walk SKIPS a busy tank instead of colliding with it
+ok 139 burn agy: --allow-active overrides the reroute-walk busy skip
+ok 140 burn agy: an automatic dry-walk hop still SKIPS the cockpit even with --force-cockpit (#63 r6 P3-1, G5b)
+ok 141 burn requires --artifact
+ok 142 _burn_timeout_bin: picks `timeout` when it's on PATH
+ok 143 _burn_timeout_bin: no timeout tool → empty bin + a WARNING (runs unbounded, doesn't silently lie)
+ok 144 _burn_next_same_engine: P0 — skips a tank an interactive session is live on
+ok 145 _burn_next_same_engine: P0 — --allow-active (=1) uses the in-use tank anyway
+ok 146 _burn_next_same_engine: P1 — skips a tank sharing a dried account (same quota)
+ok 147 _burn_next_same_engine: P1 — a DIFFERENT account is still eligible
+ok 148 _burn_next_same_engine: refuses when the cockpit is the ONLY idle same-engine tank left (#63 r4 P3-5)
+ok 149 _burn_next_same_engine: --allow-active does NOT rescue the cockpit tank (#63 r4 P3-5)
+ok 150 _burn_next_same_engine: a tank that is NOT the cockpit is still picked normally (#63 r4 P3-5)
+ok 151 burn refuses an EXPLICIT target that is the recorded cockpit: rc≠0, engine never entered, no artifact (#63 r5 P2-1)
+ok 152 burn --force-cockpit runs on the cockpit and says so on stderr (#63 r5 P2-1)
+ok 153 burn refuses a --to hop onto the cockpit after a dry tank, engine entered only for the first tank (#63 r5 P2-1)
+ok 154 burn refuses a tank that is a symlink alias of the cockpit (physical identity, #63 r5 P2-1)
+ok 155 burn refuses ALL burns when the state file exists but is unreadable (mode 000, #63 r6 P3-2)
+ok 156 burn refuses ALL burns when the state file is a symlink (#63 r6 P3-2)
+ok 157 burn refuses ALL burns when the state file's content has a stray CR (#63 r6 P3-2)
+ok 158 burn is unaffected when the state file simply does not exist (#63 r6 P3-2, no regression)
+ok 159 _burn_next_same_engine: with no cockpit recorded, nothing is excluded on that account (#63 r4 P3-5)
+ok 160 burn does NOT count a STALE artifact as success (judges by mtime change)
+ok 161 burn --fresh clears a stale artifact before running
+ok 162 burn counts an OVERWRITTEN pre-existing artifact as success (mtime advanced)
+ok 163 _burn_timeout_bin: falls back to perl when no timeout/gtimeout
+ok 164 burn executes headless tasks inside tmux when available
+ok 165 burn's engine process gets the tmux guard first on PATH despite the compgen -e restore (P2-3)
+ok 166 burn --prompt-file builds the engine command via the hook and completes
+ok 167 burn --prompt inline is equivalent to --prompt-file
+ok 168 burn --add-dir defaults to the artifact's parent (codex gets -C dirname)
+ok 169 burn rejects --prompt and --prompt-file together
+ok 170 burn with no prompt and no -- errors and mentions the prompt options
+ok 171 burn --prompt on an engine with no adapter_burn_flags errors clearly
+ok 172 burn --prompt cross-engine reroute regenerates flags for the new engine
+ok 173 adapter_burn_flags (claude): exact NUL-per-argv recipe
+ok 174 adapter_burn_flags (codex): exact NUL-per-argv recipe, first add-dir = cwd
+ok 175 adapter_burn_flags does NOT leak across adapters (leak-guard)
+ok 176 adapter_meta_permission_modes does NOT leak across adapters (leak-guard)
+ok 177 burn: --prompt with a trailing -- appends the extra argv after the generated flags
+ok 178 adapter_burn_flags (claude): a multi-line prompt stays ONE argv item
+ok 179 burn --prompt-file delivers a MULTI-LINE prompt to codex as one arg
+ok 180 burn agy: clikae captures agy's stdout into the artifact it can't write itself
+ok 181 burn agy: a REFUSAL is a failure, not an artifact full of the refusal
+ok 182 burn agy: a lapsed login fails loudly and names the tank, with no artifact (#192)
+ok 183 burn agy: any other non-zero exit is a failure too, never a captured answer (#192)
+ok 184 burn agy: success says CAPTURED, not verified
+ok 185 burn agy: a silent run is still a failure, and says where to look
+ok 186 burn agy passes extra flags after -- through to agy, not dropping them
+ok 187 burn agy: --timeout is handed to agy as --print-timeout
+ok 188 burn --json: success is one object on stdout, prose on stderr
+ok 189 burn --json: a HEALTHY codex run carries its own proactive reset, not null
+ok 190 burn --json: a reroute names the tank that ACTUALLY ran it
+ok 191 burn claude a: worse headroom than b does not stop a from launching (no pre-launch substitution, P1-2)
+ok 192 burn --to codex/c wins outright over headroom ordering on a dry tank (P1-3)
+ok 193 burn --json: a reroute driven by headroom ordering is recorded in rerouted_from (P1-4)
+ok 194 burn --json: every tank dry is a distinct, readable outcome
+ok 195 burn --json: reroute never names a lock file, dangling symlink, or dotdir; exhaustion is no-tank-available (#61)
+ok 196 burn #61 P2-7: earliest parseable reset wins across three dry tanks, visited out of order
+ok 197 burn #61 P2-7: an unparseable reset mid-walk is skipped — earliest of the PARSEABLE ones wins
+ok 198 burn #61 P2-7: every dry tank's reset is unparseable -> reset is null, not a stale/wrong phrase
+ok 199 burn without --json prints no JSON at all
+ok 200 burn's soul/MCP prelaunch waits out a held lock instead of racing it # skip lockf needed to hold the lock
+ok 201 burn #42: cockpit consumption after engine exit preserves success and bytes
+ok 202 burn #42: snapshot preserves nonempty size after consumption
+ok 203 burn #42: stale and absent snapshots cannot claim success
+ok 204 burn #42: direct fallback keeps artifact evidence with a nonzero engine exit
+ok 205 burn #45: Claude weekly limit preserves dated reset in JSON
+ok 206 burn #45: all Claude limit spellings relay reset text and ordinary prose stays clear
+ok 207 burn #45: prose merely discussing a weekly limit does not fire dry (P2-2)
+ok 208 burn #45: prose that reads 'reached your … limit' without a direct vendor report does not fire dry (P2-1 r2)
+ok 209 burn #45: a genuine 'reached your … limit' vendor report still fires dry (P2-1 r2)
+ok 210 burn #45: a curly apostrophe before the verb still fires dry (P1-1 r3)
+ok 211 burn #45: an adverb between the direct report and the verb still fires dry (P1-1 r3)
+ok 212 burn #45: main's own corpus sentence still fires dry for claude (P1-1 closing)
+ok 213 burn #45: a real sample of the fixture's reset-phrase corpus fires dry under every real vendor-sentence shape (P1-1 closing)
+ok 214 burn #45: a real dry reply with a curly apostrophe reroutes instead of a hard failure (P1-1 r3)
+ok 215 burn #45: leading transport noise (indent/tab/warning glyph) does not hide a real vendor sentence (P1-1 r4 must-match)
+ok 216 burn #45: the r2/r3 prose false-positive corpus still does not fire dry under the widened anchor (P1-1 r4 must-not-match)
+ok 217 burn #45: a markdown blockquote/list marker in front of quoted prose does not fire dry (P2-1 r5 must-not-match)
+ok 218 burn #45: a real task failure whose reply quotes a runbook blockquote does not burn the whole reserve (P2-1 r5, PROBE B)
+ok 219 burn #45: leading transport noise still fires dry under the narrowed noise class (P2-1 r5 must-match, no regression)
+ok 220 burn #45: a dry signal more than 64KiB from the end of the capture still reroutes (P2-1 r4 must-match)
+ok 221 burn #45: a large CLEAN capture with no limit signal does not falsely reroute (P2-1 r4 must-not-match)
+ok 222 burn #45: codex prose that merely talks about the limit during a real task failure does not reroute (P2-2 r4 must-not-match, PROBE B3)
+ok 223 burn #45: a genuine anchored codex limit sentence still fires dry and yields a reset (P2-2 r4 must-match)
+ok 224 burn #45: codex bare mention with no direct report and no reset phrase does not fire dry (P2-2 r4 must-not-match)
+ok 225 burn #45: a third-person sentence that merely QUOTES 'you have reached … limit' mid-line does not fire dry (P2-3 r3)
+ok 226 burn #45: that same sentence does not burn through the whole reserve (P2-3 r3)
+ok 227 burn #45: 'reset at' phrasing is extracted, not dropped to null (P2-3)
+ok 228 burn #45: 'reached your weekly limit' ordering is detected as dry, not a hard task failure (P2-3)
+ok 229 burn #45: all five review PROBE-G declaration shapes are honoured
+ok 230 burn #45: a weekly dry tank reroutes to a reserve
+ok 231 burn #44: tool-host outage retries same tank then reports infra
+ok 232 burn #44: default backoff is 5 then 10 seconds and recovery stays on the same tank
+ok 233 burn #44: zero retries reports infra without sleeping or marking dry
+ok 234 burn #44: ordinary task errors are not infrastructure failures
+ok 235 burn #44: real-shaped tool-host failure phrasings from the review corpus are recognized (P2-5)
+ok 236 burn #44: prose that merely mentions the tool host near an unrelated failure verb is not infra (P1-2 r2)
+ok 237 burn #44: a genuine task failure whose reply names the tool host in passing is not rerouted as infra (P1-2 r2)
+ok 238 burn #44: invalid retry policy fails before launching
+ok 239 burn #43: long multiline prompt is stored with only 120 characters previewed
+ok 240 burn #43: diagnostic tail does not repeat the engine's multiline prompt echo
+ok 241 burn #42: a finished task is not discarded because its OWN reply mentions a limit phrase
+ok 242 burn #42: --no-reroute also honours a fresh artifact over a limit phrase in the reply
+ok 243 burn #42/#45: a fresh artifact does not drop the reset phrase when the SAME reply also shows a limit (P2-2 r2)
+ok 244 burn #42/#45: a fresh artifact with a concurrent limit event leaves the tank marked dry, not cleared (P2-2 r2)
+ok 245 burn #45: a fresh artifact with a concurrent GENUINE limit phrased as "resets …" leaves an EXISTING marker untouched (P1-1 r5)
+ok 246 burn #42: a fresh artifact with NO limit in the reply still clears the dry marker (P2-2 r2 control)
+ok 247 burn #45: a successful codex burn that merely TALKS ABOUT the limit does not mark the tank dry (P2-2 r3, PROBE B)
+ok 248 burn #45: a fresh artifact with a concurrent GENUINE limit event leaves an EXISTING marker untouched, but writes none of its own (P2-2 r3)
+ok 249 burn #44: a tool-host phrase inside the engine's PROMPT ECHO does not trigger infra retries
+ok 250 burn #44: a tool-host phrase inside the engine's argv echo (raw -- form) does not trigger infra retries (P1-1 r2)
+ok 251 burn #44: raw -- form diagnostic tail does not repeat the engine's own argv echo (P1-1 r2)
+ok 252 _burn_redact_full: a needle at or above the minimum length redacts across a blank-line capture (P1-2 r5)
+ok 253 _burn_redact_full: a blank-line capture no longer fabricates a false infra match by fusing sentences (P1-2 r5, PROBE G3)
+ok 254 _burn_redact_full: perl failing to run is reported via a non-zero return, not a silent empty success (P3-1 r3)
+ok 255 burn #99 (P3-1 r3): when redaction itself fails, the fast-failure reason says so distinctly, not 'output redacted'
+ok 256 burn #44: an 8MB capture still classifies fast (P1-2 timing guard)
+ok 257 burn #44: an 8MB HEALTHY capture (no limit line at all) still classifies fast (P1-1 r3 timing guard)
+ok 258 burn #44: a capture with the redacted needle repeated thousands of times still classifies fast (P1-3 timing guard, round-5)
+ok 259 burn #44: a day-to-day '-C .' no longer merges sentences into a false infra match (P2-1 r3, PROBE G)
+ok 260 burn #44: a short raw-argv task string cannot shred a genuine limit line (P2-1 r3, PROBE F)
+ok 261 burn #42: a write landing just after engine exit still counts as success (P2-1 grace window)
+ok 262 burn #43: a stale prompt-log run directory is swept past the retention window (P2-4)
+ok 263 burn #43: a recent prompt-log run directory survives the sweep (P2-4)
+ok 264 burn #43/P3-3: a stale watch-github-* run directory is ALSO swept (same sweep, same policy)
+ok 265 burn #43: CLIKAE_BURN_LOG_RETENTION_DAYS=0 disables the sweep
+ok 266 burn #43: ~/.clikae/logs is created 0700 even when burn fails before the engine loop (P2-3 r2)
+ok 267 burn #60: default composed argv is byte-identical to explicit acceptEdits
+ok 268 burn #60: claude auto composes the selected permission mode
+ok 269 burn #60: codex auto degrades once on stderr with unchanged argv
+ok 270 burn #60: invalid or missing permission is refused with one usage line
+ok 271 burn #60 (production path): default composes acceptEdits exactly once
+ok 272 burn #60 (production path): --permission auto composes auto exactly once
+ok 273 burn #60: codex acceptEdits (explicit) maps without a warning and keeps default argv
+ok 274 burn #60: grok — both acceptEdits and auto degrade truthfully, argv unchanged
+ok 275 burn #60: agy — both acceptEdits and auto degrade once, argv unchanged apart from --log-file
+ok 276 burn #60: raw-argv --permission advisory fires before validate_name / any state work
+ok 277 burn #60: a duplicate engine permission flag after -- warns once, argv untouched
+ok 278 burn #60 P1-1 (round-2 review): cross-engine --to reroute does not leak claude's permission-mode capability onto codex
+ok 279 burn #66: non-git cwd refuses before creating any clikae state
+ok 280 burn #66: git cwd keeps generated argv byte-identical
+ok 281 burn #66: explicit opt-in adds skip-git-repo-check exactly once
+ok 282 burn #66: fast failure JSON reason uses trimmed stderr first line
+ok 283 burn #66: default artifact parent is checked before --fresh can delete it
+ok 284 burn #66: stderr reason is capped at 200 bytes even with engine rc zero
+ok 285 burn #66: stderr reason keeps legitimate consecutive spaces (P3-3)
+ok 286 burn #81: a prompt fragment echoed to stderr never reaches --json's reason (P3-2)
+ok 287 burn #66 round-1 P1-1: a cross-engine reroute INTO codex re-checks the git cwd
+ok 288 burn #66 round-1 P1-1 control: reroute into codex still proceeds when the cwd IS a git work tree
+ok 289 burn #66 round-1 P2-1: ANSI/control chars in stderr sanitize into valid JSON
+ok 290 burn #66 round-1 P2-2: 200-byte cap does not split a multibyte char under C locale
+ok 291 burn #66 round-1 P3-1: --codex-skip-git-check on a non-codex engine warns, does not fail
+ok 292 burn #66 round-1 P3-1 control: raw argv form also warns the flag has no effect
+ok 293 burn #66 round-1 P3-2: a nonexistent --add-dir says so, not 'not a git work tree'
+ok 294 burn (claude, --prompt): appends --disallowedTools Agent,Task and exports the bg-wait ceiling
+ok 295 burn (claude, raw -- -p): the guards apply to the power-user form too
+ok 296 burn (claude): an operator-supplied tools flag switches the argv guard off; a set ceiling is kept
+ok 297 burn (codex): the claude guards do not leak into another engine's argv
+ok 298 burn #81: stderr-only codex limit exits zero but reports dry and stores reset
+ok 299 burn #81: ordinary codex stderr preserves the no-artifact failure
+ok 300 burn #81: the vendor sentence QUOTED mid-transcript, run finishes with an artifact, is not dry (P2-2)
+ok 301 burn #81: the vendor sentence as the LAST line, no artifact, is still dry (P2-2 control)
+ok 302 burn #81 fix2: a limit line followed by a >20-line stack trace, no artifact, is dry — not a task failure (P1-1)
+ok 303 burn #81 fix2: a pre-existing dry marker survives an artifact-producing run whose SAME reply still shows a limit far from the tail (P1-1b)
+ok 304 burn #81 fix2: a fresh artifact with a non-zero engine exit does not clear a pre-existing marker (P1-1 rc-gate)
+ok 305 burn #81 fix2: a fresh artifact with rc==0 and no limit line still clears a pre-existing marker (P1-1 rc-gate control)
+ok 306 burn #99/P2-2 fix2: a stderr first line that IS the prompt does not empty reason — the real diagnostic on the next line survives
+ok 307 burn #99/P2-2 fix2: when every stderr line is placeholder or blank, reason falls back to a plain message — never empty or null
+ok 308 burn #84: committed work without artifact is reported and deduplicated in JSON
+ok 309 burn #84: clean unchanged repository leaves no block and an empty array
+ok 310 burn #84: non-git add-dir is skipped silently
+ok 311 burn #84: dry failure reports dirty work with no upstream and caps recent files
+ok 312 burn #84: timeout without artifact reports cwd work
+ok 313 burn #84: successful artifact leaves JSON array empty despite existing work
+ok 314 burn #84 P1: a corrupted .git/index never changes burn's exit code or --json shape
+ok 315 burn #84 P2-1: recent files are the newest ten by mtime, not directory order
+ok 316 burn #84 P2-2/P2-5: repos are capped at 25, newest-activity first, with a remainder line
+ok 317 burn #84 P2-2 (round-2 review): ahead>0 outranks file mtime in the 25-repo cap, and its push hint survives it
+ok 318 burn #84 P2-3: elapsed_s agrees across --json, the summary line, and status.json
+ok 319 burn #84 P2-4: an --add-dir that is a symlink to a directory of repos is still scanned
+ok 320 burn #84 P2-1 (round-2 review): a .git/HEAD FIFO cannot hang burn past its budget
+ok 321 burn #84 P2-3 (round-2 review): nested repos at any depth get their own row and hint; files attribute to the innermost repo
+ok 322 burn #84 P3-3: ahead>0 alone (known upstream, nothing else changed) qualifies
+ok 323 burn #84 P3-3: ahead with no known upstream, clean, no new files does not qualify
+ok 324 burn #84 P2-6: the left-behind scan is provably read-only — .git untouched, no hook fires
+ok 325 burn #84 P2-6 ruler sanity: without GIT_OPTIONAL_LOCKS, git status DOES touch .git/index
+ok 326 burn #84 P3-2: every ahead repo gets its own push hint, not just the first
+ok 327 burn #84 P3-5: a submodule's own dirty state and files are not double-counted into the superproject's
+ok 328 burn: the process-group probe's child never runs a direct caller's EXIT trap
+ok 329 burn: the process-group probe's child cannot swallow its stop signal
+ok 330 burn #84 P2-1 (round-5 review): the bound kills a forking child's whole process group
+ok 331 burn #84 P3-3 (round-5 review): a bounded call that finished in time never reports 124
+ok 332 burn #84 P3-3 (round-5 review): a bounded call that really overran still reports 124
+ok 333 burn #84 P2-1 (round-5 review): a never-returning file-list stat cannot hang burn
+ok 334 burn #84 P3-1 (round-5 review): a discovery find that hangs says discovery timed out, not budget exhausted
+ok 335 burn #84 P3-4 (round-5 review): a root repo already discovered survives the budget boundary
+ok 336 burn #84 P3-1 (round-6 review): _burn_lb_kill refuses every value that is not a signalable pid
+ok 337 burn #84 P3-1 (round-6 review): a real `_burn_lb_kill TERM 0` leaves its caller and its children alive
+ok 338 burn #84 P3-6 (round-6 review): the watchdog's mark is an unguessable mktemp path, and nothing is left behind
+ok 339 burn #84 P3-3 (round-6 review): the group KILL still fires when the direct child dies of TERM first
+ok 340 burn #84 P3-5 (round-6 review): a child killed from outside near the deadline reports its signal, not a timeout
+ok 341 burn #84 P3-2 (round-6 review): an interrupt during a bounded call stops the scan's own process group
+ok 342 burn #84 P3-4 (round-6 review): a write that outlives one repo's scan cannot land in the next repo's file list
+ok 343 burn #112 item 1: a wedged `git status` is reported as unanswered, not `dirty 0`
+ok 344 burn #112 item 1 control: a repo git could answer for reports git_timeout false and a dirty count
+ok 345 burn #112 item 2: roots the budget never reached count as roots_budget_skipped
+ok 346 burn #112 item 2: markers the budget never reached count as markers_budget_skipped
+ok 347 burn #112 item 2 control: an untruncated scan reports all five buckets at zero
+ok 348 burn #112 item 5: no git on PATH is reported, not silently an empty list
+ok 349 burn #112 item 5 control: a scan that ran reports left_behind_unavailable null
+ok 350 burn #112 item 6: the single-pid fallback still kills its child (and leaves the grandchild, by design)
+ok 351 burn #112 item 6: --json names the kill mode the scan actually used
+ok 352 burn #112 item 6 control: an ordinary run reports kill_mode pgroup
+ok 353 burn #112 item 7: repos the per-repo loop never reached say scan budget exhausted
+ok 354 burn #112 item 8: a failed `burn --json | cat` reaches EOF within 1s of the process exiting
+ok 355 burn #112 item 10: the in-bash bound kills a forking child's whole group, with no timeout(1)
+ok 356 burn #112 item 10: a command that finishes inside the in-bash bound keeps its status and output
+ok 357 P2-1(a): burn refreshes the launched tank's usage cache at run end — one vendor call, off the launch path
+ok 358 P2-1(a) control: a DRY run also refreshes the tank it just tried, not only a successful one
+ok 359 sidecar key (#113): a legacy 'agy' dir is RENAMED onto 'antigravity' when that is absent, and a re-run is a no-op
+ok 360 sidecar key (#113): when BOTH dirs hold a tank, the files are MERGED line by line — canonical order kept, no line twice, idempotent
+ok 361 sidecar key (#113): no store, no legacy dir => the migration creates nothing
+ok 362 burn #129: acceptEdits overrides the tank with workspace-write
+ok 363 burn #129: bypassPermissions maps to danger-full-access
+ok 364 burn #129: plan maps to read-only
+ok 365 burn #129: default maps to read-only
+ok 366 burn #129: configured sandbox omits -s without explicit permission
+ok 367 burn #129: no config and no permission keeps workspace-write
+ok 368 burn #129: commented sandbox and unrelated config keep workspace-write
+ok 369 burn #129: same-engine reroute reads the destination tank configuration
+ok 370 burn #129: a Codex-only mode degrades to Claude's existing default
+ok 371 burn #69: codex --artifact outside the writable cwd is refused early, naming both paths
+ok 372 burn #69: the early refusal carries a --json reason
+ok 373 burn #69: extra --add-dir values get exactly one read-only notice
+ok 374 burn #69 control: a single --add-dir prints no read-only notice
+ok 375 burn #69 control: an artifact under /tmp is accepted with a different cwd
+ok 376 burn #69 control: bypassPermissions (danger-full-access) is not refused
+ok 377 burn #39: a codex run ending in the sandbox EPERM signature is a sandbox refusal, not a task failure
+ok 378 #174: the engine output under a [ FAIL ] line names the tank it came from, and the tank it was rerouted from
+ok 379 the claude permissions template is valid, shaped JSON with no exact-duplicate rules
+ok 380 settings unions both lists and preserves other keys and backup
+ok 381 second apply is a byte-identical no-op
+ok 382 check detects hand-edited drift and goes green after apply
+ok 383 init creates settings that pass check
+ok 384 invalid JSON is skipped while other tanks are applied
+ok 385 dry-run previews all tanks without creating settings
+ok 386 settings rejects malformed shapes and empty files unchanged
+ok 387 settings rejects unsupported engines missing tanks and conflicting flags
+ok 388 settings apply without jq fails clearly and does not write
+ok 389 an allow rule that matches a deny rule by the same string is applied, not refused
+ok 390 settings apply with no tanks of the engine says so and exits 0
+ok 391 settings apply with a hello.lock/ dir and a zzempty/ dir present writes nothing into them
+ok 392 doctor permissions helper reports each drifted tank and stays read-only
+ok 393 targeted apply leaves other tanks alone and expands $HOME
+ok 394 $HOME/* expands the same whether or not the caller's HOME has a trailing slash
+ok 395 a colon-spelled allow rule is recognized as equivalent to the template's space-spelled rule
+ok 396 symlinked settings are skipped without changing the target
+ok 397 failed rename preserves the live file and cleans the temporary file
+ok 398 _settings_write_file refuses empty content and leaves the live file byte-identical (#63 P2-4)
+ok 399 settings.json.clikae.bak.* is capped at the newest 5 per tank (#63 P3-11)

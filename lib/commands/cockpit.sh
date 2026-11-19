@@ -18,8 +18,157 @@
 # no cockpit). The settings.json edit itself rides #76/#85's write mechanism
 # (_settings_write_file, lib/commands/settings.sh) — union merge onto the
 # tank's hooks.PreToolUse array, identified by a marker key ("_clikae":
-# "cockpit-guard") on OUR array entry so a human's own hooks (any entry
-# without that marker, any other hook event) are never touched.
+# "cockpit-guard"). Legacy ownership is checked per command, using the
+# executable and matcher. Other commands and hook events are left alone.
+
+# Literal shell words only: quote removal and backslash handling, never eval.
+# Expansions, operators, comments and unsupported shell syntax are uncertain.
+# History contains direct paths (unquoted, then jq @sh), no shell wrappers.
+_cockpit_guard_jq() {
+  cat <<'JQ'
+def cockpit_words:
+  reduce (explode[]) as $c
+    ({mode: "bare", escape: false, active: false, word: "", words: [], ok: true};
+     if $c == 0 then .ok = false
+     elif .escape then
+       # A removed backslash-newline must not start an empty word.
+       .escape = false | .active = (.active or ($c != 10)) |
+       if $c == 10 then .
+       elif .mode == "double" and ([36,96,34,92] | index($c) | not)
+         then .word += ("\\" + ([$c] | implode))
+       else .word += ([$c] | implode) end
+     elif .mode == "single" then
+       if $c == 39 then .mode = "bare" else .word += ([$c] | implode) end
+     elif $c == 92 then .escape = true
+     elif .mode == "double" then
+       if $c == 34 then .mode = "bare"
+       elif $c == 36 or $c == 96 then .ok = false
+       else .word += ([$c] | implode) end
+     elif $c == 39 then .mode = "single" | .active = true
+     elif $c == 34 then .mode = "double" | .active = true
+     elif $c == 32 or $c == 9 then
+       if .active then .words += [.word] | .word = "" | .active = false else . end
+     elif ([10,13,36,96,59,38,124,60,62,40,41,123,125,42,63,91,93,126,35,33,61] | index($c)) != null
+       then .ok = false
+     else .word += ([$c] | implode) | .active = true end) |
+  if .ok and .mode == "bare" and (.escape | not) then
+    .words + (if .active then [.word] else [] end)
+  else null end;
+
+def cockpit_path: test("(^|/)hooks/cockpit-guard\\.sh\\z");
+
+# Detection, never ownership: a path that resolves to the guard's file name
+# (repeated slashes and ./ segments collapsed). `.log`, `.disabled` and a
+# bare `cockpit-guard.sh` in a comment do not end in hooks/cockpit-guard.sh.
+def cockpit_mention:
+  gsub("/+"; "/") | gsub("/(\\./)+"; "/") | test("(^|/)hooks/cockpit-guard\\.sh\\z");
+
+# Loose words for text the literal parser refuses (or a script argument such
+# as bash -c '...'): operators and newlines separate, a word-initial # starts
+# a comment, expansions stay literal. Used only to decide "review" vs "user",
+# so a guess here can keep and report an entry, never delete one.
+def cockpit_loose_words:
+  reduce (explode[]) as $c
+    ({mode: "bare", escape: false, comment: false, active: false, word: "", words: []};
+     if .comment then (if $c == 10 then .comment = false else . end)
+     elif .escape then
+       .escape = false | .active = (.active or ($c != 10)) |
+       if $c == 10 then . else .word += ([$c] | implode) end
+     elif .mode == "single" then
+       if $c == 39 then .mode = "bare" else .word += ([$c] | implode) end
+     elif $c == 92 then .escape = true
+     elif .mode == "double" then
+       if $c == 34 then .mode = "bare" else .word += ([$c] | implode) end
+     elif $c == 39 then .mode = "single" | .active = true
+     elif $c == 34 then .mode = "double" | .active = true
+     elif $c == 35 and (.active | not) then .comment = true
+     elif ([0,9,10,13,32,59,38,124,60,62,40,41,96] | index($c)) != null then
+       if .active then .words += [.word] | .word = "" | .active = false else . end
+     else .word += ([$c] | implode) | .active = true end) |
+  .words + (if .active then [.word] else [] end);
+
+def cockpit_text_mention:
+  any(cockpit_loose_words[] | splits("[$(){}`]"); cockpit_mention);
+
+# Claude Code runs a group on Agent calls when its matcher is absent, empty,
+# "*", a |-list naming Agent (or Task, its former name), or a regex that
+# matches it. Anything but a string we can rule out counts as matching.
+def cockpit_runs_on_agent:
+  if type != "string" then true
+  else . as $m | gsub("^\\s+|\\s+$"; "") as $t |
+    $t == "" or $t == "*" or
+    any($t | split("|")[] | gsub("^\\s+|\\s+$"; ""); . == "Agent" or . == "Task") or
+    (try ("Agent" | test($m)) catch false) or (try ("Agent" | test($t)) catch false)
+  end;
+
+# Called on ONE hook, with its containing entry's matcher and marker.
+# A marker never grants ownership of unrelated sibling commands.
+# owned:  what an installer wrote — one absolute literal word naming the guard
+#         under matcher exactly "Agent". fc3ffe4's unquoted path with a space
+#         in it is review even in a marked group: no rule tells it apart from
+#         a user command that ends in the guard path.
+# review: anything else that may run the guard on an Agent call — the guard
+#         ignores its arguments and wrappers, so it still enforces; kept and
+#         reported, never deleted. A relative path may be a project script.
+# user:   everything else, including mere mentions of the file name.
+def cockpit_guard($entry):
+  if ($entry.hooks | type) != "array"
+     or .type != "command" or (.command | type) != "string"
+     or ($entry.matcher | cockpit_runs_on_agent | not)
+  then "user"
+  else (.command | cockpit_words) as $words |
+    if $entry.matcher == "Agent" and $words != null and ($words | length) == 1
+       and ($words[0] | startswith("/") and cockpit_path)
+      then "owned"
+    elif (if $words == null then .command | cockpit_text_mention
+          else any($words[]; cockpit_mention or (test("[ \\t'\"]") and cockpit_text_mention)) end)
+      then "review"
+    else "user" end
+  end;
+
+def cockpit_pre:
+  if type != "object" then error("invalid settings") else . end |
+  (.hooks.PreToolUse // []) |
+  if type != "array" then error("invalid hooks") else . end;
+
+def cockpit_scan:
+  [cockpit_pre[] | . as $entry | .hooks[]? |
+    {kind: cockpit_guard($entry), command: .command}];
+
+def cockpit_strip:
+  map(. as $entry |
+    [.hooks[]? | select(cockpit_guard($entry) == "owned")] as $ours |
+    if ($ours | length) == 0 then .
+    else .hooks |= map(select(cockpit_guard($entry) != "owned")) |
+      select(.hooks | length > 0) |
+      # The marker named the command just removed; a user's sibling that
+      # stays behind is not ours, and doctor reads the marker as a guard.
+      if ._clikae == "cockpit-guard" then del(._clikae) else . end
+    end);
+JQ
+}
+
+# A read/parse failure is never evidence of absence (including escaped JSON).
+# Send it to the snapshot/removal path to report it without rewriting the file.
+_cockpit_hook_candidate() {
+  local rc=0
+  # A dangling symlink holds nothing an engine could run: not a candidate.
+  if [ -L "$1" ] && [ ! -e "$1" ]; then return 1; fi
+  [ -f "$1" ] && [ -r "$1" ] || return 0
+  jq -se "$(_cockpit_guard_jq)"'
+    if length != 1 then error("invalid settings") else .[0] end |
+    cockpit_scan | any(.kind != "user")' "$1" >/dev/null 2>&1 || rc=$?
+  [ "$rc" -ne 1 ]
+}
+
+# Commands are JSON-encoded so embedded newlines/control bytes stay on one line.
+_cockpit_report_left() {
+  local left
+  while IFS= read -r left; do
+    [ -n "$left" ] || continue
+    printf '%s/%s: hook entry left for you to check: %s\n' "$1" "$2" "$left" >&2
+  done < <(printf '%s' "$3" | jq -c '.left[]')
+}
 
 _cockpit_state_file() { printf '%s/state/cockpit\n' "$CLIKAE_HOME"; }
 _cockpit_allow_file() { printf '%s/state/cockpit-allow\n' "$CLIKAE_HOME"; }
@@ -182,9 +331,9 @@ _cockpit_hook_install() (
   # clikae#146: the engine runs this hook for the tank's whole life, across
   # upgrades — spell the stable copy, synced here.
   runtime_sync || true
-  if ! new="$(jq -n --arg cmd "$(runtime_lib)/hooks/cockpit-guard.sh" --slurpfile current "$input" '
+  if ! new="$(jq -n --arg cmd "$(runtime_lib)/hooks/cockpit-guard.sh" --slurpfile current "$input" --arg snapshot "$_SETTINGS_SNAP" "$(_cockpit_guard_jq)"'
       def valid: type == "object";
-      if ($current | length) > 1 or (($current | length) == 1 and ($current[0] | valid | not))
+      if ($snapshot != "" and ($current | length) != 1) or (($current | length) == 1 and ($current[0] | valid | not))
         then error("invalid settings") else . end |
       ($current[0] // {}) as $old |
       # #63 round-5 P3-1: Claude Code runs `command` through a shell, so the
@@ -193,22 +342,19 @@ _cockpit_hook_install() (
       # i.e. every spawn allowed. An older unquoted entry reads as drift and
       # is rewritten on the next `clikae cockpit <tank>`.
       ($cmd | @sh) as $cmd |
-      ($old.hooks.PreToolUse // []) as $pre |
-      ($pre | map(select((._clikae // "") != "cockpit-guard"))) as $rest |
-      (($pre | map(select((._clikae // "") == "cockpit-guard"))) as $ours |
-        (($ours | length) == 1
-         and ($ours[0].matcher == "Agent")
-         and (($ours[0].hooks // [])[0].command == $cmd)
-         and (($ours[0].hooks // [])[0].timeout == 5))) as $already |
-      { changed: ($already | not),
-        settings: ($old | .hooks.PreToolUse =
-          ($rest + [{matcher: "Agent",
-                     hooks: [{type: "command", command: $cmd, timeout: 5}],
-                     _clikae: "cockpit-guard"}])) }
+      ($old | cockpit_pre) as $pre |
+      ($pre | cockpit_strip) as $rest |
+      ($old | .hooks.PreToolUse =
+        ($rest + [{matcher: "Agent",
+                   hooks: [{type: "command", command: $cmd, timeout: 5}],
+                   _clikae: "cockpit-guard"}])) as $out |
+      { changed: ($out != $old), settings: $out,
+        left: [$old | cockpit_scan[] | select(.kind == "review") | .command] }
     ' 2>/dev/null)"; then
     printf '%s/%s: skipped — settings.json is not valid JSON\n' "$engine" "$tank" >&2
     return 1
   fi
+  _cockpit_report_left "$engine" "$tank" "$new"
   changed="$(printf '%s' "$new" | jq -r .changed)"
   if [ "$changed" = "false" ]; then
     printf '%s/%s: cockpit guard already installed (unchanged)\n' "$engine" "$tank"
@@ -237,7 +383,7 @@ _cockpit_hook_install() (
   printf '%s/%s: cockpit guard installed\n' "$engine" "$tank"
 )
 
-# _cockpit_hook_remove <engine> <tank> -> remove ONLY our marked block. Empties
+# _cockpit_hook_remove <engine> <tank> -> remove marked and legacy guards. Empties
 # `hooks.PreToolUse` (and `hooks` itself) rather than leaving a dangling `[]`
 # when nothing else used them — so a tank that had no hooks before we visited
 # it comes back exactly as it was. Prints one status line.
@@ -251,29 +397,31 @@ _cockpit_hook_remove() (
     printf '%s/%s: cockpit guard not installed here (unchanged)\n' "$engine" "$tank"
     return 0
   fi
-  if ! new="$(jq '
-      ((.hooks.PreToolUse // []) | map(select((._clikae // "") == "cockpit-guard"))) as $ours |
-      if ($ours | length) == 0 then
-        { changed: false, settings: . }
+  if ! new="$(jq -s "$(_cockpit_guard_jq)"'
+      if length != 1 then error("invalid settings") else .[0] end |
+      cockpit_scan as $scan |
+      ([$scan[] | select(.kind == "owned")] | length) as $removed |
+      [$scan[] | select(.kind == "review") | .command] as $left |
+      if $removed == 0 then
+        { changed: false, settings: ., left: $left }
       else
-        ((.hooks.PreToolUse // []) | map(select((._clikae // "") != "cockpit-guard"))) as $rest |
-        ( if ($rest | length) == 0 then
-            ( if has("hooks") then
-                (.hooks |= del(.PreToolUse)) |
-                (if (.hooks | length) == 0 then del(.hooks) else . end)
-              else . end )
-          else
-            (.hooks.PreToolUse = $rest)
-          end
-        ) as $out |
-        { changed: true, settings: $out }
+        (cockpit_pre | cockpit_strip) as $rest |
+        (if ($rest | length) == 0 then
+           .hooks |= del(.PreToolUse) |
+           if (.hooks | length) == 0 then del(.hooks) else . end
+         else .hooks.PreToolUse = $rest end) as $out |
+        { changed: true, removed: $removed, settings: $out, left: $left }
       end
     ' "$_SETTINGS_SNAP" 2>/dev/null)"; then
     printf '%s/%s: skipped — settings.json is not valid JSON\n' "$engine" "$tank" >&2
     return 1
   fi
+  _cockpit_report_left "$engine" "$tank" "$new"
+  local left_count
+  left_count="$(printf '%s' "$new" | jq '.left | length')"
   changed="$(printf '%s' "$new" | jq -r .changed)"
   if [ "$changed" = "false" ]; then
+    [ "$left_count" -eq 0 ] || return 2
     printf '%s/%s: cockpit guard not installed here (unchanged)\n' "$engine" "$tank"
     return 0
   fi
@@ -284,7 +432,11 @@ _cockpit_hook_remove() (
     return 1
   }
   _settings_write_file "$file" "$settings_out" "$engine/$tank" "$_SETTINGS_SNAP" || return 1
-  printf '%s/%s: cockpit guard removed\n' "$engine" "$tank"
+  local removed unit=entries
+  removed="$(printf '%s' "$new" | jq -r '.removed')"
+  [ "$removed" -ne 1 ] || unit=entry
+  printf '%s/%s: cockpit guard removed (%s %s)\n' "$engine" "$tank" "$removed" "$unit"
+  [ "$left_count" -eq 0 ] || return 2
 )
 
 _cockpit_show() {
@@ -433,9 +585,15 @@ _cockpit_move() {
     if ! _cockpit_state_names "$cur"; then
       log_fail "cockpit: could not confirm the new cockpit record ($engine/$tank), and the state file no longer reads as ${cur:-empty} — $engine/$tank's guard was KEPT (over-guarded is the safe direction). Run \`clikae doctor\` to see what is guarded, then \`clikae cockpit --off\` and mark the right tank."
     fi
-    local rollback_msg="its guard was rolled back"
-    _cockpit_hook_remove "$engine" "$tank" >/dev/null 2>&1 \
-      || rollback_msg="its guard could NOT be rolled back either — run \`clikae cockpit --off\` to clear it"
+    # rc 2 = our guard is gone, but entries we do not own were kept; install
+    # already listed them above, so the rollback itself succeeded.
+    local rollback_msg="its guard was rolled back" rollback_rc=0
+    _cockpit_hook_remove "$engine" "$tank" >/dev/null 2>&1 || rollback_rc=$?
+    case "$rollback_rc" in
+      0) ;;
+      2) rollback_msg="its guard was rolled back; hook entries there were left for you to check (listed above)" ;;
+      *) rollback_msg="its guard could NOT be rolled back either — run \`clikae cockpit --off\` to clear it" ;;
+    esac
     if [ -n "$cur_engine" ]; then
       log_fail "cockpit: could not record the new cockpit ($engine/$tank) — $rollback_msg; $cur_engine/$cur_tank is still the cockpit, unchanged"
     else
@@ -444,7 +602,13 @@ _cockpit_move() {
   fi
 
   if [ -n "$cur_engine" ] && profile_exists "$cur_engine" "$cur_tank"; then
-    _cockpit_hook_remove "$cur_engine" "$cur_tank" || log_warn "cockpit: could not clean up the old cockpit ($cur_engine/$cur_tank) — its guard was NOT removed; run \`clikae cockpit --off\` to clear it."
+    local old_rc=0
+    _cockpit_hook_remove "$cur_engine" "$cur_tank" || old_rc=$?
+    case "$old_rc" in
+      0) ;;
+      2) log_warn "cockpit: the guard clikae installed on the old cockpit ($cur_engine/$cur_tank) is gone; hook entries there were left for you to check (listed above)." ;;
+      *) log_warn "cockpit: could not clean up the old cockpit ($cur_engine/$cur_tank) — its guard was NOT removed; run \`clikae cockpit --off\` to clear it." ;;
+    esac
   elif [ -n "$cur_engine" ]; then
     log_warn "cockpit: recorded cockpit $cur_engine/$cur_tank no longer exists; dropping the record."
   fi
@@ -481,10 +645,8 @@ _cockpit_move() {
 #      the record is still cleared, but we SAY so rather than implying the
 #      guard went with it.
 #   2. every `<engine>/<tank>/settings.json` under profiles_root that
-#      actually carries our `"_clikae": "cockpit-guard"` marker. Reading a
-#      settings.json and finding OUR marker in it is a far tighter gate than
-#      "is a tank" — a directory clikae never named cannot have acquired that
-#      marker except from a `clikae cockpit` run that named it.
+#      carries our marker or a legacy cockpit-guard.sh command. Guard identity
+#      survives both a lost tank marker and a changed installation directory.
 #
 # Everything else in clikae that walks the store goes through the one
 # enumerator (#61 P2-6) and must keep doing so. This is the documented
@@ -493,7 +655,7 @@ _cockpit_move() {
 # inherit.
 _cockpit_off() {
   command -v jq >/dev/null 2>&1 || log_fail "cockpit requires jq to edit settings.json"
-  local cli profile path any=0 had_state=0 failed="" d
+  local cli profile path any=0 had_state=0 failed="" left="" rc d
   local rec="" rec_engine="" rec_tank="" rec_dir="" rec_phys="" phys
   [ -f "$(_cockpit_state_file)" ] && had_state=1
   rec="$(_cockpit_state_read)"
@@ -504,10 +666,16 @@ _cockpit_off() {
     rec_dir="$(profile_dir "$rec_engine" "$rec_tank")"
     if [ -d "$rec_dir" ]; then
       rec_phys="$(cd -P "$rec_dir" 2>/dev/null && pwd -P)" || rec_phys=""
-      if [ -f "$rec_dir/settings.json" ] \
-         && grep -q '"_clikae"[[:space:]]*:[[:space:]]*"cockpit-guard"' "$rec_dir/settings.json" 2>/dev/null; then
+      if { [ -e "$rec_dir/settings.json" ] || [ -L "$rec_dir/settings.json" ]; } \
+         && _cockpit_hook_candidate "$rec_dir/settings.json"; then
         any=1
-        _cockpit_hook_remove "$rec_engine" "$rec_tank" || failed="$failed $rec_engine/$rec_tank"
+        rc=0
+        _cockpit_hook_remove "$rec_engine" "$rec_tank" || rc=$?
+        case "$rc" in
+          2) left="$left $rec_engine/$rec_tank" ;;
+          0) ;;
+          *) failed="$failed $rec_engine/$rec_tank" ;;
+        esac
       fi
     else
       log_warn "cockpit: recorded cockpit $rec_engine/$rec_tank no longer exists ($rec_dir) — nothing to unguard there; the record is cleared. If that directory comes back with a guard still installed, run \`clikae cockpit --off\` again."
@@ -519,8 +687,8 @@ _cockpit_off() {
     profile="${path##*/}"
     cli="${path%/*}"; cli="${cli##*/}"
     [ -n "$cli" ] && [ -n "$profile" ] || continue
-    [ -f "$path/settings.json" ] || continue
-    grep -q '"_clikae"[[:space:]]*:[[:space:]]*"cockpit-guard"' "$path/settings.json" 2>/dev/null || continue
+    [ -e "$path/settings.json" ] || [ -L "$path/settings.json" ] || continue
+    _cockpit_hook_candidate "$path/settings.json" || continue
     # Already done above, by name or by physical identity (a symlink alias of
     # the recorded tank is the same settings.json, and removing twice would
     # print a second, contradictory "not installed here" line).
@@ -529,14 +697,24 @@ _cockpit_off() {
       [ -n "$phys" ] && [ "$phys" = "$rec_phys" ] && continue
     fi
     any=1
-    _cockpit_hook_remove "$cli" "$profile" || failed="$failed $cli/$profile"
+    rc=0
+    _cockpit_hook_remove "$cli" "$profile" || rc=$?
+    case "$rc" in
+      2) left="$left $cli/$profile" ;;
+      0) ;;
+      *) failed="$failed $cli/$profile" ;;
+    esac
   done
   _cockpit_state_clear
   rm -f "$(_cockpit_allow_file)" 2>/dev/null || true
+  if [ -n "$left" ]; then
+    printf 'cockpit: state cleared; hook entries remain for you to check:%s\n' "$left" >&2
+  fi
   if [ -n "$failed" ]; then
     log_err "cockpit: --off could not clean up:$failed — fix their settings.json and run --off again"
     return 1
   fi
+  [ -z "$left" ] || return 1
   if [ "$any" -eq 0 ] && [ "$had_state" -eq 0 ]; then
     printf 'cockpit: already off (unchanged)\n'
   else

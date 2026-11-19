@@ -1,0 +1,7 @@
+
+In tests/bats/cockpit-235.bats line 163:
+  [[ "$stderr" == *'calling session claude/B differs from recorded cockpit claude/A'* ]] || false
+      ^-----^ SC2154 (warning): stderr is referenced but not assigned.
+
+For more information:
+  https://www.shellcheck.net/wiki/SC2154 -- stderr is referenced but not assi...

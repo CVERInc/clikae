@@ -1,0 +1,57 @@
+1..56
+ok 1 allows a non-Agent tool without looking at model/prompt at all
+ok 2 allows a haiku Explore spawn
+ok 3 refuses a sonnet build brief mentioning worktree
+ok 4 refuses a missing-model spawn regardless of the prompt
+ok 5 allows an opus spawn whose prompt has no lane heuristic
+ok 6 each documented heuristic phrase refuses a sonnet/opus spawn
+ok 7 allows the real captured PreToolUse payload (#63 P1-1, compact JSON)
+ok 8 the whitespace fix reaches end to end: a pretty-printed payload refuses like its compact twin (#63 P1-1)
+ok 9 no tool_name field at all REFUSES, fail-closed (#63 P1-2, r5 P2-5)
+ok 10 an ordinary non-Agent tool call stays silent (no stderr note, unlike a truly malformed payload)
+ok 11 tool_input entirely absent REFUSES with its own reason, fail-closed (#63 P1-2, r5 P2-5)
+ok 12 truncated tool_input JSON REFUSES as malformed, not as a model-less spawn (#63 P1-2, r5 P2-5)
+ok 13 honours the env escape hatch
+ok 14 honours a live timed allowance and names its expiry
+ok 15 an expired timed allowance refuses again
+ok 16 names the current reserve, excluding the cockpit tank itself
+ok 17 with no state/cockpit record, a refusal still lists every idle tank in the reserve (#61 round-6 P3-4)
+ok 18 #61 round-6 P3-4: an empty store with no state/cockpit still SAYS the reserve is empty
+ok 19 #114: the reserve still hides a tank with a LIVE burn, and a store full of finished burns cannot push a refusal past the hook timeout
+ok 20 #61 round-6 P3-1: an unreadable marker does not truncate the reserve, and says nothing to the model
+ok 21 fails CLOSED on an empty payload (#63 r5 P2-5)
+ok 22 fails CLOSED on malformed JSON (#63 r5 P2-5)
+ok 23 the escape hatches still lift a fail-closed refusal: they are read before the payload (#63 r5 P2-5)
+ok 24 a missing dependency (no jq on PATH) refuses instead of allowing (#63 r5 P2-5/P2-6)
+ok 25 six serialization variants of a refused call all refuse with the plain form's exact stderr (#63 r5 P2-6)
+ok 26 a surrogate pair decodes to ONE character: 1,000 emoji + an innocuous word stays under the length tripwire (#63 r5 P2-6)
+ok 27 a model field elsewhere in the payload cannot stand in for tool_input.model (#63 r5 P2-6)
+ok 28 two concatenated JSON objects are malformed input, refused (#63 r5 P2-6)
+ok 29 large payloads refuse in BOTH compact and pretty-printed form: 65,536 / 131,073 / 1,048,576 (#63 r5 P2-5)
+ok 30 runs comfortably inside the 50ms budget
+ok 31 the 14-item corpus: heuristic hit rate matches its documented, measured behavior
+ok 32 the 10-item false-refusal corpus: outcome matches docs/usage.md's table (#63 P3-5)
+ok 33 a multi-byte character straddling the old 8192-byte cut still refuses (#63 P1-1 fix2)
+ok 34 a JS-escaped \n straddling the old 8192-byte cut still refuses (#63 P1-1 fix2)
+ok 35 100 synthetic zh+en briefs over 8 KiB all refuse on sonnet (#63 P1-1 fix2)
+ok 36 a prompt over 8,192 characters with NO heuristic keyword still refuses on length alone (#63 P1-1 fix2)
+ok 37 `model` before a large prompt is found either way (#63 P2-1 fix2)
+ok 38 family-prefixed model ids refuse like their short aliases (#63 P3-1)
+ok 39 provider-spelled ids are placed in their family; unknown ids are checked, never silently allowed (#63 r5 P3-2)
+ok 40 #103: the five reported shapes are classified as opus/sonnet tiers, not left unknown
+ok 41 #103: gateway prefixes are stripped only where they name anthropic; a slash cannot smuggle haiku
+ok 42 #103: an unknown shape is refused on a benign prompt, naming the literal id and the allow line
+ok 43 #103: the printed allow line, once added, admits the id as checked (tripwire still applies)
+ok 44 #103: every refusal branch writes to stderr only, nothing to stdout
+ok 45 a 200kB prompt stays inside a generous timing budget (median of 5)
+ok 46 the hook decides nothing on disk: no marker, no adoption flag, even on a never-swept store (#61 round-5 merge)
+ok 47 #109 P3-5: a fable build brief refuses, in every family spelling
+ok 48 #109 P3-5: a short non-lane fable prompt is still allowed, silently
+ok 49 #109 P3-5: a long fable prompt refuses on the length tripwire alone
+ok 50 #109 P3-7: a \u0000 escape in model or tool_name fails closed instead of being cleaned up
+ok 51 #109 P3-7: a prompt that merely TALKS about a NUL escape is not refused for it
+ok 52 #109 P3-7: haiku LOOKALIKES are checked, not exempted
+ok 53 #109 P3-9: an oversized integer in the allow file refuses WITHOUT shell noise
+ok 54 #109 P3-9: a non-numeric allow file refuses without noise, and a live one still allows
+ok 55 #109 P3-9: the guard sets its shell options exactly once
+ok 56 a read-only store leaves no adopt-warn sentinel and no WARN behind (#61 round-5 merge, r5 P3-1)
