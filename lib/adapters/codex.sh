@@ -1167,12 +1167,13 @@ adapter_all_transcripts() {
 # stamped as freshly read.
 # Shared by rollout and app-server readings. Input: an array of
 # {rl: <rate_limits>, at: <event epoch or null>}, oldest first (the probe
-# passes one). A side is classified by its own duration only: exactly 300
-# minutes is the 5-hour window, exactly 10080 the weekly one; any other
-# positive duration (a free plan's 30-day window) is reported under
-# `other_windows` with its minutes and is never put in either slot. A
-# missing, zero, negative or nonnumeric duration is unreadable, never
-# positional, and an event made only of such sides never wins.
+# passes one). A side is classified by its own duration only: up to 360
+# minutes is the 5-hour slot, anything longer the weekly slot (a free plan's
+# single 30-day window reads as weekly). A slot whose length is not the usual
+# 300 or 10080 minutes also reports it (`window_window_minutes` /
+# `weekly_window_minutes`, e.g. 43200). A missing, zero, negative or
+# nonnumeric duration is unreadable, never positional, and an event made
+# only of such sides never wins.
 #
 # Each slot comes from the newest event in the look-back that has that
 # window with a readable percentage (codex sometimes writes one event that
@@ -1188,9 +1189,8 @@ _CODEX_USAGE_WINDOWS_JQ='
     def class:
       if type != "object" then null
       elif (.[$duration]|type) != "number" then null
-      elif .[$duration] == 300 then "window"
-      elif .[$duration] == 10080 then "weekly"
-      elif .[$duration] > 0 then "other" else null end;
+      elif .[$duration] <= 0 then null
+      elif .[$duration] <= 360 then "window" else "weekly" end;
     def pct: if type == "number" and . >= 0 and . <= 100 then . else null end;
     def stamp: if type == "number" then (try todateiso8601 catch null) else null end;
     def complete: type == "object" and has("primary") and has("secondary") and
@@ -1203,15 +1203,15 @@ _CODEX_USAGE_WINDOWS_JQ='
     def pick($c): [ $sides[] | select(.c == $c and .pct != null) ] | last;
     def seen($c): any($sides[]; .c == $c);
     pick("window") as $w | pick("weekly") as $k |
-    [ $sides | map(select(.c == "other" and .pct != null)) | group_by(.m)[] | last ] as $o |
-    (($w != null or $k != null or ($o|length) > 0) and ($last.plan_type != "plus") and
+    (($w != null or $k != null) and ($last.plan_type != "plus") and
       any($evs[]; .rl | complete)) as $may_absent |
     {window_pct:$w.pct, weekly_pct:$k.pct,
      window_resets_at:$w.reset, weekly_resets_at:$k.reset}
-    + (if ($o|length) > 0 then {other_windows:[$o[] | {window_minutes:.m, used_pct:.pct, resets_at:.reset}]} else {} end)
+    + (if $w != null and $w.m != 300 then {window_window_minutes:$w.m} else {} end)
+    + (if $k != null and $k.m != 10080 then {weekly_window_minutes:$k.m} else {} end)
     + (if $may_absent and (seen("window")|not) then {window_absent:true} else {} end)
     + (if $may_absent and (seen("weekly")|not) then {weekly_absent:true} else {} end)
-    + {event_epoch:([$w.at, $k.at, $o[].at] | map(numbers) | min)};
+    + {event_epoch:([$w.at, $k.at] | map(numbers) | min)};
 '
 
 # A rollout with no readable window (every side unreadable or zero-length)
@@ -1223,7 +1223,7 @@ adapter_usage() {
        map({rl:.payload.rate_limits, at:(.timestamp |
          if type == "string" then (sub("\\.[0-9]+"; "") | sub("[+-]00:00$"; "Z") | try fromdateiso8601 catch null) else null end)}) |
        windows("window_minutes"; "used_percent"; "resets_at") |
-       select(.window_pct != null or .weekly_pct != null or has("other_windows")) |
+       select(.window_pct != null or .weekly_pct != null) |
        . + {source:"transcript"}' 2>/dev/null)" && [ -n "$reading" ]; then
     printf '%s\n' "$reading"; return 0
   fi
@@ -1241,9 +1241,9 @@ adapter_usage() {
 # — app-server exits without replying the moment stdin closes (measured).
 # CLIKAE_CODEX_USAGE_PROBE=0 turns it off (the test suite's default: no test
 # may reach a vendor). Each window lands in the slot its own duration names
-# (_CODEX_USAGE_WINDOWS_JQ above): 300 minutes is the session window, 10080
-# the weekly one, and any other length, such as a free plan's single 30-day
-# window, is reported under `other_windows` with its own minutes.
+# (_CODEX_USAGE_WINDOWS_JQ above): up to 6h is the session window, anything
+# longer is the weekly slot (a free plan's single 30-day window reads as
+# weekly, with window_pct null and weekly_window_minutes 43200).
 # Nothing from the response but four numbers is ever printed; on any failure
 # the caller sees rc=1 and a fixed reason word, never the process's output.
 _CODEX_USAGE_PROBE_SEC=15
@@ -1270,7 +1270,7 @@ _codex_usage_probe() {
   reading="$(jq -c "$_CODEX_USAGE_WINDOWS_JQ"'
     select(type == "object" and .id == 2) | .result.rateLimits // empty |
     [{rl:., at:null}] | windows("windowDurationMins"; "usedPercent"; "resetsAt") |
-    select(.window_pct != null or .weekly_pct != null or has("other_windows")) |
+    select(.window_pct != null or .weekly_pct != null) |
     del(.event_epoch) | . + {source:"vendor"}' "$out" 2>/dev/null | head -n 1)"
   local answered=0
   grep -q '"id":2' "$out" 2>/dev/null && answered=1

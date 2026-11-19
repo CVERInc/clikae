@@ -238,7 +238,7 @@ _seed_captured_198() {
   [ "$note" = "5h ${short}% left · 7d ${weekly}% left" ]
 }
 
-# --- r1: one-off events, durations of other lengths, burn's unknown side ---
+# --- r1/r2: one-off events, window lengths, burn's unknown side ---
 # A captured file with the rows its filter keeps, then seeded like the rest.
 _seed_captured_rows_198() {
   local src="$CLIKAE_TEST_ROOT/tests/fixtures/usage-codex/captured" root="$TEST_HOME/fxroot"
@@ -297,27 +297,29 @@ _seed_captured_rows_198() {
   _check_198 '.source == "vendor" and .window_used_pct == 12 and .weekly_used_pct == 34'
 }
 
-@test "198 r1: only 300 and 10080 minutes fill the slots; other lengths keep their own minutes" {
+@test "198 r2: a window of another length fills the slot its duration names and states its length" {
   _seed_198 weekly-only
-  for minutes in 43200 1440 360; do
-    _mutate_198 ".payload.rate_limits.plan_type = \"free\" | .payload.rate_limits.primary.window_minutes = $minutes"
-    run clikae usage codex sample --fresh --json
-    _check_198 ".window_used_pct == null and .weekly_used_pct == null and .other_windows[0].window_minutes == $minutes and .other_windows[0].used_pct == 89 and (.other_windows[0].resets_at|type) == \"string\" and (has(\"gap\")|not)"
-  done
+  _mutate_198 '.payload.rate_limits.plan_type = "free" | .payload.rate_limits.primary.window_minutes = 43200'
+  run clikae usage codex sample --fresh --json
+  _check_198 '.window_used_pct == null and .weekly_used_pct == 89 and .weekly_window_minutes == 43200 and .window_absent == true and (has("window_window_minutes")|not)'
   run --separate-stderr clikae usage codex sample
   [ "$status" -eq 0 ]
   [ "$stderr" = 'codex 11' ]
+  _mutate_198 '.payload.rate_limits.primary.window_minutes = 60'
+  run clikae usage codex sample --fresh --json
+  _check_198 '.window_used_pct == 89 and .weekly_used_pct == null and .window_window_minutes == 60 and (has("weekly_window_minutes")|not)'
+  # The usual lengths add nothing.
+  rm -rf "$CLIKAE_HOME/profiles/codex/sample"
+  _seed_198 two-windows
+  run clikae usage codex sample --fresh --json
+  _check_198 '(has("window_window_minutes")|not) and (has("weekly_window_minutes")|not)'
 }
 
-@test "198 r1: app-server other lengths keep their own minutes" {
+@test "198 r2: app-server 30-day window reads as weekly and states its length" {
   _probe_198
   export USAGE_198_PROBE='{"id":2,"result":{"rateLimits":{"primary":{"usedPercent":100,"windowDurationMins":43200,"resetsAt":4102444800},"secondary":null}}}'
   run clikae usage codex sample --fresh --json
-  _check_198 '.source == "vendor" and .window_used_pct == null and .weekly_used_pct == null and .other_windows == [{"window_minutes":43200,"used_pct":100,"resets_at":"2100-01-01T00:00:00Z"}]'
-  source "$CLIKAE_TEST_ROOT/lib/core/usage.sh"
-  run usage_board_fields codex sample
-  [ "$(printf '%s' "$output" | cut -f1-3)" = "$(printf -- '-\t-\t100')" ]
-  [ "$(printf '%s' "$output" | cut -f5)" = "30d:100" ]
+  _check_198 '.source == "vendor" and .window_used_pct == null and .weekly_used_pct == 100 and .weekly_window_minutes == 43200'
 }
 
 _peek_198() {
@@ -341,9 +343,6 @@ _peek_198() {
   _peek_198 unreadfull '{"window_pct":95,"weekly_pct":null}'
   run usage_cache_peek codex unreadfull
   [ "$status" -eq 0 ]; [ "$output" = "$(printf '95\t100\t100')" ]
-  _peek_198 other '{"window_pct":null,"weekly_pct":null,"window_absent":true,"weekly_absent":true,"other_windows":[{"window_minutes":43200,"used_pct":100,"resets_at":"2100-01-01T00:00:00Z"}]}'
-  run usage_cache_peek codex other
-  [ "$status" -eq 0 ]; [ "$output" = "$(printf '0\t0\t100')" ]
 }
 
 @test "198 r1 burn: a tank with an unreadable window ranks after one with known headroom" {

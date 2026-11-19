@@ -1731,11 +1731,11 @@ _home_fuel_dotv_compute() {
   fi
   local usage_fields up uw cached_at age ttl
   if declare -F usage_board_fields >/dev/null && usage_fields="$(usage_board_fields "$cli" "$profile" "$now")"; then
-    # 3rd field (peak = max(window,weekly)) is the OLD single-axis reading;
+    # 4th field (peak = max(window,weekly)) is the OLD single-axis reading;
     # the dot no longer uses it — window and weekly are judged separately
-    # below — except when neither axis exists (#198, see below).
-    local spent="" peak=""
-    IFS=$'\t' read -r up uw peak cached_at spent <<< "$usage_fields"
+    # below — so it is read and discarded, not carried into an unused local.
+    local spent=""
+    IFS=$'\t' read -r up uw _ cached_at spent <<< "$usage_fields"
     [ "$spent" != - ] || spent=""
     # P3-7 (round-6 review): a `cached_at` in the FUTURE (host clock skew)
     # counts as AGE 0. This clamp is one half of a rule usage_cache_peek
@@ -1751,11 +1751,7 @@ _home_fuel_dotv_compute() {
       # Whole percents: the vendor sends "99.0" and "21.7"; the board does
       # not (the dot's own thresholds truncate the same way, _home_fuel_glyphv).
       # #179: the labels are lib/core/usage.sh's (5h / 7d), defined once.
-      # #198: neither axis (only a window of another length, carried in the
-      # 5th column below): the note starts with that window, and the dot
-      # judges it (the 3rd column) like the weekly axis, a long window.
-      if [ "$up" = - ] && [ "$uw" = - ]; then _FNOTE=""; up=0; uw="${peak:-0}"
-      elif [ "$up" = - ]; then _home_gaugev "${USAGE_LABEL_WEEKLY:-7d}" "$uw"; _FNOTE="$_UGAUGE"; up=0
+      if [ "$up" = - ]; then _home_gaugev "${USAGE_LABEL_WEEKLY:-7d}" "$uw"; _FNOTE="$_UGAUGE"; up=0
       elif [ "$uw" = - ]; then _home_gaugev "${USAGE_LABEL_WINDOW:-5h}" "$up"; _FNOTE="$_UGAUGE"; uw=0
       else
         _home_gaugev "${USAGE_LABEL_WINDOW:-5h}" "$up"; _FNOTE="$_UGAUGE"
@@ -1786,7 +1782,6 @@ _home_fuel_dotv_compute() {
         esac
         case "$_bind_pct" in ''|*[!0-9]*) ;; *) [ "$_bind_pct" -lt 100 ] || _bind_spent=1 ;; esac
       done
-      _FNOTE="${_FNOTE# · }"
       # The age comes after the model segment (grammar: model, then age).
       declare -F _human_age >/dev/null 2>&1 && [ "$age" -ge "$ttl" ] && _FNOTE="$_FNOTE · $(_human_age "$cached_at" "$now")"
       # Judged separately, not by peak = max(window,weekly) — see the

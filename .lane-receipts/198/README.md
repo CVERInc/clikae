@@ -60,3 +60,30 @@ new captured fixtures copied in.
   it started.
 - `r1-output-examples.log`: literal `clikae usage` output for the captured
   one-off events and a 30-day window.
+
+## r2 (30-day window back in the weekly slot)
+
+The r1 reclassification is reverted: up to 360 minutes fills the 5-hour slot,
+anything longer the weekly slot, as on origin/main. A slot whose length is not
+300 or 10080 minutes also states it (`window_window_minutes` /
+`weekly_window_minutes`). `other_windows` is gone. All other r1 fixes are kept.
+
+- `r2-probe2-S3-origin-main.log` / `r2-probe2-S3-fix.log`: the reviewer's S3
+  probe (free plan, 43200/null, 89%) run against an export of origin/main
+  (`84cfd47`) and against the fix. `r2-probe2-S3.diff` is the diff after
+  masking epochs and clock times. Only the two usage JSON lines differ: the
+  added `weekly_window_minutes: 43200` and the `last_*_used_pct` aliases from
+  8012a5b. Summary, peek (burn), board fields, tmux, board dot and note, and
+  `tanks --available` are identical, with fresh rollouts and after they vanish.
+- `r2-red-contract-2149da1.log`: the contract file on an export of `2149da1`:
+  the two r2 tests fail, 28 pass; exit 1. `r2-red-legible-2149da1.log`: the
+  #149 probe test (restored to its 8012a5b form, weekly_pct 100) fails there;
+  exit 1.
+- `r2-targeted-serial.log`: usage*, limit*, burn* and list* bats, one file at
+  a time under the lock. Every file passed except one r2 test that failed in
+  its setup (it re-ran `clikae init` for an existing tank). It was fixed and
+  `r2-green-contract.log` is the contract file afterwards: 30/30, exit 0.
+- `r2-full-suite.log` / `r2-full-suite.exit`: full `scripts/test.sh --locked`
+  under the suite lock: shellcheck, doc names, 2719 bats (0 failed, 30
+  skipped), 43 pty smoke checks; exit 0. `r2-load-full-suite.log`: load before
+  it started.

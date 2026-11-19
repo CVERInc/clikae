@@ -1,0 +1,8 @@
+2c2
+< JSON {"engine":"codex","tank":"sample","window_pct":null,"weekly_pct":89,"window_resets_at":null,"weekly_resets_at":"2026-11-30TTIME","source":"transcript","window_absent":true,"age_sec":30,"window_used_pct":null,"weekly_used_pct":89}
+---
+> JSON {"engine":"codex","tank":"sample","window_pct":null,"weekly_pct":89,"window_resets_at":null,"weekly_resets_at":"2026-11-30TTIME","source":"transcript","window_absent":true,"weekly_window_minutes":43200,"age_sec":30,"window_used_pct":null,"weekly_used_pct":89}
+18c18
+< JSON {"engine":"codex","tank":"sample","window_pct":null,"weekly_pct":null,"window_resets_at":null,"weekly_resets_at":null,"source":"unknown","age_sec":0,"window_used_pct":null,"weekly_used_pct":null,"gap":"no-probe","last_window_pct":null,"last_weekly_pct":89,"last_at":EPOCH,"last_age_sec":30,"dry_marked_at":null}
+---
+> JSON {"engine":"codex","tank":"sample","window_pct":null,"weekly_pct":null,"window_resets_at":null,"weekly_resets_at":null,"source":"unknown","age_sec":0,"window_used_pct":null,"weekly_used_pct":null,"gap":"no-probe","last_window_pct":null,"last_weekly_pct":89,"last_window_used_pct":null,"last_weekly_used_pct":89,"last_at":EPOCH,"last_age_sec":30,"dry_marked_at":null}

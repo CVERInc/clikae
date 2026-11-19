@@ -1,0 +1,7 @@
+1..1
+not ok 1 #149 codex probe: app-server account/rateLimits/read is read into the right slot
+# (in test file tests/bats/usage-legible.bats, line 99)
+#   `and (has("gap") | not)' || { echo "got: $output"; false; }' failed
+# false
+# got: {"engine":"codex","tank":"marlin","window_pct":null,"weekly_pct":null,"window_resets_at":null,"weekly_resets_at":null,"source":"vendor","window_absent":true,"weekly_absent":true,"other_windows":[{"window_minutes":43200,"used_pct":100,"resets_at":"2099-01-01T00:00:00Z"}],"age_sec":0,"window_used_pct":null,"weekly_used_pct":null}
+exit=1

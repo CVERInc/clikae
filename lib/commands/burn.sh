@@ -638,8 +638,7 @@ _burn_cockpit_gate() {
 #     the worst tier, because a burn starting NOW hits that wall in minutes).
 #   · #198 — a side the reading could not read is unknown, never 0% used
 #     (usage_cache_peek): such a tank ranks with the unknowns, or with the
-#     nearly-exhausted ones when its readable side is already >=90%. A
-#     window of another length (other_windows) counts toward peak.
+#     nearly-exhausted ones when its readable side is already >=90%.
 #   · P2-3 (round-2 review) — WITHIN a tier, ordered by lowest window_pct
 #     first, weekly_pct only as the tie-break. A burn is about to run NOW: a
 #     tank with a great weekly number but its 5-hour window nearly spent
@@ -733,7 +732,7 @@ EOF
     [ -n "${c_acct[i]}" ] || continue
     case "$seen" in *$'\n'"${c_acct[i]}"$'\n'*) continue ;; esac
     seen="$seen${c_acct[i]}"$'\n'
-    local first=-1 wu="" ww="" wp="" hasstale=0
+    local first=-1 wu="" ww="" hasstale=0
     for (( j = 0; j < n; j++ )); do
       [ "${c_acct[j]}" = "${c_acct[i]}" ] || continue
       [ "$first" -ge 0 ] || first=$j
@@ -742,14 +741,11 @@ EOF
       [ -n "${c_up[j]}" ] || continue
       { [ -n "$wu" ] && [ "${c_up[j]}" -le "$wu" ]; } || wu="${c_up[j]}"
       { [ -n "$ww" ] && [ "${c_uw[j]}" -le "$ww" ]; } || ww="${c_uw[j]}"
-      # #198: peak can exceed both (a window of another length binds).
-      { [ -n "$wp" ] && [ "${c_peak[j]}" -le "$wp" ]; } || wp="${c_peak[j]}"
     done
     c_up[first]="$wu"; c_uw[first]="$ww"
     c_stale[first]="$hasstale"
     if [ -n "$wu" ]; then
       c_peak[first]="$wu"; [ "$ww" -le "$wu" ] || c_peak[first]="$ww"
-      [ "$wp" -le "${c_peak[first]}" ] || c_peak[first]="$wp"
     else
       c_peak[first]=""
     fi

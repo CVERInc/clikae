@@ -119,9 +119,10 @@ Per-model rows use `models[].used_pct`; historical readings use
 `last_window_used_pct` and `last_weekly_used_pct`. The older percentage names
 remain aliases for one release. `stale: true` marks readings over six hours old.
 Codex classifies windows by their duration, never their position or time until
-reset: exactly 300 minutes is the 5-hour window and 10080 the weekly one. Any
-other length (a free plan's 30-day window) is listed under `other_windows` as
-`{window_minutes, used_pct, resets_at}` and is in neither slot.
+reset: up to 360 minutes is the 5-hour slot, anything longer the weekly slot.
+When a slot's window is not the usual 300 or 10080 minutes, its length is
+given too: a free plan's single 30-day window reads as weekly with
+`weekly_window_minutes: 43200` (`window_window_minutes` for the 5-hour slot).
 
 Codex sometimes writes a single rollout event that leaves out a window the plan
 has, then a complete one seconds later. So each window comes from the newest of
