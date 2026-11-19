@@ -1,0 +1,35 @@
+command: flock -w 1800 /tmp/clikae-test-suite.lock env CLIKAE_SUITE_LOCKED=1 bash scripts/test.sh --locked
+exit: 0
+→ shellcheck (severity=warning)
+→ doc names (every function a doc names must exist)
+→ bats
+→ pty smoke (interactive screens — the layer bats cannot reach)
+1..2710
+bats ok: 2710
+bats not ok: 0
+bats skipped (counted in ok): 30
+pty smoke ok: 43
+pty smoke failures: 0
+198 tests in this run:
+ok 2305 198 point 1: weekly-only prolite and team remain weekly on the last day
+ok 2306 198 point 1: both windows follow duration even when swapped
+ok 2307 198 point 1: missing duration is unreadable, never positional
+ok 2308 198 point 1: malformed percentage is unreadable, not an absent window
+ok 2309 198 point 1: app-server weekly-only plan explicitly lacks the short window
+ok 2310 198 point 2: old transcript is stale in JSON and aged in the summary
+ok 2311 198 point 2: fresh transcript is not stale and reset passage is explicit
+ok 2312 198 point 3: transcript used percentages equal 100 minus status text left
+ok 2313 198 point 3: every engine public reading names used units and retains aliases
+ok 2314 198 point 3: agy group percentages name used units and retain aliases
+ok 2315 198 point 3: last known percentages name used units and retain aliases
+ok 2316 198 point 3: model percentages name used units and retain aliases
+ok 2317 198 point 3: dependency fallback still names used units
+ok 2318 198 point 1: invalid or missing duration never proves absence
+ok 2319 198 point 1: app-server short-only plan lacks weekly but an unreadable side does not
+ok 2320 198 preservation: a rollout without readable percentages still tries app-server
+ok 2321 198 captured: plus reports both windows by duration; a later empty premium event does not displace them
+ok 2322 198 captured: weekly-only prolite and team stay weekly and lack the short window
+ok 2323 198 captured: a zero-length window is unreadable and proves no absence
+ok 2324 198 captured: an old capture is stale
+ok 2325 198 captured: usage JSON is percent used, the status renderer is percent left
+✅ ALL GREEN

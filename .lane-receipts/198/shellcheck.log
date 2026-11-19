@@ -1,0 +1,1 @@
+shellcheck -S warning: all 6 touched shell files passed (exit 0)

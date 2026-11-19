@@ -1,0 +1,5 @@
+load1 sampled every 30s before the full suite (UTC):
+waited 630s
+12:01:47 load1 12.55
+12:02:17 load1 11.27
+waited 30s (second run)

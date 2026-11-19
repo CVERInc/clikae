@@ -9,6 +9,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **`clikae usage codex` distinguishes absent windows from unreadable ones**, including live
+  app-server readings, and no longer guesses a window from its position when its duration is missing.
+  Historical, per-model and agy group percentages now name the used unit too; older JSON names remain
+  aliases for one release.
+- **A one-off codex event that leaves out a window no longer erases it.** Each window comes from the
+  newest of the last 16 rollout events that has it, so a plus plan keeps both readings, and
+  `window_absent` / `weekly_absent` now mean no recent event showed that window (never on plus). A
+  zero-length window is never chosen. A slot whose window is not the usual 300 or 10080 minutes
+  states its length (`weekly_window_minutes: 43200` for a free plan's 30-day window).
+- **`clikae burn` no longer reads an unreadable window as 0% used** when choosing a tank: such a
+  tank ranks with the unread ones, or with the nearly empty ones when its readable window is at 90%
+  or more.
 - **`clikae cockpit --off` removes legacy guards regardless of their installation path**, including
   duplicates, and reports the number removed per tank. Moving or repairing the cockpit recognizes
   those guards too. A hook entry clikae did not write that may still run the guard (extra arguments, a

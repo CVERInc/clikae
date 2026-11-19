@@ -1,0 +1,2 @@
+{"timestamp":"2026-11-18T16:58:39.773Z","type":"event_msg","payload":{"type":"token_count","rate_limits":{"limit_id":"codex","primary":{"used_percent":100.0,"window_minutes":10080,"resets_at":1795612983},"secondary":null,"plan_type":"team","rate_limit_reached_type":null}}}
+{"timestamp":"2026-11-18T16:58:40.281Z","type":"event_msg","payload":{"type":"token_count","rate_limits":{"limit_id":"premium","primary":null,"secondary":null,"plan_type":"team","rate_limit_reached_type":"workspace_owner_credits_depleted"}}}

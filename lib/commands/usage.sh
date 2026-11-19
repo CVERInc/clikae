@@ -139,8 +139,14 @@ per tank, adding "engine"/"tank" to the reading; the plain form prints
 
 Reading fields: window_used_pct, weekly_used_pct (percent USED, 0-100, or null;
 window_pct and weekly_pct are the same numbers under their older names),
-window_absent or weekly_absent (true: this plan has no such window, which is not
-the same as could-not-read), stale (true: the reading is over 6 hours old),
+last_window_used_pct and last_weekly_used_pct (the last known reading),
+groups[].window_used_pct / weekly_used_pct and models[].used_pct use the same
+unit. The older percentage names remain aliases for one release.
+window_absent or weekly_absent (true: no recent reading showed such a window;
+null without it means it could not be read), window_window_minutes or
+weekly_window_minutes (codex: that slot's window length when it is not 300 or
+10080 minutes, e.g. 43200 for a 30-day window in the weekly slot),
+stale (true: the reading is over 6 hours old),
 window_resets_at,
 weekly_resets_at (ISO instants, or null), source. source is "vendor" (a
 live call answered), "quota-api" (agy: its own retrieveUserQuotaSummary

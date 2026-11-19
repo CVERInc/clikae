@@ -1,0 +1,68 @@
+1..30
+ok 1 198 point 1: weekly-only prolite and team remain weekly on the last day
+ok 2 198 point 1: both windows follow duration even when swapped
+ok 3 198 point 1: missing duration is unreadable, never positional
+ok 4 198 point 1: malformed percentage is unreadable, not an absent window
+ok 5 198 point 1: app-server weekly-only plan explicitly lacks the short window
+ok 6 198 point 2: old transcript is stale in JSON and aged in the summary
+ok 7 198 point 2: fresh transcript is not stale and reset passage is explicit
+ok 8 198 point 3: transcript used percentages equal 100 minus status text left
+ok 9 198 point 3: every engine public reading names used units and retains aliases
+ok 10 198 point 3: agy group percentages name used units and retain aliases
+ok 11 198 point 3: last known percentages name used units and retain aliases
+ok 12 198 point 3: model percentages name used units and retain aliases
+ok 13 198 point 3: dependency fallback still names used units
+ok 14 198 point 1: invalid or missing duration never proves absence
+ok 15 198 point 1: app-server short-only plan lacks weekly but an unreadable side does not
+ok 16 198 preservation: a rollout without readable percentages still tries app-server
+ok 17 198 captured: plus reports both windows by duration; a later empty premium event does not displace them
+ok 18 198 captured: weekly-only prolite and team stay weekly and lack the short window
+ok 19 198 captured: an old capture is stale
+ok 20 198 captured: usage JSON is percent used, the status renderer is percent left
+not ok 21 198 r1 captured: plus 7-day-only one-off keeps the 5-hour reading from the event before
+# (from function `_check_198' in file tests/bats/usage-contract-198.bats, line 27,
+#  in test file tests/bats/usage-contract-198.bats, line 254)
+#   `_check_198 '.window_used_pct == 14 and .weekly_used_pct == 9 and (has("window_absent")|not) and (has("weekly_absent")|not) and .age_sec >= 33'' failed
+# false
+not ok 22 198 r1 captured: plus 5-hour-only one-off keeps the weekly reading from the event before
+# (from function `_check_198' in file tests/bats/usage-contract-198.bats, line 27,
+#  in test file tests/bats/usage-contract-198.bats, line 263)
+#   `_check_198 '.window_used_pct == 65 and .weekly_used_pct == 41 and (has("window_absent")|not) and (has("weekly_absent")|not)'' failed
+# false
+not ok 23 198 r1 captured: a zero-length window never wins over the readings before it
+# (from function `_check_198' in file tests/bats/usage-contract-198.bats, line 27,
+#  in test file tests/bats/usage-contract-198.bats, line 269)
+#   `_check_198 '.source == "transcript" and .window_used_pct == 19 and .weekly_used_pct == 93 and (has("window_absent")|not) and (has("weekly_absent")|not)'' failed
+# false
+not ok 24 198 r1 captured: a plus one-off alone is never an absent window
+# (from function `_check_198' in file tests/bats/usage-contract-198.bats, line 27,
+#  in test file tests/bats/usage-contract-198.bats, line 275)
+#   `_check_198 '.window_used_pct == null and .weekly_used_pct == 9 and (has("window_absent")|not)'' failed
+# false
+not ok 25 198 r1: absence needs every recent event to agree, and a plan change starts over
+# (from function `_check_198' in file tests/bats/usage-contract-198.bats, line 27,
+#  in test file tests/bats/usage-contract-198.bats, line 285)
+#   `_check_198 '.window_used_pct == 14 and .weekly_used_pct == 9 and (has("window_absent")|not)'' failed
+# false
+not ok 26 198 r1: a rollout whose only window is zero-length still asks app-server
+# (from function `_check_198' in file tests/bats/usage-contract-198.bats, line 27,
+#  in test file tests/bats/usage-contract-198.bats, line 297)
+#   `_check_198 '.source == "vendor" and .window_used_pct == 12 and .weekly_used_pct == 34'' failed
+# false
+not ok 27 198 r1: only 300 and 10080 minutes fill the slots; other lengths keep their own minutes
+# (from function `_check_198' in file tests/bats/usage-contract-198.bats, line 27,
+#  in test file tests/bats/usage-contract-198.bats, line 305)
+#   `_check_198 ".window_used_pct == null and .weekly_used_pct == null and .other_windows[0].window_minutes == $minutes and .other_windows[0].used_pct == 89 and (.other_windows[0].resets_at|type) == \"string\" and (has(\"gap\")|not)"' failed
+# false
+not ok 28 198 r1: app-server other lengths keep their own minutes
+# (from function `_check_198' in file tests/bats/usage-contract-198.bats, line 27,
+#  in test file tests/bats/usage-contract-198.bats, line 316)
+#   `_check_198 '.source == "vendor" and .window_used_pct == null and .weekly_used_pct == null and .other_windows == [{"window_minutes":43200,"used_pct":100,"resets_at":"2100-01-01T00:00:00Z"}]'' failed
+# false
+not ok 29 198 r1 burn: an unreadable side is not 0% used; known values rank as before
+# (in test file tests/bats/usage-contract-198.bats, line 340)
+#   `[ "$status" -ne 0 ]; [ -z "$output" ]' failed
+not ok 30 198 r1 burn: a tank with an unreadable window ranks after one with known headroom
+# (in test file tests/bats/usage-contract-198.bats, line 378)
+#   `[ "$output" = bbknown ]' failed
+exit=1

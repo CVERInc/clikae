@@ -1,0 +1,10 @@
+1..5
+ok 1 198 captured: plus reports both windows by duration; a later empty premium event does not displace them
+ok 2 198 captured: weekly-only prolite and team stay weekly and lack the short window
+not ok 3 198 captured: a zero-length window is unreadable and proves no absence
+# (from function `_check_198' in file tests/bats/usage-contract-198.bats, line 27,
+#  in test file tests/bats/usage-contract-198.bats, line 217)
+#   `_check_198 '.window_used_pct == null and .weekly_used_pct == null and (has("window_absent")|not) and (has("weekly_absent")|not)'' failed
+# false
+ok 4 198 captured: an old capture is stale
+ok 5 198 captured: usage JSON is percent used, the status renderer is percent left

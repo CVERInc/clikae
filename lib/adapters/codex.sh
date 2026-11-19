@@ -1165,30 +1165,69 @@ adapter_all_transcripts() {
 # returns), not "now" — usage_read only falls back to "now" when a reading
 # carries no usable event time of its own, so a week-old rollout is never
 # stamped as freshly read.
+# Shared by rollout and app-server readings. Input: an array of
+# {rl: <rate_limits>, at: <event epoch or null>}, oldest first (the probe
+# passes one). A side is classified by its own duration only: up to 360
+# minutes is the 5-hour slot, anything longer the weekly slot (a free plan's
+# single 30-day window reads as weekly). A slot whose length is not the usual
+# 300 or 10080 minutes also reports it (`window_window_minutes` /
+# `weekly_window_minutes`, e.g. 43200). A missing, zero, negative or
+# nonnumeric duration is unreadable, never positional, and an event made
+# only of such sides never wins.
+#
+# Each slot comes from the newest event in the look-back that has that
+# window with a readable percentage (codex sometimes writes one event that
+# omits a window the plan has, then a complete one seconds later). Only
+# events with the newest event's limit_id and plan_type count, so a plan
+# change is not mixed with the plan before it. `*_absent: true` is claimed
+# only when no event in the look-back has that window at all, at least one
+# of them is complete (both sides present and each null or classified), and
+# the plan is not plus, which always has both. `event_epoch` is the oldest
+# event a reported number came from, so the age never flatters a number.
+_CODEX_USAGE_WINDOWS_JQ='
+  def windows($duration; $used; $reset):
+    def class:
+      if type != "object" then null
+      elif (.[$duration]|type) != "number" then null
+      elif .[$duration] <= 0 then null
+      elif .[$duration] <= 360 then "window" else "weekly" end;
+    def pct: if type == "number" and . >= 0 and . <= 100 then . else null end;
+    def stamp: if type == "number" then (try todateiso8601 catch null) else null end;
+    def complete: type == "object" and has("primary") and has("secondary") and
+      ([.primary,.secondary] | all(. == null or class != null));
+    (map(select((.rl|type) == "object"))) as $all |
+    ($all[-1].rl // {}) as $last |
+    [ $all[] | select(.rl.limit_id == $last.limit_id and .rl.plan_type == $last.plan_type) ] as $evs |
+    [ $evs[] | .at as $at | .rl | [.primary,.secondary][] | select(class != null) |
+      {c:class, m:.[$duration], pct:(.[$used]|pct), reset:(.[$reset]|stamp), at:$at} ] as $sides |
+    def pick($c): [ $sides[] | select(.c == $c and .pct != null) ] | last;
+    def seen($c): any($sides[]; .c == $c);
+    pick("window") as $w | pick("weekly") as $k |
+    (($w != null or $k != null) and ($last.plan_type != "plus") and
+      any($evs[]; .rl | complete)) as $may_absent |
+    {window_pct:$w.pct, weekly_pct:$k.pct,
+     window_resets_at:$w.reset, weekly_resets_at:$k.reset}
+    + (if $w != null and $w.m != 300 then {window_window_minutes:$w.m} else {} end)
+    + (if $k != null and $k.m != 10080 then {weekly_window_minutes:$k.m} else {} end)
+    + (if $may_absent and (seen("window")|not) then {window_absent:true} else {} end)
+    + (if $may_absent and (seen("weekly")|not) then {weekly_absent:true} else {} end)
+    + {event_epoch:([$w.at, $k.at] | map(numbers) | min)};
+'
+
+# A rollout with no readable window (every side unreadable or zero-length)
+# falls through to the app-server probe, as a rollout with no event does.
 adapter_usage() {
-  local fields pu pw pr su sw sr ts
-  if ! fields="$(_limit_codex_rate_limits "$1" 2>/dev/null)"; then
-    _codex_usage_probe "$1"; return
+  local events reading
+  if events="$(_limit_codex_rate_limits "$1" --event 2>/dev/null)" &&
+     reading="$(printf '%s\n' "$events" | jq -sc "$_CODEX_USAGE_WINDOWS_JQ"'
+       map({rl:.payload.rate_limits, at:(.timestamp |
+         if type == "string" then (sub("\\.[0-9]+"; "") | sub("[+-]00:00$"; "Z") | try fromdateiso8601 catch null) else null end)}) |
+       windows("window_minutes"; "used_percent"; "resets_at") |
+       select(.window_pct != null or .weekly_pct != null) |
+       . + {source:"transcript"}' 2>/dev/null)" && [ -n "$reading" ]; then
+    printf '%s\n' "$reading"; return 0
   fi
-  IFS=$'\037' read -r pu pw pr su sw sr ts <<< "$fields"
-  # Each side is classified by its own window length, as _codex_usage_probe does.
-  # Plans with one window report a 7-day window as `primary`. A side with no
-  # length falls back to its position (primary = window, secondary = weekly).
-  jq -cn --arg pu "$pu" --arg pw "$pw" --arg pr "$pr" --arg su "$su" --arg sw "$sw" --arg sr "$sr" --arg ts "$ts" '
-    def pct: try tonumber catch null;
-    def stamp: try (tonumber | todateiso8601) catch null;
-    def norm_stamp: sub("\\.[0-9]+";"") | sub("[+-]00:00$";"Z");
-    def class($mins; $fallback): ($mins|pct) as $m | if $m == null then $fallback elif $m <= 360 then "window" else "weekly" end;
-    [{c:class($pw;"window"),pct:($pu|pct),at:($pr|stamp),known:($pw != "")},
-     {c:class($sw;"weekly"),pct:($su|pct),at:($sr|stamp),known:($sw != "")}]
-    | map(select(.pct != null)) as $sides
-    | ([$sides[]|select(.c == "window")][0]) as $w
-    | ([$sides[]|select(.c == "weekly")][0]) as $k
-    | {window_pct:$w.pct,weekly_pct:$k.pct,
-     window_resets_at:$w.at,weekly_resets_at:$k.at,source:"transcript"}
-    + (if $w == null and ($k.known // false) then {window_absent:true} else {} end)
-    + (if $k == null and ($w.known // false) then {weekly_absent:true} else {} end)
-    + {event_epoch:(if $ts == "" then null else ($ts|norm_stamp|try fromdateiso8601 catch null) end)}'
+  _codex_usage_probe "$1"
 }
 
 # #149: the per-tank LIVE reading codex itself exposes. `codex app-server`
@@ -1201,9 +1240,10 @@ adapter_usage() {
 # _CODEX_USAGE_PROBE_SEC. stdin has to stay open until the answer is written
 # — app-server exits without replying the moment stdin closes (measured).
 # CLIKAE_CODEX_USAGE_PROBE=0 turns it off (the test suite's default: no test
-# may reach a vendor). Each window lands in the slot its own duration names:
-# up to 6h is the session window, anything longer is the weekly slot (a free
-# plan's single 30-day window reads as weekly, with window_pct null).
+# may reach a vendor). Each window lands in the slot its own duration names
+# (_CODEX_USAGE_WINDOWS_JQ above): up to 6h is the session window, anything
+# longer is the weekly slot (a free plan's single 30-day window reads as
+# weekly, with window_pct null and weekly_window_minutes 43200).
 # Nothing from the response but four numbers is ever printed; on any failure
 # the caller sees rc=1 and a fixed reason word, never the process's output.
 _CODEX_USAGE_PROBE_SEC=15
@@ -1227,16 +1267,11 @@ _codex_usage_probe() {
       esac > "$out" 2>/dev/null || rc=$?
   : "$rc"
   local reading
-  reading="$(jq -c 'select(type == "object" and .id == 2) | .result.rateLimits // empty |
-    def slot($w): [.primary, .secondary][] | select(type == "object")
-      | select((.windowDurationMins|type) == "number")
-      | select(if $w == "window" then .windowDurationMins <= 360 else .windowDurationMins > 360 end);
-    def at: if type == "number" then todateiso8601 else null end;
-    ([slot("window")][0]) as $w | ([slot("weekly")][0]) as $k |
-    select($w != null or $k != null) |
-    {window_pct:($w.usedPercent // null), weekly_pct:($k.usedPercent // null),
-     window_resets_at:(($w.resetsAt // null)|at), weekly_resets_at:(($k.resetsAt // null)|at),
-     source:"vendor"}' "$out" 2>/dev/null | head -n 1)"
+  reading="$(jq -c "$_CODEX_USAGE_WINDOWS_JQ"'
+    select(type == "object" and .id == 2) | .result.rateLimits // empty |
+    [{rl:., at:null}] | windows("windowDurationMins"; "usedPercent"; "resetsAt") |
+    select(.window_pct != null or .weekly_pct != null) |
+    del(.event_epoch) | . + {source:"vendor"}' "$out" 2>/dev/null | head -n 1)"
   local answered=0
   grep -q '"id":2' "$out" 2>/dev/null && answered=1
   rm -f "$out"

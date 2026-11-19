@@ -1445,9 +1445,9 @@ limit_reset_phrase() {
 # server (the same tolerance _limit_codex_render_reset's own short/dated
 # split already used, now factored into one function both call).
 #
-# Percent LEFT is the canonical unit here (matching the vendor's own "N%
-# left" wording); `used_percent` is converted once, at the boundary
-# (_limit_codex_left).
+# The status renderer uses percent LEFT (matching the vendor's "N% left"
+# wording); `_limit_codex_left` converts `used_percent` for that display only.
+# Usage JSON keeps percent USED, named `*_used_pct`.
 
 # _limit_codex_local — the SAME date arithmetic as _limit_local above, but
 # never force a TZ override. claude's phrases always carry an explicit zone
@@ -1643,11 +1643,20 @@ _limit_codex_window_label() {
 # (the winning event's own timestamp) rides along as a 7th field so a caller
 # combining several already-scanned files (the per-file cache) can pick the
 # newest across them without re-parsing anything.
+_LIMIT_CODEX_EVENT_LOOKBACK=16
 _limit_codex_rate_limits_from_files() {
-  local out
+  # --event (usage JSON only) prints whole events instead of seven fields:
+  # flattened empty fields cannot tell a null window from an unreadable one,
+  # and one event is not enough. Codex sometimes writes a single event that
+  # omits a window the plan has, then a complete one seconds later, so usage
+  # chooses each window from a short look-back (adapter_usage). The newest
+  # _LIMIT_CODEX_EVENT_LOOKBACK events with a window object are printed,
+  # oldest first, from the same tails the seven-field form reads.
+  local out event=0
+  if [ "${1:-}" = --event ]; then event=1; shift; fi
   out="$(for f in "$@"; do
       [ -n "$f" ] && transcript_tail_scan "$f" '"type": *"token_count"'
-    done | awk '
+    done | awk -v event="$event" '
       function ts(s,   t) {
         if (match(s, /"timestamp": *"[^"]*"/)) {
           t = substr(s, RSTART, RLENGTH); sub(/.*"timestamp": *"/, "", t); sub(/".*/, "", t)
@@ -1675,14 +1684,21 @@ _limit_codex_rate_limits_from_files() {
         p = side(rl, "primary"); s = side(rl, "secondary")
         if (p == "" && s == "") next
         t = ts($0)
+        if (event) { if (t != "") print t "\t" $0; next }
         if (t != "" && (maxT == "" || t > maxT)) {
           maxT = t
           pu = field(p, "used_percent"); pw = field(p, "window_minutes"); pr = field(p, "resets_at")
           su = field(s, "used_percent"); sw = field(s, "window_minutes"); sr = field(s, "resets_at")
         }
       }
-      END { printf "%s\037%s\037%s\037%s\037%s\037%s\037%s\n", pu, pw, pr, su, sw, sr, maxT }
+      END { if (!event) printf "%s\037%s\037%s\037%s\037%s\037%s\037%s\n", pu, pw, pr, su, sw, sr, maxT }
     ')"
+  if [ "$event" = 1 ]; then
+    [ -n "$out" ] || return 1
+    printf '%s\n' "$out" | LC_ALL=C sort -s -t "$(printf '\t')" -k1,1 |
+      tail -n "$_LIMIT_CODEX_EVENT_LOOKBACK" | cut -f2-
+    return
+  fi
   local pu pw pr su sw sr ts
   IFS=$'\037' read -r pu pw pr su sw sr ts <<EOF
 $out
@@ -1705,6 +1721,10 @@ $files
 EOF
 
   local out pu pw pr su sw sr ts
+  if [ "${2:-}" = --event ]; then
+    _limit_codex_rate_limits_from_files --event "${filearr[@]}"
+    return
+  fi
   out="$(_limit_codex_rate_limits_from_files "${filearr[@]}")" || return 1
   IFS=$'\037' read -r pu pw pr su sw sr ts <<EOF
 $out

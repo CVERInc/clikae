@@ -691,6 +691,9 @@ _burn_cockpit_gate() {
 #     (tiering itself uses peak = max(window_pct, weekly_pct): a tank with
 #     PLENTY of weekly room left but its 5h window nearly gone still lands in
 #     the worst tier, because a burn starting NOW hits that wall in minutes).
+#   · #198 — a side the reading could not read is unknown, never 0% used
+#     (usage_cache_peek): such a tank ranks with the unknowns, or with the
+#     nearly-exhausted ones when its readable side is already >=90%.
 #   · P2-3 (round-2 review) — WITHIN a tier, ordered by lowest window_pct
 #     first, weekly_pct only as the tie-break. A burn is about to run NOW: a
 #     tank with a great weekly number but its 5-hour window nearly spent

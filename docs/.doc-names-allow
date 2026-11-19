@@ -56,6 +56,12 @@ cache_creation_input_tokens  a field in Anthropic's own API usage JSON (status-l
 clikae_session_id  the per-session tmux user option `@clikae_session_id` (lib/core/tmux.sh's tmux_set_session_id, lib/core/live.sh's live_session_id), not a function
 window_pct         a field in `clikae usage --json`'s result object (#72), not a function
 weekly_pct         ditto
+window_used_pct    a percent-used JSON field in `clikae usage --json`, not a function
+weekly_used_pct    ditto
+last_window_used_pct a historical percent-used JSON field in `clikae usage --json`, not a function
+last_weekly_used_pct ditto
+window_window_minutes a codex window length field in `clikae usage --json`, not a function
+weekly_window_minutes ditto
 window_resets_at   ditto
 weekly_resets_at   ditto
 cached_at          a field in `clikae usage --json`'s result object and in the on-disk usage cache (#72), not a function

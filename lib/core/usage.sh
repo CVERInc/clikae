@@ -134,11 +134,11 @@ usage_unknown() {
   esac
   case "${1:-}" in
     rate-limited)
-      printf '{"window_pct":null,"weekly_pct":null,"window_resets_at":null,"weekly_resets_at":null,"source":"unknown","reason":"rate-limited"%s}\n' "$_u_retry" ;;
+      printf '{"window_used_pct":null,"weekly_used_pct":null,"window_pct":null,"weekly_pct":null,"window_resets_at":null,"weekly_resets_at":null,"source":"unknown","reason":"rate-limited"%s}\n' "$_u_retry" ;;
     needs-refresh|relogin-required|keychain-denied|no-credentials|network|unparseable)
-      printf '{"window_pct":null,"weekly_pct":null,"window_resets_at":null,"weekly_resets_at":null,"source":"unknown","reason":"%s"}\n' "$1" ;;
+      printf '{"window_used_pct":null,"weekly_used_pct":null,"window_pct":null,"weekly_pct":null,"window_resets_at":null,"weekly_resets_at":null,"source":"unknown","reason":"%s"}\n' "$1" ;;
     *)
-      printf '%s\n' '{"window_pct":null,"weekly_pct":null,"window_resets_at":null,"weekly_resets_at":null,"source":"unknown"}' ;;
+      printf '%s\n' '{"window_used_pct":null,"weekly_used_pct":null,"window_pct":null,"weekly_pct":null,"window_resets_at":null,"weekly_resets_at":null,"source":"unknown"}' ;;
   esac
 }
 
@@ -345,6 +345,7 @@ _usage_read_finish() {
     # A window this plan does not have, as opposed to one that could not be read.
     (.window_absent == true) as $window_absent |
     (.weekly_absent == true) as $weekly_absent |
+    (.window_window_minutes) as $wmin | (.weekly_window_minutes) as $kmin |
     # #179: an auth reason never carries a number — whatever else an adapter
     # put beside it is dropped here (the same rule #107 gave `expired`).
     if $reason == "needs-refresh" or $reason == "relogin-required" or $reason == "keychain-denied" then
@@ -357,6 +358,14 @@ _usage_read_finish() {
     if .source == "unknown" and $reason != null then . + {reason:$reason} else . end |
     if .source != "unknown" and $window_absent and .window_pct == null then . + {window_absent:true} else . end |
     if .source != "unknown" and $weekly_absent and .weekly_pct == null then . + {weekly_absent:true} else . end |
+    # #198: codex names a slot'"'"'s window length when it is not the usual 300
+    # or 10080 minutes (a free plan'"'"'s 30-day window fills the weekly slot):
+    # a positive whole number, beside a percentage only.
+    def mins: if type == "number" and . > 0 and floor == . and . <= 1000000 then . else null end;
+    if .source != "unknown" and .window_pct != null and ($wmin|mins) != null
+    then . + {window_window_minutes:($wmin|mins)} else . end |
+    if .source != "unknown" and .weekly_pct != null and ($kmin|mins) != null
+    then . + {weekly_window_minutes:($kmin|mins)} else . end |
     if .source == "unknown" and $reason == "rate-limited" and $retry != null
     then . + {retry_after:$retry} else . end |
     if (.source == "vendor" or .source == "quota-api") and ($models|length) > 0 then . + {models:$models} else . end |
@@ -588,6 +597,12 @@ _usage_public() {
     . as $r | del(.cached_at, .scanned_at, .last_good) |
     . + {age_sec:(if ($r.cached_at|type) == "number" then ([$now - $r.cached_at, 0]|max) else null end)} |
     . + {window_used_pct:.window_pct, weekly_used_pct:.weekly_pct} |
+    (if (.groups|type) == "array" then
+       .groups |= map(. + {window_used_pct:.window_pct, weekly_used_pct:.weekly_pct})
+     else . end) |
+    (if (.models|type) == "array" then
+       .models |= map(. + {used_pct:.pct})
+     else . end) |
     (if (.window_pct != null or .weekly_pct != null) and (.age_sec // 0) > '"$_USAGE_STALE_SEC"'
      then . + {stale:true} else . end) |
     (if (.window_pct != null) and (.window_resets_at|expired) then . + {window_reset_passed:true} else . end) |
@@ -599,6 +614,8 @@ _usage_public() {
                 else "no-signal" end),
            last_window_pct:($r.last_good.window_pct // null),
            last_weekly_pct:($r.last_good.weekly_pct // null),
+           last_window_used_pct:($r.last_good.window_pct // null),
+           last_weekly_used_pct:($r.last_good.weekly_pct // null),
            last_at:($r.last_good.at // null),
            last_age_sec:(if ($r.last_good.at|type) == "number"
                          then ([$now - $r.last_good.at, 0]|max) else null end),
@@ -774,7 +791,10 @@ esac
 # with age (window/weekly readings only fall or reset, never rise), so
 # trusting an old "0%" here is exactly backwards from what "stale beats
 # nothing" was meant to buy. Only a missing cache, missing jq, a reading
-# older than the ceiling, or a non-vendor/incomplete reading is "unknown":
+# older than the ceiling, a non-vendor/incomplete reading, or (#198) one
+# with a side that could not be read and no known side at 90% or more, is
+# "unknown" (a null side is never 0% used; only a passed reset or a window
+# the plan does not have is):
 # empty stdout, rc=4 (jq -er's exit status when the pipeline produces no
 # output at all, not rc=1 — rc=1 is "last value was false/null", which
 # never happens here since select() either produces a value or nothing).
@@ -806,9 +826,18 @@ usage_cache_peek() {
     # A timestamp in the FUTURE counts as age 0. See this function header.
     (if ($now - $evidence) < 0 then 0 else ($now - $evidence) end) as $age |
     select($age <= $max_age) |
-    (if (.window_resets_at|expired) then 0 else (.window_pct // 0) end) as $w |
-    (if (.weekly_resets_at|expired) then 0 else (.weekly_pct // 0) end) as $k |
-    [$w,$k,([$w,$k]|max)] | @tsv' "$cache" 2>/dev/null
+    # #198: a side is 0 only when its reset passed or the plan has no such
+    # window (`*_absent`); null means it could not be read, never 0% used.
+    (if (.window_resets_at|expired) then 0 elif .window_pct != null then .window_pct
+     elif .window_absent == true then 0 else null end) as $w |
+    (if (.weekly_resets_at|expired) then 0 elif .weekly_pct != null then .weekly_pct
+     elif .weekly_absent == true then 0 else null end) as $k |
+    if $w != null and $k != null then [$w,$k,([$w,$k]|max)]
+    # An unreadable side is not known headroom: the reading ranks as unknown,
+    # unless the side that IS known already says nearly out (>= 90). Then the
+    # unreadable side counts as spent, so it never sorts ahead of a sibling.
+    elif ([$w,$k] | map(numbers) | max // -1) >= 90 then [($w // 100),($k // 100),100]
+    else empty end | @tsv' "$cache" 2>/dev/null
 }
 
 # P3-4 (round-5 review): does a candidate have ANY on-disk numeric reading at

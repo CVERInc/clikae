@@ -1624,7 +1624,7 @@ _usage107_calls() { if [ -f "$USAGE_CALLS" ]; then wc -l < "$USAGE_CALLS" | tr -
   # #179: a reader that may not spend (the shape under test is the no-number one).
   USAGE_HTTP=401 CLIKAE_USAGE_AUTO_WAKE=0 run --separate-stderr clikae usage claude work --json
   [ "$status" -eq 0 ]
-  echo "$output" | jq -e '(keys | sort) == (["engine","tank","window_pct","weekly_pct","window_used_pct","weekly_used_pct","window_resets_at","weekly_resets_at","source","reason","age_sec","gap","last_window_pct","last_weekly_pct","last_at","last_age_sec","dry_marked_at"] | sort)' \
+  echo "$output" | jq -e '(keys | sort) == (["engine","tank","window_pct","weekly_pct","window_used_pct","weekly_used_pct","window_resets_at","weekly_resets_at","source","reason","age_sec","gap","last_window_pct","last_weekly_pct","last_window_used_pct","last_weekly_used_pct","last_at","last_age_sec","dry_marked_at"] | sort)' \
     || { echo "got: $output"; false; }
   [ "$(printf '%s\n' "$output" | wc -l | tr -d ' ')" = 1 ]
   # --json never carries the human hint; the plain form puts it on stderr, so
@@ -1904,7 +1904,7 @@ STUB
   chmod +x "$TEST_HOME/.testbin/curl"
   run clikae usage claude work --fresh --json
   [ "$status" -eq 0 ]
-  echo "$output" | jq -e '(.models|length) == 1 and .models[0] == {name:"Ok",pct:5,resets_at:null}' \
+  echo "$output" | jq -e '(.models|length) == 1 and .models[0] == {name:"Ok",pct:5,used_pct:5,resets_at:null}' \
     || { echo "got: $output"; false; }
   # Nothing but name/pct/resets_at survives into the cache.
   run ! grep -R 'tok-leak\|severity\|TooHigh\|Negative\|NotANumber' "$CLIKAE_HOME/state"

@@ -1,0 +1,4 @@
+command: bats --print-output-on-failure tests/bats/usage.bats tests/bats/usage-agy.bats tests/bats/usage-codex-wake.bats tests/bats/usage-legible.bats tests/bats/adapters/codex.bats tests/bats/limit-codex-status.bats tests/bats/limit.bats tests/bats/limit-reset.bats tests/bats/watch-usage-poll.bats
+passed: 259
+failed: 0
+exit: 0

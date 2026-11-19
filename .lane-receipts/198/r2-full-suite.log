@@ -1,0 +1,41 @@
+scripts/test.sh --locked (under flock on the suite lock), r2
+→ shellcheck (severity=warning)
+→ doc names (every function a doc names must exist)
+→ bats
+→ pty smoke (interactive screens — the layer bats cannot reach)
+✅ ALL GREEN
+exit=0
+bats: 2719 tests, 0 failed, 30 skipped
+pty smoke: 43 checks
+--- this issue's tests
+ok 2305 198 point 1: weekly-only prolite and team remain weekly on the last day
+ok 2306 198 point 1: both windows follow duration even when swapped
+ok 2307 198 point 1: missing duration is unreadable, never positional
+ok 2308 198 point 1: malformed percentage is unreadable, not an absent window
+ok 2309 198 point 1: app-server weekly-only plan explicitly lacks the short window
+ok 2310 198 point 2: old transcript is stale in JSON and aged in the summary
+ok 2311 198 point 2: fresh transcript is not stale and reset passage is explicit
+ok 2312 198 point 3: transcript used percentages equal 100 minus status text left
+ok 2313 198 point 3: every engine public reading names used units and retains aliases
+ok 2314 198 point 3: agy group percentages name used units and retain aliases
+ok 2315 198 point 3: last known percentages name used units and retain aliases
+ok 2316 198 point 3: model percentages name used units and retain aliases
+ok 2317 198 point 3: dependency fallback still names used units
+ok 2318 198 point 1: invalid or missing duration never proves absence
+ok 2319 198 point 1: app-server short-only plan lacks weekly but an unreadable side does not
+ok 2320 198 preservation: a rollout without readable percentages still tries app-server
+ok 2321 198 captured: plus reports both windows by duration; a later empty premium event does not displace them
+ok 2322 198 captured: weekly-only prolite and team stay weekly and lack the short window
+ok 2323 198 captured: an old capture is stale
+ok 2324 198 captured: usage JSON is percent used, the status renderer is percent left
+ok 2325 198 r1 captured: plus 7-day-only one-off keeps the 5-hour reading from the event before
+ok 2326 198 r1 captured: plus 5-hour-only one-off keeps the weekly reading from the event before
+ok 2327 198 r1 captured: a zero-length window never wins over the readings before it
+ok 2328 198 r1 captured: a plus one-off alone is never an absent window
+ok 2329 198 r1: absence needs every recent event to agree, and a plan change starts over
+ok 2330 198 r1: a rollout whose only window is zero-length still asks app-server
+ok 2331 198 r2: a window of another length fills the slot its duration names and states its length
+ok 2332 198 r2: app-server 30-day window reads as weekly and states its length
+ok 2333 198 r1 burn: an unreadable side is not 0% used; known values rank as before
+ok 2334 198 r1 burn: a tank with an unreadable window ranks after one with known headroom
+ok 2338 #149 codex probe: app-server account/rateLimits/read is read into the right slot
